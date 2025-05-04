@@ -1,4 +1,4 @@
-module qadena_v3
+module github.com/c3qtech/qadena_v3
 
 go 1.22
 
