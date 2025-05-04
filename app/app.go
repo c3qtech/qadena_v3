@@ -76,26 +76,26 @@ import (
 	ibctransferkeeper "github.com/cosmos/ibc-go/v8/modules/apps/transfer/keeper"
 	ibckeeper "github.com/cosmos/ibc-go/v8/modules/core/keeper"
 
-	nameservicemodulekeeper "qadena_v3/x/nameservice/keeper"
-	qadenamodulekeeper "qadena_v3/x/qadena/keeper"
+	nameservicemodulekeeper "github.com/c3qtech/qadena_v3/x/nameservice/keeper"
+	qadenamodulekeeper "github.com/c3qtech/qadena_v3/x/qadena/keeper"
 
-	dsvsmodulekeeper "qadena_v3/x/dsvs/keeper"
-	pricefeedmodulekeeper "qadena_v3/x/pricefeed/keeper"
+	dsvsmodulekeeper "github.com/c3qtech/qadena_v3/x/dsvs/keeper"
+	pricefeedmodulekeeper "github.com/c3qtech/qadena_v3/x/pricefeed/keeper"
 
-	c "qadena_v3/x/qadena/common"
+	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 
 	cosmossdkversion "github.com/cosmos/cosmos-sdk/version"
 
 	// this line is used by starport scaffolding # stargate/app/moduleImport
 
-	"qadena_v3/docs"
+	"github.com/c3qtech/qadena_v3/docs"
 
 	sdkante "github.com/cosmos/cosmos-sdk/x/auth/ante"
 	// 	qadena
-	ante "qadena_v3/app/ante"
-	post "qadena_v3/app/post"
+	ante "github.com/c3qtech/qadena_v3/app/ante"
+	post "github.com/c3qtech/qadena_v3/app/post"
 
-	cmdcfg "qadena_v3/cmd/config"
+	cmdcfg "github.com/c3qtech/qadena_v3/cmd/config"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	//enccodec "github.com/evmos/evmos/v18/encoding/codec"

@@ -3,8 +3,8 @@ package qadena
 import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"qadena_v3/x/qadena/keeper"
-	"qadena_v3/x/qadena/types"
+	"github.com/c3qtech/qadena_v3/x/qadena/keeper"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 )
 
 // InitGenesis initializes the module's state from a provided genesis state.

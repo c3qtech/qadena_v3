@@ -6,9 +6,9 @@ import (
 	errorsmod "cosmossdk.io/errors"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"qadena_v3/x/qadena/common"
+	"github.com/c3qtech/qadena_v3/x/qadena/common"
 
-	"qadena_v3/x/qadena/types"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 )
 
 func (k msgServer) AddServiceProvider(goCtx context.Context, msg *types.MsgAddServiceProvider) (*types.MsgAddServiceProviderResponse, error) {

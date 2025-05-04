@@ -5,8 +5,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	keepertest "qadena_v3/testutil/keeper"
-	"qadena_v3/x/qadena/types"
+	keepertest "github.com/c3qtech/qadena_v3/testutil/keeper"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 )
 
 func TestParamsQuery(t *testing.T) {

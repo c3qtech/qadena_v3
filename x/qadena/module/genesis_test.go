@@ -3,10 +3,10 @@ package qadena_test
 import (
 	"testing"
 
-	keepertest "qadena_v3/testutil/keeper"
-	"qadena_v3/testutil/nullify"
-	qadena "qadena_v3/x/qadena/module"
-	"qadena_v3/x/qadena/types"
+	keepertest "github.com/c3qtech/qadena_v3/testutil/keeper"
+	"github.com/c3qtech/qadena_v3/testutil/nullify"
+	qadena "github.com/c3qtech/qadena_v3/x/qadena/module"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 
 	"github.com/stretchr/testify/require"
 )

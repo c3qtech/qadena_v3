@@ -3,9 +3,9 @@ package keeper
 import (
 	"context"
 
-	"qadena_v3/x/qadena/types"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 
-	"qadena_v3/x/qadena/common"
+	"github.com/c3qtech/qadena_v3/x/qadena/common"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"google.golang.org/grpc/codes"

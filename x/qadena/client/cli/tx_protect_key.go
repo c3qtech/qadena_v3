@@ -5,7 +5,7 @@ import (
 
 	"github.com/hashicorp/vault/shamir"
 
-	"qadena_v3/x/qadena/types"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
@@ -14,8 +14,8 @@ import (
 	"errors"
 	"fmt"
 
-	qadenatx "qadena_v3/x/qadena/client/tx"
-	c "qadena_v3/x/qadena/common"
+	qadenatx "github.com/c3qtech/qadena_v3/x/qadena/client/tx"
+	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 )
 
 var _ = strconv.Itoa(0)

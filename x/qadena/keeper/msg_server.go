@@ -1,7 +1,7 @@
 package keeper
 
 import (
-	"qadena_v3/x/qadena/types"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 )
 
 type msgServer struct {

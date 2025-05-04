@@ -1,7 +1,7 @@
 syntax = "proto3";
 package qadena.qadena;
 
-option go_package = "qadena_v3/x/qadena/types";
+option go_package = "github.com/c3qtech/qadena_v3/x/qadena/types";
 import "qadena/qadena/ec_point.proto";
 import "qadena/qadena/bigint.proto";
 import "qadena/qadena/b_v_shared_secret.proto";

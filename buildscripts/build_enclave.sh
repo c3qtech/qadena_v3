@@ -64,7 +64,7 @@ if [[ $build_reproducible == 1 ]] ; then
     ldd --version
     ego-go version
     echo "Build..."
-    ego-go build -buildvcs=false -ldflags="-s -w" -trimpath -o $enclave_path/qadenad_enclave -mod=vendor qadena_v3/cmd/qadenad_enclave || exit 1
+    ego-go build -buildvcs=false -ldflags="-s -w" -trimpath -o $enclave_path/qadenad_enclave -mod=vendor github.com/c3qtech/qadena_v3/cmd/qadenad_enclave || exit 1
     cd $enclave_path
 #    cp qadenad_enclave qadenad_enclave.unsigned
     echo "Signing qadenad_enclave executable"
@@ -104,7 +104,7 @@ else
   echo "$TITLE BUILD DEBUG ENCLAVE $VERSION"
   echo "-------------------"
   cd $qadenabuild
-  go build -trimpath -o $enclave_path/qadenad_enclave -mod=vendor qadena_v3/cmd/qadenad_enclave || exit 1
+  go build -trimpath -o $enclave_path/qadenad_enclave -mod=vendor github.com/c3qtech/qadena_v3/cmd/qadenad_enclave || exit 1
 
 fi
 

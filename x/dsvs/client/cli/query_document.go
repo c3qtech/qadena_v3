@@ -4,15 +4,16 @@ import (
 	"context"
 	"encoding/hex"
 
-	dsvstypes "qadena_v3/x/dsvs/types"
-	"qadena_v3/x/qadena/types"
+	dsvstypes "github.com/c3qtech/qadena_v3/x/dsvs/types"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/spf13/cobra"
 
 	"fmt"
-	c "qadena_v3/x/qadena/common"
+
+	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 )
 
 func CmdListDocument() *cobra.Command {

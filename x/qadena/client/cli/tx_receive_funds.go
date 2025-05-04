@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"strconv"
 
-	"qadena_v3/x/qadena/types"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
@@ -16,7 +16,7 @@ import (
 
 	"fmt"
 
-	qadenatx "qadena_v3/x/qadena/client/tx"
+	qadenatx "github.com/c3qtech/qadena_v3/x/qadena/client/tx"
 	//	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	//	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 
@@ -29,7 +29,7 @@ import (
 
 	"github.com/cometbft/cometbft/crypto/tmhash"
 
-	c "qadena_v3/x/qadena/common"
+	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 
 	"cosmossdk.io/math"
 )

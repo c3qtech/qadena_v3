@@ -4,11 +4,11 @@ package keeper
 import (
 	"context"
 
-	"qadena_v3/x/qadena/types"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	c "qadena_v3/x/qadena/common"
+	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 )
 
 func (k msgServer) UpdateIntervalPublicKeyID(goCtx context.Context, msg *types.MsgUpdateIntervalPublicKeyID) (*types.MsgUpdateIntervalPublicKeyIDResponse, error) {

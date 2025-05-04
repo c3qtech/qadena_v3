@@ -9,8 +9,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	qadenacommon "qadena_v3/x/qadena/common"
-	"qadena_v3/x/qadena/types"
+	qadenacommon "github.com/c3qtech/qadena_v3/x/qadena/common"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 )
 
 var signer []byte

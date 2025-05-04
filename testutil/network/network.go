@@ -7,7 +7,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/testutil/network"
 	"github.com/stretchr/testify/require"
 
-	"qadena_v3/app"
+	"github.com/c3qtech/qadena_v3/app"
 )
 
 type (

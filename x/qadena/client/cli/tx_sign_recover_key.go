@@ -6,14 +6,14 @@ import (
 	"strconv"
 	"time"
 
-	c "qadena_v3/x/qadena/common"
+	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 
-	"qadena_v3/x/qadena/types"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
 
-	qadenatx "qadena_v3/x/qadena/client/tx"
+	qadenatx "github.com/c3qtech/qadena_v3/x/qadena/client/tx"
 
 	"github.com/spf13/cobra"
 )

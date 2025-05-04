@@ -3,7 +3,7 @@ package types
 import (
 	"context"
 
-	pricefeedtypes "qadena_v3/x/pricefeed/types"
+	pricefeedtypes "github.com/c3qtech/qadena_v3/x/pricefeed/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"

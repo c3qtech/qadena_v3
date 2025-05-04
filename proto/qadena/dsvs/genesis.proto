@@ -9,7 +9,7 @@ import "qadena/dsvs/document_hash.proto";
 import "qadena/dsvs/document.proto";
 import "qadena/dsvs/authorized_signatory.proto";
 
-option go_package = "qadena_v3/x/dsvs/types";
+option go_package = "github.com/c3qtech/qadena_v3/x/dsvs/types";
 
 // GenesisState defines the dsvs module's genesis state.
 message GenesisState {

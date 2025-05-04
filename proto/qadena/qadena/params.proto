@@ -7,11 +7,11 @@ import "gogoproto/gogo.proto";
 import "cosmos/base/v1beta1/coin.proto";
 
 
-option go_package = "qadena_v3/x/qadena/types";
+option go_package = "github.com/c3qtech/qadena_v3/x/qadena/types";
 
 // Params defines the parameters for the module.
 message Params {
-  option (amino.name) = "qadena_v3/x/qadena/Params";
+  option (amino.name) = "github.com/c3qtech/qadena_v3/x/qadena/Params";
   option (gogoproto.equal) = true;
 
   cosmos.base.v1beta1.Coin  create_wallet_incentive = 1

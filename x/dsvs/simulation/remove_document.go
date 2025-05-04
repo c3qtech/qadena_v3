@@ -3,8 +3,8 @@ package simulation
 import (
 	"math/rand"
 
-	"qadena_v3/x/dsvs/keeper"
-	"qadena_v3/x/dsvs/types"
+	"github.com/c3qtech/qadena_v3/x/dsvs/keeper"
+	"github.com/c3qtech/qadena_v3/x/dsvs/types"
 
 	"github.com/cosmos/cosmos-sdk/baseapp"
 	sdk "github.com/cosmos/cosmos-sdk/types"

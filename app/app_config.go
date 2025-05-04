@@ -53,18 +53,18 @@ import (
 	ibcexported "github.com/cosmos/ibc-go/v8/modules/core/exported"
 	"google.golang.org/protobuf/types/known/durationpb"
 
-	dsvsmodulev1 "qadena_v3/api/qadena/dsvs/module"
-	nameservicemodulev1 "qadena_v3/api/qadena/nameservice/module"
-	pricefeedmodulev1 "qadena_v3/api/qadena/pricefeed/module"
-	qadenamodulev1 "qadena_v3/api/qadena/qadena/module"
-	_ "qadena_v3/x/dsvs/module" // import for side-effects
-	dsvsmoduletypes "qadena_v3/x/dsvs/types"
-	_ "qadena_v3/x/nameservice/module" // import for side-effects
-	nameservicemoduletypes "qadena_v3/x/nameservice/types"
-	_ "qadena_v3/x/pricefeed/module" // import for side-effects
-	pricefeedmoduletypes "qadena_v3/x/pricefeed/types"
-	_ "qadena_v3/x/qadena/module" // import for side-effects
-	qadenamoduletypes "qadena_v3/x/qadena/types"
+	dsvsmodulev1 "github.com/c3qtech/qadena_v3/api/qadena/dsvs/module"
+	nameservicemodulev1 "github.com/c3qtech/qadena_v3/api/qadena/nameservice/module"
+	pricefeedmodulev1 "github.com/c3qtech/qadena_v3/api/qadena/pricefeed/module"
+	qadenamodulev1 "github.com/c3qtech/qadena_v3/api/qadena/qadena/module"
+	_ "github.com/c3qtech/qadena_v3/x/dsvs/module" // import for side-effects
+	dsvsmoduletypes "github.com/c3qtech/qadena_v3/x/dsvs/types"
+	_ "github.com/c3qtech/qadena_v3/x/nameservice/module" // import for side-effects
+	nameservicemoduletypes "github.com/c3qtech/qadena_v3/x/nameservice/types"
+	_ "github.com/c3qtech/qadena_v3/x/pricefeed/module" // import for side-effects
+	pricefeedmoduletypes "github.com/c3qtech/qadena_v3/x/pricefeed/types"
+	_ "github.com/c3qtech/qadena_v3/x/qadena/module" // import for side-effects
+	qadenamoduletypes "github.com/c3qtech/qadena_v3/x/qadena/types"
 	// this line is used by starport scaffolding # stargate/app/moduleImport
 )
 

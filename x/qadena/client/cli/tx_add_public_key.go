@@ -3,8 +3,8 @@ package cli
 import (
 	"strconv"
 
-	qadenatx "qadena_v3/x/qadena/client/tx"
-	"qadena_v3/x/qadena/types"
+	qadenatx "github.com/c3qtech/qadena_v3/x/qadena/client/tx"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"

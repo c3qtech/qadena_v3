@@ -3,7 +3,7 @@ package keeper
 import (
 	"context"
 
-	"qadena_v3/x/pricefeed/types"
+	"github.com/c3qtech/qadena_v3/x/pricefeed/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"google.golang.org/grpc/codes"

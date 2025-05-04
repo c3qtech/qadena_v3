@@ -3,10 +3,10 @@ package dsvs_test
 import (
 	"testing"
 
-	keepertest "qadena_v3/testutil/keeper"
-	"qadena_v3/testutil/nullify"
-	dsvs "qadena_v3/x/dsvs/module"
-	"qadena_v3/x/dsvs/types"
+	keepertest "github.com/c3qtech/qadena_v3/testutil/keeper"
+	"github.com/c3qtech/qadena_v3/testutil/nullify"
+	dsvs "github.com/c3qtech/qadena_v3/x/dsvs/module"
+	"github.com/c3qtech/qadena_v3/x/dsvs/types"
 
 	"github.com/stretchr/testify/require"
 )

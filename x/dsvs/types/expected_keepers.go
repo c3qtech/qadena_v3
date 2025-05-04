@@ -3,7 +3,7 @@ package types
 import (
 	"context"
 
-	qadenatypes "qadena_v3/x/qadena/types"
+	qadenatypes "github.com/c3qtech/qadena_v3/x/qadena/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )

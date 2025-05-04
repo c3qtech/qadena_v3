@@ -5,9 +5,9 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"qadena_v3/x/qadena/common"
+	"github.com/c3qtech/qadena_v3/x/qadena/common"
 
-	"qadena_v3/x/qadena/types"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 )
 
 func (k msgServer) PioneerUpdateEnclaveIdentity(goCtx context.Context, msg *types.MsgPioneerUpdateEnclaveIdentity) (*types.MsgPioneerUpdateEnclaveIdentityResponse, error) {

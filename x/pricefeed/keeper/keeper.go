@@ -12,9 +12,10 @@ import (
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	pricefeedtypes "qadena_v3/x/pricefeed/types"
 	"sort"
 	"time"
+
+	pricefeedtypes "github.com/c3qtech/qadena_v3/x/pricefeed/types"
 
 	"cosmossdk.io/math"
 	errorsmod "github.com/pkg/errors" // Add this line to import the errorsmod package

@@ -17,8 +17,8 @@ import (
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 	"github.com/stretchr/testify/require"
 
-	"qadena_v3/x/qadena/keeper"
-	"qadena_v3/x/qadena/types"
+	"github.com/c3qtech/qadena_v3/x/qadena/keeper"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 )
 
 func QadenaKeeper(t testing.TB) (keeper.Keeper, sdk.Context) {

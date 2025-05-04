@@ -17,8 +17,8 @@ import (
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 	"github.com/stretchr/testify/require"
 
-	"qadena_v3/x/dsvs/keeper"
-	"qadena_v3/x/dsvs/types"
+	"github.com/c3qtech/qadena_v3/x/dsvs/keeper"
+	"github.com/c3qtech/qadena_v3/x/dsvs/types"
 )
 
 func DsvsKeeper(t testing.TB) (keeper.Keeper, sdk.Context) {

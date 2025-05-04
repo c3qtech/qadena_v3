@@ -3,8 +3,8 @@ package nameservice
 import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"qadena_v3/x/nameservice/keeper"
-	"qadena_v3/x/nameservice/types"
+	"github.com/c3qtech/qadena_v3/x/nameservice/keeper"
+	"github.com/c3qtech/qadena_v3/x/nameservice/types"
 )
 
 // InitGenesis initializes the module's state from a provided genesis state.

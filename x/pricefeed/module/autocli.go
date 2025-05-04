@@ -3,7 +3,7 @@ package pricefeed
 import (
 	autocliv1 "cosmossdk.io/api/cosmos/autocli/v1"
 
-	modulev1 "qadena_v3/api/qadena/pricefeed"
+	modulev1 "github.com/c3qtech/qadena_v3/api/qadena/pricefeed"
 )
 
 // AutoCLIOptions implements the autocli.HasAutoCLIConfig interface.

@@ -3,12 +3,13 @@ package keeper
 import (
 	"context"
 
-	"qadena_v3/x/qadena/types"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"qadena_v3/x/qadena/common"
 	"strings"
+
+	"github.com/c3qtech/qadena_v3/x/qadena/common"
 )
 
 func (k msgServer) PioneerUpdateJarRegulator(goCtx context.Context, msg *types.MsgPioneerUpdateJarRegulator) (*types.MsgPioneerUpdateJarRegulatorResponse, error) {

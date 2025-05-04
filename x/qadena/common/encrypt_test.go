@@ -6,7 +6,8 @@ import (
 	"testing"
 
 	"math/big"
-	types "qadena_v3/x/qadena/types"
+
+	types "github.com/c3qtech/qadena_v3/x/qadena/types"
 )
 
 func TestEncryptDecryptEWA(t *testing.T) {

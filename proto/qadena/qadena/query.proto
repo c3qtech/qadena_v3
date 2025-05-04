@@ -21,7 +21,7 @@ import "cosmos/base/v1beta1/coin.proto";
 import "qadena/qadena/b_pedersen_commit.proto";
 import "qadena/qadena/enclave_identity.proto";
 
-option go_package = "qadena_v3/x/qadena/types";
+option go_package = "github.com/c3qtech/qadena_v3/x/qadena/types";
 
 // Query defines the gRPC querier service.
 service Query {

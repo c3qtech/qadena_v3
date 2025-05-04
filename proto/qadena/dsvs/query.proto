@@ -12,7 +12,7 @@ import "qadena/dsvs/document.proto";
 import "qadena/dsvs/authorized_signatory.proto";
 import "qadena/dsvs/v_share_authorized_signatory.proto";
 
-option go_package = "qadena_v3/x/dsvs/types";
+option go_package = "github.com/c3qtech/qadena_v3/x/dsvs/types";
 
 // Query defines the gRPC querier service.
 service Query {

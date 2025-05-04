@@ -10,9 +10,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	keepertest "qadena_v3/testutil/keeper"
-	"qadena_v3/testutil/nullify"
-	"qadena_v3/x/pricefeed/types"
+	keepertest "github.com/c3qtech/qadena_v3/testutil/keeper"
+	"github.com/c3qtech/qadena_v3/testutil/nullify"
+	"github.com/c3qtech/qadena_v3/x/pricefeed/types"
 )
 
 // Prevent strconv unused error

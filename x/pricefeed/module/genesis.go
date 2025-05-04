@@ -3,8 +3,8 @@ package pricefeed
 import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"qadena_v3/x/pricefeed/keeper"
-	"qadena_v3/x/pricefeed/types"
+	"github.com/c3qtech/qadena_v3/x/pricefeed/keeper"
+	"github.com/c3qtech/qadena_v3/x/pricefeed/types"
 )
 
 // InitGenesis initializes the module's state from a provided genesis state.

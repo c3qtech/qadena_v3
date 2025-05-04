@@ -3,8 +3,8 @@ package keeper
 import (
 	"fmt"
 
-	c "qadena_v3/x/qadena/common"
-	"qadena_v3/x/qadena/types"
+	c "github.com/c3qtech/qadena_v3/x/qadena/common"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
