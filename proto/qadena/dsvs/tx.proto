@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package qadena.dsvs;
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+import "qadena/dsvs/params.proto";
+import "qadena/dsvs/v_share_signatory.proto";
+import "qadena/dsvs/v_share_authorized_signatory.proto";
+
+option go_package = "qadena/x/dsvs/types";
+
+// Msg defines the Msg service.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+  
+  // UpdateParams defines a (governance) operation for updating the module
+  // parameters. The authority defaults to the x/gov module account.
+  rpc UpdateParams (MsgUpdateParams) returns (MsgUpdateParamsResponse);
+  
+  // AUTHORIZATION:
+  // make sure that the creator *IS* the dsvs service provider
+  // make sure that all the required signatory vshares ccPubK has ss interval public key
+  rpc CreateDocument (MsgCreateDocument) returns (MsgCreateDocumentResponse);
+  
+  // AUTHORIZATION:
+  // make sure that the creator *HAS* the dsvs service provider, and that the signatory vshare ccPubK has its public key
+  // make sure that the signatory vshare ccPubK has ss interval public key
+  rpc SignDocument                (MsgSignDocument               ) returns (MsgSignDocumentResponse               );
+  rpc RegisterAuthorizedSignatory (MsgRegisterAuthorizedSignatory) returns (MsgRegisterAuthorizedSignatoryResponse);
+  rpc RemoveDocument              (MsgRemoveDocument             ) returns (MsgRemoveDocumentResponse             );
+}
+// MsgUpdateParams is the Msg/UpdateParams request type.
+message MsgUpdateParams {
+  option (cosmos.msg.v1.signer) =                     "authority";
+  option           (amino.name) = "qadena/x/dsvs/MsgUpdateParams";
+  
+  // authority is the address that controls the module (defaults to x/gov unless overwritten).
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+  // params defines the module parameters to update.
+  
+  // NOTE: All parameters must be supplied.
+  Params params = 2 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+}
+
+// MsgUpdateParamsResponse defines the response structure for executing a
+// MsgUpdateParams message.
+message MsgUpdateParamsResponse {}
+
+message MsgCreateDocument {
+  option (cosmos.msg.v1.signer) = "creator";
+           string          creator           = 1;
+           string          documentID        = 2;
+           string          documentType      = 3;
+           string          companyName       = 4;
+  repeated VShareSignatory requiredSignatory = 5;
+           bytes           hash              = 6;
+}
+
+message MsgCreateDocumentResponse {}
+
+message MsgSignDocument {
+  option (cosmos.msg.v1.signer) = "creator";
+  string          creator            = 1;
+  VShareSignatory completedSignatory = 2;
+  bytes           currentHash        = 3;
+  bytes           hash               = 4;
+}
+
+message MsgSignDocumentResponse {}
+
+message MsgRegisterAuthorizedSignatory {
+  option (cosmos.msg.v1.signer) = "creator";
+  string                    creator                   = 1;
+  VShareAuthorizedSignatory vShareAuthorizedSignatory = 2;
+}
+
+message MsgRegisterAuthorizedSignatoryResponse {}
+
+message MsgRemoveDocument {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator    = 1;
+  string documentID = 2;
+}
+
+message MsgRemoveDocumentResponse {}
+

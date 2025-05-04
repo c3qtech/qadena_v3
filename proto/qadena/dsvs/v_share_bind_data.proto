@@ -1,0 +1,27 @@
+syntax = "proto3";
+package qadena.dsvs;
+
+option go_package = "qadena/x/dsvs/types";
+import "qadena/dsvs/ec_point.proto";
+import "qadena/dsvs/bigint.proto";
+import "qadena/dsvs/b_v_shared_secret.proto";
+
+message VShareBindData {
+  repeated VShareBindDataInternal Data = 1;
+}
+
+message BECPointInfo {
+  BECPoint ECPoint = 1;
+  string NodeType = 2;
+  string NodeID = 3;
+}
+
+message VShareBindDataInternal {
+  BInt W = 1;
+  BInt Z = 2;
+  BECPoint C = 3;
+  BECPointInfo Y = 4;
+  repeated BECPointInfo Cc = 5;
+  BVSharedSecret R = 6;
+  repeated BVSharedSecret Rr = 7;
+}

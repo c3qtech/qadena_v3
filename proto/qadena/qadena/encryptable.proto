@@ -1,0 +1,215 @@
+syntax = "proto3";
+package qadena.qadena;
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "cosmos/base/v1beta1/coin.proto";
+
+import "gogoproto/gogo.proto";
+import "qadena/qadena/params.proto";
+import "qadena/qadena/suspicious_transaction.proto";
+import "qadena/qadena/pedersen_commit.proto";
+import "qadena/qadena/bind_data.proto";
+import "qadena/qadena/range_proof.proto";
+import "qadena/qadena/b_pedersen_commit.proto";
+import "qadena/qadena/v_share_bind_data.proto";
+import "qadena/qadena/share.proto";
+import "qadena/qadena/secret_share_priv_k.proto";
+import "qadena/qadena/recover_share.proto";
+import "qadena/qadena/bulk_credential.proto";
+import "qadena/qadena/bigint.proto";
+
+import "google/protobuf/timestamp.proto";
+
+
+option go_package = "qadena/x/qadena/types";
+
+message EncryptableString {
+	string Value = 1;
+}
+
+message EncryptableClaimCredentialExtraParms {
+	bytes EncCredentialInfoVShare = 1;
+	VShareBindData CredentialInfoVShareBind = 2;
+	string WalletID = 3;
+	BPedersenCommit FindCredentialPC = 4;
+	BPedersenCommit NewCredentialPC = 5;
+	bytes EncWalletIDVShare = 6;
+	VShareBindData WalletIDVShareBind = 7;
+	bytes EncCredentialHashVShare = 8;
+	VShareBindData CredentialHashVShareBind = 9;
+	EncryptablePedersenCommit ZeroPC = 10;
+	BPedersenCommit ClaimPC = 11;
+}
+
+message EncryptableAuthorizedSignatory {
+	string Nonce = 1;
+	string WalletID = 2;
+}
+
+message EncryptableSignatory {
+	string Nonce = 1;
+	string Email = 2;
+	string PhoneNumber = 3;
+}
+
+message EncryptableWalletAmount {
+	string Nonce = 1;
+	string TransactionID = 2;
+	EncryptablePedersenCommit PedersenCommit = 3;
+	string Note = 4;
+	string RequiredSenderPIN = 5;
+	string RequiredSenderFirstName = 6;
+	string RequiredSenderMiddleName = 7;
+	string RequiredSenderLastName = 8;
+}
+
+message EncryptablePersonalInfoDetails {
+    string FirstName = 1;
+    string MiddleName = 2;
+    string LastName = 3;
+    string Birthdate = 4;
+    string Citizenship = 5;  // e.g US,PH,...
+    string Residency = 6;
+    string Gender = 7;
+}
+
+message EncryptablePersonalInfo {
+    string Nonce = 1;
+    string PIN = 2;
+    EncryptablePersonalInfoDetails Details = 3; 
+}
+
+message EncryptableSingleContactInfoDetails {
+    string Contact = 1;
+}
+
+message EncryptableSingleContactInfo {
+    string Nonce = 1;
+    string PIN = 2;
+    EncryptableSingleContactInfoDetails Details = 3; 
+}
+
+message EncryptableValidatedCredential {
+	string CredentialType = 1;
+	string PIN = 2;
+	BPedersenCommit CredentialPC = 3;
+}
+
+message EncryptableValidatedCredentials {
+	repeated EncryptableValidatedCredential Credentials = 1;
+}
+
+message EncryptableCreateWalletEWalletIDExtraParms {
+	BPedersenCommit ProofPC = 1;
+}
+
+message EncryptableCreateWalletEWalletID {
+	string Nonce = 1;
+	string WalletID = 2;
+	EncryptableCreateWalletEWalletIDExtraParms ExtraParms = 3;
+}
+
+
+message EncryptableCreateWallet {
+	EncryptableCreateWalletEWalletID DstEWalletID = 1;
+}
+
+
+
+message EncryptableTransferFundsEWalletIDExtraParms {
+	BPedersenCommit AcceptPasswordPC = 1;
+	bytes MatchFirstNameHashHex = 2;
+	bytes MatchMiddleNameHashHex = 3;
+	bytes MatchLastNameHashHex = 4;
+
+	BPedersenCommit RequiredSenderFirstNameCheckPC = 5;
+	BPedersenCommit RequiredSenderFirstNameProofPC = 6;
+	BPedersenCommit RequiredSenderMiddleNameCheckPC = 7;
+	BPedersenCommit RequiredSenderMiddleNameProofPC = 8;
+	BPedersenCommit RequiredSenderLastNameCheckPC = 9;
+	BPedersenCommit RequiredSenderLastNameProofPC = 10;
+}
+
+message EncryptableTransferFundsEWalletID {
+	string Nonce = 1;
+	string WalletID = 2;
+	EncryptableTransferFundsEWalletIDExtraParms ExtraParms = 3;
+}
+
+
+message EncryptableTransferFunds {
+	EncryptablePedersenCommit HiddenTransferPC = 1;
+	EncryptableTransferFundsEWalletID DstEWalletID = 2;
+	string OptInReason = 3;
+}
+
+
+message EncryptableReceiveFundsEWalletIDExtraParms {
+	string Queue = 1;
+}
+
+message EncryptableReceiveFundsEWalletID {
+	string Nonce = 1;
+	string WalletID = 2;
+	EncryptableReceiveFundsEWalletIDExtraParms ExtraParms = 3;
+}
+
+message EncryptableSignRecoverKeyEWalletID {
+	string Nonce = 1;
+	string WalletID = 2;
+}
+
+
+
+message EncryptableReceiveFunds {
+	EncryptableReceiveFundsEWalletID EphEWalletID = 1;
+}
+
+
+message EncryptableAnonTransferFunds {
+	EncryptablePedersenCommit TotalTransferPrimePC = 1;
+	BInt TransparentTransferBF = 2;
+}
+
+message EncryptableESuspiciousAmount {
+	string Nonce = 1;
+	cosmos.base.v1beta1.Coin USDCoinAmount = 2;
+	cosmos.base.v1beta1.Coin CoinAmount = 3;
+}
+
+message EncryptableSSIDAndPrivK {
+	string PubKID = 1;
+	string PubK = 2;
+	string PrivK = 3;
+}
+
+message EncryptablePioneerIDs {
+	repeated string PioneerIDs = 1;
+}
+
+message EncryptableEnclaveSSOwnerMap {
+	map<string, EncryptablePioneerIDs> Pioneers = 1;
+}
+
+message EncryptableEnclavePubKCacheMap {
+	map<string, string> PubKs = 1;
+}
+
+message EncryptableSharedEnclaveParams {
+	string JarID = 1;
+	string JarArmorPrivK = 2;
+	string JarPrivK = 3;
+	string JarPubK = 4;
+
+	string RegulatorID = 5;
+	string RegulatorArmorPrivK = 6;
+	string RegulatorPrivK = 7;
+	string RegulatorPubK = 8;
+
+	// these only used temporarily to sync data from enclave to enclave
+	EncryptableEnclaveSSOwnerMap SSIntervalOwners = 9;
+	EncryptableEnclavePubKCacheMap SSIntervalPubKCache = 10;
+}
+

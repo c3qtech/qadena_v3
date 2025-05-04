@@ -1,0 +1,11 @@
+syntax = "proto3";
+package qadena.dsvs;
+
+option go_package = "qadena/x/dsvs/types";
+
+message DocumentHash {
+  bytes hash = 1; 
+  string documentID = 2; 
+  
+}
+

@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package qadena.qadena;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+import "qadena/qadena/params.proto";
+import "qadena/qadena/credential.proto";
+import "qadena/qadena/public_key.proto";
+import "qadena/qadena/wallet.proto";
+import "qadena/qadena/interval_public_key_i_d.proto";
+import "qadena/qadena/pioneer_jar.proto";
+import "qadena/qadena/jar_regulator.proto";
+import "qadena/qadena/suspicious_transaction.proto";
+import "qadena/qadena/protect_key.proto";
+import "qadena/qadena/recover_key.proto";
+import "qadena/qadena/enclave_identity.proto";
+
+option go_package = "qadena/x/qadena/types";
+
+// GenesisState defines the qadena module's genesis state.
+message GenesisState {
+  
+  // params defines all the parameters of the module.
+           Params                params                     =  1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+  repeated Credential            credentialList             =  2 [(gogoproto.nullable) = false] ;
+  repeated PublicKey             publicKeyList              =  3 [(gogoproto.nullable) = false] ;
+  repeated Wallet                walletList                 =  4 [(gogoproto.nullable) = false] ;
+  repeated IntervalPublicKeyID   intervalPublicKeyIDList    =  5 [(gogoproto.nullable) = false] ;
+  repeated PioneerJar            pioneerJarList             =  6 [(gogoproto.nullable) = false] ;
+  repeated JarRegulator          jarRegulatorList           =  7 [(gogoproto.nullable) = false] ;
+  repeated SuspiciousTransaction suspiciousTransactionList  =  8 [(gogoproto.nullable) = false] ;
+           uint64                suspiciousTransactionCount =  9;
+  repeated ProtectKey            protectKeyList             = 10 [(gogoproto.nullable) = false] ;
+  repeated RecoverKey            recoverKeyList             = 11 [(gogoproto.nullable) = false] ;
+  repeated EnclaveIdentity       enclaveIdentityList        = 12 [(gogoproto.nullable) = false] ;
+}
+

@@ -1,0 +1,15 @@
+syntax = "proto3";
+package qadena.dsvs;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "qadena/x/dsvs/types";
+
+// Params defines the parameters for the module.
+message Params {
+  option (amino.name) = "qadena/x/dsvs/Params";
+  option (gogoproto.equal) = true;
+
+  
+}

@@ -1,0 +1,20 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "qadena/x/qadena/types";
+import "qadena/qadena/ec_point.proto"; 
+import "qadena/qadena/bigint.proto";
+
+message EncryptablePedersenCommit {
+  BInt a = 1;
+  BInt x = 2;
+}
+
+/* DEPRECATED
+message PedersenCommit {
+  string a = 1; 
+  string x = 2; 
+  ECPoint c = 3; 
+}
+*/
+

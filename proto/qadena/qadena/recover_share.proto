@@ -1,0 +1,11 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "qadena/x/qadena/types";
+
+// ignite scaffold type RecoverShare walletID encWalletPubKShare
+
+message RecoverShare {
+  string walletID = 1; 
+  bytes encWalletPubKShare = 2; 
+}

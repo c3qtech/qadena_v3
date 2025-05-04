@@ -1,0 +1,40 @@
+How to build, deploy, use and convert ERC20 tokens to native cosmos tokens in QADENA
+
+# Pre-requisite
+- Install npm/node
+    - It's recommended to use nvm so switching node versions can be easily attained (https://github.com/nvm-sh/nvm)
+    - Or you can also install using the default installation of node (https://nodejs.org/en/download/)
+- A running qadena chain (please refer to HOWTO-DEMO.txt)
+
+1. Go to test_token directory
+$ cd cmd/test_token && npm install
+
+2. Build the project
+$ npm run build
+
+2. Deploy sample fake tokens
+$ npm run deploy-fbtc && npm run deploy-feth
+
+    Note: The `smart_contract_address` will be provided after the smart contract deployment successfully completed.
+    You can see it inside your terminal where you run the `npm run deploy-fbtc && npm run deploy-feth` command.
+
+4. Execute the governance script
+$ ./deploy.sh {fbtc_contract_address} {feth_contract_address}
+
+After a successful deployment, the new token proposal should be passed (after 5 mins) and later when you do `qadenad query qadena show-wallet ann`
+it should show you the a new tokens with 0 balance.
+
+5. Transfer the initial token balance from the contract to native qadena wallet address
+
+$ qadenad tx erc20 convert-erc20 {fbtc_contract_address} 1000000000000000000000 qdn15fyr7wpx8j8ckm2gxfygqn48hfkq90zus4wdh7 --from ann --gas auto --gas-adjustment 1.12 --yes
+$ qadenad tx erc20 convert-erc20 {feth_contract_address} 1000000000000000000000 qdn15fyr7wpx8j8ckm2gxfygqn48hfkq90zus4wdh7 --from ann --gas auto --gas-adjustment 1.12 --yes
+
+Note: qdn15fyr7wpx8j8ckm2gxfygqn48hfkq90zus4wdh7 -> Is ann cosmos real wallet address
+
+This time when you do `qadenad query qadena show-wallet ann` it should say you have 1000 "transparent" balance for the new tokens.
+
+6. To transfer these tokens to ephemeral to real vice-versa you can use
+$ ./transfer-fbtc-feth.sh -> transfer transparent balance on real wallet to private balance on ephemeral wallet
+$ ./receive-fbtc-feth.sh -> transfer private balance on ephemeral wallet to private balance on real wallet
+
+ENJOY! :)

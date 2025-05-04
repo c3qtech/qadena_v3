@@ -1,0 +1,12 @@
+syntax = "proto3";
+package qadena.nameservice;
+
+option go_package = "qadena/x/nameservice/types";
+
+message NameBinding {
+  string credential = 1; 
+  string credentialType = 2; 
+  string address = 3; 
+  
+}
+

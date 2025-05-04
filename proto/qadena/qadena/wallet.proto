@@ -1,0 +1,78 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "qadena/x/qadena/types";
+
+import "qadena/qadena/pedersen_commit.proto";
+import "qadena/qadena/b_pedersen_commit.proto";
+import "qadena/qadena/recover_share.proto";
+import "qadena/qadena/bind_data.proto";
+import "qadena/qadena/v_share_bind_data.proto";
+
+
+message WalletAmount {
+  BPedersenCommit walletAmountPedersenCommit = 1;
+  bytes encWalletAmountVShare = 2;  // formerly encWalletAmountUserCredentialPubK
+  VShareBindData walletAmountVShareBind = 3;
+  repeated BPedersenCommit RequiredSenderCheckPC = 4;
+}
+
+message ListWalletAmount {
+  repeated WalletAmount walletAmounts = 1;
+}
+
+// WARNING:  ANY CHANGES TO WALLET MUST BE DONE TO STABLEWALLET, and c.SetStableWallet must be updated
+// THE ONLY DIFFERENCE IS THAT MAPS ARE CHANGED TO REPEATED
+// IF YOU ADD ANYTHING HERE, YOU MUST MAKE SURE TO MODIFY common.SetStableWallet
+message Wallet {
+  string walletID = 1; 
+  string homePioneerID = 2; 
+  repeated string serviceProviderID = 3;
+  map<string, WalletAmount> walletAmount = 4;
+  string credentialID = 5; 
+  bytes encCreateWalletVShare = 6; // 
+  VShareBindData createWalletVShareBind = 7; // formerly vShareBind
+  map<string, int32> ephemeralWalletAmountCount = 8; 
+  map<string, ListWalletAmount> queuedWalletAmount = 9; 
+  BPedersenCommit acceptPasswordPedersenCommit = 10;
+  bytes encAcceptValidatedCredentialsVShare = 11;
+  VShareBindData acceptValidatedCredentialsVShareBind = 12;
+  string senderOptions = 13;
+  repeated RecoverShare recoverShares = 14;
+}
+// WARNING:  ANY CHANGES TO WALLET MUST BE DONE TO STABLEWALLET, and c.SetStableWallet must be updated
+
+
+message StringWalletAmount {
+  string name = 1;
+  WalletAmount val = 2;
+}
+
+message StringInt32 {
+  string name = 1;
+  int32 val = 2;
+}
+
+message StringListWalletAmount {
+  string name = 1;
+  ListWalletAmount val = 2;
+}
+
+message StableWallet {
+  string walletID = 1; 
+  string homePioneerID = 2; 
+  repeated string serviceProviderID = 3;
+  repeated StringWalletAmount walletAmount = 4;
+  string credentialID = 5; 
+  bytes encCreateWalletVShare = 6; 
+  VShareBindData createWalletVShareBind = 7; 
+  repeated StringInt32 ephemeralWalletAmountCount = 8; 
+  repeated StringListWalletAmount queuedWalletAmount = 9; 
+  BPedersenCommit acceptPasswordPedersenCommit = 10;
+  bytes encAcceptValidatedCredentialsVShare = 11;
+  VShareBindData acceptValidatedCredentialsVShareBind = 12;
+  string senderOptions = 13;
+  repeated RecoverShare recoverShares = 14;
+}
+
+

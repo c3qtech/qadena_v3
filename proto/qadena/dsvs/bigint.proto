@@ -1,0 +1,9 @@
+syntax = "proto3";
+package qadena.dsvs;
+
+option go_package = "qadena/x/dsvs/types";
+
+message BInt {
+    bytes i = 1;
+}
+  

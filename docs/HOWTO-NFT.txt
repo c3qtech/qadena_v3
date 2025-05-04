@@ -1,0 +1,42 @@
+How to build, deploy and run nft marketplace using hardhat
+
+# Pre-requisite
+- Install metamask wallet (https://metamask.io/)
+    - Create a new wallet
+    - Import qadena `al` wallet into metamask using private key
+    - Import qadena `ann` wallet into metamask using private key
+- Install npm/node
+    - It's recommended to use nvm so switching node versions can be easily attained (https://github.com/nvm-sh/nvm)
+    - Or you can also install using the default installation of node (https://nodejs.org/en/download/)
+- A running qadena chain (please refer to HOWTO-DEMO.txt)
+
+1. Copy .env.exammple to .env
+$ cp .env.example .env
+
+    Then fill out the available environment, you need to sign up to infura to get project id and secret.
+
+2. Build smart contract projects
+$ ./build_smartcontracts.sh
+
+3. Deploy sample NFT smart contract
+$ ./scripts/nft/deploy_nft.sh
+
+    Note: The `smart_contract_address` will be provided after the smart contract deployment successfully completed.
+    You can see it inside your terminal where you run the `./deploy_nft.sh` command.
+
+    nftMarketplace deployed to: 0x... <-- copy this address to demo_wallet/lib/chain/chain.dart | paste the value on `nftContractAddress`
+
+4. Run the NFT Marketplace react project
+$ ./scripts/nft/run_nft_marketplace.sh
+
+    This will open a new server port running in 3000. Access it using http://localhost:3000
+
+    4.1 Create a new NFT using the UI http://localhost:3000/create-nft
+    4.2 The newly minted NFT is automatically listed on the marketplace, so in order for it to show on your wallet you must need to buy it first (will do improvements later)
+
+5. On a new terminal window. Run demo_wallet project
+$ cd demo_wallet
+$ flutter run
+
+    5.1 Login to the wallet and go to NFT section to see your owned NFT
+    5.2 Play around with it :)

@@ -1,0 +1,18 @@
+syntax = "proto3";
+package qadena.dsvs;
+
+option go_package = "qadena/x/dsvs/types";
+
+import "gogoproto/gogo.proto";
+import "google/protobuf/timestamp.proto";
+import "qadena/dsvs/v_share_bind_data.proto";
+
+
+message VShareAuthorizedSignatory {
+  bytes encAuthorizedSignatoryVShare = 1; 
+  dsvs.VShareBindData authorizedSignatoryVShareBind = 2; 
+  google.protobuf.Timestamp time = 3 [
+    (gogoproto.stdtime) = true,
+    (gogoproto.nullable) = false
+  ];
+}

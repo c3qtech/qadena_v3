@@ -1,0 +1,101 @@
+AZURE ENCLAVE NOTES
+
+1.  Sign up and Create VM on Azure
+- Services/Virtual machines
+- Create, then Virtual machine
+
+Basics tab:
+
+Project details
+- pick the right subscription (e.g. Microsoft Azure Sponsorship)
+- select or create a resource group
+
+Instance details
+- enter a virtual machine name, e.g. qadena-node-1
+- Region [e.g. (Asia Pacific) Southeast Asia]
+- azure-selected zone
+- Image (e.g. Ubuntu Server 22.04 LTS - x64 Gen2)
+- VM: x64
+- Size: (DC-Series - Designed to protect the confidentiality and integrity of code and data for general-purpose workloads)
+	DC1s_v3 (1 vcpu, 8 GB RAM) - confidential compute
+	DC4s_v3 (4 vCPU, 32 GB RAM) - $350/month
+	DC8s_v3 (8 vCPU, 64 GB RAM) - $700.80/month
+
+SSH access
+- Choose "public key" 
+    Upload .ssh/id_rsa.pub
+OR
+- Choose "create new key"
+- Download the PEM certificate needed to log in via SSH, and put it in ~/.ssh (e.g. qadena-sgx.pem)
+
+Disks tab:
+Default for OS disk size, disk type, etc.
+
+Create and attach a new disk
+1TB Premium SSD LRS
+"Delete with VM" ENABLED
+
+Networking tab:
+Defaults for most
+"Delete public IP and NIC when VM is deleted" ENABLED
+
+Management tab:
+Defaults
+
+All other tabs:
+Defaults
+
+Click "Create"
+
+
+
+Get the IP address of the VM instance (e.g. 40.115.217.217)
+
+Then do:
+  chmod 400 ~/.ssh/*.pem
+
+
+2.  ./copy_to_azure.sh ~/.ssh/qadena-sgx.pem azureuser@40.115.217.217
+
+This copies the install scripts
+
+3. Login to the VM instnace, you should be able to do something like: 
+
+  ssh -i ~/.ssh/qadena-sgx.pem azureuser@40.115.217.217
+
+4.  Install Edgeless/RT
+
+  ./install_edgelessrt.sh
+
+5.  Install EGo
+
+  ./install_ego.sh
+
+6.  Install QADENA
+
+  ./install_qadena.sh
+
+7.  Run it
+
+  ./run.sh
+
+
+-------------------------------------------------------------
+
+Ensure SGX-capable
+
+sudo apt-get update
+sudo apt-get install cpuid
+
+This is the output I got:
+
+azureuser@qadena-sgx-3:~$ cpuid | grep SGX
+      SGX: Software Guard Extensions supported = true
+      SGX_LC: SGX launch config supported      = true
+   Software Guard Extensions (SGX) capability (0x12/0):
+      SGX1 supported                         = true
+      SGX2 supported                         = true
+      SGX ENCLV E*VIRTCHILD, ESETCONTEXT     = false
+      SGX ENCLS ETRACKC, ERDINFO, ELDBC, ELDUC = false
+   SGX attributes (0x12/1):
+   SGX EPC enumeration (0x12/n):

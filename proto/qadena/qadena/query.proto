@@ -1,0 +1,450 @@
+syntax = "proto3";
+
+package qadena.qadena;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+import "cosmos/base/query/v1beta1/pagination.proto";
+import "qadena/qadena/params.proto";
+import "qadena/qadena/credential.proto";
+import "qadena/qadena/public_key.proto";
+import "qadena/qadena/wallet.proto";
+import "qadena/qadena/interval_public_key_i_d.proto";
+import "qadena/qadena/pioneer_jar.proto";
+import "qadena/qadena/jar_regulator.proto";
+import "qadena/qadena/suspicious_transaction.proto";
+import "qadena/qadena/protect_key.proto";
+import "qadena/qadena/recover_share.proto";
+import "qadena/qadena/recover_key.proto";
+import "cosmos/base/v1beta1/coin.proto";
+import "qadena/qadena/b_pedersen_commit.proto";
+import "qadena/qadena/enclave_identity.proto";
+
+option go_package = "qadena/x/qadena/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  
+  // Parameters queries the parameters of the module.
+  rpc Params (QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/qadena/qadena/params";
+  
+  }
+  
+  // Queries a list of Credential items.
+  rpc Credential    (QueryGetCredentialRequest) returns (QueryGetCredentialResponse) {
+    option (google.api.http).get = "/qadena/qadena/credential/{credentialID}/{credentialType}";
+  
+  }
+  rpc CredentialAll (QueryAllCredentialRequest) returns (QueryAllCredentialResponse) {
+    option (google.api.http).get = "/qadena/qadena/credential";
+  
+  }
+  
+  // Queries a list of PublicKey items.
+  rpc PublicKey    (QueryGetPublicKeyRequest) returns (QueryGetPublicKeyResponse) {
+    option (google.api.http).get = "/qadena/qadena/public_key/{pubKID}/{pubKType}";
+  
+  }
+  rpc PublicKeyAll (QueryAllPublicKeyRequest) returns (QueryAllPublicKeyResponse) {
+    option (google.api.http).get = "/qadena/qadena/public_key";
+  
+  }
+  
+  // Queries a list of Wallet items.
+  rpc Wallet    (QueryGetWalletRequest) returns (QueryGetWalletResponse) {
+    option (google.api.http).get = "/qadena/qadena/wallet/{walletID}";
+  
+  }
+  rpc WalletAll (QueryAllWalletRequest) returns (QueryAllWalletResponse) {
+    option (google.api.http).get = "/qadena/qadena/wallet";
+  
+  }
+  
+  // Queries a list of IntervalPublicKeyID items.
+  rpc IntervalPublicKeyID    (QueryGetIntervalPublicKeyIDRequest) returns (QueryGetIntervalPublicKeyIDResponse) {
+    option (google.api.http).get = "/qadena/qadena/interval_public_key_i_d/{nodeID}/{nodeType}";
+  
+  }
+  rpc IntervalPublicKeyIDAll (QueryAllIntervalPublicKeyIDRequest) returns (QueryAllIntervalPublicKeyIDResponse) {
+    option (google.api.http).get = "/qadena/qadena/interval_public_key_i_d";
+  
+  }
+  
+  // Queries a list of PioneerJar items.
+  rpc PioneerJar    (QueryGetPioneerJarRequest) returns (QueryGetPioneerJarResponse) {
+    option (google.api.http).get = "/qadena/qadena/pioneer_jar/{pioneerID}";
+  
+  }
+  rpc PioneerJarAll (QueryAllPioneerJarRequest) returns (QueryAllPioneerJarResponse) {
+    option (google.api.http).get = "/qadena/qadena/pioneer_jar";
+  
+  }
+  
+  // Queries a list of JarRegulator items.
+  rpc JarRegulator    (QueryGetJarRegulatorRequest) returns (QueryGetJarRegulatorResponse) {
+    option (google.api.http).get = "/qadena/qadena/jar_regulator/{jarID}";
+  
+  }
+  rpc JarRegulatorAll (QueryAllJarRegulatorRequest) returns (QueryAllJarRegulatorResponse) {
+    option (google.api.http).get = "/qadena/qadena/jar_regulator";
+  
+  }
+  
+  // Queries a list of SuspiciousTransaction items.
+  rpc SuspiciousTransaction    (QueryGetSuspiciousTransactionRequest) returns (QueryGetSuspiciousTransactionResponse) {
+    option (google.api.http).get = "/qadena/qadena/suspicious_transaction/{id}";
+  
+  }
+  rpc SuspiciousTransactionAll (QueryAllSuspiciousTransactionRequest) returns (QueryAllSuspiciousTransactionResponse) {
+    option (google.api.http).get = "/qadena/qadena/suspicious_transaction";
+  
+  }
+  
+  // Queries a list of ProtectKey items.
+  rpc ProtectKey    (QueryGetProtectKeyRequest) returns (QueryGetProtectKeyResponse) {
+    option (google.api.http).get = "/qadena/qadena/protect_key/{walletID}";
+  
+  }
+  rpc ProtectKeyAll (QueryAllProtectKeyRequest) returns (QueryAllProtectKeyResponse) {
+    option (google.api.http).get = "/qadena/qadena/protect_key";
+  
+  }
+  
+  // Queries a list of RecoverKey items.
+  rpc RecoverKey    (QueryGetRecoverKeyRequest) returns (QueryGetRecoverKeyResponse) {
+    option (google.api.http).get = "/qadena/qadena/recover_key/{walletID}";
+  
+  }
+  rpc RecoverKeyAll (QueryAllRecoverKeyRequest) returns (QueryAllRecoverKeyResponse) {
+    option (google.api.http).get = "/qadena/qadena/recover_key";
+  
+  }
+  
+  // Queries a list of Treasury items.
+  rpc Treasury (QueryTreasuryRequest) returns (QueryTreasuryResponse) {
+    option (google.api.http).get = "/qadena/qadena/treasury";
+  
+  }
+  
+  // Queries a list of Account items.
+  rpc Account (QueryAccountRequest) returns (QueryAccountResponse) {
+    option (google.api.http).get = "/qadena/qadena/account/{name}";
+  
+  }
+  
+  // Queries a list of Incentives items.
+  rpc Incentives (QueryIncentivesRequest) returns (QueryIncentivesResponse) {
+    option (google.api.http).get = "/qadena/qadena/incentives";
+  
+  }
+  
+  // Queries a list of EnclaveSyncEnclave items.
+  rpc EnclaveSyncEnclave (QueryEnclaveSyncEnclaveRequest) returns (QueryEnclaveSyncEnclaveResponse) {
+    option (google.api.http).get = "/qadena/qadena/enclave_sync_enclave/{remoteReport}/{enclavePubK}";
+  
+  }
+  
+  // Queries a list of EnclaveSecretShare items.
+  rpc EnclaveSecretShare (QueryEnclaveSecretShareRequest) returns (QueryEnclaveSecretShareResponse) {
+    option (google.api.http).get = "/qadena/qadena/enclave_secret_share/{remoteReport}/{enclavePubK}/{pubKID}";
+  
+  }
+  
+  // Queries a list of EnclaveRecoverKeyShare items.
+  rpc EnclaveRecoverKeyShare (QueryEnclaveRecoverKeyShareRequest) returns (QueryEnclaveRecoverKeyShareResponse) {
+    option (google.api.http).get = "/qadena/qadena/enclave_recover_key_share/{remoteReport}/{newWalletID}/{shareWalletID}/{encShareWalletPubK}";
+  
+  }
+
+  rpc EnclaveValidateEnclaveIdentity (QueryEnclaveValidateEnclaveIdentityRequest) returns (QueryEnclaveValidateEnclaveIdentityResponse) {
+    option (google.api.http).get = "/qadena/qadena/enclave_validate_enclave_identity/{remoteReport}/{uniqueID}/{signerID}/{productID}";
+  
+  }
+  
+  // Queries a list of FindCredential items.
+  rpc FindCredential (QueryFindCredentialRequest) returns (QueryFindCredentialResponse) {
+    option (google.api.http).get = "/qadena/qadena/find_credential/{credentialPC}/{credentialType}/{sSIntervalPubKID}/{encUserCredentialPubKSSIntervalPubK}/{encProofPCSSIntervalPubK}/{encCheckPCSSIntervalPubK}";
+  
+  }
+  
+  // Queries a list of EnclaveIdentity items.
+  rpc EnclaveIdentity    (QueryGetEnclaveIdentityRequest) returns (QueryGetEnclaveIdentityResponse) {
+    option (google.api.http).get = "/qadena/qadena/enclave_identity/{uniqueID}";
+  
+  }
+  rpc EnclaveIdentityAll (QueryAllEnclaveIdentityRequest) returns (QueryAllEnclaveIdentityResponse) {
+    option (google.api.http).get = "/qadena/qadena/enclave_identity";
+  
+  }
+}
+// QueryParamsRequest is request type for the Query/Params RPC method.
+message QueryParamsRequest {}
+
+// QueryParamsResponse is response type for the Query/Params RPC method.
+message QueryParamsResponse {
+  
+  // params holds all the parameters of this module.
+  Params params = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+}
+
+message QueryGetCredentialRequest {
+  string credentialID   = 1;
+  string credentialType = 2;
+}
+
+message QueryGetCredentialResponse {
+  Credential credential = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllCredentialRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllCredentialResponse {
+  repeated Credential                             credential = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination = 2;
+}
+
+message QueryGetPublicKeyRequest {
+  string pubKID   = 1;
+  string pubKType = 2;
+}
+
+message QueryGetPublicKeyResponse {
+  PublicKey publicKey = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllPublicKeyRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllPublicKeyResponse {
+  repeated PublicKey                              publicKey  = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination = 2;
+}
+
+message QueryGetWalletRequest {
+  string walletID = 1;
+}
+
+message QueryGetWalletResponse {
+  Wallet wallet = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllWalletRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllWalletResponse {
+  repeated Wallet                                 wallet     = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination = 2;
+}
+
+message QueryGetIntervalPublicKeyIDRequest {
+  string nodeID   = 1;
+  string nodeType = 2;
+}
+
+message QueryGetIntervalPublicKeyIDResponse {
+  IntervalPublicKeyID intervalPublicKeyID = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllIntervalPublicKeyIDRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllIntervalPublicKeyIDResponse {
+  repeated IntervalPublicKeyID                    intervalPublicKeyID = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination          = 2;
+}
+
+message QueryGetPioneerJarRequest {
+  string pioneerID = 1;
+}
+
+message QueryGetPioneerJarResponse {
+  PioneerJar pioneerJar = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllPioneerJarRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllPioneerJarResponse {
+  repeated PioneerJar                             pioneerJar = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination = 2;
+}
+
+message QueryGetJarRegulatorRequest {
+  string jarID = 1;
+}
+
+message QueryGetJarRegulatorResponse {
+  JarRegulator jarRegulator = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllJarRegulatorRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllJarRegulatorResponse {
+  repeated JarRegulator                           jarRegulator = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination   = 2;
+}
+
+message QueryGetSuspiciousTransactionRequest {
+  uint64 id = 1;
+}
+
+message QueryGetSuspiciousTransactionResponse {
+  SuspiciousTransaction SuspiciousTransaction = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllSuspiciousTransactionRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllSuspiciousTransactionResponse {
+  repeated SuspiciousTransaction                  SuspiciousTransaction = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination            = 2;
+}
+
+message QueryGetProtectKeyRequest {
+  string walletID = 1;
+}
+
+message QueryGetProtectKeyResponse {
+  ProtectKey protectKey = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllProtectKeyRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination   = 1;
+  string                                credentialID = 2;
+}
+
+message QueryAllProtectKeyResponse {
+  repeated ProtectKey                             protectKey = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination = 2;
+}
+
+message QueryGetRecoverKeyRequest {
+  string walletID = 1;
+}
+
+message QueryGetRecoverKeyResponse {
+  RecoverKey recoverKey = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllRecoverKeyRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination   = 1;
+  string                                credentialID = 2;
+}
+
+message QueryAllRecoverKeyResponse {
+  repeated RecoverKey                             recoverKey = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination = 2;
+}
+
+message QueryTreasuryRequest {}
+
+message QueryTreasuryResponse {
+  cosmos.base.v1beta1.Coin totalBalance     = 1 [(gogoproto.nullable) = false];
+  cosmos.base.v1beta1.Coin encryptedBalance = 2 [(gogoproto.nullable) = false];
+}
+
+message QueryAccountRequest {
+  string name = 1;
+}
+
+message QueryAccountResponse {
+  string transparentBalance = 1;
+  string encryptedBalance   = 2;
+}
+
+message QueryIncentivesRequest {}
+
+message QueryIncentivesResponse {
+  cosmos.base.v1beta1.Coin createWalletIncentive                     = 1 [(gogoproto.nullable) = false];
+  cosmos.base.v1beta1.Coin createEphemeralWalletIncentive            = 2 [(gogoproto.nullable) = false];
+  cosmos.base.v1beta1.Coin createWalletTransparentIncentive          = 3 [(gogoproto.nullable) = false];
+  cosmos.base.v1beta1.Coin createEphemeralWalletTransparentIncentive = 4 [(gogoproto.nullable) = false];
+}
+
+message QueryEnclaveValidateEnclaveIdentityRequest {
+  bytes remoteReport = 1;
+  string uniqueID = 2; 
+  string signerID = 3; 
+  string productID = 4; 
+}
+
+message QueryEnclaveValidateEnclaveIdentityResponse {
+  bytes remoteReport = 1;
+  string status        = 2;
+}
+
+message QueryEnclaveSyncEnclaveRequest {
+  bytes remoteReport = 1;
+  string enclavePubK  = 2;
+}
+
+message QueryEnclaveSyncEnclaveResponse {
+  bytes remoteReport                = 1;
+  bytes  encEnclaveParamsEnclavePubK = 2;
+}
+
+message QueryEnclaveSecretShareRequest {
+  bytes remoteReport = 1;
+  string enclavePubK  = 2;
+  string pubKID       = 3;
+}
+
+message QueryEnclaveSecretShareResponse {
+  bytes remoteReport              = 1;
+  bytes  encSecretShareEnclavePubK = 2;
+}
+
+message QueryEnclaveRecoverKeyShareRequest {
+  bytes remoteReport       = 1;
+  string newWalletID        = 2;
+  string shareWalletID      = 3;
+  bytes  encShareWalletPubK = 4;
+}
+
+message QueryEnclaveRecoverKeyShareResponse {
+  bytes remoteReport       = 1;
+  bytes  encShareWalletPubK = 2;
+}
+
+message QueryFindCredentialRequest {
+  bytes  credentialPC                        = 1;
+  string credentialType                      = 2;
+  string sSIntervalPubKID                    = 3;
+  bytes  encUserCredentialPubKSSIntervalPubK = 4;
+  bytes  encProofPCSSIntervalPubK            = 5;
+  bytes  encCheckPCSSIntervalPubK            = 6;
+}
+
+message QueryFindCredentialResponse {
+  bytes encPersonalInfoUserCredentialPubK = 1;
+  bytes encCredentialIDUserCredentialPubK = 2;
+}
+
+message QueryGetEnclaveIdentityRequest {
+  string uniqueID = 1;
+}
+
+message QueryGetEnclaveIdentityResponse {
+  EnclaveIdentity enclaveIdentity = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllEnclaveIdentityRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllEnclaveIdentityResponse {
+  repeated EnclaveIdentity                        enclaveIdentity = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination      = 2;
+}
+

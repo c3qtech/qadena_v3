@@ -1,0 +1,11 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "qadena/x/qadena/types";
+
+message PioneerJar {
+  string pioneerID = 1; 
+  string jarID = 2; 
+  bytes remoteReport = 3; 
+}
+

@@ -1,0 +1,16 @@
+syntax = "proto3";
+package qadena.pricefeed;
+
+import "gogoproto/gogo.proto";
+import "cosmos_proto/cosmos.proto";
+
+option go_package = "qadena/x/pricefeed/types";
+
+message CurrentPrice {
+  
+  string marketId = 1; 
+  string price = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+}

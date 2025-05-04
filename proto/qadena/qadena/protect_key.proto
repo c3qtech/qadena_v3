@@ -1,0 +1,16 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "qadena/x/qadena/types";
+import "qadena/qadena/recover_share.proto";
+
+// ignite scaffold map ProtectKey Threshold:int Recover_Share:RecoverShare --index Wallet_ID --no-message
+// then added repeated to recoverShare
+
+message ProtectKey {
+  string walletID = 1; 
+  int32 threshold = 2; 
+  repeated RecoverShare recoverShare = 3; 
+  
+}
+

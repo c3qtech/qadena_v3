@@ -1,0 +1,210 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "qadenad",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["--home", "/Users/alvillarica/qadenax", "start", "--home", "/Users/alvillarica/qadenax", "--pruning", "nothing", "--grpc.address", "0.0.0.0:9090", "--enclave-addr", "localhost:50051"]
+            
+        },
+        {
+            "name": "qadenad version",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["version"]
+            
+        },
+        {
+            "name": "enclave",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad_enclave",
+            "args": ["--home", "/Users/alvillarica/qadena", "--chain-id", "qadena_1000-1"]
+        },
+        {
+            "name": "enclave upgrade from uniqueid",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad_enclave",
+            "args": ["--home", "/Users/alvillarica/qadena", "--chain-id", "qadena_1000-1", "--upgrade-from-enclave-unique-id", "unique032"]
+        },
+        {
+            "name": "init_enclave",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["enclave", "init-enclave", "pioneer1", "127.0.0.1:9090", "jar1", "regulator1"]
+        },
+        {
+            "name": "create_wallet secdsvs",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["tx", "qadena", "create-wallet", "secdsvs", "pioneer1", "pioneer1-create-wallet-sponsor", "--account-mnemonic", "sort aspect economy pluck decrease turn slam nasty pull void deliver grit maximum tornado stove track fault loyal imitate plunge quantum boil want depend", "--service-provider", "secdsvs", "--yes"]
+        },
+        {
+            "name": "bind_credential",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["tx", "nameservice", "bind-credential", "al", "email-contact-info", "--from", "al-eph2", "--yes"]
+        },
+        {
+            "name": "create_wallet",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["tx", "qadena", "create-wallet", "testwallet2", "pioneer1", "pioneer1-create-wallet-sponsor", "--account-mnemonic", "sort aspect economy pluck decrease turn slam nasty pull void deliver grit maximum tornado stove track fault loyal imitate plunge quantum boil want depend", "--yes"]
+        },
+        {
+            "name": "create_wallet2",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["tx", "qadena", "create-wallet", "testwallet3", "pioneer1", "pioneer1-create-wallet-sponsor", "--account-mnemonic", "inherit rebel absorb diamond leopard lens approve deny balcony toast merry text metal pair diamond lumber gravity song liberty pumpkin goddess nature slush basic", "--yes"]
+        },
+        {
+            "name": "create_wallet4",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["tx", "qadena", "create-wallet", "testwallet18", "pioneer1", "pioneer1-create-wallet-sponsor", "--yes"]
+        },        {
+            "name": "create_wallet_sec_eph2",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["tx", "qadena", "create-wallet", "sec-eph5", "pioneer1", "pioneer1-create-wallet-sponsor", "--link-to-real-wallet", "sec", "--account-mnemonic", "tide ugly fork short cushion girl earth stage anger away pig screen blood frequent link become crowd visa end present share helmet brain fit", "--eph-account-index","5","--service-provider","sec", "--yes"]
+        },
+        {
+            "name": "create_document",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["tx", "dsvs", "create-document", "document1", "ByLaws", "C3Q Technologies, Inc.", "../../test_data/document1.pdf", "sec@sec.gov.ph", "", "alvillarica@c3qtech.com", "+639061234567", "--from", "secdsvssrvprv", "--yes"]
+        },
+        {
+            "name": "create_document2",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["tx", "dsvs", "create-document", "document2", "ByLaws", "C3Q Technologies, Inc.", "../../test_data/document2.pdf", "sec@sec.gov.ph", "", "alvillarica@c3qtech.com", "+639061234567", "--from", "secdsvssrvprv", "--yes"]
+        },
+        {
+            "name": "sign_document",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["tx", "dsvs", "sign-document", "../../test_data/document1.pdf", "../../test_data/document2.pdf", "alvillarica@c3qtech.com", "", "--from", "al-eph", "--yes"]
+        },
+        {
+            "name": "register_authorized_signatory",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["tx", "dsvs", "register-authorized-signatory", "al-eph", "alvillarica@c3qtech.com", "", "--from", "al", "--yes"]
+        },
+        {
+            "name": "create_credential",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["tx", "qadena", "create-credential", "15045532540185210796115304411577244178345486756514790769917116521566223995353.93948152462490931584246311174809229366570463085366411531424358318469650970706", "personal-info",  "rodolfo alberto", "asuncion", "villarica", "1970-Feb-02", "ph", "us", "M", "--from", "pioneer1", "--yes"]
+        },
+        {
+            "name": "claim_credential",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["tx", "qadena", "claim-credential", "1234.5678", "personal-info", "--from", "al", "--yes"]
+        },
+        {
+            "name": "show_recover-key",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["query", "qadena", "show-recover-key", "recover-al"]
+        },
+
+        {
+            "name": "show_wallet",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["query", "qadena", "show-wallet", "al"]
+        },
+        {
+            "name": "generate hex compresssed pedersen commit",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["query", "qadena", "convert-to-compressed-pc", "1234", "5678"]
+        },
+        {
+            "name": "keys list",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["keys", "list"]
+        },
+        {
+            "name": "keys export",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["keys", "export", "pioneer1"]
+        },
+        {
+            "name": "keys import",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["keys", "import", "pioneer1test", "/Users/alvillarica/test/qadena/test.key"]
+        },
+        {
+            "name": "keys add",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadenad",
+            "args": ["keys", "add", "aaa"]
+        },        
+        {
+            "name": "ekyc_api_server",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/qadena_ekyc",
+            "args": ["--home", "/Users/alvillarica/.ekyc", "--chain-id", "qadena_1000-1", "--ekyc-armor-privk", "-----BEGIN TENDERMINT PRIVATE KEY-----\nkdf: bcrypt\nsalt: 739D528C3FA20A94A7D75B7DB2AEECF9\ntype: eth_secp256k1\n\nUgGmc1g5TMYxR+hmh8H89giL+Q7icCQ9Sb2qlBRZJMCAWcdm48uMyjSt6KborKRK\n46ZMNvYIaj3OLMRPncE6GQXjPvmm4E+ju1H0jTw=\n=po88\n-----END TENDERMINT PRIVATE KEY-----", "--ekyc-armor-passphrase", "dummy-passphrase"]
+        }
+    ]
+}

@@ -1,0 +1,19 @@
+syntax = "proto3";
+package qadena.dsvs;
+
+import "gogoproto/gogo.proto";
+import "cosmos_proto/cosmos.proto";
+import "google/protobuf/timestamp.proto";
+import "qadena/dsvs/v_share_bind_data.proto";
+
+option go_package = "qadena/x/dsvs/types";
+
+message VShareSignatory {
+  bytes encSignatoryVShare = 1; 
+  dsvs.VShareBindData signatoryVShareBind = 2;   
+  google.protobuf.Timestamp time = 3 [
+    (gogoproto.stdtime) = true,
+    (gogoproto.nullable) = false
+  ];
+	string WalletID = 4;
+}

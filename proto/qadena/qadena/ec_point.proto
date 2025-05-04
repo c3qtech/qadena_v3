@@ -1,0 +1,18 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "qadena/x/qadena/types";
+
+message BECPoint {
+  bytes compressed = 1;
+}
+
+/* DEPRECATED
+
+message ECPoint {
+  
+  string x = 1; 
+  string y = 2; 
+}
+
+*/

@@ -1,0 +1,116 @@
+syntax = "proto3";
+
+package qadena.dsvs;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+import "cosmos/base/query/v1beta1/pagination.proto";
+import "qadena/dsvs/params.proto";
+import "qadena/dsvs/document_hash.proto";
+import "qadena/dsvs/document.proto";
+import "qadena/dsvs/authorized_signatory.proto";
+import "qadena/dsvs/v_share_authorized_signatory.proto";
+
+option go_package = "qadena/x/dsvs/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  
+  // Parameters queries the parameters of the module.
+  rpc Params (QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/qadena/dsvs/params";
+  
+  }
+  
+  // Queries a list of DocumentHash items.
+  rpc DocumentHash    (QueryGetDocumentHashRequest) returns (QueryGetDocumentHashResponse) {
+    option (google.api.http).get = "/qadena/dsvs/document_hash/{hash}";
+  
+  }
+  rpc DocumentHashAll (QueryAllDocumentHashRequest) returns (QueryAllDocumentHashResponse) {
+    option (google.api.http).get = "/qadena/dsvs/document_hash";
+  
+  }
+  
+  // Queries a list of Document items.
+  rpc Document    (QueryGetDocumentRequest) returns (QueryGetDocumentResponse) {
+    option (google.api.http).get = "/qadena/dsvs/document/{documentID}";
+  
+  }
+  rpc DocumentAll (QueryAllDocumentRequest) returns (QueryAllDocumentResponse) {
+    option (google.api.http).get = "/qadena/dsvs/document";
+  
+  }
+  
+  // Queries a list of AuthorizedSignatory items.
+  rpc AuthorizedSignatory    (QueryGetAuthorizedSignatoryRequest) returns (QueryGetAuthorizedSignatoryResponse) {
+    option (google.api.http).get = "/qadena/dsvs/authorized_signatory/{walletID}";
+  
+  }
+  rpc AuthorizedSignatoryAll (QueryAllAuthorizedSignatoryRequest) returns (QueryAllAuthorizedSignatoryResponse) {
+    option (google.api.http).get = "/qadena/dsvs/authorized_signatory";
+  
+  }
+}
+// QueryParamsRequest is request type for the Query/Params RPC method.
+message QueryParamsRequest {}
+
+// QueryParamsResponse is response type for the Query/Params RPC method.
+message QueryParamsResponse {
+  
+  // params holds all the parameters of this module.
+  Params params = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+}
+
+message QueryGetDocumentHashRequest {
+  bytes hash = 1;
+}
+
+message QueryGetDocumentHashResponse {
+  DocumentHash documentHash = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllDocumentHashRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllDocumentHashResponse {
+  repeated DocumentHash                           documentHash = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination   = 2;
+}
+
+message QueryGetDocumentRequest {
+  string documentID = 1;
+}
+
+message QueryGetDocumentResponse {
+  Document document = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllDocumentRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllDocumentResponse {
+  repeated Document                               document   = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination = 2;
+}
+
+message QueryGetAuthorizedSignatoryRequest {
+  string walletID = 1;
+}
+
+message QueryGetAuthorizedSignatoryResponse {
+  AuthorizedSignatory authorizedSignatory = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllAuthorizedSignatoryRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllAuthorizedSignatoryResponse {
+  repeated AuthorizedSignatory                    authorizedSignatory = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination          = 2;
+}
+

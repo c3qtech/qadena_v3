@@ -1,0 +1,398 @@
+syntax = "proto3";
+
+package qadena.qadena;
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+import "qadena/qadena/params.proto";
+import "qadena/qadena/suspicious_transaction.proto";
+import "qadena/qadena/pedersen_commit.proto";
+import "qadena/qadena/bind_data.proto";
+import "qadena/qadena/range_proof.proto";
+import "qadena/qadena/b_pedersen_commit.proto";
+import "qadena/qadena/v_share_bind_data.proto";
+import "qadena/qadena/share.proto";
+import "qadena/qadena/secret_share_priv_k.proto";
+import "qadena/qadena/recover_share.proto";
+import "qadena/qadena/bulk_credential.proto";
+import "qadena/qadena/bigint.proto";
+
+import "google/protobuf/timestamp.proto";
+
+
+
+option go_package = "qadena/x/qadena/types";
+
+// Msg defines the Msg service.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+  
+  // UpdateParams defines a (governance) operation for updating the module
+  // parameters. The authority defaults to the x/gov module account.
+  rpc UpdateParams                          (MsgUpdateParams                         ) returns (MsgUpdateParamsResponse                         );
+
+  // AUTHORIZATION:
+  rpc AddPublicKey                          (MsgAddPublicKey                         ) returns (MsgAddPublicKeyResponse                         );
+
+  // AUTHORIZATION:
+  rpc CreateWallet                          (MsgCreateWallet                         ) returns (MsgCreateWalletResponse                         );
+  rpc TransferFunds                         (MsgTransferFunds                        ) returns (MsgTransferFundsResponse                        );
+  rpc ReceiveFunds                          (MsgReceiveFunds                         ) returns (MsgReceiveFundsResponse                         );
+  rpc ProtectPrivateKey                     (MsgProtectPrivateKey                    ) returns (MsgProtectPrivateKeyResponse                    );
+  rpc SignRecoverPrivateKey                 (MsgSignRecoverPrivateKey                ) returns (MsgSignRecoverPrivateKeyResponse                );
+  rpc ClaimCredential                       (MsgClaimCredential                      ) returns (MsgClaimCredentialResponse                      );
+
+  // AUTHORIZATION: gov module
+  rpc AddServiceProvider                    (MsgAddServiceProvider                   ) returns (MsgAddServiceProviderResponse                   );
+  rpc DeactivateServiceProvider             (MsgDeactivateServiceProvider            ) returns (MsgDeactivateServiceProviderResponse            );
+  rpc UpdateEnclaveIdentity                 (MsgUpdateEnclaveIdentity                ) returns (MsgUpdateEnclaveIdentityResponse                );
+
+  // AUTHORIZATION:
+  // make sure that the creator *IS* a Pioneer via enclave
+  rpc PioneerAddPublicKey                   (MsgPioneerAddPublicKey                  ) returns (MsgPioneerAddPublicKeyResponse                  );
+  rpc PioneerUpdateIntervalPublicKeyID      (MsgPioneerUpdateIntervalPublicKeyID     ) returns (MsgPioneerUpdateIntervalPublicKeyIDResponse     );
+  rpc PioneerEnclaveExchange                (MsgPioneerEnclaveExchange               ) returns (MsgPioneerEnclaveExchangeResponse               );
+  rpc PioneerBroadcastSecretSharePrivateKey (MsgPioneerBroadcastSecretSharePrivateKey) returns (MsgPioneerBroadcastSecretSharePrivateKeyResponse);
+  //rpc PioneerUpdateIntervalPublicKeyID             (MsgPioneerUpdateIntervalPublicKeyID            ) returns (MsgPioneerUpdateIntervalPublicKeyIDResponse            );
+  rpc PioneerUpdatePioneerJar                      (MsgPioneerUpdatePioneerJar                     ) returns (MsgPioneerUpdatePioneerJarResponse                     );
+  rpc PioneerUpdateJarRegulator                    (MsgPioneerUpdateJarRegulator                   ) returns (MsgPioneerUpdateJarRegulatorResponse                   );
+  rpc PioneerUpdateEnclaveIdentity                 (MsgPioneerUpdateEnclaveIdentity                ) returns (MsgPioneerUpdateEnclaveIdentityResponse                );
+
+
+  // AUTHORIZATION:
+  // make sure that the creator *IS* an identity service provider
+  // make sure that all the required signatory vshares ccPubK has ss interval public key
+  rpc CreateCredential                      (MsgCreateCredential                     ) returns (MsgCreateCredentialResponse                     );
+  rpc CreateBulkCredentials                 (MsgCreateBulkCredentials                ) returns (MsgCreateBulkCredentialsResponse                );
+
+// RAV removed for now
+//  rpc DeploySmartContract                   (MsgDeploySmartContract                  ) returns (MsgDeploySmartContractResponse                  );
+//  rpc ExecuteSmartContract                  (MsgExecuteSmartContract                 ) returns (MsgExecuteSmartContractResponse                 );
+}
+// MsgUpdateParams is the Msg/UpdateParams request type.
+message MsgUpdateParams {
+  option (cosmos.msg.v1.signer) =                       "authority";
+  option           (amino.name) = "qadena/x/qadena/MsgUpdateParams";
+  
+  // authority is the address that controls the module (defaults to x/gov unless overwritten).
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+  // params defines the module parameters to update.
+  
+  // NOTE: All parameters must be supplied.
+  Params params = 2 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+}
+
+// MsgUpdateParamsResponse defines the response structure for executing a
+// MsgUpdateParams message.
+message MsgUpdateParamsResponse {}
+
+message MsgCreateSuspiciousTransaction {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator                                 = 1;
+  string jarID                                   = 2;
+  string regulatorPubKID                         = 3;
+  string reason                                  = 4;
+  google.protobuf.Timestamp  time   = 5 [
+    (gogoproto.stdtime) = true,
+    (gogoproto.nullable) = false
+  ];
+  bytes encSourcePersonalInfoRegulatorPubK      = 6;
+  bytes encDestinationPersonalInfoRegulatorPubK = 7;
+  bytes encEAmountRegulatorPubK                 = 8;
+  bytes encOptInReasonRegulatorPubK             = 9;
+}
+
+message MsgCreateSuspiciousTransactionResponse {
+  uint64 id = 1;
+}
+
+message MsgUpdateSuspiciousTransaction {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator                                 =  1;
+  uint64 id                                      =  2;
+  string jarID                                   =  3;
+  string regulatorPubKID                         =  4;
+  string reason                                  =  5;
+  google.protobuf.Timestamp  time   = 6 [
+    (gogoproto.stdtime) = true,
+    (gogoproto.nullable) = false
+  ];
+  bytes encSourcePersonalInfoRegulatorPubK      =  7;
+  bytes encDestinationPersonalInfoRegulatorPubK =  8;
+  bytes encEAmountRegulatorPubK                 =  9;
+  bytes encOptInReasonRegulatorPubK             = 10;
+}
+
+message MsgUpdateSuspiciousTransactionResponse {}
+
+message MsgDeleteSuspiciousTransaction {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator = 1;
+  uint64 id      = 2;
+}
+
+message MsgDeleteSuspiciousTransactionResponse {}
+
+message MsgAddPublicKey {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator  = 1;
+  string pubK     = 2;
+  string pubKType = 3;
+}
+
+message MsgAddPublicKeyResponse {}
+
+
+message MsgAddServiceProvider {
+  option (cosmos.msg.v1.signer) =                       "authority";
+  // authority is the address that controls the module (defaults to x/gov unless overwritten).
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+  string pubKID    = 2;
+  string nodeID   = 3;
+  string serviceProviderType = 4;
+}
+
+message MsgAddServiceProviderResponse {}
+
+message MsgDeactivateServiceProvider {
+  option (cosmos.msg.v1.signer) =                       "authority";
+  // authority is the address that controls the module (defaults to x/gov unless overwritten).
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string nodeID   = 2;
+}
+
+message MsgDeactivateServiceProviderResponse {}
+
+message MsgUpdateEnclaveIdentity {
+  option (cosmos.msg.v1.signer) = "authority";
+  // authority is the address that controls the module (defaults to x/gov unless overwritten).
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+  string uniqueID = 2; 
+  string signerID = 3; 
+  string productID = 4; 
+  string status = 5;   
+}
+
+message MsgUpdateEnclaveIdentityResponse {}
+
+message MsgPioneerUpdatePioneerJar {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator   = 1;
+  string pioneerID = 2;
+  string jarID     = 3;
+  bytes remoteReport = 4;
+}
+
+message MsgPioneerUpdatePioneerJarResponse {}
+
+message MsgPioneerUpdateJarRegulator {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator     = 1;
+  string jarID       = 2;
+  string regulatorID = 3;
+  bytes remoteReport = 4;
+}
+
+message MsgPioneerUpdateJarRegulatorResponse {}
+
+message MsgPioneerUpdateEnclaveIdentity {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator   = 1;
+  string uniqueID = 2;
+  string signerID = 3;
+  string productID = 4;
+  string status = 5;
+  bytes remoteReport = 6;
+}
+
+message MsgPioneerUpdateEnclaveIdentityResponse {}
+
+message MsgCreateWallet {
+  option (cosmos.msg.v1.signer) = "creator";
+  string         creator                           =  1;
+  string         homePioneerID                     =  2;
+  repeated string serviceProviderID                 = 3;
+  bytes         encCreateWalletVShare             =  4;
+  VShareBindData       createWalletVShareBind                        =  5;  // formerly vShareBind
+  BPedersenCommit acceptPasswordPC                  =  6;
+  bytes         encAcceptValidatedCredentialsVShare   =  7;
+  VShareBindData       acceptValidatedCredentialsVShareBind                        =  8;
+  EncryptablePedersenCommit walletAmountPedersenCommit        =  9; // we do need to send amount and blinding factor, so this is the type we need to use
+  bytes         encWalletAmountVShare =  10;
+  VShareBindData       walletAmountVShareBind                        = 11;
+  EncryptablePedersenCommit transparentWalletAmountPC         = 12; // we do need to send amount and blinding factor, so this is the type we need to use
+  string         acceptCredentialType              = 13;
+}
+
+message MsgCreateWalletResponse {}
+
+message MsgTransferFunds {
+  option (cosmos.msg.v1.signer) = "creator";
+  string         creator                       =  1;
+  string         transactionID                 =  2;
+  BPedersenCommit sourcePC                      =  3;
+  BPedersenCommit hiddenTransferPC              =  4;
+  BPedersenCommit newSourcePC                   =  5;
+  bytes         encNewSourceWalletAmountVShare      =  6;
+  VShareBindData       newSourceWalletAmountVShareBind              =  7;
+  bytes         encNewDestinationWalletAmountVShare =  8;
+  VShareBindData       newDestinationWalletAmountVShareBind         =  9;
+  bytes         encAnonTransferFundsVShare          = 10;
+  VShareBindData       anonTransferFundsVShareBind                 = 11;
+  BInt         transparentAmount             = 12;
+  string         tokenDenom                    = 13;
+  BRangeProof     hiddenTransferPCProof         = 14;
+  BRangeProof     newSourcePCProof              = 15;
+  bytes         encTransferFundsVShare        = 16;
+  VShareBindData       transferFundsVShareBind                    = 17; // formerly vShareBind
+}
+
+message MsgTransferFundsResponse {}
+
+message MsgReceiveFunds {
+  option (cosmos.msg.v1.signer) = "creator";
+  string         creator                       =  1;
+  string         transactionID                 =  2;
+  BPedersenCommit destinationPC                 =  3;
+  BPedersenCommit hiddenTransferPC              =  4;
+  BPedersenCommit newDestinationPC              =  5;
+  bytes         encNewDestinationWalletAmountVShare =  6;
+  VShareBindData       newDestinationWalletAmountVShareBind         =  7;
+  bytes         encAnonReceiveFundsVShare     =  8;
+  VShareBindData       anonReceiveFundsVShareBind                   =  9;
+  BInt         transparentAmount             = 10;
+  string         tokenDenom                    = 11;
+  BRangeProof     hiddenTransferPCProof         = 12;
+  BRangeProof     newDestinationPCProof         = 13;
+  bytes         encReceiveFundsVShare         = 14;
+  VShareBindData       receiveFundsVShareBind                    = 15;
+}
+
+message MsgReceiveFundsResponse {}
+
+message MsgDeploySmartContract {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator          = 1;
+  string srcWalletID      = 2;
+  string smartContractHex = 3;
+}
+
+message MsgDeploySmartContractResponse {}
+
+message MsgExecuteSmartContract {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator          = 1;
+  string srcWalletID      = 2;
+  string smartContractHex = 3;
+}
+
+message MsgExecuteSmartContractResponse {}
+
+message MsgCreateCredential {
+  option (cosmos.msg.v1.signer) = "creator";
+  string          creator                         =  1;
+  string          credentialID                    =  2;
+  string          credentialType                  =  3;
+  BPedersenCommit  credentialPedersenCommit        =  4;
+  bytes           encCredentialInfoVShare         =  5;
+  VShareBindData       credentialInfoVShareBind         =  6;
+  bytes           encCredentialHashVShare =  7;
+  VShareBindData       credentialHashVShareBind         =  8;
+  BPedersenCommit findCredentialPedersenCommit    =  9;
+  string          eKYCAppWalletID                 = 10;
+  string          referenceCredentialID           = 11;
+}
+
+message MsgCreateCredentialResponse {}
+
+message MsgPioneerAddPublicKey {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator  = 1;
+  string pubKID   = 2;
+  string pubK     = 3;
+  string pubKType = 4;
+  repeated Share  shares   = 5;
+  bytes remoteReport     = 6;
+}
+
+message MsgPioneerAddPublicKeyResponse {}
+
+message MsgPioneerUpdateIntervalPublicKeyID {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator           = 1;
+  string pubKID            = 2;
+  string nodeID            = 3;
+  string nodeType          = 4;
+  string externalIPAddress = 5;
+  bytes remoteReport      = 6;
+}
+
+message MsgPioneerUpdateIntervalPublicKeyIDResponse {}
+
+message MsgPioneerEnclaveExchange {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator = 1;
+  string msgType = 2;
+  string msg     = 3;
+}
+
+message MsgPioneerEnclaveExchangeResponse {}
+
+message MsgPioneerBroadcastSecretSharePrivateKey {
+  option (cosmos.msg.v1.signer) = "creator";
+           string           creator      = 1;
+  repeated SecretSharePrivK privateKeys  = 2;
+           bytes           remoteReport = 3;
+}
+
+message MsgPioneerBroadcastSecretSharePrivateKeyResponse {}
+
+message MsgProtectPrivateKey {
+  option (cosmos.msg.v1.signer) = "creator";
+           string       creator      = 1;
+           int32        threshold    = 2;
+  repeated RecoverShare recoverShare = 3;
+}
+
+message MsgProtectPrivateKeyResponse {}
+
+message MsgSignRecoverPrivateKey {
+  option (cosmos.msg.v1.signer) = "creator";
+  string       creator                                 = 1;
+  bytes       encDestinationEWalletIDVShare = 2; // formerly encDestinationEWalletIDSSIntervalPubK
+  VShareBindData       destinationEWalletIDVShareBind = 3;
+  RecoverShare recoverShare                            = 4;
+}
+
+message MsgSignRecoverPrivateKeyResponse {}
+
+
+message MsgClaimCredential {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator                                    = 1;
+  string credentialID                               = 2;
+  string credentialType                             = 3;
+  bool   recoverKey                                 = 4;
+  bytes encClaimCredentialExtraParmsVShare = 5;
+  VShareBindData claimCredentialExtraParmsVShareBind = 6;
+}
+
+message MsgClaimCredentialResponse {}
+
+message MsgCreateBulkCredentials {
+  option (cosmos.msg.v1.signer) = "creator";
+  string         creator          = 1;
+  string         credentialType   = 2;
+  VShareBindData      credentialInfoVShareBind       = 3;
+  VShareBindData      credentialHashVShareBind       = 4;
+  string         eKYCAppWalletID  = 5;
+  repeated BulkCredential bulkCredentials  = 6;
+}
+
+message MsgCreateBulkCredentialsResponse {}
+

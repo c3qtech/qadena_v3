@@ -1,0 +1,31 @@
+How to run the demo:
+
+Window 1
+
+cd qadena_v2
+
+- reset everything
+./init.sh
+- run the chain
+./run.sh
+
+Window 2
+
+cd qadena_v2
+
+- setup all the wallets al, al-eph, ann, ann-eph, setup up credentials
+./setup.sh
+
+- show some of the wallets
+./show_wallets.sh
+
+Window 3
+
+cd qadena_v2
+
+- do some transfers/receives
+./transfer1.sh
+./receive1.sh
+
+
+

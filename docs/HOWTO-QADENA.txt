@@ -1,0 +1,197 @@
+DEV
+
+1.  install go (need 1.21 or higher)
+
+  https://go.dev/doc/install
+
+2. install some tools
+
+  a. install zsh (if not on MacOS -- zsh is installed by default on MacOS)
+
+    sudo apt-get install zsh
+
+  b.  add /Users/alvillarica/go/bin to PATH in .zshrc (modify the /Users/alvillarica as appropriate for your OS), put something like in ~/.zshrc
+
+    export PATH=$PATH:/Users/alvillarica/go/bin
+
+  c.  execute this in the current shell (modify the /Users/alvillarica as appropriate for your OS)
+
+    export PATH=$PATH:/Users/alvillarica/go/bin
+
+  d.  On MacOS, you may need to install brew
+
+    Install brew for Mac -> https://brew.sh/
+
+3.  install dlv and gdlv (debuggers)
+
+  go install github.com/go-delve/delve/cmd/dlv@latest
+  go install github.com/aarzilli/gdlv@latest
+
+4.  Remove any old Ignite versions and install Ignite
+
+  rm `which ignite`
+
+  Follow instructions in: https://docs.ignite.com/welcome/install
+
+    In general, you can do this if the version of ignite is compatible with the version of Cosmos SDK (as of 12/28/2024, it is Cosmos SDK v0.50.6):  curl https://get.ignite.com/cli! | bash
+
+5. get and build qadena
+
+  a.  ask to be invited to the qadena git repo
+
+  b.  git clone https://github.com/c3qtech/qadena_v2.git
+
+    create a github personal access token:  on github.com, click on the profile icon (upper right corner as of 12/27/2024), Settings, Developer Settings, Personal access tokens, Tokens (classic), Generate new token, click "repo" scope, then use the Personal Access Token as both username and password when running the git tools
+
+    save the personal access token:
+
+      Linux:
+        git config credential.helper store
+
+      MacOS: (untested as of 6/24/2022)
+        git credential-osxkeychain
+        git config --global credential.helper osxkeychain
+
+  c.  (if you want to build so it can be run from gdlv) ?????
+
+  d.  install other tools
+
+      gcc -- needed to build the enclave properly, otherwise you'll get errors like (which is caused by needing CGO to work):
+            # github.com/edgelesssys/ego/enclave
+            ../go/pkg/mod/github.com/edgelesssys/ego@v1.5.3/enclave/enclave.go:22:17: undefined: GetLocalReport
+            ../go/pkg/mod/github.com/edgelesssys/ego@v1.5.3/enclave/enclave.go:27:16: undefined: GetLocalReport
+            ../go/pkg/mod/github.com/edgelesssys/ego@v1.5.3/enclave/enclave.go:32:9: undefined: VerifyLocalReport
+            ../go/pkg/mod/github.com/edgelesssys/ego@v1.5.3/enclave/enclave.go:44:9: undefined: GetSealKey
+            ../go/pkg/mod/github.com/edgelesssys/ego@v1.5.3/enclave/enclave.go:49:47: undefined: GetRemoteReport
+            ../go/pkg/mod/github.com/edgelesssys/ego@v1.5.3/enclave/enclave.go:54:51: undefined: GetRemoteReport
+            ../go/pkg/mod/github.com/edgelesssys/ego@v1.5.3/enclave/enclave.go:68:19: undefined: VerifyRemoteReport
+            ../go/pkg/mod/github.com/edgelesssys/ego@v1.5.3/enclave/enclave.go:81:17: undefined: GetRemoteReport
+
+        sudo apt-get install gcc
+
+      jq (commandline JSON processor) -- needed in the script to turn a node into a full-node and validator
+        sudo apt-get install jq (for linux)
+        brew install jq (for MacOS)
+
+      yq (commandline YAML processor) -- needed in the script to turn a node into a full-node and validator
+        sudo snap install yq (for linux)
+        brew install yq (for MacOS)
+
+      dasel (modify TOML)
+        macos: brew install dasel
+        linux_x86: curl -sSLf "$(curl -sSLf https://api.github.com/repos/tomwright/dasel/releases/latest | grep browser_download_url | grep linux_amd64 | grep -v .gz | cut -d\" -f 4)" -L -o dasel && chmod +x dasel && sudo mv ./dasel /usr/local/bin/dasel
+        linux_arm64: curl -sSLf "$(curl -sSLf https://api.github.com/repos/tomwright/dasel/releases/latest | grep browser_download_url | grep linux_arm64 | grep -v .gz | cut -d\" -f 4)" -L -o dasel && chmod +x dasel && sudo mv ./dasel /usr/local/bin/dasel
+
+      ss -- needed in Linux (ss is the newer version of netstat...netstat is supposed to be deprecated)
+        sudo apt-get install ss (if you get an error, you might already have ss installed)
+
+  e. cd qadena_v2
+     ./init.sh
+     ./run.sh (this runs the chain)
+     ./setup.sh (this sets up sample wallets, credentials, etc.)
+     ./show_wallets.sh (this shows the wallets)
+     check HOWTO-DEMO.txt
+
+
+
+
+
+
+
+----------------------------------
+
+GIT NOTES
+
+Revert to last commit
+  git checkout -f && git clean -fd
+  (script in git_revert_to_last_commit.sh)
+
+GIT BRANCHES NOTES
+
+Creating new branch
+1. work on changes to code
+Create a new branch (locally)
+  git checkout -b new-branch-name
+
+2. push those changes into the remote repo
+Push the new branch into remote repo
+  git add .
+  git commit
+  git push -u origin new-branch-name
+
+3. when you're ready to merge new-branch-name into "main"...
+Merge new branch into main (needed before pushing the new branch into "main")
+  git checkout main
+  git merge new-branch-name
+
+4. at this point you can do a "git push"
+
+  or switch to new branch to test out the merg
+    git checkout -b new-branch-name-2
+    ...then go through steps 1&2 using new-branch-name-2...and then switch to new-branch-name-2 on another machine
+
+--
+
+If you want to load the new branch on a new machine:
+  git checkout new-branch-name
+  
+
+----------------------------------
+
+UBUNTU NOTES
+
+TO INSTALL OPENSSH
+sudo apt-get install openssh-server
+
+TO COPY SSH KEYS
+ssh-copy-id alvillarica@192.168.86.140
+ssh-copy-id parallels@192.168.86.125
+
+TO LOGIN
+ssh alvillarica@192.168.86.140
+ssh parallels@192.168.86.125
+
+
+----------------------------------
+
+TO ADD NEW FULL-NODES TO AN EXISTING QADENAD
+0.  Make sure your dev machine has a working qadenad and is running
+
+1.  Prepare the new machine
+  a.  Do ./init.sh on the new machine to build the qadenad executable
+  b.  Test by doing ./run.sh
+  
+2.  Add as full node "add_full_node.sh pioneer-name advertise-ip-address pioneer1-ip-address", for example:
+  ./add_full_node.sh pioneer2 10.211.55.2 10.211.55.3
+
+EXTRA CREDIT -- TURN A FULL NODE INTO A VALIDATOR NODE
+
+3.  On the new machine, make it a "validator node", for example:
+  ./convert_to_validator.sh
+
+----------------------------------
+
+FLUTTER/COCOAPODS ISSUE ON ARM-BASED MAC
+1.  This fixed a crash:
+ sudo gem uninstall ffi && sudo gem install ffi -- --enable-libffi-alloc
+2.  This fixed an issue with:  [!] CDN: trunk URL couldn't be downloaded: https://cdn.cocoapods.org/CocoaPods-version.yml Response: URL using bad/illegal format or missing URL
+  sudo gem uninstall cocoapods
+  brew install cocoapods  
+
+
+----------------------------------
+OLD NOTES
+
+qadenad init some-moniker (e.g. pioneer2)
+copy genesis.json to the new machine's .qadenad/config/genesis.json
+copy enclave_params.json to the new machine's .qadenad/config/enclave_params.json
+
+  scp ~/.qadenad/config/genesis.json parallels@192.168.86.125:.qadenad/config/genesis.json
+  scp ~/.qadenad/config/enclave_params.json parallels@192.168.86.125:.qadenad/config/enclave_params.json
+
+look for this in the existing QADENAD genesis.json:  "memo": "2ec...."
+
+edit config.toml and change persistent_peers = "2ec...@192.168.86.121:26656"
+edit client.toml and make sure keyring-backwnd = "test"
+
+

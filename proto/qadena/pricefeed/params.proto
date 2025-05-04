@@ -1,0 +1,20 @@
+syntax = "proto3";
+package qadena.pricefeed;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+
+import "qadena/pricefeed/market.proto";
+
+option go_package = "qadena/x/pricefeed/types";
+
+// Params defines the parameters for the module.
+message Params {
+  option (amino.name) = "qadena/x/pricefeed/Params";
+  option (gogoproto.equal) = true;
+
+  repeated Market markets = 1 [
+    (gogoproto.nullable) = false
+  ];
+  
+}

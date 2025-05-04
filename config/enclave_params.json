@@ -1,0 +1,5 @@
+{
+    "jar_id": "jar1",
+    "jar_transaction_priv_k": "jar1PrivKHex_privkhex:jar1PubK_privk",
+    "ss_interval_priv_k": "ssPrivKHex_privkhex:ssPubK_privk"
+}

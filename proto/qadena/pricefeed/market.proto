@@ -1,0 +1,23 @@
+syntax = "proto3";
+package qadena.pricefeed;
+
+import "gogoproto/gogo.proto";
+import "cosmos_proto/cosmos.proto";
+
+option go_package = "qadena/x/pricefeed/types";
+
+option (gogoproto.equal_all) = true;
+option (gogoproto.verbose_equal_all) = true;
+
+
+message Market {
+  
+  string marketId = 1; 
+  string baseAsset = 2; 
+  string quoteAsset = 3; 
+  repeated bytes oracles = 4 [
+    (cosmos_proto.scalar) = "cosmos.AddressBytes",
+    (gogoproto.casttype) = "github.com/cosmos/cosmos-sdk/types.AccAddress"
+  ];
+  bool active = 5;
+}

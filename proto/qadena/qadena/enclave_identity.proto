@@ -1,0 +1,14 @@
+
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "qadena/x/qadena/types";
+
+message EnclaveIdentity {
+  string uniqueID = 1; 
+  string signerID = 2; 
+  string productID = 3; 
+  string status = 4; 
+  
+}
+

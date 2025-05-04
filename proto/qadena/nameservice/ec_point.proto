@@ -1,0 +1,16 @@
+syntax = "proto3";
+package qadena.nameservice;
+
+option go_package = "qadena/x/nameservice/types";
+
+message BECPoint {
+  bytes compressed = 1;
+}
+
+/* DEPRECATED
+message ECPoint {
+  
+  string x = 1; 
+  string y = 2; 
+}
+*/

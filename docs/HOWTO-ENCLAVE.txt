@@ -1,0 +1,143 @@
+Install Intel-based Ubuntu 22.04 on SGX-capable machine
+
+Check AZURE ENCLAVE NOTES BELOW
+
+Make sure BIOS is up-to-date, otherwise the remote attestation may not work
+
+Check if CPU & BIOS are SGX-capable
+  sudo apt install cpuid
+  cpuid | grep SGX
+
+Install edgelessrt
+
+  instructions are at:  https://github.com/edgelesssys/edgelessrt
+
+  1.  git clone https://github.com/edgelesssys/edgelessrt.git
+  2.  sudo apt install build-essential clang-10 cmake gdb libssl-dev ninja-build python3
+      cd edgelessrt
+  3.  mkdir build
+  4.  cd build
+  5.  cmake -GNinja ..
+  6.  ninja
+
+  wget -qO- https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | sudo apt-key add
+sudo add-apt-repository "deb [arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu `lsb_release -cs` main"
+sudo apt install libsgx-dcap-ql-dev libsgx-enclave-common libsgx-launch
+
+  sudo ninja install
+  echo ". /opt/edgelessrt/share/openenclave/openenclaverc" >> ~/.profile
+  . ~/.profile
+
+Install EGo
+
+  Use installation docs at:  https://docs.edgeless.systems/ego/#/getting-started/install
+
+  0.  Install go first
+  wget https://go.dev/dl/go1.18.4.linux-amd64.tar.gz
+  sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.18.4.linux-amd64.tar.gz
+  echo "export PATH=$PATH:/usr/local/go/bin" >> ~/.profile
+  . ~/.profile
+
+1.  git clone https://github.com/edgelesssys/ego.git
+  mkdir build
+  cd build
+  cmake ..
+  make
+  sudo make install
+  
+Setup PCCS (service that a quoting provider that's running within an enclave will talk to)
+
+  Go to Intel.com to get PCCS API key (https://api.portal.trustedservices.intel.com/provisioning-certification)
+  You need to Sign up first (I used alvillarica@c3qtech.com)
+  Then go to that link again, or look for "Intel Provisioning Certification Service"
+  Under "Get PCK Certificate/s", click on "Subscribe" button, click on "Add subscription", then look for your subscriptions, there should be Primary key and Secondary key, click on Show for Primary key and copy it
+  We can temporarily use APIKEY=5a36166d59854fd4bfef53c9a8cb3ca2
+
+Run PCCS on Ubuntu 20.04 server
+  sudo apt-get install docker.io
+Add user to docker group (so you don't need to do sudo when issuing docker commands)
+  sudo usermod -aG docker `whoami`
+  ***logout, then log back in***
+
+  docker run -e APIKEY=5a36166d59854fd4bfef53c9a8cb3ca2 -p 8081:8081 --name pccs -d ghcr.io/edgelesssys/pccs
+  
+  You can see logs from the PCCS
+  sudo docker attach pccs
+  
+  Test PCCS using:
+  curl -kv https://localhost:8081/sgx/certification/v3/rootcacrl (you should see logs in the "attach pccs")
+
+
+Install/set up quote provider
+  sudo ego install libsgx-dcap-default-qpl
+
+Add user to sgx_prv (need to do this in order to run attested tls sample)
+   sudo usermod -a -G sgx_prv `whoami`
+
+
+Modify /etc/sgx_default_qcnl.conf
+  Set:
+    "use_secure_cert": false,
+
+
+
+TO STOP/REMOVE PCCS DOCKER
+  sudo docker stop pccs
+  sudo docker rm pccs
+
+SPECIAL NOTES:
+
+- On a Linux system that has EGo installed, init.sh will call "ignite chain init" (which does a build, initializes the chain, etc.), does fixups on files, then calls build.sh again.  This actually builds the chain twice, but is necessary because "ignite chain init" does a build.  If EGo is installed, we need to build the chain with a special build tag (realenclave), which is not yet possible with the current version of Ignite.
+- run.sh will try to run the PCCS docker container
+
+
+TROUBLESHOOTING
+- If you receive errors like CRL is expired
+  - go back to the "Setup PCCS" section (PCCS API key)
+  - follow "Get PCK Certificate/s"
+  - regenerate Primary key
+  - copy it then remove the old pccs from docker and do the "docker run" with the new APIKEY
+  - follow "Test PCCS" instructions
+
+- If you get TCB_LEVEL_INVALID on your SGX machine, update to the latest BIOS
+  - if you have Intel NUC7CJYH or NUC7CJYHN, get BIOS from https://www.intel.com/content/www/us/en/download/19231/bios-update-jyglkcpx.html
+  
+
+
+
+
+NEW INSTRUCTIONS
+  ngrok for local machine:  ngrok tcp --region=ap --remote-addr=1.tcp.ap.ngrok.io:22152 22
+  ssh alvillarica@0.tcp.ngrok.io -p 22152
+
+  ssh alvillarica@1.tcp.ap.ngrok.io -p 22152
+
+
+install zsh
+    sudo apt-get install zsh
+
+install go 1.23.4
+    rm -rf /usr/local/go && tar -C /usr/local -xzf go1.23.4.linux-amd64.tar.gz
+
+    add to .profile
+    	export PATH=$PATH:/usr/local/go/bin
+
+install ego
+	sudo snap install ego-dev --classic
+	sudo snap install build-essential libssl-dev
+
+
+
+install ignite
+#	sudo snap install curl
+#	  rm `which ignite`
+#	sudo mkdir /usr/local/bin
+#	curl https://get.ignite.com/cli! | sudo bash
+
+	sudo snap install ignite --classic
+
+
+        sudo apt-get install gcc
+        sudo apt-get install jq (for linux)
+        curl -sSLf "$(curl -sSLf https://api.github.com/repos/tomwright/dasel/releases/latest | grep browser_download_url | grep linux_arm64 | grep -v .gz | cut -d\" -f 4)" -L -o dasel && chmod +x dasel && sudo mv ./dasel /usr/local/bin/dasel
+

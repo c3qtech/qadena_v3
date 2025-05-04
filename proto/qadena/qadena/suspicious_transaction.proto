@@ -1,0 +1,24 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "qadena/x/qadena/types";
+
+import "google/protobuf/timestamp.proto";
+import "gogoproto/gogo.proto";
+
+
+message SuspiciousTransaction {
+  uint64 id = 1;
+  string jarID = 2; 
+  string regulatorPubKID = 3; 
+  string reason = 4; 
+  google.protobuf.Timestamp  time   = 5 [
+    (gogoproto.stdtime) = true,
+    (gogoproto.nullable) = false
+  ];
+  bytes encSourcePersonalInfoRegulatorPubK = 6; 
+  bytes encDestinationPersonalInfoRegulatorPubK = 7; 
+  bytes encEAmountRegulatorPubK = 8; 
+  bytes encOptInReasonRegulatorPubK = 9; 
+  string creator = 10;
+}

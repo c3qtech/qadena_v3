@@ -1,0 +1,11 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "qadena/x/qadena/types";
+
+message JarRegulator {
+  string jarID = 1; 
+  string regulatorID = 2; 
+  bytes remoteReport = 3; 
+}
+

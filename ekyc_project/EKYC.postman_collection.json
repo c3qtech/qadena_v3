@@ -1,0 +1,271 @@
+{
+	"info": {
+		"_postman_id": "cbd49958-3eb6-4576-a13b-3feca4e6f39c",
+		"name": "EKYC",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "8522143"
+	},
+	"item": [
+		{
+			"name": "reuse-kyc-as-maya",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"provider-name\":\"maya-kyc-provider\",\n    \"from-provider-name\":\"coopnet-kyc-provider\",\n    \"phone-number\":\"+639209153085\",\n    \"last-name\":\"villarica\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost/reuse-kyc",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"path": [
+						"reuse-kyc"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "authenticate-user-reuse-kyc",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"pin\":\"1234\",\n    \"otp\":\"248049\",\n    \"session-id\": \"04f37597b4896c773daa60cdf688bdc890ff9bb5fbc969fc8829a40d45ea8c22619e5c3ba7a4e2ad7144ade5c873af7ec2c90bb2d2008e814c952ec85ac41b5971dfee7b0bcc87654d43b58f441c50b0bbcfbb5e74643be40617d60624a01c7633bd65220fc855f9ee1e859723e8da74d9fd52fdd239f1bc550e5e74a259954f80f65d60b9a9d75d43c87f2baabdb50118e64405351bb5c897a9abb97bd5c7cdfb6c70504be1a22977fffb610fd28a0b6c0c973a0245dc0bb4fcd7e7d27387cc1d7a777e53bf2593a41ca1838c4a49ada133aa9dcec16764631e4b03d7f27659461a2339de097da9f1\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost/authenticate-user-reuse-kyc",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"path": [
+						"authenticate-user-reuse-kyc"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "notify-user-reuse-kyc",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"session-id\": \"456e6328416a4a2b38747678446d793875457643307468707944762f75354a42385341537365416744633551763164375f7075626b2c7b2270726f76696465722d6e616d65223a226d6179612d6b79632d70726f7669646572222c2270686f6e652d6e756d626572223a222b363339323039313533303835222c226c6173742d6e616d65223a2276696c6c6172696361222c2266726f6d2d70726f76696465722d6e616d65223a22636f6f706e65742d6b79632d70726f7669646572227d29\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost/notify-user-reuse-kyc",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"path": [
+						"notify-user-reuse-kyc"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "submit-kyc al villarica",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"provider-name\": \"coopnet-kyc-provider\",\n    \"phone-number\": \"+639209153085\",\n    \"email\": \"alvillarica@gmail.com\",\n    \"PIN\": \"1234\",\n    \"personal-info-details\": {\n        \"FirstName\": \"rodolfo alberto\",\n        \"MiddleName\": \"asuncion\",\n        \"LastName\": \"villarica\",\n        \"Birthdate\": \"1970-feb-02\",\n        \"Gender\": \"M\",\n        \"Citizenship\": \"ph\",\n        \"Residency\": \"us\"\n\n    }\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost/submit-kyc",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"path": [
+						"submit-kyc"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "bulk-submit-kyc 2 records",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"provider-name\": \"coopnet-kyc-provider\",\n    \"kyc-records\": [\n        {\n            \"phone-number\": \"+639209153085\",\n            \"email\": \"alvillarica@gmail.com\",\n            \"PIN\": \"1234\",\n            \"personal-info-details\": {\n                \"FirstName\": \"rodolfo alberto\",\n                \"MiddleName\": \"asuncion\",\n                \"LastName\": \"villarica\",\n                \"Birthdate\": \"1970-feb-02\",\n                \"Gender\": \"M\",\n                \"Citizenship\": \"ph\",\n                \"Residency\": \"us\"\n            }\n        },\n        {\n            \"provider-name\": \"coopnet-kyc-provider\",\n            \"phone-number\": \"+639088894480\",\n            \"email\": \"doryvillarica@gmail.com\",\n            \"PIN\": \"1234\",\n            \"personal-info-details\": {\n                \"FirstName\": \"rhodora\",\n                \"MiddleName\": \"roxas\",\n                \"LastName\": \"villarica\",\n                \"Birthdate\": \"1970-feb-03\",\n                \"Gender\": \"F\",\n                \"Citizenship\": \"ph\",\n                \"Residency\": \"us\"\n            }\n        }\n    ]\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost/bulk-submit-kyc",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"path": [
+						"bulk-submit-kyc"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "bulk-submit-kyc 10 records",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"provider-name\": \"coopnet-kyc-provider\",\n    \"kyc-records\": \n    [\n    {\n        \"phone-number\": \"+639209153085\",\n        \"email\": \"alvillarica@gmail.com\",\n        \"PIN\": \"1234\",\n        \"personal-info-details\": {\n            \"FirstName\": \"rodolfo alberto\",\n            \"MiddleName\": \"asuncion\",\n            \"LastName\": \"villarica\",\n            \"Birthdate\": \"1970-feb-02\",\n            \"Gender\": \"M\",\n            \"Citizenship\": \"ph\",\n            \"Residency\": \"us\"\n        }\n    },\n    {\n        \"phone-number\": \"+639088894480\",\n        \"email\": \"doryvillarica@gmail.com\",\n        \"PIN\": \"1234\",\n        \"personal-info-details\": {\n            \"FirstName\": \"rhodora\",\n            \"MiddleName\": \"roxas\",\n            \"LastName\": \"villarica\",\n            \"Birthdate\": \"1970-feb-03\",\n            \"Gender\": \"F\",\n            \"Citizenship\": \"ph\",\n            \"Residency\": \"us\"\n        }\n    },\n    {\n        \"phone-number\": \"+123456789\",\n        \"email\": \"sample1@example.com\",\n        \"PIN\": \"5678\",\n        \"personal-info-details\": {\n            \"FirstName\": \"John\",\n            \"MiddleName\": \"Doe\",\n            \"LastName\": \"Smith\",\n            \"Birthdate\": \"1995-jan-15\",\n            \"Gender\": \"M\",\n            \"Citizenship\": \"us\",\n            \"Residency\": \"us\"\n        }\n    },\n    {\n        \"phone-number\": \"+987654321\",\n        \"email\": \"sample2@example.com\",\n        \"PIN\": \"7890\",\n        \"personal-info-details\": {\n            \"FirstName\": \"Jane\",\n            \"MiddleName\": \"Doe\",\n            \"LastName\": \"Johnson\",\n            \"Birthdate\": \"1992-mar-22\",\n            \"Gender\": \"F\",\n            \"Citizenship\": \"us\",\n            \"Residency\": \"us\"\n        }\n    },\n    {\n        \"phone-number\": \"+614567890\",\n        \"email\": \"sample3@example.com\",\n        \"PIN\": \"2345\",\n        \"personal-info-details\": {\n            \"FirstName\": \"Michael\",\n            \"MiddleName\": \"James\",\n            \"LastName\": \"Williams\",\n            \"Birthdate\": \"1988-jul-10\",\n            \"Gender\": \"M\",\n            \"Citizenship\": \"au\",\n            \"Residency\": \"au\"\n        }\n    },\n    {\n        \"phone-number\": \"+442012345678\",\n        \"email\": \"sample4@example.com\",\n        \"PIN\": \"1234\",\n        \"personal-info-details\": {\n            \"FirstName\": \"Sophia\",\n            \"MiddleName\": \"Grace\",\n            \"LastName\": \"Wilson\",\n            \"Birthdate\": \"1998-may-05\",\n            \"Gender\": \"F\",\n            \"Citizenship\": \"gb\",\n            \"Residency\": \"gb\"\n        }\n    },\n    {\n        \"phone-number\": \"+33123456789\",\n        \"email\": \"sample5@example.com\",\n        \"PIN\": \"4321\",\n        \"personal-info-details\": {\n            \"FirstName\": \"Louis\",\n            \"MiddleName\": \"Henri\",\n            \"LastName\": \"Martin\",\n            \"Birthdate\": \"1990-oct-18\",\n            \"Gender\": \"M\",\n            \"Citizenship\": \"fr\",\n            \"Residency\": \"fr\"\n        }\n    },\n    {\n        \"phone-number\": \"+551234567890\",\n        \"email\": \"sample6@example.com\",\n        \"PIN\": \"9876\",\n        \"personal-info-details\": {\n            \"FirstName\": \"Isabella\",\n            \"MiddleName\": \"Marie\",\n            \"LastName\": \"Garcia\",\n            \"Birthdate\": \"1985-apr-30\",\n            \"Gender\": \"F\",\n            \"Citizenship\": \"br\",\n            \"Residency\": \"br\"\n        }\n    }\n]\n\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost/bulk-submit-kyc",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"path": [
+						"bulk-submit-kyc"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "submit-kyc dory villarica",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"provider-name\": \"coopnet-kyc-provider\",\n    \"phone-number\": \"+639088894480\",\n    \"email\": \"doryvillarica@gmail.com\",\n    \"PIN\": \"1234\",\n    \"personal-info-details\": {\n        \"FirstName\": \"rhodora\",\n        \"MiddleName\": \"roxas\",\n        \"LastName\": \"villarica\",\n        \"Birthdate\": \"1970-feb-03\",\n        \"Gender\": \"F\",\n        \"Citizenship\": \"ph\",\n        \"Residency\": \"us\"\n\n    }\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost/submit-kyc",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"path": [
+						"submit-kyc"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "register-kyc-provider Maya",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"friendly-name\": \"Maya\",\n    \"name\": \"maya-kyc-provider\",\n    \"armor-priv-key\": \"-----BEGIN TENDERMINT PRIVATE KEY-----\\nkdf: bcrypt\\nsalt: 17CC5AD77CCB1B38DEF803F281B99E08\\ntype: eth_secp256k1\\n\\nHbwolSfDxdtFt/7aIZaTQXiMpKUxIHYtXg+uFKZflaml4PrKIkv86CxcbDfCvM1i\\n29NlKdKBqQfnSw6mWe/9ntDYtVIVQ8q6GikWTBc=\\n=rruy\\n-----END TENDERMINT PRIVATE KEY-----\",\n    \"armor-pass-phrase\": \"dummy-passphrase\",\n    \"logo\": \"https://www.mayabank.ph/wp-content/uploads/2022/03/mayabank_logo_mintgreen.svg\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost/register-kyc-provider",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"path": [
+						"register-kyc-provider"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "register-kyc-provider CoopNet",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"friendly-name\": \"CoopNet\",\n    \"name\": \"coopnet-kyc-provider\",\n    \"armor-priv-key\": \"-----BEGIN TENDERMINT PRIVATE KEY-----\\nkdf: bcrypt\\nsalt: 50E5C5928CEE7D8634FFFBFBDCC81F18\\ntype: eth_secp256k1\\n\\n7q94PFlVN5PjffJIZmTSlHiGhaXkYRszzX3A6DONcQrhjVa4duQoyoLhK5PtHJd4\\n+AEm2PGieoNMUOevHIlhT3AzAekw5Nr/aHnDC/I=\\n=Esk8\\n-----END TENDERMINT PRIVATE KEY-----\",\n    \"armor-pass-phrase\": \"dummy-passphrase\",\n    \"logo\": \"https://coopnet.online/img/coopnet-logo.94f920f2.5587f8d8.png\"\n    \n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost/register-kyc-provider",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"path": [
+						"register-kyc-provider"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "get kyc providers",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost/get-kyc-providers",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"path": [
+						"get-kyc-providers"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}

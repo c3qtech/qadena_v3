@@ -1,0 +1,66 @@
+DEV
+
+1.  install go
+
+https://go.dev/doc/install
+
+2.  add /Users/alvillarica/go/bin to PATH in .zshrc
+
+3.  install dlv and gdlv (debuggers)
+
+go install github.com/go-delve/delve/cmd/dlv@latest
+go install github.com/aarzilli/gdlv@latest
+
+4. compile cosmos so it can be used with gdlv
+
+make COSMOS_BUILD_OPTIONS=nostrip build
+
+~/initcosmos.sh
+
+
+
+TUTORIAL FOR CHECKERS
+
+
+Install starport
+curl https://get.starport.com/starport! | bash
+
+
+starport scaffold chain github.com/alice/checkers
+
+cd checkers
+starport chain serve
+
+
+checkersd keys list
+
+checkersd query bank balances $(checkersd keys show bob -a)
+
+checkersd query bank balances $(checkersd keys show alice -a)
+
+
+
+cd vue
+npm install
+npm run dev
+
+install keplr wallet
+
+https://medium.com/chainapsis/how-to-use-keplr-wallet-40afc80907f6
+
+click on "puzzle" icon at top right corner of Chrome and select Keplr wallet extension
+click "profile" icon, "Add account", "Import existing account", find the seed phrases in the window where you did "startport chain serve"
+
+
+access Vue GUI for checkers
+http://localhost:3000
+
+"You cannot rely on a large random number like a UUID because transactions have to be verifiable in the future" -- what does this mean?  Is this because each of the validators have to come up with this ID number independently/simultaneously?
+
+starport scaffold single nextGame idValue:uint --module checkers --no-message
+starport scaffold map storedGame creator game turn red black --module checkers --no-message
+
+
+
+Revert to last commit
+git checkout -f && git clean -fd

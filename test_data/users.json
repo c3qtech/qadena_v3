@@ -1,0 +1,177 @@
+[
+    {
+        "name": "secdsvs",
+        "mnemonic": "tide ugly fork short cushion girl earth stage anger away pig screen blood frequent link become crowd visa end present share helmet brain fit",
+        "a": "1",
+        "bf": "5678",
+        "firstname": "SEC",
+        "middlename": "SEC",
+        "lastname": "SEC",
+        "birthdate": "1970-Jan-01",
+        "gender": "M",
+        "citizenship": "PH",
+        "residency": "PH",
+        "email": "no-reply@sec.gov.ph",
+        "phone": "+63288888800"
+    },
+    {
+        "name": "al",
+        "mnemonic": "palace friend deposit baby crunch flag airport mistake enlist island auction phrase double truck coffee salad hidden story orange couch useful feature electric crush",
+        "a": "2",
+        "bf": "5678",
+        "firstname": "Rodolfo Alberto",
+        "middlename": "Asuncion",
+        "lastname": "Villarica",
+        "birthdate": "1970-Feb-02",
+        "gender": "M",
+        "citizenship": "US",
+        "residency": "PH",
+        "email": "alvillarica@c3qtech.com",
+        "phone": "+63288888801",
+        "accept-credential-types": "first-name-personal-info",
+        "accept-password": "1234",
+        "require-sender-credential-types": "first-name-personal-info,middle-name-personal-info,last-name-personal-info",
+        "recovery" : {
+            "partners": [
+                "pioneer1",
+                "+63288888802",
+                "victortorres@c3qtech.com"
+            ],
+            "required": 2
+        }
+    },
+    {
+        "name": "ann",
+        "mnemonic": "inherit rebel absorb diamond leopard lens approve deny balcony toast merry text metal pair diamond lumber gravity song liberty pumpkin goddess nature slush basic",
+        "a": "3",
+        "bf": "5678",
+        "firstname": "Ann",
+        "middlename": "A",
+        "lastname": "Cuisia",
+        "birthdate": "1970-Jan-01",
+        "gender": "F",
+        "citizenship": "PH",
+        "residency": "PH",
+        "email": "anncuisia@c3qtech.com",
+        "phone": "+63288888802",
+        "accept-credential-types": "first-name-personal-info",
+        "recovery" : {
+            "partners": [
+                "victortorres@c3qtech.com"
+            ],
+            "required": 1
+        }
+    },
+    {
+        "name": "jill",
+        "mnemonic": "catalog sword rack income garment shoot south crouch capital slush essence escape fit bike country firm fly faculty theory fragile nominee shoot erode cherry",
+        "a": "4",
+        "bf": "5678",
+        "firstname": "Jill",
+        "middlename": "Lava",
+        "lastname": "Quimba",
+        "birthdate": "1980-Jan-01",
+        "gender": "F",
+        "citizenship": "PH",
+        "residency": "PH",
+        "email": "jillquimba@c3qtech.com",
+        "phone": "+63288888803"
+    },
+    {
+        "name": "victor",
+        "mnemonic": "wealth scatter potato bacon glass any present reopen box patrol divide erase tube matter half maze sugar tackle trial duty river eight fragile arctic",
+        "a": "5",
+        "bf": "5678",
+        "firstname": "Victor",
+        "middlename": "V",
+        "lastname": "Torres",
+        "birthdate": "1980-Jan-02",
+        "gender": "M",
+        "citizenship": "PH",
+        "residency": "PH",
+        "email": "victortorres@c3qtech.com",
+        "phone": "+63288888804",
+        "recovery" : {
+            "partners": [
+                "pioneer1"
+            ],
+            "required": 0
+        }
+    },
+    {
+        "name": "alexis",
+        "mnemonic": "ask shy wrong cancel oven joy space allow unknown purity valid fossil alpha hamster garment glow moment pass bonus mutual tomorrow secret sight luggage",
+        "a": "6",
+        "bf": "5678",
+        "firstname": "Alexis",
+        "middlename": "A",
+        "lastname": "Cantiga",
+        "birthdate": "1980-Jan-03",
+        "gender": "M",
+        "citizenship": "PH",
+        "residency": "PH",
+        "email": "alexiscantiga@c3qtech.com",
+        "phone": "+63288888805"
+    }, 
+    {
+        "name": "kelvin",
+        "mnemonic": "bronze spider school hurt jump stadium blue nuclear glass chef inhale hard spray rifle people plate spoil govern tumble view amused regular journey miss",
+        "a": "7",
+        "bf": "5678",
+        "firstname": "Kelvin",
+        "middlename": "K",
+        "lastname": "Santos",
+        "birthdate": "1980-Jan-04",
+        "gender": "M",
+        "citizenship": "PH",
+        "residency": "PH",
+        "email": "kelvinsantos@c3qtech.com",
+        "phone": "+63288888806"
+    }, 
+    {
+        "name": "carlo",
+        "mnemonic": "later there grid crouch phrase deal vivid spider chicken couple insect language vacant extra wise concert common rough add tornado artwork find feed demise",
+        "a": "8",
+        "bf": "5678",
+        "firstname": "Carlo",
+        "middlename": "C",
+        "lastname": "Adona",
+        "birthdate": "1980-Jan-05",
+        "gender": "M",
+        "citizenship": "PH",
+        "residency": "PH",
+        "email": "carloadona@c3qtech.com",
+        "phone": "+63288888807"
+    }, 
+    {
+        "name": "tway",
+        "mnemonic": "section trap blue divide never uphold reflect arrive very spike prize dinner ignore label test ski burger purchase slow disease sibling object economy obtain",
+        "a": "9",
+        "bf": "5678",
+        "firstname": "Tway",
+        "middlename": "T",
+        "lastname": "Bacani",
+        "birthdate": "1980-Jan-06",
+        "gender": "M",
+        "citizenship": "PH",
+        "residency": "PH",
+        "email": "twaybacani@c3qtech.com",
+        "phone": "+63288888808"
+    }, 
+    {
+        "name": "bhon",
+        "mnemonic": "concert mother alert rug beef light scene clip lumber quit feed arrow garment awesome easy soldier rude reward ecology clay seminar public tank prison",
+        "a": "10",
+        "bf": "5678",
+        "firstname": "Bhon",
+        "middlename": "B",
+        "lastname": "Chua",
+        "birthdate": "1980-Jan-07",
+        "gender": "M",
+        "citizenship": "PH",
+        "residency": "PH",
+        "email": "bhonchua@c3qtech.com",
+        "phone": "+63288888809"
+    }
+]
+

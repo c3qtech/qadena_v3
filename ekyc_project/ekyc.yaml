@@ -1,0 +1,170 @@
+openapi: 3.0.0
+info:
+  title: EKYC
+  version: 1.0.0
+paths:
+  /reuse-kyc:
+    post:
+      summary: Reuse KYC
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider-name:
+                  type: string
+                from-provider-name:
+                  type: string
+                phone-number:
+                  type: string
+                last-name:
+                  type: string
+      responses:
+        '200':
+          description: Successful response
+  /authenticate-user-reuse-kyc:
+    post:
+      summary: Authenticate user for reuse KYC
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pin:
+                  type: string
+                otp:
+                  type: string
+                session-id:
+                  type: string
+      responses:
+        '200':
+          description: Successful response
+  /notify-user-reuse-kyc:
+    post:
+      summary: Notify user for reuse KYC
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                session-id:
+                  type: string
+      responses:
+        '200':
+          description: Successful response
+  /submit-kyc:
+    post:
+      summary: Submit KYC for al villarica
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider-name:
+                  type: string
+                phone-number:
+                  type: string
+                email:
+                  type: string
+                PIN:
+                  type: string
+                personal-info-details:
+                  type: object
+                  properties:
+                    FirstName:
+                      type: string
+                    MiddleName:
+                      type: string
+                    LastName:
+                      type: string
+                    Birthdate:
+                      type: string
+                    Gender:
+                      type: string
+                    Citizenship:
+                      type: string
+                    Residency:
+                      type: string
+      responses:
+        '200':
+          description: Successful response
+  /bulk-submit-kyc:
+    post:
+      summary: Bulk submit KYC records
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider-name:
+                  type: string
+                kyc-records:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      phone-number:
+                        type: string
+                      email:
+                        type: string
+                      PIN:
+                        type: string
+                      personal-info-details:
+                        type: object
+                        properties:
+                          FirstName:
+                            type: string
+                          MiddleName:
+                            type: string
+                          LastName:
+                            type: string
+                          Birthdate:
+                            type: string
+                          Gender:
+                            type: string
+                          Citizenship:
+                            type: string
+                          Residency:
+                            type: string
+      responses:
+        '200':
+          description: Successful response
+  /register-kyc-provider:
+    post:
+      summary: Register KYC Provider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                friendly-name:
+                  type: string
+                name:
+                  type: string
+                armor-priv-key:
+                  type: string
+                armor-pass-phrase:
+                  type: string
+                logo:
+                  type: string
+      responses:
+        '200':
+          description: Successful response
+  /get-kyc-providers:
+    get:
+      summary: Get KYC Providers
+      responses:
+        '200':
+          description: Successful response

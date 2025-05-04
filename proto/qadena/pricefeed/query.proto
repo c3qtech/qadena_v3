@@ -1,0 +1,133 @@
+syntax = "proto3";
+
+package qadena.pricefeed;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+import "cosmos/base/query/v1beta1/pagination.proto";
+import "qadena/pricefeed/params.proto";
+import "qadena/pricefeed/posted_price.proto";
+import "cosmos_proto/cosmos.proto";
+import "qadena/pricefeed/current_price.proto";
+import "qadena/pricefeed/market.proto";
+
+option go_package = "qadena/x/pricefeed/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  
+  // Parameters queries the parameters of the module.
+  rpc Params (QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/qadena/pricefeed/params";
+  
+  }
+  
+  /*
+  // Queries a list of PostedPrice items.
+  rpc PostedPrice    (QueryGetPostedPriceRequest) returns (QueryGetPostedPriceResponse) {
+    option (google.api.http).get = "/qadena/pricefeed/posted_price/{marketId}/{oracleAddress}";
+  
+  }
+  rpc PostedPriceAll (QueryAllPostedPriceRequest) returns (QueryAllPostedPriceResponse) {
+    option (google.api.http).get = "/qadena/pricefeed/posted_price";
+  
+  }
+    */
+  
+  // Queries a list of Price items.
+  rpc Price (QueryPriceRequest) returns (QueryPriceResponse) {
+    option (google.api.http).get = "/qadena/pricefeed/price/{marketId}";
+  
+  }
+  
+  // Queries a list of Prices items.
+  rpc Prices (QueryPricesRequest) returns (QueryPricesResponse) {
+    option (google.api.http).get = "/qadena/pricefeed/prices";
+  
+  }
+  
+  // Queries a list of RawPrices items.
+  rpc RawPrices (QueryRawPricesRequest) returns (QueryRawPricesResponse) {
+    option (google.api.http).get = "/qadena/pricefeed/raw_prices/{marketId}";
+  
+  }
+  
+  // Queries a list of Oracles items.
+  rpc Oracles (QueryOraclesRequest) returns (QueryOraclesResponse) {
+    option (google.api.http).get = "/qadena/pricefeed/oracles/{marketId}";
+  
+  }
+  
+  // Queries a list of Markets items.
+  rpc Markets (QueryMarketsRequest) returns (QueryMarketsResponse) {
+    option (google.api.http).get = "/qadena/pricefeed/markets";
+  
+  }
+}
+// QueryParamsRequest is request type for the Query/Params RPC method.
+message QueryParamsRequest {}
+
+// QueryParamsResponse is response type for the Query/Params RPC method.
+message QueryParamsResponse {
+  
+  // params holds all the parameters of this module.
+  Params params = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+}
+
+message QueryGetPostedPriceRequest {
+  string marketId      = 1;
+  bytes  oracleAddress = 2 [(cosmos_proto.scalar) = "cosmos.AddressBytes", (gogoproto.casttype) = "github.com/cosmos/cosmos-sdk/types.AccAddress"];
+}
+
+message QueryGetPostedPriceResponse {
+  PostedPrice postedPrice = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllPostedPriceRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllPostedPriceResponse {
+  repeated PostedPrice                            postedPrice = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination  = 2;
+}
+
+message QueryPriceRequest {
+  string marketId = 1;
+}
+
+message QueryPriceResponse {
+  CurrentPrice price = 1;
+}
+
+message QueryPricesRequest {
+  string marketId = 1;
+}
+
+message QueryPricesResponse {
+  repeated CurrentPrice prices = 1;
+}
+
+message QueryRawPricesRequest {
+  string marketId = 1;
+}
+
+message QueryRawPricesResponse {
+  repeated PostedPrice rawPrices = 1;
+}
+
+message QueryOraclesRequest {
+  string marketId = 1;
+}
+
+message QueryOraclesResponse {
+  repeated string oracles = 1;
+}
+
+message QueryMarketsRequest {}
+
+message QueryMarketsResponse {
+  repeated Market markets = 1;
+}
+

@@ -1,0 +1,26 @@
+syntax = "proto3";
+package qadena.qadena;
+
+import "qadena/qadena/ec_point.proto"; 
+import "qadena/qadena/bigint.proto";
+
+option go_package = "qadena/x/qadena/types";
+
+/* DEPRECARED
+message InnerProdArg {
+  repeated ECPoint L = 1;
+  repeated ECPoint R = 2;
+  string A = 3;
+  string B = 4;
+
+  repeated string Challenges = 5;
+}
+*/
+
+message BInnerProductProof {
+  repeated BECPoint l = 1;
+  repeated BECPoint r = 2;
+  BInt a = 3;
+  BInt b = 4;
+}
+

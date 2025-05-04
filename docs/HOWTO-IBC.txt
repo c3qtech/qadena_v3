@@ -1,0 +1,71 @@
+How to build, deploy, use IBC token transfer from one chain to another
+
+1. Go to the docker env directory to build the primary docker image
+$ cd docker/env && sh build.sh
+
+2. Go to the ibc-tokentransfer/qadena folder to build the docker image of 2 chains
+$ cd docker/ibc-tokentransfer/qadena && sh build-images.sh
+
+3. Go to the ibc-tokentransfer folder to build relayer and run a docker-compose command
+$ cd docker/ibc-tokentransfer && docker-compose -f tokentransfer.yml --profile go up
+
+4. To verify if all build, images and containers are successful try these ff commands:
+$ docker images
+
+You should see something like:
+qdnb                 latest    6d3110fbb7eb   2 days ago   6.2GB
+qdna                 latest    27c9c407aefb   2 days ago   6.2GB
+relayer_go            latest    90b4c8b07d85   3 days ago   2.48GB
+goignite              latest    391f3a021cdb   6 days ago   3.02GB
+
+$ docker ps
+
+You should see something like:
+CONTAINER ID   IMAGE        COMMAND                  CREATED          STATUS         PORTS                                                                        NAMES
+d0854cd7ca82   qdna        "zsh ./scripts/conta…"   10 seconds ago   Up 9 seconds   0.0.0.0:1317->1317/tcp, 0.0.0.0:4500->4500/tcp, 0.0.0.0:26657->26657/tcp     qdna
+d4bd547086a7   qdnb        "zsh ./scripts/conta…"   10 seconds ago   Up 9 seconds   0.0.0.0:1318->26657/tcp, 0.0.0.0:4501->26657/tcp, 0.0.0.0:26658->26657/tcp   qdnb
+3d80d5e5019a   relayer_go   "bash"                   10 seconds ago   Up 9 seconds                                                                                relayer
+
+If you can see all this, then you're all set!
+
+---
+
+CLI commands that can be used inside a relayer:
+
+# Go inside the relayer docker container
+docker exec -it relayer bash
+
+# Initialize relayer based on config and path directories
+rly config init
+rly chains add-dir configs
+rly paths add-dir paths
+
+# Restore the existing user on qadena chain
+rly keys restore qdna alice "cinnamon legend sword giant master simple visit action level ancient day rubber pigeon filter garment hockey stay water crawl omit airport venture toilet oppose" --coin-type 60
+rly keys restore qdnb bob "define envelope federal move soul panel purity language memory illegal little twin borrow menu mule vote alter bright must deal sight muscle weather rug" --coin-type 60
+
+# List the chain and paths
+rly chains list
+rly paths list
+
+# Link chain a (qdna) to chain b (qdnb)
+rly tx link demo -d -t 3s
+
+# Run the replay packets/acknowledgements
+rly start demo
+
+# Query balances on both chains
+rly q balance qdna
+rly q bal qdnb
+
+# Do a IBC transfer from chain a to chain b
+rly tx transfer qdna qdnb 10aqdn $(rly chains address qdnb) channel-0
+
+# Query balances on both chains
+rly q bal qdna
+rly q bal qdnb
+
+# Transfer back the transferred IBC token from chain b to chain a
+rly tx transfer qdnb qdna 10transfer/channel-0/aqdn $(rly chains addr qdna) channel-0
+
+To learn more about IBC, go here: https://tutorials.cosmos.network/academy/3-ibc/

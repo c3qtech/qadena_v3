@@ -1,0 +1,15 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "qadena/x/qadena/types";
+import "qadena/qadena/recover_share.proto"; 
+import "qadena/qadena/v_share_bind_data.proto"; 
+
+message RecoverKey {
+  string walletID = 1;
+  bytes encNewWalletIDVShare = 3;
+  VShareBindData NewWalletIDVShareBind = 4;
+  repeated string signatory = 5; 
+  repeated RecoverShare recoverShare = 6; 
+}
+

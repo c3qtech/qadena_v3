@@ -1,0 +1,9 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "qadena/x/qadena/types";
+
+message BInt {
+    bytes i = 1;
+}
+  

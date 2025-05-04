@@ -1,0 +1,397 @@
+// Copyright 2015 gRPC authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+package qadena.qadena;
+
+import "qadena/qadena/wallet.proto";
+import "qadena/qadena/tx.proto";
+import "qadena/qadena/credential.proto";
+import "qadena/qadena/suspicious_transaction.proto";
+import "qadena/qadena/public_key.proto";
+import "qadena/qadena/jar_regulator.proto";
+import "qadena/qadena/interval_public_key_i_d.proto";
+import "qadena/qadena/secret_share_priv_k.proto";
+import "qadena/qadena/query.proto";
+import "qadena/qadena/protect_key.proto";
+import "qadena/qadena/recover_key.proto";
+import "qadena/qadena/v_share_bind_data.proto";
+import "qadena/qadena/pioneer_jar.proto";
+import "qadena/qadena/enclave_identity.proto";
+
+option go_package = "qadena/x/qadena/types";
+
+import "google/protobuf/timestamp.proto";
+import "gogoproto/gogo.proto";
+
+
+// The greeting service definition.
+service Greeter {
+  // Sends a greeting
+  rpc SayHello (HelloRequest) returns (HelloReply) {}
+}
+
+// The request message containing the user's name.
+message HelloRequest {
+  string name = 1;
+}
+
+// The response message containing the greetings
+message HelloReply {
+  string message = 1;
+}
+
+service QadenaEnclave {
+  // these are called from init_enclave
+  rpc InitEnclave (MsgInitEnclave) returns (InitEnclaveReply) {}
+  rpc SyncEnclave (MsgSyncEnclave) returns (SyncEnclaveReply) {}
+  //rpc AddAsValidator (MsgAddAsValidator) returns (AddAsValidatorReply) {}
+  rpc UpgradeEnclave (MsgUpgradeEnclave) returns (UpgradeEnclaveReply) {}
+
+  // for debug only, called from init_enclave
+  rpc ExportPrivateKey (MsgExportPrivateKey) returns (ExportPrivateKeyReply) {}
+  rpc ExportPrivateState (MsgExportPrivateState) returns (ExportPrivateStateReply) {}
+  rpc RemovePrivateKey (MsgRemovePrivateKey) returns (RemovePrivateKeyReply) {}
+  rpc UpdateSSIntervalKey (MsgUpdateSSIntervalKey) returns (UpdateSSIntervalKeyReply) {}
+
+  // these are called from the chain by an enclave
+  rpc QueryEnclaveSyncEnclave (QueryEnclaveSyncEnclaveRequest) returns (QueryEnclaveSyncEnclaveResponse) {}
+  rpc QueryEnclaveSecretShare (QueryEnclaveSecretShareRequest) returns (QueryEnclaveSecretShareResponse) {}
+  rpc QueryEnclaveRecoverKeyShare (QueryEnclaveRecoverKeyShareRequest) returns (QueryEnclaveRecoverKeyShareResponse) {}
+  rpc QueryEnclaveValidateEnclaveIdentity (QueryEnclaveValidateEnclaveIdentityRequest) returns (QueryEnclaveValidateEnclaveIdentityResponse) {}
+
+  rpc SetEnclaveIdentity (EnclaveIdentity) returns (SetEnclaveIdentityReply) {}
+
+  rpc UpdateEnclaveIdentity (PioneerUpdateEnclaveIdentity) returns (UpdateEnclaveIdentityReply) {}
+
+
+  rpc SetWallet (Wallet) returns (SetWalletReply) {}
+  rpc SetProtectKey (ProtectKey) returns (SetProtectKeyReply) {}
+  rpc SetRecoverKey (RecoverKey) returns (SetRecoverKeyReply) {}
+  rpc SetCredential (Credential) returns (SetCredentialReply) {}
+  rpc RecoverKeyByCredential (Credential) returns (RecoverKeyReply) {}
+  rpc ClaimCredential(MsgClaimCredential) returns (MsgClaimCredentialResponse) {}
+  rpc SignRecoverKey(MsgSignRecoverPrivateKey) returns (SignRecoverKeyReply) {}
+  rpc QueryGetRecoverKey(QueryGetRecoverKeyRequest) returns (QueryGetRecoverKeyResponse) {}
+  rpc QueryFindCredential(QueryFindCredentialRequest) returns (QueryFindCredentialResponse) {}
+  rpc QueryGetSubWalletIDByOriginalWalletID(Credential) returns (QueryGetSubWalletIDByOriginalWalletIDResponse) {}
+
+  // used to validate the "authorized signatory" (this allows a user to specify which eph wallet ID is allowed to sign documents)
+  rpc ValidateAuthorizedSignatory (ValidateAuthorizedSignatoryRequest) returns (ValidateAuthorizedSignatoryReply) {}
+
+  // used to validate whether this signer can sign a document (is the signer's credentials enough to sign the document?)
+  rpc ValidateAuthorizedSigner (ValidateAuthorizedSignerRequest) returns (ValidateAuthorizedSignerReply) {}
+  
+  rpc SetPublicKey (PublicKey) returns (SetPublicKeyReply) {}
+  rpc SetJarRegulator (JarRegulator) returns (SetJarRegulatorReply) {}
+  rpc SetIntervalPublicKeyID (IntervalPublicKeyID) returns (SetIntervalPublicKeyIdReply) {}
+  rpc SetPioneerJar (PioneerJar) returns (SetPioneerJarReply) {}
+  rpc SetSecretSharePrivateKey (SecretSharePrivK) returns (SetSecretSharePrivateKeyReply) {}
+  rpc ValidateDestinationWallet (MsgCreateWallet) returns (ValidateDestinationWalletReply) {}
+  rpc ValidateCredential (MsgBindCredential) returns (ValidateCredentialReply) {}
+  rpc ValidateTransferPrime (MsgTransferFunds) returns (ValidateTransferPrimeReply) {}
+  rpc ValidateTransferDoublePrime (MsgReceiveFunds) returns (ValidateTransferDoublePrimeReply) {}
+  rpc SyncWallets (MsgSyncWallets) returns (SyncWalletsReply) {}
+  rpc SyncCredentials (MsgSyncCredentials) returns (SyncCredentialsReply) {}
+  rpc SyncRecoverKeys (MsgSyncRecoverKeys) returns (SyncRecoverKeysReply) {}
+  rpc SyncSuspiciousTransactions (MsgSyncSuspiciousTransactions) returns (SyncSuspiciousTransactionsReply) {}
+  rpc ScanTransaction (MsgScanTransactions) returns (ScanTransactionReply) {}
+
+  // called at BeginBlock at a certain interval (i.e. not at every BeginBlock)
+  rpc UpdateHeight (MsgUpdateHeight) returns (UpdateHeightReply) {}
+
+  // called after each transaction
+  rpc TransactionComplete (MsgTransactionComplete) returns (TransactionCompleteReply) {}
+
+  // called at each EndBlock
+  rpc EndBlock (MsgEndBlock) returns (EndBlockReply) {}
+
+  // called on init
+  rpc GetStoreHash (MsgGetStoreHash) returns (GetStoreHashReply) {}
+}
+
+
+message MsgEndBlock {
+}
+
+message EndBlockReply {
+}
+
+message QueryGetSubWalletIDByOriginalWalletIDResponse {
+	string subWalletID = 1;
+}
+
+message StoreHash {
+  string key = 1;
+  string hash = 2;
+}
+
+message MsgGetStoreHash {
+}
+
+message GetStoreHashReply {
+  repeated StoreHash hashes = 1;
+}
+
+
+message MsgAddAsValidator {
+}
+
+message MsgSyncEnclave {
+  string pioneerID = 1;
+  string externalAddress = 2;
+  string pioneerArmorPrivK = 3;
+  string pioneerArmorPassPhrase = 4;
+  string seedNode = 5;
+}
+
+message MsgUpgradeEnclave {
+  bytes remoteReport = 1;
+  string enclavePubK      = 2;
+}
+
+message UpgradeEnclaveReply {
+  bytes remoteReport = 1;
+  bytes encEnclavePrivateStateEnclavePubK      = 2;
+}
+
+
+message MsgExportPrivateKey {
+  string pubKID = 1;
+}
+
+message MsgRemovePrivateKey {
+  string pubKID = 1;
+}
+
+message MsgExportPrivateState {
+}
+
+message MsgUpdateSSIntervalKey {
+}
+
+message UpdateSSIntervalKeyReply {
+}
+
+message RemovePrivateKeyReply {
+}
+
+message ExportPrivateKeyReply {
+  string privK = 1;
+}
+
+message ExportPrivateStateReply {
+  string state = 1;
+}
+
+message MsgInitEnclave {
+  string pioneerID = 1;
+  string externalAddress = 2;
+  string pioneerArmorPrivK = 3;
+  string pioneerArmorPassPhrase = 4;
+  string jarID = 5;
+  string regulatorID = 6;
+  string signerID = 7;
+  string uniqueID = 8;
+}
+
+message VShareSignatory {
+  bytes encSignatoryVShare = 1; 
+  VShareBindData vShareBind = 2;   
+}
+
+message ValidateAuthorizedSignerRequest {
+  string creator = 1;
+  VShareSignatory requestingSignatory = 2;
+  repeated VShareSignatory requiredSignatory = 3;
+  repeated VShareSignatory completedSignatory = 4;
+}
+
+message ValidateAuthorizedSignerReply {
+  bool status = 1;
+}
+
+message ValidateAuthorizedSignatoryRequest {
+  string creator = 1;
+  VShareSignatory signatory = 2;
+  repeated VShareSignatory currentSignatory = 3; 
+}
+
+message ValidateAuthorizedSignatoryReply {
+  bool status = 1;
+}
+
+message MsgUpdateHeight {
+  int64 height = 1;
+  bool isProposer = 2;
+}
+
+message MsgScanTransactions {
+  google.protobuf.Timestamp  timestamp   = 1 [
+    (gogoproto.stdtime) = true,
+    (gogoproto.nullable) = false
+  ];
+  int64 height = 2;
+  MsgTransferFunds msg = 3;
+  string exchangerate = 4;
+}
+
+message MsgSyncWallets {
+  bool clear = 1;
+}
+
+message SyncWalletsReply {
+  repeated Wallet wallets = 1;
+}
+
+message MsgSyncCredentials {
+  bool clear = 1;
+}
+
+message SyncCredentialsReply {
+  repeated Credential credentials = 1;
+}
+
+
+message MsgSyncRecoverKeys {
+  bool clear = 1;
+}
+
+message SyncRecoverKeysReply {
+  repeated RecoverKey recoverKeys = 1;
+}
+
+
+message SetSecretSharePrivateKeyReply {
+  bool status = 1;
+}
+
+message MsgSyncSuspiciousTransactions {
+  bool clear = 1;
+}
+
+message SyncSuspiciousTransactionsReply {
+  repeated SuspiciousTransaction suspiciousTransactions = 1;
+}
+
+message InitEnclaveReply {
+  bool status = 1;
+}
+
+message UpdateHeightReply {
+  bool status = 1;
+}
+
+message MsgTransactionComplete {
+  bool success = 1;
+}
+
+message TransactionCompleteReply {
+  bool status = 1;
+}
+
+message SyncEnclaveReply {
+  bool status = 1;
+}
+
+message AddAsValidatorReply {
+  bool status = 1;
+}
+
+message SetWalletReply {
+  bool status = 1;
+}
+
+message SetEnclaveIdentityReply {
+  bool status = 1;
+}
+
+message PioneerUpdateEnclaveIdentity {
+  EnclaveIdentity enclaveIdentity = 1;
+  bytes remoteReport = 2;
+}
+
+message UpdateEnclaveIdentityReply {
+  bool status = 1;
+}
+
+
+message SetProtectKeyReply {
+  bool status = 1;
+}
+
+message SetRecoverKeyReply {
+  bool status = 1;
+}
+
+message SetCredentialReply {
+  bool status = 1;
+}
+
+message RecoverKeyReply {
+  bool status = 1;
+}
+
+message SignRecoverKeyReply {
+  bool status = 1;
+}
+
+message SetPublicKeyReply {
+  bool status = 1;
+}
+
+message SetJarRegulatorReply {
+  bool status = 1;
+}
+
+message SetPioneerJarReply {
+  bool status = 1;
+}
+
+message SetIntervalPublicKeyIdReply {
+  bool status = 1;
+}
+
+message ValidateDestinationWalletReply {
+  int32 status = 1;
+}
+
+message ValidateCredentialReply {
+  bool status = 1;
+}
+
+message ValidateTransferPrimeReply {
+  bool updateSourceWallet = 1;
+}
+
+message ValidateTransferDoublePrimeReply {
+  bool updateDestinationWallet = 1;
+}
+
+message ScanTransactionReply {
+  bool status = 1;
+}
+
+// these are used to marshal strings and arrays of strings, needed by the persistent KV implementation in the enclave
+message EnclaveStoreStringArray {
+  repeated string a = 1;
+}
+
+message EnclaveStoreString {
+  string s = 1;
+}
+
+message EnclaveEnclaveIdentityArray {
+  repeated EnclaveIdentity identity = 1;
+}

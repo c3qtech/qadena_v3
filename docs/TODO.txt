@@ -1,0 +1,8 @@
+- QADENA wallet
+- self-sovereign stuff
+- KYC onboarding (for legal KYC)
+- "credibility score" - crowdsourcing KYC -- endorsement KYC
+- changing limits/capabilities based on "credibility score"
+- changing keys
+- many many things
+

@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package qadena.pricefeed;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+import "qadena/pricefeed/params.proto";
+import "qadena/pricefeed/posted_price.proto";
+
+option go_package = "qadena/x/pricefeed/types";
+
+// GenesisState defines the pricefeed module's genesis state.
+message GenesisState {
+  
+  // params defines all the parameters of the module.
+           Params      params          = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+  repeated PostedPrice postedPriceList = 2 [(gogoproto.nullable) = false] ;
+}
+

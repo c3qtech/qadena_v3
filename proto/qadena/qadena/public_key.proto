@@ -1,0 +1,15 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "qadena/x/qadena/types";
+
+import "qadena/qadena/share.proto";
+
+message PublicKey {
+  string pubKID = 1; 
+  string pubKType = 2;  
+  string pubK = 3;
+  repeated Share shares = 4;
+  bytes remoteReport = 5;
+}
+

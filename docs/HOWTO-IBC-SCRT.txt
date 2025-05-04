@@ -1,0 +1,104 @@
+How to build, deploy, use IBC token transfer from one chain to another
+
+1. Go to the docker env directory to build the primary docker image
+$ cd docker/env && sh build.sh
+
+2. Go to the ibc-tokentransfer/qadena folder to build the docker image of 2 chains
+$ cd docker/ibc-tokentransfer-scrt/qadena && sh build-images.sh
+
+3. Go to the ibc-tokentransfer folder to build relayer and run a docker-compose command
+$ cd docker/ibc-tokentransfer-scrt && docker-compose -f tokentransfer.yml --profile go up
+
+4. To verify if all build, images and containers are successful try these ff commands:
+$ docker images
+
+You should see something like:
+scrt                 latest    6d3110fbb7eb   2 days ago   6.2GB
+qadena                 latest    27c9c407aefb   2 days ago   6.2GB
+relayer_go            latest    90b4c8b07d85   3 days ago   2.48GB
+goignite              latest    391f3a021cdb   6 days ago   3.02GB
+
+$ docker ps
+
+You should see something like:
+CONTAINER ID   IMAGE        COMMAND                  CREATED          STATUS         PORTS                                                                        NAMES
+d0854cd7ca82   qadena        "zsh ./scripts/conta…"   10 seconds ago   Up 9 seconds   0.0.0.0:1317->1317/tcp, 0.0.0.0:4500->4500/tcp, 0.0.0.0:26657->26657/tcp     qadena
+d4bd547086a7   scrt        "zsh ./scripts/conta…"   10 seconds ago   Up 9 seconds   0.0.0.0:1318->26657/tcp, 0.0.0.0:4501->26657/tcp, 0.0.0.0:26658->26657/tcp   scrt
+3d80d5e5019a   relayer_go   "bash"                   10 seconds ago   Up 9 seconds                                                                                relayer
+
+If you can see all this, then you're all set!
+
+---
+
+NOTE: BEFORE PROCEEDING, we need to create a new account on scrt network via these commands
+$ docker exec -it scrt bash
+
+Check the balance of scrt network pioneer
+
+Pioneer
+secret1ap26qrlp8mcq2pg6r47w43l0y8zkqm8a450s03
+
+$ secretd q bank balances secret1ap26qrlp8mcq2pg6r47w43l0y8zkqm8a450s03
+
+Recover bob account
+
+$ secretd keys add bob --recover
+
+Then paste: define envelope federal move soul panel purity language memory illegal little twin borrow menu mule vote alter bright must deal sight muscle weather rug
+
+Send funds from pioneer to bob
+
+$ secretd tx bank send secret1ap26qrlp8mcq2pg6r47w43l0y8zkqm8a450s03 secret1jgrqpljwraec04qqmg4wrhsaajjsn27yeghv2n 10000000000000uscrt --yes
+
+Bob
+secret1jgrqpljwraec04qqmg4wrhsaajjsn27yeghv2n
+
+Check the balance of bob
+
+secretd q bank balances secret1jgrqpljwraec04qqmg4wrhsaajjsn27yeghv2n
+
+CLI commands that can be used inside a relayer:
+
+# Go inside the relayer docker container
+docker exec -it relayer bash
+
+# Initialize relayer based on config and path directories
+rly config init
+rly chains add-dir configs
+rly paths add-dir paths
+
+# Restore the existing user on qadena chain
+rly keys restore qadena ann "inherit rebel absorb diamond leopard lens approve deny balcony toast merry text metal pair diamond lumber gravity song liberty pumpkin goddess nature slush basic" --coin-type 60
+rly keys restore scrt bob "define envelope federal move soul panel purity language memory illegal little twin borrow menu mule vote alter bright must deal sight muscle weather rug" --coin-type 529
+
+# List the chain and paths
+rly chains list
+rly paths list
+
+# Link chain a (qadena) to chain b (scrt)
+rly tx link demo -d -t 3s
+
+# Run the replay packets/acknowledgements
+rly start demo
+
+# Query balances on both chains
+rly q balance qadena
+rly q bal scrt
+
+# Do a IBC transfer from chain a to chain b
+rly tx transfer qadena scrt 10aqdn $(rly chains address scrt) channel-0
+
+# Do a IBC transfer from chain b to chain a
+rly tx transfer scrt qadena 10uscrt $(rly chains address qadena) channel-0
+
+# Query balances on both chains
+rly q bal qadena
+rly q bal scrt
+
+# Transfer back the transferred IBC token from chain a to chain b
+rly tx transfer qadena scrt 10transfer/channel-0/uscrt $(rly chains addr scrt) channel-0
+
+# Transfer back the transferred IBC token from chain b to chain a
+rly tx transfer scrt qadena 10transfer/channel-0/aqdn $(rly chains addr qadena) channel-0
+
+To learn more about IBC, go here: https://tutorials.cosmos.network/academy/3-ibc/

@@ -1,0 +1,46 @@
+TO MAKE IT WORK ON ANOTHER HOST (INSTEAD OF LOCALHOST)
+1.  modify repository/conf/deployment (changed localhost to ekycph.southeastasia...):
+
+[server]
+hostname = "ekycph.southeastasia.cloudapp.azure.com"
+
+2.  if you get "Registered callback does not match ...", use:  https://apim.docs.wso2.com/en/4.1.0/troubleshooting/troubleshooting-invalid-callback-error/
+
+
+
+
+
+
+TO MAKE IT WORK ON HTTPS
+
+0. DO ABOVE FIRST
+
+1.  CONFIGURE https:  https://techglimpse.com/setup-wso2-letsencrypt-certificate/
+
+2.  NOTE!!!!  ****delete any users that were there before the changes below****
+
+3.  modify repository/conf/deployment (changed localhost to ekycph.southeastasia...):
+
+[[apim.gateway.environment]]
+name = "Default"
+type = "hybrid"
+provider = "wso2"
+display_in_api_console = true
+description = "This is a hybrid gateway that handles both production and sandbox token traffic."
+show_as_token_endpoint_url = true
+service_url = "https://localhost:${mgt.transport.https.port}/services/"
+username= "${admin.username}"
+password= "${admin.password}"
+ws_endpoint = "ws://ekycph.southeastasia.cloudapp.azure.com:9099"
+wss_endpoint = "wss://ekycph.southeastasia.cloudapp.azure.com:8099"
+http_endpoint = "http://ekycph.southeastasia.cloudapp.azure.com:${http.nio.port}"
+https_endpoint = "https://ekycph.southeastasia.cloudapp.azure.com:${https.nio.port}"
+websub_event_receiver_http_endpoint = "http://localhost:9021"
+websub_event_receiver_https_endpoint = "https://localhost:8021"
+
+[apim.devportal]
+url = "https://ekycph.southeastasia.cloudapp.azure.com:${mgt.transport.https.port}/devportal"
+
+
+4.  if you get "Registered callback does not match ...", use:  https://apim.docs.wso2.com/en/4.1.0/troubleshooting/troubleshooting-invalid-callback-error/
+

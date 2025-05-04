@@ -1,0 +1,195 @@
+
+
+ignite scaffold chain qadena
+ignite scaffold module nameservice --dep bank,qadena
+
+ADD SOME BASIC TYPES, BUT COPY IN THE ONES WE MANUALLY ADDED
+
+PRICEFEED
+
+ignite scaffold module pricefeed
+
+ignite scaffold type CurrentPrice market_id price --module pricefeed
+ignite scaffold type Market market_id base_asset quote_asset oracles active --module pricefeed
+ignite scaffold map PostedPrice price expiry --no-message --index market_id,oracle_address --module pricefeed
+
+ignite scaffold query Price market_id --response price:CurrentPrice --module pricefeed
+ignite scaffold query Prices --response prices:CurrentPrice --module pricefeed
+ignite scaffold query RawPrices market_id --response raw_prices:PostedPrice --module pricefeed
+ignite scaffold query Oracles market_id --response oracles --module pricefeed
+ignite scaffold query Markets --response markets:Market --module pricefeed
+
+NAMESERVICE
+
+ignite scaffold type E_C_Point X Y --no-message --module nameservice
+ignite scaffold type PedersenCommit A X C --no-message --module nameservice
+// modify pedersen_commit.proto insert "import .../e_c_point.proto", change "string c" to "ECPoint c",
+
+ignite scaffold map NameBinding Address --no-message --index Credential,Credential_Type --module nameservice
+
+ignite scaffold message BindCredential Credential_Type CredentialInfo Credential_PedersenCommit --module nameservice
+
+QADENA
+
+ignite scaffold type B_Int i:bytes --no-message
+ignite scaffold type E_C_Point X Y --no-message
+ignite scaffold type PedersenCommit A X C --no-message
+// modify pedersen_commit.proto insert "import .../e_c_point.proto", change "string c" to "ECPoint c",
+
+THESE ADD TO GENESIS.PROTO
+
+ignite scaffold map Credential Wallet_I_D Credential_Pedersen_Commit Enc_Credential_Hash_Interval_S_S_Pub_K Interval_S_S_Pub_K_I_D Enc_Credential_Info_V_Share V_Share_Bind Find_Credential_Pedersen_Commit Provider_Wallet_I_D Reference_Credential_I_D --no-message --index Credential_I_D,Credential_Type
+ignite scaffold map Public_Key Pub_K Shares Remote_Report --no-message --index Pub_K_I_D,Pub_K_Type
+
+
+ignite scaffold map Wallet Home_Pioneer_I_D --no-message --index Wallet_I_D
+
+ignite scaffold map Interval_Public_Key_I_D Pub_K_I_D External_I_P_Address --no-message --index Node_I_D,Node_Type
+
+ignite scaffold map Pioneer_Jar Jar_I_D --no-message --index Pioneer_I_D
+
+ignite scaffold map Jar_Regulator Regulator_I_D --no-message --index Jar_I_D
+
+ignite scaffold list SuspiciousTransaction Jar_I_D Regulator_Pub_K_I_D Reason Time Enc_Source_Personal_Info_Regulator_Pub_K Enc_Destination_Personal_Info_Regulator_Pub_K Enc_E_Amount_Regulator_Pub_K Enc_Opt_In_Reason_Regulator_Pub_K
+
+ignite scaffold map ProtectKey Threshold:int Recover_Share:RecoverShare --index Wallet_I_D --no-message
+
+ignite scaffold map RecoverKey Signatory Recover_Share:RecoverShare --index Wallet_I_D --no-message
+
+THESE ADD TRANSACTIONS
+
+ignite scaffold message Add_Public_Key Pub_K Pub_K_Type
+
+ignite scaffold message Update_Interval_Public_Key_I_D Node_I_D Node_Type
+
+ignite scaffold message UpdatePioneerJar Pioneer_I_D Jar_I_D
+
+ignite scaffold message UpdateJarRegulator Jar_I_D Regulator_I_D
+
+ignite scaffold message CreateWallet Home_Pioneer_I_D Jar_I_D Jar_Interval_Pub_K_I_D SS_Interval_Pub_K_I_D Enc_Create_Wallet_V_Share V_Share_Bind:BindData Accept_Password_P_C:PedersenCommit enc_S_S_Accept_Validated_Credentials Wallet_Amount_Pedersen_Commit:PedersenCommit Enc_Wallet_Amount_User_Credential_Pub_K Transparent_Wallet_Amount_P_C:PedersenCommit Accept_Credential_Type
+
+ignite scaffold message TransferFunds Transaction_I_D Jar_I_D Jar_Interval_Pub_K_I_D SS_Interval_Pub_K_I_D Source_P_C:PedersenCommit Hidden_Transfer_P_C:PedersenCommit New_Source_P_C:PedersenCommit Enc_New_Source_Wallet_Amount Enc_New_Destination_Wallet_Amount Enc_Anon_Transfer_Funds Transparent_Amount Token_Denom Hidden_Transfer_P_C_Proof:RangeProof New_Source_P_C_Proof:RangeProof Enc_Transfer_Funds_V_Share V_Share_Bind:BindData
+
+ignite scaffold message ReceiveFunds Transaction_I_D Jar_I_D Jar_Interval_Pub_K_I_D SS_Interval_Pub_K_I_D Destination_P_C:PedersenCommit Hidden_Transfer_P_C:PedersenCommit New_Destination_P_C:PedersenCommit Enc_New_Destination_Wallet_Amount Enc_Anon_Receive_Funds Transparent_Amount Token_Denom Hidden_Transfer_P_C_Proof:RangeProof New_Destination_P_C_Proof:RangeProof Enc_Receive_Funds_V_Share V_Share_Bind:BindData
+
+ignite scaffold message Deploy_Smart_Contract Src_Wallet_I_D Smart_Contract_Hex
+
+ignite scaffold message Execute_Smart_Contract Src_Wallet_I_D Smart_Contract_Hex
+
+ignite scaffold message CreateCredential Credential_I_D Credential_Type Credential_Pedersen_Commit:PedersenCommit SS_Interval_Pub_K_I_D Enc_Credential_Info_V_Share V_Share_Bind:BBindData Enc_Credential_Hash_S_S_Interval_PubK Find_Credential_Pedersen_Commit:BPedersenCommit E_K_Y_C_App_Wallet_I_D Reference_Credential_I_D
+
+ignite scaffold message Pioneer_Add_Public_Key Pub_K_I_D Pub_K Pub_K_Type Shares:Share
+
+ignite scaffold message Pioneer_Update_Interval_Public_Key_I_D Pub_K_I_D Node_I_D Node_Type External_I_P_Address
+
+ignite scaffold message Pioneer_Enclave_Exchange Msg_Type Msg
+
+ignite scaffold message Pioneer_Broadcast_Secret_Share_Private_Key Private_Keys:SecretSharePrivK Remote_Report
+
+ignite scaffold message ProtectPrivateKey Threshold:int RecoverShare:RecoverShare
+
+ignite scaffold message SignRecoverPrivateKey SS_Interval_Pub_K_I_D Enc_Destination_E_Wallet_I_D_S_S_Interval_Pub_K_I_D RecoverShare:RecoverShare 
+
+ignite scaffold message ClaimCredential Credential_I_D Credential_Type Recover_Key:bool SS_Interval_Pub_K_I_D Enc_Claim_Credential_Extra_Parms_S_S_Interval_Pub_K
+
+ignite scaffold message CreateBulkCredentials Credential_Type SS_Interval_Pub_K_I_D V_Share_Bind:BBindData E_K_Y_C_App_Wallet_I_D Bulk_Credentials:BulkCredential
+
+
+
+
+THESE ADD QUERIES
+
+ignite scaffold query Treasury --response Total_Balance:coin,Encrypted_Balance:coin
+ignite scaffold query Account Name --response Transparent_Balance,Encrypted_Balance
+
+ignite scaffold query Incentives --response Create_Wallet_Incentive:coin,Create_Ephemeral_Wallet_Incentive:coin,Create_Wallet_Transparent_Incentive:coin,Create_Ephemeral_Wallet_Transparent_Incentive:coin
+
+ignite scaffold query SyncEnclave Remote_Report Enclave_Pub_K --response Remote_Report,Enc_Enclave_Params_Enclave_Pub_K
+
+ignite scaffold query EnclaveSecretShare Remote_Report Enclave_Pub_K Pub_K_I_D --response Remote_Report,Enc_Secret_Share_Enclave_Pub_K
+
+ignite scaffold query EnclaveRecoverKeyShare Remote_Report New_Wallet_I_D Share_Wallet_I_D Enc_Share_Wallet_Pub_K --response Remote_Report,Enc_Share_Wallet_Pub_K
+
+ignite scaffold query FindCredential Credential_P_C Credential_Type Ss_Interval_Pub_K_I_D Enc_User_Credential_Pub_K_S_S_Interval_Pub_K Enc_Proof_P_C_S_S_Interval_Pub_K Enc_Check_P_C_S_S_Interval_Pub_K --response Enc_Personal_Info_User_Credential_Pub_K,Enc_Credential_I_D_User_Credential_Pub_K
+
+
+EXAMPLES OF USING IGNITE:
+
+https://tutorials.ignite.com/decentralized-identity-verification-module/
+
+
+
+DSVS
+
+ignite scaffold module dsvs --dep bank,qadena
+(added EncryptableSignatory to encryptables.proto)
+ignite scaffold type HashInfo hash:bytes version:int --module dsvs
+ignite scaffold type V_Share_Signatory Enc_Signatory_V_Share V_Share_Bind:BBindData Timestamp --module dsvs
+ignite scaffold map DocumentHash Document_I_D --no-message --index Hash --module dsvs
+ignite scaffold map Document Type Company_Name Required_Signatory:array.string Completed_Signatory:array.string Hash:array.string --no-message --index Document_I_D --module dsvs
+ignite scaffold message Create_Document Document_Type Company_Name Required_Signatory:array.string Hash:array.string --module dsvs
+ignite scaffold message Sign_Document Completed_Signatory:V_Share_Signatory Current_Hash Hash --module dsvs
+
+// remove document
+ignite scaffold message Remove_Document Document_I_D --module dsvs
+
+
+
+// register an authorized signatory against the main wallet
+ignite scaffold message Register_Authorized_Signatory V_Share_Authorized_Signatory --module dsvs
+
+ignite scaffold type V_Share_Authorized_Signatory Enc_Authorized_Signatory_V_Share V_Share_Bind:BBindData --module dsvs
+
+ignite scaffold map Authorized_Signatory Signatory:V_Share_Authorized_Signatory --no-message --index Wallet_I_D --module dsvs
+
+
+Map of  DocumentID to Document
+Map of Hash to DocumentID
+Map of WalletID to Signatory
+
+EncryptableSignatory
+  Nonce
+  Email
+  PhoneNumber
+
+VShareSignatory
+  Enc_
+  VShareBind
+  Timestamp
+  WalletID
+
+HashInfo
+  Hash
+  Version
+
+Document
+  DocumentID
+  Document_Type
+  CompanyName
+  RequiredSignatory[]
+  CompletedSignatory[]
+  Hash[]
+
+RegisterSignatory
+  
+  
+CreateDocument
+  Type
+  CompanyName
+  VShareEncRequireSignatory[]
+  Hash
+
+SignDocument
+  CompletedSgnatory
+  CurrentHash
+  Hash
+
+ENCLAVE UPGRADE
+
+Enclave
+  UniqueID
+  SignerID
+  ProductID
+  Status
+
+ignite scaffold map Enclave_Identity Signer_I_D Product_I_D Status --no-message --index Unique_I_D --signer authority

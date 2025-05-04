@@ -1,0 +1,14 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "qadena/x/qadena/types";
+
+message IntervalPublicKeyID {
+  string nodeID = 1; 
+  string nodeType = 2; 
+  string pubKID = 3; 
+  string externalIPAddress = 4; 
+  string serviceProviderType = 5;  
+  bytes remoteReport = 6;  
+}
+

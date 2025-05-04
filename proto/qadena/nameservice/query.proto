@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package qadena.nameservice;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+import "cosmos/base/query/v1beta1/pagination.proto";
+import "qadena/nameservice/params.proto";
+import "qadena/nameservice/name_binding.proto";
+
+option go_package = "qadena/x/nameservice/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  
+  // Parameters queries the parameters of the module.
+  rpc Params (QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/qadena/nameservice/params";
+  
+  }
+  
+  // Queries a list of NameBinding items.
+  rpc NameBinding    (QueryGetNameBindingRequest) returns (QueryGetNameBindingResponse) {
+    option (google.api.http).get = "/qadena/nameservice/name_binding/{credential}/{credentialType}";
+  
+  }
+  rpc NameBindingAll (QueryAllNameBindingRequest) returns (QueryAllNameBindingResponse) {
+    option (google.api.http).get = "/qadena/nameservice/name_binding";
+  
+  }
+}
+// QueryParamsRequest is request type for the Query/Params RPC method.
+message QueryParamsRequest {}
+
+// QueryParamsResponse is response type for the Query/Params RPC method.
+message QueryParamsResponse {
+  
+  // params holds all the parameters of this module.
+  Params params = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+}
+
+message QueryGetNameBindingRequest {
+  string credential     = 1;
+  string credentialType = 2;
+}
+
+message QueryGetNameBindingResponse {
+  NameBinding nameBinding = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllNameBindingRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllNameBindingResponse {
+  repeated NameBinding                            nameBinding = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination  = 2;
+}
+

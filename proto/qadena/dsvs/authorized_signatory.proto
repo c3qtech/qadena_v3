@@ -1,0 +1,12 @@
+syntax = "proto3";
+package qadena.dsvs;
+
+option go_package = "qadena/x/dsvs/types";
+import "qadena/dsvs/v_share_authorized_signatory.proto"; 
+
+message AuthorizedSignatory {
+  string walletID = 1; 
+  repeated VShareAuthorizedSignatory signatory = 2; 
+  
+}
+
