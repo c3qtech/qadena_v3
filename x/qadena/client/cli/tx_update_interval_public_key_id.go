@@ -4,9 +4,9 @@ package cli
 import (
 	"strconv"
 
-	qadenatx "qadena/x/qadena/client/tx"
-	c "qadena/x/qadena/common"
-	"qadena/x/qadena/types"
+	qadenatx "qadena_v3/x/qadena/client/tx"
+	c "qadena_v3/x/qadena/common"
+	"qadena_v3/x/qadena/types"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"

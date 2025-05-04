@@ -8,9 +8,9 @@ import (
 	simtypes "github.com/cosmos/cosmos-sdk/types/simulation"
 	"github.com/cosmos/cosmos-sdk/x/simulation"
 
-	"qadena/testutil/sample"
-	qadenasimulation "qadena/x/qadena/simulation"
-	"qadena/x/qadena/types"
+	"qadena_v3/testutil/sample"
+	qadenasimulation "qadena_v3/x/qadena/simulation"
+	"qadena_v3/x/qadena/types"
 )
 
 // avoid unused import issue

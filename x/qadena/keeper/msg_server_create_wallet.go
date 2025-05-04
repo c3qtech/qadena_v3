@@ -6,12 +6,12 @@ import (
 
 	// "math/big"
 
-	"qadena/x/qadena/types"
+	"qadena_v3/x/qadena/types"
 
 	//sdkerrors "cosmossdk.io/errors"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	c "qadena/x/qadena/common"
+	c "qadena_v3/x/qadena/common"
 )
 
 func (k msgServer) CreateWallet(goCtx context.Context, msg *types.MsgCreateWallet) (*types.MsgCreateWalletResponse, error) {

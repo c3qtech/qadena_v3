@@ -6,7 +6,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 
-	qadenamodulekeeper "qadena/x/qadena/keeper"
+	qadenamodulekeeper "qadena_v3/x/qadena/keeper"
 )
 
 // HandlerOptions are the options required for constructing a default SDK AnteHandler.

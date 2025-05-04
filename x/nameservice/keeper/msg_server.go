@@ -1,7 +1,7 @@
 package keeper
 
 import (
-	"qadena/x/nameservice/types"
+	"qadena_v3/x/nameservice/types"
 )
 
 type msgServer struct {

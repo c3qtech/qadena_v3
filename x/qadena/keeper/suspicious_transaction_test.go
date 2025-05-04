@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	keepertest "qadena/testutil/keeper"
-	"qadena/testutil/nullify"
-	"qadena/x/qadena/keeper"
-	"qadena/x/qadena/types"
+	keepertest "qadena_v3/testutil/keeper"
+	"qadena_v3/testutil/nullify"
+	"qadena_v3/x/qadena/keeper"
+	"qadena_v3/x/qadena/types"
 
 	"github.com/stretchr/testify/require"
 )

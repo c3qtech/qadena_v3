@@ -12,7 +12,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	pricefeedtypes "qadena/x/pricefeed/types"
+	pricefeedtypes "qadena_v3/x/pricefeed/types"
 	"sort"
 	"time"
 

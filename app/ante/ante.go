@@ -10,7 +10,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/types/tx/signing"
 	"github.com/cosmos/cosmos-sdk/x/auth/types"
 
-	qadenamodulekeeper "qadena/x/qadena/keeper"
+	qadenamodulekeeper "qadena_v3/x/qadena/keeper"
 
 	authante "github.com/cosmos/cosmos-sdk/x/auth/ante"
 )

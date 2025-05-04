@@ -1,4 +1,4 @@
-module qadena
+module qadena_v3
 
 go 1.22
 

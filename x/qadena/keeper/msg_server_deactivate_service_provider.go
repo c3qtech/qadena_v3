@@ -6,11 +6,11 @@ import (
 	//errorsmod "cosmossdk.io/errors"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"qadena/x/qadena/common"
+	"qadena_v3/x/qadena/common"
 
 	errorsmod "cosmossdk.io/errors"
 
-	"qadena/x/qadena/types"
+	"qadena_v3/x/qadena/types"
 )
 
 func (k msgServer) DeactivateServiceProvider(goCtx context.Context, msg *types.MsgDeactivateServiceProvider) (*types.MsgDeactivateServiceProviderResponse, error) {

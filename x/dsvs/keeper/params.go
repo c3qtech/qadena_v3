@@ -5,7 +5,7 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/runtime"
 
-	"qadena/x/dsvs/types"
+	"qadena_v3/x/dsvs/types"
 )
 
 // GetParams get all parameters as types.Params

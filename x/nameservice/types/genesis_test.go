@@ -3,7 +3,7 @@ package types_test
 import (
 	"testing"
 
-	"qadena/x/nameservice/types"
+	"qadena_v3/x/nameservice/types"
 
 	"github.com/stretchr/testify/require"
 )

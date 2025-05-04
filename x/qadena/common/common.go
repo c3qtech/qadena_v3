@@ -40,9 +40,9 @@ import (
 
 	//	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 
-	dsvstypes "qadena/x/dsvs/types"
-	nstypes "qadena/x/nameservice/types"
-	"qadena/x/qadena/types"
+	dsvstypes "qadena_v3/x/dsvs/types"
+	nstypes "qadena_v3/x/nameservice/types"
+	"qadena_v3/x/qadena/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 

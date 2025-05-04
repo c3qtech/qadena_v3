@@ -3,8 +3,8 @@ package dsvs
 import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"qadena/x/dsvs/keeper"
-	"qadena/x/dsvs/types"
+	"qadena_v3/x/dsvs/keeper"
+	"qadena_v3/x/dsvs/types"
 )
 
 // InitGenesis initializes the module's state from a provided genesis state.

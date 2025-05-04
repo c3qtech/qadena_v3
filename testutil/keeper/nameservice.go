@@ -17,8 +17,8 @@ import (
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 	"github.com/stretchr/testify/require"
 
-	"qadena/x/nameservice/keeper"
-	"qadena/x/nameservice/types"
+	"qadena_v3/x/nameservice/keeper"
+	"qadena_v3/x/nameservice/types"
 )
 
 func NameserviceKeeper(t testing.TB) (keeper.Keeper, sdk.Context) {

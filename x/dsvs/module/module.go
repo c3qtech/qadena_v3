@@ -21,10 +21,10 @@ import (
 
 	// this line is used by starport scaffolding # 1
 
-	modulev1 "qadena/api/qadena/dsvs/module"
-	"qadena/x/dsvs/client/cli"
-	"qadena/x/dsvs/keeper"
-	"qadena/x/dsvs/types"
+	modulev1 "qadena_v3/api/qadena/dsvs/module"
+	"qadena_v3/x/dsvs/client/cli"
+	"qadena_v3/x/dsvs/keeper"
+	"qadena_v3/x/dsvs/types"
 )
 
 var (

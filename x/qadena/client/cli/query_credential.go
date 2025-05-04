@@ -9,9 +9,9 @@ import (
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/spf13/cobra"
 
-	c "qadena/x/qadena/common"
-	"qadena/x/qadena/types"
-	qadenatypes "qadena/x/qadena/types"
+	c "qadena_v3/x/qadena/common"
+	"qadena_v3/x/qadena/types"
+	qadenatypes "qadena_v3/x/qadena/types"
 )
 
 func CmdListCredential() *cobra.Command {

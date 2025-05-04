@@ -7,7 +7,7 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/client"
 	// "github.com/cosmos/cosmos-sdk/client/flags"
-	"qadena/x/dsvs/types"
+	"qadena_v3/x/dsvs/types"
 )
 
 // GetTxCmd returns the transaction commands for this module

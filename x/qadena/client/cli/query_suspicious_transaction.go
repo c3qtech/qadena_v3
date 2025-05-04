@@ -6,8 +6,8 @@ import (
 
 	"fmt"
 
-	c "qadena/x/qadena/common"
-	"qadena/x/qadena/types"
+	c "qadena_v3/x/qadena/common"
+	"qadena_v3/x/qadena/types"
 
 	"cosmossdk.io/math"
 	"github.com/cosmos/cosmos-sdk/client"

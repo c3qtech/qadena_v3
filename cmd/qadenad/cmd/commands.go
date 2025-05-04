@@ -23,8 +23,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"qadena/app"
-	c "qadena/x/qadena/common"
+	"qadena_v3/app"
+	c "qadena_v3/x/qadena/common"
 )
 
 func initRootCmd(

@@ -5,10 +5,10 @@ import (
 	"strconv"
 	"testing"
 
-	keepertest "qadena/testutil/keeper"
-	"qadena/testutil/nullify"
-	"qadena/x/nameservice/keeper"
-	"qadena/x/nameservice/types"
+	keepertest "qadena_v3/testutil/keeper"
+	"qadena_v3/testutil/nullify"
+	"qadena_v3/x/nameservice/keeper"
+	"qadena_v3/x/nameservice/types"
 
 	"github.com/stretchr/testify/require"
 )

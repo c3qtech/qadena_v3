@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 
-	"qadena/x/qadena/types"
+	"qadena_v3/x/qadena/types"
 
 	"cosmossdk.io/store/prefix"
 	storetypes "cosmossdk.io/store/types"

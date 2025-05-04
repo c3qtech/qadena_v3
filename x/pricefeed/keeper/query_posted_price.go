@@ -3,7 +3,7 @@ package keeper
 import (
 	"context"
 
-	"qadena/x/pricefeed/types"
+	"qadena_v3/x/pricefeed/types"
 
 	"cosmossdk.io/store/prefix"
 	"github.com/cosmos/cosmos-sdk/runtime"

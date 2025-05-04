@@ -16,11 +16,11 @@ import (
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/spf13/cobra"
 
-	dsvstypes "qadena/x/dsvs/types"
-	c "qadena/x/qadena/common"
+	dsvstypes "qadena_v3/x/dsvs/types"
+	c "qadena_v3/x/qadena/common"
 
-	qadenatx "qadena/x/qadena/client/tx"
-	"qadena/x/qadena/types"
+	qadenatx "qadena_v3/x/qadena/client/tx"
+	"qadena_v3/x/qadena/types"
 	// proto "github.com/cosmos/gogoproto/proto"
 )
 

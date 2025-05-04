@@ -30,10 +30,10 @@ import (
 
 	//	bip39 "github.com/cosmos/go-bip39"
 
-	c "qadena/x/qadena/common"
-	"qadena/x/qadena/types"
+	c "qadena_v3/x/qadena/common"
+	"qadena_v3/x/qadena/types"
 
-	qadenatx "qadena/x/qadena/client/tx"
+	qadenatx "qadena_v3/x/qadena/client/tx"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"

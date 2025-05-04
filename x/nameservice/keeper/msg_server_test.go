@@ -6,9 +6,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	keepertest "qadena/testutil/keeper"
-	"qadena/x/nameservice/keeper"
-	"qadena/x/nameservice/types"
+	keepertest "qadena_v3/testutil/keeper"
+	"qadena_v3/x/nameservice/keeper"
+	"qadena_v3/x/nameservice/types"
 )
 
 func setupMsgServer(t testing.TB) (keeper.Keeper, types.MsgServer, context.Context) {

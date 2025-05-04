@@ -3,13 +3,13 @@ package keeper
 import (
 	"context"
 
-	"qadena/x/qadena/types"
+	"qadena_v3/x/qadena/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"qadena/x/qadena/common"
+	"qadena_v3/x/qadena/common"
 )
 
 func (k Keeper) EnclaveSecretShare(goCtx context.Context, req *types.QueryEnclaveSecretShareRequest) (response *types.QueryEnclaveSecretShareResponse, err error) {

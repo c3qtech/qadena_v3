@@ -8,9 +8,9 @@ import (
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"qadena/x/dsvs/types"
-	c "qadena/x/qadena/common"
-	qadenatypes "qadena/x/qadena/types"
+	"qadena_v3/x/dsvs/types"
+	c "qadena_v3/x/qadena/common"
+	qadenatypes "qadena_v3/x/qadena/types"
 )
 
 type (

@@ -10,7 +10,7 @@ import (
 	// "github.com/cosmos/cosmos-sdk/client/flags"
 	// sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"qadena/x/dsvs/types"
+	"qadena_v3/x/dsvs/types"
 )
 
 // GetQueryCmd returns the cli query commands for this module

@@ -5,7 +5,7 @@ package types
 import (
 	"testing"
 
-	"qadena/testutil/sample"
+	"qadena_v3/testutil/sample"
 
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	"github.com/stretchr/testify/require"

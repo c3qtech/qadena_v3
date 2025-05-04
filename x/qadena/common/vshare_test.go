@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	types "qadena/x/qadena/types"
+	types "qadena_v3/x/qadena/types"
 )
 
 func TestGenerateVSharedKey(t *testing.T) {

@@ -3,10 +3,10 @@ package pricefeed_test
 import (
 	"testing"
 
-	keepertest "qadena/testutil/keeper"
-	"qadena/testutil/nullify"
-	pricefeed "qadena/x/pricefeed/module"
-	"qadena/x/pricefeed/types"
+	keepertest "qadena_v3/testutil/keeper"
+	"qadena_v3/testutil/nullify"
+	pricefeed "qadena_v3/x/pricefeed/module"
+	"qadena_v3/x/pricefeed/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/require"

@@ -12,12 +12,12 @@ import (
 	// big
 	"math/big"
 
-	cmdcfg "qadena/cmd/config"
-	qadenakr "qadena/crypto/keyring"
+	cmdcfg "qadena_v3/cmd/config"
+	qadenakr "qadena_v3/crypto/keyring"
 
 	// cryptocodec "github.com/cosmos/cosmos-sdk/crypto/codec"
 
-	//	qadenaflags "/qadena/x/qadena/client/flags"
+	//	qadenaflags "/qadena_v3/x/qadena/client/flags"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	amino "github.com/cosmos/cosmos-sdk/codec"

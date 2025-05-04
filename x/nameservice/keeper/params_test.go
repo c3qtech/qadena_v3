@@ -5,8 +5,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	keepertest "qadena/testutil/keeper"
-	"qadena/x/nameservice/types"
+	keepertest "qadena_v3/testutil/keeper"
+	"qadena_v3/x/nameservice/types"
 )
 
 func TestGetParams(t *testing.T) {

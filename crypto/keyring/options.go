@@ -4,7 +4,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	//"github.com/evmos/evmos/v18/crypto/hd"
 	// RAV REMOVE EVMOS
-	//	cmdcfg "qadena/cmd/config"
+	//	cmdcfg "qadena_v3/cmd/config"
 )
 
 var (

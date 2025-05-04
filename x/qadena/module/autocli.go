@@ -3,7 +3,7 @@ package qadena
 import (
 	autocliv1 "cosmossdk.io/api/cosmos/autocli/v1"
 
-	modulev1 "qadena/api/qadena/qadena"
+	modulev1 "qadena_v3/api/qadena/qadena"
 )
 
 // AutoCLIOptions implements the autocli.HasAutoCLIConfig interface.

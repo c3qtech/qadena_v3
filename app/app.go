@@ -76,26 +76,26 @@ import (
 	ibctransferkeeper "github.com/cosmos/ibc-go/v8/modules/apps/transfer/keeper"
 	ibckeeper "github.com/cosmos/ibc-go/v8/modules/core/keeper"
 
-	nameservicemodulekeeper "qadena/x/nameservice/keeper"
-	qadenamodulekeeper "qadena/x/qadena/keeper"
+	nameservicemodulekeeper "qadena_v3/x/nameservice/keeper"
+	qadenamodulekeeper "qadena_v3/x/qadena/keeper"
 
-	dsvsmodulekeeper "qadena/x/dsvs/keeper"
-	pricefeedmodulekeeper "qadena/x/pricefeed/keeper"
+	dsvsmodulekeeper "qadena_v3/x/dsvs/keeper"
+	pricefeedmodulekeeper "qadena_v3/x/pricefeed/keeper"
 
-	c "qadena/x/qadena/common"
+	c "qadena_v3/x/qadena/common"
 
 	cosmossdkversion "github.com/cosmos/cosmos-sdk/version"
 
 	// this line is used by starport scaffolding # stargate/app/moduleImport
 
-	"qadena/docs"
+	"qadena_v3/docs"
 
 	sdkante "github.com/cosmos/cosmos-sdk/x/auth/ante"
 	// 	qadena
-	ante "qadena/app/ante"
-	post "qadena/app/post"
+	ante "qadena_v3/app/ante"
+	post "qadena_v3/app/post"
 
-	cmdcfg "qadena/cmd/config"
+	cmdcfg "qadena_v3/cmd/config"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	//enccodec "github.com/evmos/evmos/v18/encoding/codec"

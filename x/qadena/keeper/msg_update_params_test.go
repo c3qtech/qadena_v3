@@ -6,7 +6,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/require"
 
-	"qadena/x/qadena/types"
+	"qadena_v3/x/qadena/types"
 )
 
 func TestMsgUpdateParams(t *testing.T) {

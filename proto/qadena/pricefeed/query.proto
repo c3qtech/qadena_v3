@@ -12,7 +12,7 @@ import "cosmos_proto/cosmos.proto";
 import "qadena/pricefeed/current_price.proto";
 import "qadena/pricefeed/market.proto";
 
-option go_package = "qadena/x/pricefeed/types";
+option go_package = "qadena_v3/x/pricefeed/types";
 
 // Query defines the gRPC querier service.
 service Query {

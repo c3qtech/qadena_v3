@@ -20,9 +20,9 @@ import (
 
 	// this line is used by starport scaffolding # 1
 
-	modulev1 "qadena/api/qadena/pricefeed/module"
-	"qadena/x/pricefeed/keeper"
-	"qadena/x/pricefeed/types"
+	modulev1 "qadena_v3/api/qadena/pricefeed/module"
+	"qadena_v3/x/pricefeed/keeper"
+	"qadena_v3/x/pricefeed/types"
 )
 
 var (

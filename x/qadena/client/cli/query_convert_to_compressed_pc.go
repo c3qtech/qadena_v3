@@ -7,7 +7,7 @@ import (
 
 	"encoding/hex"
 	"math/big"
-	c "qadena/x/qadena/common"
+	c "qadena_v3/x/qadena/common"
 )
 
 func CmdConvertToCompressedPC() *cobra.Command {

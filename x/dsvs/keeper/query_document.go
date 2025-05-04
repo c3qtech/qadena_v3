@@ -3,7 +3,7 @@ package keeper
 import (
 	"context"
 
-	"qadena/x/dsvs/types"
+	"qadena_v3/x/dsvs/types"
 
 	"cosmossdk.io/store/prefix"
 	"github.com/cosmos/cosmos-sdk/runtime"

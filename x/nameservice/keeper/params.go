@@ -5,7 +5,7 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/runtime"
 
-	"qadena/x/nameservice/types"
+	"qadena_v3/x/nameservice/types"
 )
 
 // GetParams get all parameters as types.Params

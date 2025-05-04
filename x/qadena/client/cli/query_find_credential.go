@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"qadena/x/qadena/types"
+	"qadena_v3/x/qadena/types"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
@@ -15,7 +15,7 @@ import (
 	//  "math/rand"
 	"strings"
 
-	c "qadena/x/qadena/common"
+	c "qadena_v3/x/qadena/common"
 )
 
 var _ = strconv.Itoa(0)

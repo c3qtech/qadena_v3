@@ -8,9 +8,9 @@ import (
 	simtypes "github.com/cosmos/cosmos-sdk/types/simulation"
 	"github.com/cosmos/cosmos-sdk/x/simulation"
 
-	"qadena/testutil/sample"
-	nameservicesimulation "qadena/x/nameservice/simulation"
-	"qadena/x/nameservice/types"
+	"qadena_v3/testutil/sample"
+	nameservicesimulation "qadena_v3/x/nameservice/simulation"
+	"qadena_v3/x/nameservice/types"
 )
 
 // avoid unused import issue

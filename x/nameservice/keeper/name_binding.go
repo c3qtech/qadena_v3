@@ -3,7 +3,7 @@ package keeper
 import (
 	"context"
 
-	"qadena/x/nameservice/types"
+	"qadena_v3/x/nameservice/types"
 
 	"cosmossdk.io/store/prefix"
 	storetypes "cosmossdk.io/store/types"

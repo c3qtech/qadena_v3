@@ -23,10 +23,10 @@ import (
 
 	"errors"
 	"math/big"
-	qadenatx "qadena/x/qadena/client/tx"
+	qadenatx "qadena_v3/x/qadena/client/tx"
 
-	c "qadena/x/qadena/common"
-	"qadena/x/qadena/types"
+	c "qadena_v3/x/qadena/common"
+	"qadena_v3/x/qadena/types"
 
 	"github.com/cometbft/cometbft/crypto/tmhash"
 )

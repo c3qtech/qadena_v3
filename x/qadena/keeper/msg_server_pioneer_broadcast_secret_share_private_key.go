@@ -3,10 +3,10 @@ package keeper
 import (
 	"context"
 
-	"qadena/x/qadena/types"
+	"qadena_v3/x/qadena/types"
 
 	"encoding/json"
-	c "qadena/x/qadena/common"
+	c "qadena_v3/x/qadena/common"
 	"strings"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"

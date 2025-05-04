@@ -6,8 +6,8 @@ import (
 
 	svrcmd "github.com/cosmos/cosmos-sdk/server/cmd"
 
-	"qadena/app"
-	"qadena/cmd/qadenad/cmd"
+	"qadena_v3/app"
+	"qadena_v3/cmd/qadenad/cmd"
 )
 
 func main() {

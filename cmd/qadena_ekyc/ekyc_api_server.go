@@ -49,12 +49,12 @@ import (
 	//  "github.com/evmos/ethermint/encoding"
 	//  "github.com/c3qtech/qadena/app"
 	qadenaflags "github.com/cosmos/cosmos-sdk/client/flags"
-	cmdcfg "qadena/cmd/config"
-	qadenakr "qadena/crypto/keyring"
-	nstypes "qadena/x/nameservice/types"
-	qadenatx "qadena/x/qadena/client/tx"
-	c "qadena/x/qadena/common"
-	"qadena/x/qadena/types"
+	cmdcfg "qadena_v3/cmd/config"
+	qadenakr "qadena_v3/crypto/keyring"
+	nstypes "qadena_v3/x/nameservice/types"
+	qadenatx "qadena_v3/x/qadena/client/tx"
+	c "qadena_v3/x/qadena/common"
+	"qadena_v3/x/qadena/types"
 
 	//	"google.golang.org/grpc/codes"
 	//	"google.golang.org/grpc/status"
@@ -98,6 +98,7 @@ import (
 	amino "github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
+
 	//	enccodec "github.com/evmos/evmos/v18/encoding/codec"
 
 	proto "github.com/cosmos/gogoproto/proto"

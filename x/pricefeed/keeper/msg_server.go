@@ -1,7 +1,7 @@
 package keeper
 
 import (
-	"qadena/x/pricefeed/types"
+	"qadena_v3/x/pricefeed/types"
 )
 
 type msgServer struct {

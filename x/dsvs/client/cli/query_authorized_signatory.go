@@ -3,15 +3,15 @@ package cli
 import (
 	"context"
 
-	dsvstypes "qadena/x/dsvs/types"
-	"qadena/x/qadena/types"
+	dsvstypes "qadena_v3/x/dsvs/types"
+	"qadena_v3/x/qadena/types"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/spf13/cobra"
 
 	"fmt"
-	c "qadena/x/qadena/common"
+	c "qadena_v3/x/qadena/common"
 )
 
 func CmdListAuthorizedSignatory() *cobra.Command {

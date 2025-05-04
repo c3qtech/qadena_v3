@@ -3,8 +3,8 @@ package simulation
 import (
 	"math/rand"
 
-	"qadena/x/pricefeed/keeper"
-	"qadena/x/pricefeed/types"
+	"qadena_v3/x/pricefeed/keeper"
+	"qadena_v3/x/pricefeed/types"
 
 	"github.com/cosmos/cosmos-sdk/baseapp"
 	sdk "github.com/cosmos/cosmos-sdk/types"

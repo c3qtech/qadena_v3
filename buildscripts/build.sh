@@ -83,7 +83,7 @@ if [[ $build_reproducible_flag == "--build-reproducible" ]]; then
     echo "--------------------"
     export CGO_CFLAGS="-I/opt/ego/include"
     export CGO_LDFLAGS="-L/opt/ego/lib -L/usr/lib/x86_64-linux-gnu"
-    go build -trimpath -ldflags "-X github.com/cosmos/cosmos-sdk/version.Version=$VERSION" -tags realenclave -o $chain_path/qadenad -mod=vendor qadena/cmd/qadenad
+    go build -trimpath -ldflags "-X github.com/cosmos/cosmos-sdk/version.Version=$VERSION" -tags realenclave -o $chain_path/qadenad -mod=vendor qadena_v3/cmd/qadenad
   else
     echo "--------------------"
     echo "$TITLE STARTING REPRODUCIBLE DOCKER BUILD FOR REAL ENCLAVE"
@@ -92,7 +92,7 @@ if [[ $build_reproducible_flag == "--build-reproducible" ]]; then
   fi
 else
     echo "Building for testing purposes"
-    go build -trimpath -ldflags "-X github.com/cosmos/cosmos-sdk/version.Version=$VERSION" -o $chain_path/qadenad -mod=vendor qadena/cmd/qadenad
+    go build -trimpath -ldflags "-X github.com/cosmos/cosmos-sdk/version.Version=$VERSION" -o $chain_path/qadenad -mod=vendor qadena_v3/cmd/qadenad
 fi
 
 if [ $? -ne 0 ] ; then

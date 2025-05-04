@@ -17,8 +17,8 @@ import (
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 	"github.com/stretchr/testify/require"
 
-	"qadena/x/pricefeed/keeper"
-	"qadena/x/pricefeed/types"
+	"qadena_v3/x/pricefeed/keeper"
+	"qadena_v3/x/pricefeed/types"
 )
 
 func PricefeedKeeper(t testing.TB) (keeper.Keeper, sdk.Context) {

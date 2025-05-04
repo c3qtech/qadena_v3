@@ -5,10 +5,10 @@ import (
 	"strconv"
 	"testing"
 
-	keepertest "qadena/testutil/keeper"
-	"qadena/testutil/nullify"
-	"qadena/x/dsvs/keeper"
-	"qadena/x/dsvs/types"
+	keepertest "qadena_v3/testutil/keeper"
+	"qadena_v3/testutil/nullify"
+	"qadena_v3/x/dsvs/keeper"
+	"qadena_v3/x/dsvs/types"
 
 	"github.com/stretchr/testify/require"
 )

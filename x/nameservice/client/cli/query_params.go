@@ -3,7 +3,7 @@ package cli
 import (
 	"context"
 
-	"qadena/x/nameservice/types"
+	"qadena_v3/x/nameservice/types"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"

@@ -5,11 +5,11 @@ import (
 	//	"math/big"
 	"strconv"
 
-	"qadena/x/qadena/types"
+	"qadena_v3/x/qadena/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	c "qadena/x/qadena/common"
+	c "qadena_v3/x/qadena/common"
 
 	"cosmossdk.io/math"
 )

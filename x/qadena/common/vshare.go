@@ -14,7 +14,7 @@ import (
 	"crypto/sha256"
 	"math/big"
 
-	"qadena/x/qadena/types"
+	"qadena_v3/x/qadena/types"
 
 	ecies "github.com/ecies/go/v2"
 

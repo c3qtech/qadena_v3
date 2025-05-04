@@ -3,7 +3,7 @@ package types_test
 import (
 	"testing"
 
-	"qadena/x/qadena/types"
+	"qadena_v3/x/qadena/types"
 
 	"github.com/stretchr/testify/require"
 )

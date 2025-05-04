@@ -24,14 +24,14 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"qadena/app"
-	qadenakr "qadena/crypto/keyring"
+	"qadena_v3/app"
+	qadenakr "qadena_v3/crypto/keyring"
 	//cryptocodec "github.com/evmos/evmos/v18/crypto/codec"
 	//"github.com/evmos/evmos/v18/crypto/ethsecp256k1"
 	//legacycodec "github.com/cosmos/cosmos-sdk/codec/legacy"
 	//"github.com/evmos/evmos/v18/crypto/hd"
 	//enccodec "github.com/evmos/evmos/v18/encoding/codec"
-	//cmdcfg "qadena/cmd/config"
+	//cmdcfg "qadena_v3/cmd/config"
 )
 
 // NewRootCmd creates a new root command for qadenad. It is called once in the main function.

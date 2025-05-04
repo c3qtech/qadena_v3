@@ -44,11 +44,11 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	cmdcfg "qadena/cmd/config"
-	qadenakr "qadena/crypto/keyring"
-	qadenatx "qadena/x/qadena/client/tx"
-	c "qadena/x/qadena/common"
-	"qadena/x/qadena/types"
+	cmdcfg "qadena_v3/cmd/config"
+	qadenakr "qadena_v3/crypto/keyring"
+	qadenatx "qadena_v3/x/qadena/client/tx"
+	c "qadena_v3/x/qadena/common"
+	"qadena_v3/x/qadena/types"
 
 	//	"github.com/cosmos/cosmos-sdk/client/config"
 

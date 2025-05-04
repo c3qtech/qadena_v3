@@ -10,7 +10,7 @@ import "qadena/dsvs/params.proto";
 import "qadena/dsvs/v_share_signatory.proto";
 import "qadena/dsvs/v_share_authorized_signatory.proto";
 
-option go_package = "qadena/x/dsvs/types";
+option go_package = "qadena_v3/x/dsvs/types";
 
 // Msg defines the Msg service.
 service Msg {
@@ -35,7 +35,7 @@ service Msg {
 // MsgUpdateParams is the Msg/UpdateParams request type.
 message MsgUpdateParams {
   option (cosmos.msg.v1.signer) =                     "authority";
-  option           (amino.name) = "qadena/x/dsvs/MsgUpdateParams";
+  option           (amino.name) = "qadena_v3/x/dsvs/MsgUpdateParams";
   
   // authority is the address that controls the module (defaults to x/gov unless overwritten).
   string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];

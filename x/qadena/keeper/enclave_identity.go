@@ -3,9 +3,9 @@ package keeper
 import (
 	"context"
 
-	"qadena/x/qadena/types"
+	"qadena_v3/x/qadena/types"
 
-	c "qadena/x/qadena/common"
+	c "qadena_v3/x/qadena/common"
 
 	"cosmossdk.io/store/prefix"
 	storetypes "cosmossdk.io/store/types"

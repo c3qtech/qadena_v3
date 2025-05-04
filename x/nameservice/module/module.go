@@ -20,13 +20,13 @@ import (
 
 	// this line is used by starport scaffolding # 1
 
-	modulev1 "qadena/api/qadena/nameservice/module"
-	"qadena/x/nameservice/keeper"
-	"qadena/x/nameservice/types"
+	modulev1 "qadena_v3/api/qadena/nameservice/module"
+	"qadena_v3/x/nameservice/keeper"
+	"qadena_v3/x/nameservice/types"
 
 	"github.com/spf13/cobra"
 
-	"qadena/x/nameservice/client/cli"
+	"qadena_v3/x/nameservice/client/cli"
 )
 
 var (

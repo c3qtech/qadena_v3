@@ -16,7 +16,7 @@ import (
 
 	"google.golang.org/grpc"
 	//  "google.golang.org/grpc/credentials/insecure"
-	"qadena/x/qadena/types"
+	"qadena_v3/x/qadena/types"
 
 	"google.golang.org/grpc/credentials"
 )

@@ -3,14 +3,14 @@ package keeper
 import (
 	"context"
 
-	"qadena/x/nameservice/types"
+	"qadena_v3/x/nameservice/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"fmt"
 
-	c "qadena/x/qadena/common"
-	qadenatypes "qadena/x/qadena/types"
+	c "qadena_v3/x/qadena/common"
+	qadenatypes "qadena_v3/x/qadena/types"
 )
 
 func (k msgServer) BindCredential(goCtx context.Context, msg *types.MsgBindCredential) (*types.MsgBindCredentialResponse, error) {

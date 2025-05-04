@@ -3,8 +3,8 @@ package simulation
 import (
 	"math/rand"
 
-	"qadena/x/nameservice/keeper"
-	"qadena/x/nameservice/types"
+	"qadena_v3/x/nameservice/keeper"
+	"qadena_v3/x/nameservice/types"
 
 	"github.com/cosmos/cosmos-sdk/baseapp"
 	sdk "github.com/cosmos/cosmos-sdk/types"

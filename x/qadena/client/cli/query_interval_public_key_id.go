@@ -3,7 +3,7 @@ package cli
 import (
 	"context"
 
-	"qadena/x/qadena/types"
+	"qadena_v3/x/qadena/types"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
@@ -14,7 +14,7 @@ import (
 	"os"
 	"strings"
 
-	//	c "qadena/x/qadena/common"
+	//	c "qadena_v3/x/qadena/common"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

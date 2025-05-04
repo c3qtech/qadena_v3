@@ -3,7 +3,7 @@ package types_test
 import (
 	"testing"
 
-	"qadena/x/dsvs/types"
+	"qadena_v3/x/dsvs/types"
 
 	"github.com/stretchr/testify/require"
 )

@@ -3,7 +3,7 @@ package types_test
 import (
 	"testing"
 
-	"qadena/x/pricefeed/types"
+	"qadena_v3/x/pricefeed/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/require"

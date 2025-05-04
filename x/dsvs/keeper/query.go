@@ -1,7 +1,7 @@
 package keeper
 
 import (
-	"qadena/x/dsvs/types"
+	"qadena_v3/x/dsvs/types"
 )
 
 var _ types.QueryServer = Keeper{}

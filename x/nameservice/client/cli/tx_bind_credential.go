@@ -7,16 +7,16 @@ import (
 	"errors"
 	"fmt"
 
-	nstypes "qadena/x/nameservice/types"
-	c "qadena/x/qadena/common"
+	nstypes "qadena_v3/x/nameservice/types"
+	c "qadena_v3/x/qadena/common"
 
 	"github.com/cometbft/cometbft/crypto/tmhash"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/spf13/cobra"
 
-	qadenatx "qadena/x/qadena/client/tx"
-	"qadena/x/qadena/types"
+	qadenatx "qadena_v3/x/qadena/client/tx"
+	"qadena_v3/x/qadena/types"
 
 	proto "github.com/cosmos/gogoproto/proto"
 )

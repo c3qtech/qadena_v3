@@ -3,10 +3,10 @@ package nameservice_test
 import (
 	"testing"
 
-	keepertest "qadena/testutil/keeper"
-	"qadena/testutil/nullify"
-	nameservice "qadena/x/nameservice/module"
-	"qadena/x/nameservice/types"
+	keepertest "qadena_v3/testutil/keeper"
+	"qadena_v3/testutil/nullify"
+	nameservice "qadena_v3/x/nameservice/module"
+	"qadena_v3/x/nameservice/types"
 
 	"github.com/stretchr/testify/require"
 )

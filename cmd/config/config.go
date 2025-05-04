@@ -3,7 +3,7 @@ package config
 import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	qadenatypes "qadena/x/qadena/types"
+	qadenatypes "qadena_v3/x/qadena/types"
 
 	"cosmossdk.io/math"
 	// evmos "github.com/evmos/evmos/v18/types"

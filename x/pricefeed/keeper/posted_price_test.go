@@ -5,10 +5,10 @@ import (
 	"strconv"
 	"testing"
 
-	keepertest "qadena/testutil/keeper"
-	"qadena/testutil/nullify"
-	"qadena/x/pricefeed/keeper"
-	"qadena/x/pricefeed/types"
+	keepertest "qadena_v3/testutil/keeper"
+	"qadena_v3/testutil/nullify"
+	"qadena_v3/x/pricefeed/keeper"
+	"qadena_v3/x/pricefeed/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/require"

@@ -31,7 +31,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 
-	"qadena/app"
+	"qadena_v3/app"
 )
 
 const (

@@ -6,7 +6,7 @@ import "cosmos_proto/cosmos.proto";
 import "google/protobuf/timestamp.proto";
 import "qadena/dsvs/v_share_bind_data.proto";
 
-option go_package = "qadena/x/dsvs/types";
+option go_package = "qadena_v3/x/dsvs/types";
 
 message VShareSignatory {
   bytes encSignatoryVShare = 1; 

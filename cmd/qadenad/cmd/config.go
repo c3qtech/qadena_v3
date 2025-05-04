@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	cmdcfg "qadena/cmd/config"
+	cmdcfg "qadena_v3/cmd/config"
 
 	cmtcfg "github.com/cometbft/cometbft/config"
 	serverconfig "github.com/cosmos/cosmos-sdk/server/config"

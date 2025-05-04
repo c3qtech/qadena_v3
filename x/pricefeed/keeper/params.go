@@ -5,7 +5,7 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/runtime"
 
-	"qadena/x/pricefeed/types"
+	"qadena_v3/x/pricefeed/types"
 )
 
 // GetParams get all parameters as types.Params

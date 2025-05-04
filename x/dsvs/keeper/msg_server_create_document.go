@@ -3,9 +3,9 @@ package keeper
 import (
 	"context"
 
-	"qadena/x/dsvs/types"
-	c "qadena/x/qadena/common"
-	qadenatypes "qadena/x/qadena/types"
+	"qadena_v3/x/dsvs/types"
+	c "qadena_v3/x/qadena/common"
+	qadenatypes "qadena_v3/x/qadena/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )

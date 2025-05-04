@@ -20,16 +20,16 @@ import (
 
 	// this line is used by starport scaffolding # 1
 
-	modulev1 "qadena/api/qadena/qadena/module"
-	"qadena/x/qadena/keeper"
-	"qadena/x/qadena/types"
+	modulev1 "qadena_v3/api/qadena/qadena/module"
+	"qadena_v3/x/qadena/keeper"
+	"qadena_v3/x/qadena/types"
 
 	"cosmossdk.io/core/comet"
 	"cosmossdk.io/core/header"
 
 	"github.com/spf13/cobra"
 
-	"qadena/x/qadena/client/cli"
+	"qadena_v3/x/qadena/client/cli"
 )
 
 var (
