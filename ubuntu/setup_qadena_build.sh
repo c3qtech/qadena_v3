@@ -79,10 +79,10 @@ usermod -aG docker $SUDO_USER
 
 (cd installers; gunzip dasel.gz; cp -f dasel /usr/local/bin)
 
-git clone https://github.com/c3qtech/qadena_v2.git
-chown -R "$SUDO_UID:$SUDO_GID" qadena_v2
-cd qadena_v2
-git config credential.helper store
+#git clone https://github.com/c3qtech/qadena_v2.git
+#chown -R "$SUDO_UID:$SUDO_GID" qadena_v2
+#cd qadena_v2
+#git config credential.helper store
 
 echo "Now you need to:"
 echo "  exit"
