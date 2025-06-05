@@ -105,3 +105,151 @@ genesis:
           - denom: "aqdn"
             amount: "1000000000000000000"
         voting_period: "300s"
+    qadena:
+      params:
+        create_wallet_incentive:
+          amount: "30000000"
+          denom: "qdn"
+        create_wallet_transparent_incentive:
+          amount: "9000000"
+          denom: "qdn"
+        create_ephemeral_wallet_incentive:
+          amount: "0"
+          denom: "aqdn"
+        create_ephemeral_wallet_transparent_incentive:
+          amount: "5000000"
+          denom: "qdn"
+        create_credential_fee: "0.10usd"
+        ekyc_submit_new_app_royalty_percentage: "70"
+        ekyc_submit_reuse_app_royalty_percentage: "35"
+        ekyc_submit_reuse_provider_royalty_percentage: "35"
+      enclaveIdentityList:
+        - uniqueID: test-unique-id
+          signerID: test-signer-id
+          productID: test-product-id
+          status: active
+      publicKeyList:
+        - pubKID: qadena1yxwh2nsxezlgwdgl5ve6gkxfjnf2w2yjavza8g
+          pubK: AkXVN5vo4gHbEaQ81oEhMipW1+HbWt00nh7EoLl1PTsH
+          pubKType: transaction
+        - pubKID: qadena1yxwh2nsxezlgwdgl5ve6gkxfjnf2w2yjavza8g
+          pubK: AkXVN5vo4gHbEaQ81oEhMipW1+HbWt00nh7EoLl1PTsH
+          pubKType: credential
+        - pubKID: secidentitysrvprvPubKID
+          pubK: secidentitysrvprvPubK_pubk
+          pubKType: transaction
+        - pubKID: secidentitysrvprvPubKID
+          pubK: secidentitysrvprvPubK_pubk
+          pubKType: credential
+        - pubKID: secdsvssrvprvPubKID
+          pubK: secdsvssrvprvPubK_pubk
+          pubKType: transaction
+        - pubKID: secdsvssrvprvPubKID
+          pubK: secdsvssrvprvPubK_pubk
+          pubKType: credential
+        - pubKID: testfinancesrvprvPubKID
+          pubK: testfinancesrvprvPubK_pubk
+          pubKType: transaction
+        - pubKID: testfinancesrvprvPubKID
+          pubK: testfinancesrvprvPubK_pubk
+          pubKType: credential
+      intervalPublicKeyIDList:
+        - pubKID: qadena1yxwh2nsxezlgwdgl5ve6gkxfjnf2w2yjavza8g
+          nodeType: pioneer
+          nodeID: pioneer1
+        - pubKID: treasuryPubKID
+          nodeType: treasury
+          nodeID: treasury
+        - pubKID: secidentitysrvprvPubKID
+          nodeType: srv-prv
+          nodeID: secidentitysrvprv
+          serviceProviderType: identity
+        - pubKID: secdsvssrvprvPubKID
+          nodeType: srv-prv
+          nodeID: secdsvssrvprv
+          serviceProviderType: dsvs
+        - pubKID: testfinancesrvprvPubKID
+          nodeType: srv-prv
+          nodeID: testfinancesrvprv
+          serviceProviderType: finance
+    pricefeed:
+      params:
+        markets:
+          - active: true
+            baseAsset: "qdn"
+            marketId: "cn:qdn:usd"
+            quoteAsset: "usd"
+            oracles:
+              - "qadena138sf5wpu7lvxj3f65trha9ls7ktfwdd4yt76ng"
+              - "qadena1nzzpvqjj0j56rgtwqlk6r0gyj43j6a7hft87tg"
+          - active: true
+            baseAsset: "php"
+            marketId: "fn:php:usd"
+            quoteAsset: "usd"
+            oracles:
+              - "qadena138sf5wpu7lvxj3f65trha9ls7ktfwdd4yt76ng"
+              - "qadena1nzzpvqjj0j56rgtwqlk6r0gyj43j6a7hft87tg"
+          - active: true
+            baseAsset: "aud"
+            marketId: "fn:aud:usd"
+            quoteAsset: "usd"
+            oracles:
+              - "qadena138sf5wpu7lvxj3f65trha9ls7ktfwdd4yt76ng"
+              - "qadena1nzzpvqjj0j56rgtwqlk6r0gyj43j6a7hft87tg"
+          - active: true
+            baseAsset: "btc"
+            marketId: "cn:btc:usd"
+            quoteAsset: "usd"
+            oracles:
+              - "qadena138sf5wpu7lvxj3f65trha9ls7ktfwdd4yt76ng"
+              - "qadena1nzzpvqjj0j56rgtwqlk6r0gyj43j6a7hft87tg"
+          - active: true
+            baseAsset: "eth"
+            marketId: "cn:eth:usd"
+            quoteAsset: "usd"
+            oracles:
+              - "qadena138sf5wpu7lvxj3f65trha9ls7ktfwdd4yt76ng"
+              - "qadena1nzzpvqjj0j56rgtwqlk6r0gyj43j6a7hft87tg"
+          - active: true
+            baseAsset: "btc-qdn"
+            marketId: "cw:qdnw.btc:usd"
+            quoteAsset: "usd"
+            oracles:
+              - "qadena138sf5wpu7lvxj3f65trha9ls7ktfwdd4yt76ng"
+              - "qadena1nzzpvqjj0j56rgtwqlk6r0gyj43j6a7hft87tg"
+          - active: true
+            baseAsset: "eth-qdn"
+            marketId: "cw:qdnw.eth:usd"
+            quoteAsset: "usd"
+            oracles:
+              - "qadena138sf5wpu7lvxj3f65trha9ls7ktfwdd4yt76ng"
+              - "qadena1nzzpvqjj0j56rgtwqlk6r0gyj43j6a7hft87tg"
+      postedPriceList:
+        - expiry: "2030-01-01T00:00:00Z"
+          marketId: "cn:qdn:usd"
+          oracleAddress: "qadena1nzzpvqjj0j56rgtwqlk6r0gyj43j6a7hft87tg"
+          price: "0.01"
+        - expiry: "2030-01-01T00:00:00Z"
+          marketId: "fn:php:usd"
+          oracleAddress: "qadena1nzzpvqjj0j56rgtwqlk6r0gyj43j6a7hft87tg"
+          price: "0.0180729"
+        - expiry: "2030-01-01T00:00:00Z"
+          marketId: "fn:aud:usd"
+          oracleAddress: "qadena1nzzpvqjj0j56rgtwqlk6r0gyj43j6a7hft87tg"
+          price: "0.676955"
+        - expiry: "2030-01-01T00:00:00Z"
+          marketId: "cn:btc:usd"
+          oracleAddress: "qadena1nzzpvqjj0j56rgtwqlk6r0gyj43j6a7hft87tg"
+          price: "17217.06"
+        - expiry: "2030-01-01T00:00:00Z"
+          marketId: "cn:eth:usd"
+          oracleAddress: "qadena1nzzpvqjj0j56rgtwqlk6r0gyj43j6a7hft87tg"
+          price: "1282.63"
+        - expiry: "2030-01-01T00:00:00Z"
+          marketId: "cw:qdnw.btc:usd"
+          oracleAddress: "qadena1nzzpvqjj0j56rgtwqlk6r0gyj43j6a7hft87tg"
+          price: "17217.06"
+        - expiry: "2030-01-01T00:00:00Z"
+          marketId: "cw:qdnw.eth:usd"
+          oracleAddress: "qadena1nzzpvqjj0j56rgtwqlk6r0gyj43j6a7hft87tg"
+          price: "1282.63"
