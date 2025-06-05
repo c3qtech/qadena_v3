@@ -106,11 +106,11 @@ echo "Creating extra sub-wallets"
 echo "-------------------------"
 
 
-qadenad_alias tx qadena create-wallet al-eph2 pioneer1 pioneer1-create-wallet-sponsor --link-to-real-wallet al --account-mnemonic="$almnemonic" --eph-account-index "2" --accept-credential-types first-name-personal-info --yes || exit 1
+qadenad_alias tx qadena create-wallet al-eph2 pioneer1 sec-create-wallet-sponsor --link-to-real-wallet al --account-mnemonic="$almnemonic" --eph-account-index "2" --accept-credential-types first-name-personal-info --yes || exit 1
 
-qadenad_alias tx qadena create-wallet al-eph3 pioneer1 pioneer1-create-wallet-sponsor --link-to-real-wallet al --account-mnemonic="$almnemonic" --eph-account-index "3" --accept-password="1234" --yes || exit 1
+qadenad_alias tx qadena create-wallet al-eph3 pioneer1 sec-create-wallet-sponsor --link-to-real-wallet al --account-mnemonic="$almnemonic" --eph-account-index "3" --accept-password="1234" --yes || exit 1
 
-qadenad_alias tx qadena create-wallet al-eph4 pioneer1 pioneer1-create-wallet-sponsor --link-to-real-wallet al --account-mnemonic="$almnemonic" --eph-account-index "4" --require-sender-credential-types first-name-personal-info,middle-name-personal-info,last-name-personal-info --yes || exit 1
+qadenad_alias tx qadena create-wallet al-eph4 pioneer1 sec-create-wallet-sponsor --link-to-real-wallet al --account-mnemonic="$almnemonic" --eph-account-index "4" --require-sender-credential-types first-name-personal-info,middle-name-personal-info,last-name-personal-info --yes || exit 1
 
-qadenad_alias tx qadena create-wallet ann-eph2 pioneer1 pioneer1-create-wallet-sponsor --link-to-real-wallet ann --account-mnemonic="$annmnemonic" --eph-account-index "2" --accept-credential-types first-name-personal-info --yes || exit 1
+qadenad_alias tx qadena create-wallet ann-eph2 pioneer1 sec-create-wallet-sponsor --link-to-real-wallet ann --account-mnemonic="$annmnemonic" --eph-account-index "2" --accept-credential-types first-name-personal-info --yes || exit 1
 

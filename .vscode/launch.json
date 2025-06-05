@@ -52,7 +52,7 @@
             "request": "launch",
             "mode": "debug",
             "program": "${workspaceFolder}/cmd/qadenad",
-            "args": ["tx", "qadena", "create-wallet", "secdsvs", "pioneer1", "pioneer1-create-wallet-sponsor", "--account-mnemonic", "sort aspect economy pluck decrease turn slam nasty pull void deliver grit maximum tornado stove track fault loyal imitate plunge quantum boil want depend", "--service-provider", "secdsvs", "--yes"]
+            "args": ["tx", "qadena", "create-wallet", "secdsvs", "pioneer1", "sec-create-wallet-sponsor", "--account-mnemonic", "sort aspect economy pluck decrease turn slam nasty pull void deliver grit maximum tornado stove track fault loyal imitate plunge quantum boil want depend", "--service-provider", "secdsvs", "--yes"]
         },
         {
             "name": "bind_credential",
@@ -68,7 +68,7 @@
             "request": "launch",
             "mode": "debug",
             "program": "${workspaceFolder}/cmd/qadenad",
-            "args": ["tx", "qadena", "create-wallet", "testwallet2", "pioneer1", "pioneer1-create-wallet-sponsor", "--account-mnemonic", "sort aspect economy pluck decrease turn slam nasty pull void deliver grit maximum tornado stove track fault loyal imitate plunge quantum boil want depend", "--yes"]
+            "args": ["tx", "qadena", "create-wallet", "testwallet2", "pioneer1", "sec-create-wallet-sponsor", "--account-mnemonic", "sort aspect economy pluck decrease turn slam nasty pull void deliver grit maximum tornado stove track fault loyal imitate plunge quantum boil want depend", "--yes"]
         },
         {
             "name": "create_wallet2",
@@ -76,7 +76,7 @@
             "request": "launch",
             "mode": "debug",
             "program": "${workspaceFolder}/cmd/qadenad",
-            "args": ["tx", "qadena", "create-wallet", "testwallet3", "pioneer1", "pioneer1-create-wallet-sponsor", "--account-mnemonic", "inherit rebel absorb diamond leopard lens approve deny balcony toast merry text metal pair diamond lumber gravity song liberty pumpkin goddess nature slush basic", "--yes"]
+            "args": ["tx", "qadena", "create-wallet", "testwallet3", "pioneer1", "sec-create-wallet-sponsor", "--account-mnemonic", "inherit rebel absorb diamond leopard lens approve deny balcony toast merry text metal pair diamond lumber gravity song liberty pumpkin goddess nature slush basic", "--yes"]
         },
         {
             "name": "create_wallet4",
@@ -84,14 +84,14 @@
             "request": "launch",
             "mode": "debug",
             "program": "${workspaceFolder}/cmd/qadenad",
-            "args": ["tx", "qadena", "create-wallet", "testwallet18", "pioneer1", "pioneer1-create-wallet-sponsor", "--yes"]
+            "args": ["tx", "qadena", "create-wallet", "testwallet18", "pioneer1", "sec-create-wallet-sponsor", "--yes"]
         },        {
             "name": "create_wallet_sec_eph2",
             "type": "go",
             "request": "launch",
             "mode": "debug",
             "program": "${workspaceFolder}/cmd/qadenad",
-            "args": ["tx", "qadena", "create-wallet", "sec-eph5", "pioneer1", "pioneer1-create-wallet-sponsor", "--link-to-real-wallet", "sec", "--account-mnemonic", "tide ugly fork short cushion girl earth stage anger away pig screen blood frequent link become crowd visa end present share helmet brain fit", "--eph-account-index","5","--service-provider","sec", "--yes"]
+            "args": ["tx", "qadena", "create-wallet", "sec-eph5", "pioneer1", "sec-create-wallet-sponsor", "--link-to-real-wallet", "sec", "--account-mnemonic", "tide ugly fork short cushion girl earth stage anger away pig screen blood frequent link become crowd visa end present share helmet brain fit", "--eph-account-index","5","--service-provider","sec", "--yes"]
         },
         {
             "name": "create_document",

@@ -4,7 +4,7 @@ accounts:
 - name: pioneer1
   coins: ["100000000qdn"]
   mnemonic: "nest gown ability blouse ski tortoise wall female across know accuse guard shy drive grunt assault cricket solar pave arrange actress ring more country"
-- name: pioneer1-create-wallet-sponsor
+- name: sec-create-wallet-sponsor
   coins: ["10000000000qdn"]
   mnemonic: "guilt decline utility scale crash envelope snap table dress coach tray use detect success lemon fatigue surround project warfare victory mean midnight address before"
 - name: treasury

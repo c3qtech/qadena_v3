@@ -152,7 +152,7 @@ func CmdCreateWallet() *cobra.Command {
 	var argServiceProviderID string
 
 	cmd := &cobra.Command{
-		Use:   "create-wallet [friendly-account-name] [home-pioneer-id (e.g. pioneer1)] [create-wallet-sponsor (e.g. pioneer1-create-wallet-sponsor)] [optional: link-to-real-wallet-name (e.g. al)]",
+		Use:   "create-wallet [friendly-account-name] [home-pioneer-id (e.g. pioneer1)] [create-wallet-sponsor (e.g. sec-create-wallet-sponsor)] [optional: link-to-real-wallet-name (e.g. al)]",
 		Short: "Broadcast message CreateWallet",
 		Args:  cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) (err error) {
