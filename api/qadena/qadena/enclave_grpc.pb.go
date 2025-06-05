@@ -142,6 +142,7 @@ const (
 	QadenaEnclave_SetProtectKey_FullMethodName                         = "/qadena.qadena.QadenaEnclave/SetProtectKey"
 	QadenaEnclave_SetRecoverKey_FullMethodName                         = "/qadena.qadena.QadenaEnclave/SetRecoverKey"
 	QadenaEnclave_SetCredential_FullMethodName                         = "/qadena.qadena.QadenaEnclave/SetCredential"
+	QadenaEnclave_RemoveCredential_FullMethodName                      = "/qadena.qadena.QadenaEnclave/RemoveCredential"
 	QadenaEnclave_RecoverKeyByCredential_FullMethodName                = "/qadena.qadena.QadenaEnclave/RecoverKeyByCredential"
 	QadenaEnclave_ClaimCredential_FullMethodName                       = "/qadena.qadena.QadenaEnclave/ClaimCredential"
 	QadenaEnclave_SignRecoverKey_FullMethodName                        = "/qadena.qadena.QadenaEnclave/SignRecoverKey"
@@ -195,6 +196,7 @@ type QadenaEnclaveClient interface {
 	SetProtectKey(ctx context.Context, in *ProtectKey, opts ...grpc.CallOption) (*SetProtectKeyReply, error)
 	SetRecoverKey(ctx context.Context, in *RecoverKey, opts ...grpc.CallOption) (*SetRecoverKeyReply, error)
 	SetCredential(ctx context.Context, in *Credential, opts ...grpc.CallOption) (*SetCredentialReply, error)
+	RemoveCredential(ctx context.Context, in *Credential, opts ...grpc.CallOption) (*RemoveCredentialReply, error)
 	RecoverKeyByCredential(ctx context.Context, in *Credential, opts ...grpc.CallOption) (*RecoverKeyReply, error)
 	ClaimCredential(ctx context.Context, in *MsgClaimCredential, opts ...grpc.CallOption) (*MsgClaimCredentialResponse, error)
 	SignRecoverKey(ctx context.Context, in *MsgSignRecoverPrivateKey, opts ...grpc.CallOption) (*SignRecoverKeyReply, error)
@@ -384,6 +386,15 @@ func (c *qadenaEnclaveClient) SetRecoverKey(ctx context.Context, in *RecoverKey,
 func (c *qadenaEnclaveClient) SetCredential(ctx context.Context, in *Credential, opts ...grpc.CallOption) (*SetCredentialReply, error) {
 	out := new(SetCredentialReply)
 	err := c.cc.Invoke(ctx, QadenaEnclave_SetCredential_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *qadenaEnclaveClient) RemoveCredential(ctx context.Context, in *Credential, opts ...grpc.CallOption) (*RemoveCredentialReply, error) {
+	out := new(RemoveCredentialReply)
+	err := c.cc.Invoke(ctx, QadenaEnclave_RemoveCredential_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -649,6 +660,7 @@ type QadenaEnclaveServer interface {
 	SetProtectKey(context.Context, *ProtectKey) (*SetProtectKeyReply, error)
 	SetRecoverKey(context.Context, *RecoverKey) (*SetRecoverKeyReply, error)
 	SetCredential(context.Context, *Credential) (*SetCredentialReply, error)
+	RemoveCredential(context.Context, *Credential) (*RemoveCredentialReply, error)
 	RecoverKeyByCredential(context.Context, *Credential) (*RecoverKeyReply, error)
 	ClaimCredential(context.Context, *MsgClaimCredential) (*MsgClaimCredentialResponse, error)
 	SignRecoverKey(context.Context, *MsgSignRecoverPrivateKey) (*SignRecoverKeyReply, error)
@@ -738,6 +750,9 @@ func (UnimplementedQadenaEnclaveServer) SetRecoverKey(context.Context, *RecoverK
 }
 func (UnimplementedQadenaEnclaveServer) SetCredential(context.Context, *Credential) (*SetCredentialReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetCredential not implemented")
+}
+func (UnimplementedQadenaEnclaveServer) RemoveCredential(context.Context, *Credential) (*RemoveCredentialReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveCredential not implemented")
 }
 func (UnimplementedQadenaEnclaveServer) RecoverKeyByCredential(context.Context, *Credential) (*RecoverKeyReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RecoverKeyByCredential not implemented")
@@ -1132,6 +1147,24 @@ func _QadenaEnclave_SetCredential_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QadenaEnclaveServer).SetCredential(ctx, req.(*Credential))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QadenaEnclave_RemoveCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Credential)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QadenaEnclaveServer).RemoveCredential(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QadenaEnclave_RemoveCredential_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QadenaEnclaveServer).RemoveCredential(ctx, req.(*Credential))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1678,6 +1711,10 @@ var QadenaEnclave_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetCredential",
 			Handler:    _QadenaEnclave_SetCredential_Handler,
+		},
+		{
+			MethodName: "RemoveCredential",
+			Handler:    _QadenaEnclave_RemoveCredential_Handler,
 		},
 		{
 			MethodName: "RecoverKeyByCredential",

@@ -67,18 +67,28 @@ func (k Keeper) GetCredential(
 }
 
 // RemoveCredential removes a credential from the store
-func (k Keeper) RemoveCredential(
+func (k Keeper) KeeperRemoveCredential(
 	ctx context.Context,
 	credentialID string,
 	credentialType string,
-
-) {
+) error {
+	sdkctx := sdk.UnwrapSDKContext(ctx)
+	credential := types.Credential{
+		CredentialID:   credentialID,
+		CredentialType: credentialType,
+	}
+	err := k.EnclaveClientRemoveCredential(sdkctx, credential) // forward this to the enclave
+	if err != nil {
+		common.ContextError(sdkctx, "EnclaveClientRemoveCredential err "+err.Error())
+		return err
+	}
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.CredentialKeyPrefix))
 	store.Delete(types.CredentialKey(
 		credentialID,
 		credentialType,
 	))
+	return nil
 }
 
 // GetAllCredential returns all credential

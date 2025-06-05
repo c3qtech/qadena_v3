@@ -1050,7 +1050,13 @@ func (s *qadenaServer) ExportPrivateState(ctx context.Context, in *types.MsgExpo
 
 	//  c.LoggerDebug(logger, "state" + c.PrettyPrint(state))
 
-	return &types.ExportPrivateStateReply{State: c.PrettyPrint(state)}, nil
+	// export as jsonstring
+	jsonState, err := json.Marshal(state)
+	if err != nil {
+		return nil, err
+	}
+
+	return &types.ExportPrivateStateReply{State: string(jsonState)}, nil
 }
 
 func (s *qadenaServer) exportTable(pfx string) (tableMap map[string]string) {
@@ -3365,6 +3371,27 @@ func (s *qadenaServer) SetCredential(ctx context.Context, in *types.Credential) 
 	return &types.SetCredentialReply{Status: true}, nil
 }
 
+func (s *qadenaServer) RemoveCredential(ctx context.Context, in *types.Credential) (*types.RemoveCredentialReply, error) {
+	c.LoggerDebug(logger, "RemoveCredential "+c.PrettyPrint(in))
+
+	// get the credential
+	credential, found := s.getCredential(in.CredentialID, in.CredentialType)
+	if !found {
+		c.LoggerError(logger, "credential does not exist")
+		return &types.RemoveCredentialReply{Status: false}, types.ErrCredentialNotExists
+	}
+
+	if credential.WalletID != "" {
+		c.LoggerError(logger, "credential is already claimed: "+credential.WalletID)
+		return &types.RemoveCredentialReply{Status: false}, types.ErrCredentialClaimed
+	}
+
+	s.removeCredentialByPCXY(&credential)
+	s.removeCredentialNoNotify(in.CredentialID, in.CredentialType)
+
+	return &types.RemoveCredentialReply{Status: true}, nil
+}
+
 func (s *qadenaServer) SignRecoverKey(ctx context.Context, in *types.MsgSignRecoverPrivateKey) (*types.SignRecoverKeyReply, error) {
 	c.LoggerDebug(logger, "SignRecoverKey "+c.PrettyPrint(in))
 
@@ -3960,6 +3987,13 @@ func (s *qadenaServer) setCredentialByPCXY(credential *types.Credential) {
 	c.LoggerDebug(logger, "Stored credentialByPCXY", hex.EncodeToString(credentialPCXY), credential.CredentialType)
 }
 
+func (s *qadenaServer) removeCredentialByPCXY(credential *types.Credential) {
+	credentialPCXY := credential.FindCredentialPedersenCommit.C.Compressed
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveCredentialPCXYKeyPrefix))
+	store.Delete(EnclaveKeyBKeyCredentialType(credentialPCXY, credential.CredentialType))
+	c.LoggerDebug(logger, "Removed credentialByPCXY", hex.EncodeToString(credentialPCXY), credential.CredentialType)
+}
+
 func (s *qadenaServer) getCredentialByPCXY(pcXY []byte, credentialType string) (credential types.Credential, found bool) {
 	//	key := pcXY + "." + credentialType
 
@@ -4400,6 +4434,14 @@ func (s *qadenaServer) setCredentialNoNotify(credID string, credType string, cre
 		credID,
 		credType,
 	), b)
+}
+
+func (s *qadenaServer) removeCredentialNoNotify(credID string, credType string) {
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.CredentialKeyPrefix))
+	store.Delete(types.CredentialKey(
+		credID,
+		credType,
+	))
 }
 
 func (s *qadenaServer) setCredential(credID string, credType string, credential types.Credential) {

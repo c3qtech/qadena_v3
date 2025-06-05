@@ -369,6 +369,24 @@ func (k Keeper) EnclaveClientSetCredential(sdkctx sdk.Context, credential types.
 	return nil
 }
 
+func (k Keeper) EnclaveClientRemoveCredential(sdkctx sdk.Context, credential types.Credential) error {
+	if sdkctx.IsCheckTx() {
+		c.ContextDebug(sdkctx, "RemoveCredential not called in checktx")
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	defer cancel()
+
+	r, err := EnclaveGRPCClient.RemoveCredential(ctx, &credential)
+	if err != nil {
+		c.ContextError(sdkctx, "error returned by RemoveCredential on enclave "+err.Error())
+		return err
+	}
+	c.ContextDebug(sdkctx, "RemoveCredential returns "+strconv.FormatBool(r.GetStatus()))
+	return nil
+}
+
 func (k Keeper) EnclaveClientClaimCredential(sdkctx sdk.Context, claimCredential *types.MsgClaimCredential) (*types.MsgClaimCredentialResponse, error) {
 	if sdkctx.IsCheckTx() {
 		c.ContextDebug(sdkctx, "ClaimCredential not called in checktx")

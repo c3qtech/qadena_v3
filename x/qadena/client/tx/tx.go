@@ -203,7 +203,7 @@ func GenerateOrBroadcastTxCLISync(clientCtx client.Context, flagSet *pflag.FlagS
 		}
 
 		oldSequence := txf.Sequence()
-		fmt.Println("will use sequence", oldSequence, "for", txf.fromName)
+		//fmt.Println("will use sequence", oldSequence, "for", txf.fromName)
 
 		/* ADD THIS IF YOU WANT TO TEST SEQUENCE ERROR
 		fmt.Println("HACK")
@@ -225,7 +225,7 @@ func GenerateOrBroadcastTxCLISync(clientCtx client.Context, flagSet *pflag.FlagS
 			if newBackoff && !backoff {
 				maxTries = 0
 				backoff = true
-				fmt.Println("backing off")
+				//fmt.Println("backing off")
 				timeouts = backoffTimeouts
 			} else {
 				maxTries++
@@ -242,7 +242,7 @@ func GenerateOrBroadcastTxCLISync(clientCtx client.Context, flagSet *pflag.FlagS
 	}
 
 	oldSequence := txf.Sequence()
-	fmt.Println("used sequence", oldSequence)
+	//fmt.Println("used sequence", oldSequence)
 	waitForSequenceChange(clientCtx, flagSet, oldSequence)
 
 	// note: we get here even if the sequence number did not increase, but the chain may just be delayed in updating the sequence number
@@ -299,7 +299,7 @@ func BroadcastTx(clientCtx client.Context, txf Factory, msgs ...sdk.Msg) (error,
 		}
 
 		txf = txf.WithGas(adjusted)
-		_, _ = fmt.Fprintf(os.Stderr, "%s\n", GasEstimateResponse{GasEstimate: txf.Gas()})
+		//_, _ = fmt.Fprintf(os.Stderr, "%s\n", GasEstimateResponse{GasEstimate: txf.Gas()})
 	}
 
 	if clientCtx.Simulate {

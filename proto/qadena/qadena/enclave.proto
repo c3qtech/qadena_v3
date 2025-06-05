@@ -80,6 +80,7 @@ service QadenaEnclave {
   rpc SetProtectKey (ProtectKey) returns (SetProtectKeyReply) {}
   rpc SetRecoverKey (RecoverKey) returns (SetRecoverKeyReply) {}
   rpc SetCredential (Credential) returns (SetCredentialReply) {}
+  rpc RemoveCredential (Credential) returns (RemoveCredentialReply) {}
   rpc RecoverKeyByCredential (Credential) returns (RecoverKeyReply) {}
   rpc ClaimCredential(MsgClaimCredential) returns (MsgClaimCredentialResponse) {}
   rpc SignRecoverKey(MsgSignRecoverPrivateKey) returns (SignRecoverKeyReply) {}
@@ -336,6 +337,10 @@ message SetRecoverKeyReply {
 }
 
 message SetCredentialReply {
+  bool status = 1;
+}
+
+message RemoveCredentialReply {
   bool status = 1;
 }
 

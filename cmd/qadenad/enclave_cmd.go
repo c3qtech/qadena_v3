@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -259,6 +261,13 @@ func newExportPrivateStateCmd() *cobra.Command {
 			if debug && verbose {
 				c.LoggerDebug(logger, "ExportPrivateState returns", r2)
 			}
+
+			var prettyJSON bytes.Buffer
+			if err := json.Indent(&prettyJSON, []byte(r2.State), "", "    "); err != nil {
+				c.LoggerError(logger, "could not format JSON", err)
+				return err
+			}
+			fmt.Println(string(prettyJSON.Bytes()))
 
 			return nil
 		},

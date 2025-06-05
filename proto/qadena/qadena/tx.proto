@@ -65,6 +65,7 @@ service Msg {
   // make sure that the creator *IS* an identity service provider
   // make sure that all the required signatory vshares ccPubK has ss interval public key
   rpc CreateCredential                      (MsgCreateCredential                     ) returns (MsgCreateCredentialResponse                     );
+  rpc RemoveCredential                      (MsgRemoveCredential                     ) returns (MsgRemoveCredentialResponse                     );
   rpc CreateBulkCredentials                 (MsgCreateBulkCredentials                ) returns (MsgCreateBulkCredentialsResponse                );
 
 // RAV removed for now
@@ -309,6 +310,16 @@ message MsgCreateCredential {
 }
 
 message MsgCreateCredentialResponse {}
+
+message MsgRemoveCredential {
+  option (cosmos.msg.v1.signer) = "creator";
+  string          creator                         =  1;
+  string          credentialID                    =  2;
+  string          credentialType                  =  3;
+}
+
+message MsgRemoveCredentialResponse {}
+
 
 message MsgPioneerAddPublicKey {
   option (cosmos.msg.v1.signer) = "creator";

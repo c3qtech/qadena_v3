@@ -38,6 +38,7 @@ const (
 	Msg_PioneerUpdateJarRegulator_FullMethodName             = "/qadena.qadena.Msg/PioneerUpdateJarRegulator"
 	Msg_PioneerUpdateEnclaveIdentity_FullMethodName          = "/qadena.qadena.Msg/PioneerUpdateEnclaveIdentity"
 	Msg_CreateCredential_FullMethodName                      = "/qadena.qadena.Msg/CreateCredential"
+	Msg_RemoveCredential_FullMethodName                      = "/qadena.qadena.Msg/RemoveCredential"
 	Msg_CreateBulkCredentials_FullMethodName                 = "/qadena.qadena.Msg/CreateBulkCredentials"
 )
 
@@ -75,6 +76,7 @@ type MsgClient interface {
 	// make sure that the creator *IS* an identity service provider
 	// make sure that all the required signatory vshares ccPubK has ss interval public key
 	CreateCredential(ctx context.Context, in *MsgCreateCredential, opts ...grpc.CallOption) (*MsgCreateCredentialResponse, error)
+	RemoveCredential(ctx context.Context, in *MsgRemoveCredential, opts ...grpc.CallOption) (*MsgRemoveCredentialResponse, error)
 	CreateBulkCredentials(ctx context.Context, in *MsgCreateBulkCredentials, opts ...grpc.CallOption) (*MsgCreateBulkCredentialsResponse, error)
 }
 
@@ -257,6 +259,15 @@ func (c *msgClient) CreateCredential(ctx context.Context, in *MsgCreateCredentia
 	return out, nil
 }
 
+func (c *msgClient) RemoveCredential(ctx context.Context, in *MsgRemoveCredential, opts ...grpc.CallOption) (*MsgRemoveCredentialResponse, error) {
+	out := new(MsgRemoveCredentialResponse)
+	err := c.cc.Invoke(ctx, Msg_RemoveCredential_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *msgClient) CreateBulkCredentials(ctx context.Context, in *MsgCreateBulkCredentials, opts ...grpc.CallOption) (*MsgCreateBulkCredentialsResponse, error) {
 	out := new(MsgCreateBulkCredentialsResponse)
 	err := c.cc.Invoke(ctx, Msg_CreateBulkCredentials_FullMethodName, in, out, opts...)
@@ -300,6 +311,7 @@ type MsgServer interface {
 	// make sure that the creator *IS* an identity service provider
 	// make sure that all the required signatory vshares ccPubK has ss interval public key
 	CreateCredential(context.Context, *MsgCreateCredential) (*MsgCreateCredentialResponse, error)
+	RemoveCredential(context.Context, *MsgRemoveCredential) (*MsgRemoveCredentialResponse, error)
 	CreateBulkCredentials(context.Context, *MsgCreateBulkCredentials) (*MsgCreateBulkCredentialsResponse, error)
 	mustEmbedUnimplementedMsgServer()
 }
@@ -364,6 +376,9 @@ func (UnimplementedMsgServer) PioneerUpdateEnclaveIdentity(context.Context, *Msg
 }
 func (UnimplementedMsgServer) CreateCredential(context.Context, *MsgCreateCredential) (*MsgCreateCredentialResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateCredential not implemented")
+}
+func (UnimplementedMsgServer) RemoveCredential(context.Context, *MsgRemoveCredential) (*MsgRemoveCredentialResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveCredential not implemented")
 }
 func (UnimplementedMsgServer) CreateBulkCredentials(context.Context, *MsgCreateBulkCredentials) (*MsgCreateBulkCredentialsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateBulkCredentials not implemented")
@@ -723,6 +738,24 @@ func _Msg_CreateCredential_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Msg_RemoveCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MsgRemoveCredential)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MsgServer).RemoveCredential(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Msg_RemoveCredential_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MsgServer).RemoveCredential(ctx, req.(*MsgRemoveCredential))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Msg_CreateBulkCredentials_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(MsgCreateBulkCredentials)
 	if err := dec(in); err != nil {
@@ -823,6 +856,10 @@ var Msg_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateCredential",
 			Handler:    _Msg_CreateCredential_Handler,
+		},
+		{
+			MethodName: "RemoveCredential",
+			Handler:    _Msg_RemoveCredential_Handler,
 		},
 		{
 			MethodName: "CreateBulkCredentials",
