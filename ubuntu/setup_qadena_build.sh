@@ -9,6 +9,14 @@ fi
 # zsh
 apt-get install -y zsh
 
+# git
+apt-get install -y git
+
+# get the installers from git
+
+git clone https://github.com/c3qtech/qadena_installers.git installers
+
+
 # go
 rm -rf /usr/local/go && tar -C /usr/local -xzf installers/go1.23.4.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
@@ -32,6 +40,7 @@ apt-get install -y curl
 # rotatelogs
 apt install -y apache2-utils
 
+
 # sgx
 mkdir -p /etc/apt/keyrings
 wget -qO- https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | tee /etc/apt/keyrings/intel-sgx-keyring.asc > /dev/null
@@ -47,7 +56,6 @@ apt install -y build-essential libssl-dev
 (cd installers; tar -xvf ./ignite_28.8.2_linux_amd64.tar.gz -C /usr/local/bin)
 
 apt-get install -y jq
-apt-get install -y git
 
 # Add Docker's official GPG key:
 apt-get update
