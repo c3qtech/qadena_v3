@@ -55,7 +55,11 @@ apt install -y build-essential libssl-dev
 # ignite
 (cd installers; tar -xvf ./ignite_28.8.2_linux_amd64.tar.gz -C /usr/local/bin)
 
+# jq
 apt-get install -y jq
+
+# ifconfig
+apt-get install -y net-tools
 
 # Add Docker's official GPG key:
 apt-get update
