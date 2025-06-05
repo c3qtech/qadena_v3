@@ -58,18 +58,18 @@ if [[ $ADVERTISE_IP_ADDRESS == "" ]] ; then
     ADVERTISE_IP_ADDRESS=`$qadenabuildscripts/get_default_ip.sh`
     if [[ $ADVERTISE_IP_ADDRESS == "" ]] ; then
 	echo "Failed to get a default IP address for your node."
-	echo "Args: init.sh [advertise-ip-address]"
-	echo "Example:  init.sh 192.168.86.100"
+	echo "Args: init.sh [--advertise-ip-address <ip>]"
+	echo "Example:  init.sh --advertise-ip-address 192.168.86.100"
 	exit 1
     fi
     echo "You didn't enter an IP address to advertise for your node.  This will be used for other nodes to connect to this node."
-    echo "You can avoid this prompt by calling init.sh advertise-ip-address"
+    echo "You can avoid this prompt by calling init.sh --advertise-ip-address <ip>"
     read REPLY\?"*** For now, shall I use $ADVERTISE_IP_ADDRESS? (y/N) "
     if [[ $REPLY == "y" ]] ; then
 	echo "Ok"
     else
-	echo "Args: init.sh [advertise-ip-address]"
-	echo "Example:  init.sh 192.168.86.100"
+	echo "Args: init.sh [--advertise-ip-address <ip>]"
+	echo "Example:  init.sh --advertise-ip-address 192.168.86.100"
 	exit 1
     fi
 fi
@@ -114,7 +114,7 @@ if [ ! -f $qadenabuild/config.yml ]; then
         if [[ ! -d "$qadenabin" ]] ; then
             mkdir -p "$qadenabin"
         fi
-        cp `which qadenad` $qadenabin/
+        cp `which qadena_v3d` $qadenabin/qadenad
     else
         echo "ignite chain init failed"
 	    rm $qadenabuild/config.yml
@@ -149,7 +149,7 @@ if [ ! -f $qadenabuild/config.yml ]; then
         if [[ ! -d "$qadenabin" ]] ; then
             mkdir -p "$qadenabin"
         fi
-        cp `which qadenad` $qadenabin/
+        cp `which qadena_v3d` $qadenabin/qadenad
     else
 	    rm $qadenabuild/config.yml
         echo "Failed to build chain, removing config.yml"
@@ -161,7 +161,7 @@ else
         if [[ ! -d "$qadenabin" ]] ; then
             mkdir -p "$qadenabin"
         fi
-        cp `which qadenad` $qadenabin/
+        cp `which qadena_v3d` $qadenabin/qadenad
     else
         echo ""
         echo ""
