@@ -30,12 +30,12 @@ requiresendertypes=${19}
 echo "-------------------------"
 echo "$username Create wallet"
 echo "-------------------------"
-qadenad_alias tx qadena create-wallet $username $pioneer $pioneer-create-wallet-sponsor --account-mnemonic="$usermnemonic"  --service-provider $serviceprovider --yes
+qadenad_alias tx qadena create-wallet $username $pioneer sec-create-wallet-sponsor --account-mnemonic="$usermnemonic"  --service-provider $serviceprovider --yes
 
 echo "-------------------------"
 echo "$username Create wallet eph"
 echo "-------------------------"
-qadenad_alias tx qadena create-wallet $username-eph $pioneer $pioneer-create-wallet-sponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "1" --yes
+qadenad_alias tx qadena create-wallet $username-eph $pioneer sec-create-wallet-sponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "1" --yes
 
 echo "-------------------------"
 echo "$username Create credential personal-info"
