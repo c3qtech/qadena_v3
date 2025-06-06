@@ -41,6 +41,7 @@ func GetTxCmd() *cobra.Command {
 	//		cmd.AddCommand(CmdExecuteSmartContract())
 	cmd.AddCommand(CmdCreateCredential())
 	cmd.AddCommand(CmdClaimCredential())
+	cmd.AddCommand(CmdRemoveCredential())
 	//		cmd.AddCommand(CmdCreateSuspiciousTransaction())
 	//		cmd.AddCommand(CmdUpdateSuspiciousTransaction())
 	//		cmd.AddCommand(CmdDeleteSuspiciousTransaction())
