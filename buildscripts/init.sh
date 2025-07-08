@@ -210,6 +210,38 @@ else
     exit 1
 fi
 
+if $qadenabuildscripts/setPubKAndPubKID.sh ekycphidentitysrvprv $genesisfile ; then
+else
+    echo "failed to modify config.yml"
+    exit 1
+fi
+
+if $qadenabuildscripts/setPubKAndPubKID.sh mayaidentitysrvprv $genesisfile ; then
+else
+    echo "failed to modify config.yml"
+    exit 1
+fi
+
+if $qadenabuildscripts/setPubKAndPubKID.sh coinsphidentitysrvprv $genesisfile ; then
+else
+    echo "failed to modify config.yml"
+    exit 1
+fi
+
+if $qadenabuildscripts/setPubKAndPubKID.sh coopnetidentitysrvprv $genesisfile ; then
+else
+    echo "failed to modify config.yml"
+    exit 1
+fi
+
+
+if $qadenabuildscripts/setPubKAndPubKID.sh unionbankidentitysrvprv $genesisfile ; then
+else
+    echo "failed to modify config.yml"
+    exit 1
+fi
+
+
 if $qadenabuildscripts/setPubKAndPubKID.sh testfinancesrvprv $genesisfile ; then
 else
     echo "failed to modify config.yml"

@@ -19,7 +19,7 @@ import (
 func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateCredential) (*types.MsgCreateCredentialResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
-	c.ContextDebug(ctx, "create credential", ctx.IsCheckTx())
+	c.ContextDebug(ctx, "create credential isCheckTx=", ctx.IsCheckTx())
 
 	creatorIntervalPubKID, found := k.GetIntervalPublicKeyIDByPubKID(ctx, msg.Creator)
 

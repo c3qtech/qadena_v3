@@ -9,11 +9,8 @@ accounts:
   mnemonic: "guilt decline utility scale crash envelope snap table dress coach tray use detect success lemon fatigue surround project warfare victory mean midnight address before"
 - name: treasury
   coins: ["100000000000qdn"]
-- name: r-dsvs-as-app
+- name: ekycphidentitysrvprv
   coins: ["10000000qdn"]
-  mnemonic: "hope skate cattle float amount agent north belt remember wealth unfair tongue amazing sphere monkey guitar weekend kiss control peanut silent source tape rookie"
-- name: r-ekyc-app
-  coins: ["0qdn"]
   mnemonic: "blood dish hybrid toddler upgrade squirrel gate hazard raven wrong prevent lake battle acquire crack agree slam please autumn damage best skin gym call"
 - name: coingecko-oracle
   coins: ["10000000qdn"]
@@ -21,16 +18,16 @@ accounts:
 - name: band-protocol-oracle
   coins: ["10000000qdn"]
   mnemonic: "verb select bread spirit beyond snow slender lumber ramp rule tribe soldier help area remove guard cage knife witness era mule afford wage like"
-- name: coopnet-kyc-provider
+- name: coopnetidentitysrvprv
   coins: ["10000000qdn"]
   mnemonic: "clarify whip jungle dune joke entry federal liquid pen journey reject flush evolve disorder slim upon stomach airport affair member occur code twice isolate"
-- name: maya-kyc-provider
+- name: mayaidentitysrvprv
   coins: ["10000000qdn"]
   mnemonic: "penalty caution equip sound they soccer edge debris paddle add purity swap minute defense mass nature hood long diagram auction fat wish story minute"
-- name: gcash-kyc-provider
+- name: coinsphidentitysrvprv
   coins: ["10000000qdn"]
   mnemonic: "crunch theory census zoo olympic holiday they early chunk before humor word smile wisdom casual album nation perfect rotate toward have dress wear also"
-- name: unionbank-kyc-provider
+- name: unionbankidentitysrvprv
   coins: ["10000000qdn"]
   mnemonic: "among umbrella kingdom vote demise fetch eternal era lab thumb artefact tourist mail cactus album nation tuna fresh rule caution patch guilt body bean"
 - name: testfinancesrvprv
@@ -153,6 +150,36 @@ genesis:
         - pubKID: testfinancesrvprvPubKID
           pubK: testfinancesrvprvPubK_pubk
           pubKType: credential
+        - pubKID: ekycphidentitysrvprvPubKID
+          pubK: ekycphidentitysrvprvPubK_pubk
+          pubKType: transaction
+        - pubKID: ekycphidentitysrvprvPubKID
+          pubK: ekycphidentitysrvprvPubK_pubk
+          pubKType: credential
+        - pubKID: mayaidentitysrvprvPubKID
+          pubK: mayaidentitysrvprvPubK_pubk
+          pubKType: transaction
+        - pubKID: mayaidentitysrvprvPubKID
+          pubK: mayaidentitysrvprvPubK_pubk
+          pubKType: credential
+        - pubKID: coopnetidentitysrvprvPubKID
+          pubK: coopnetidentitysrvprvPubK_pubk
+          pubKType: transaction
+        - pubKID: coopnetidentitysrvprvPubKID
+          pubK: coopnetidentitysrvprvPubK_pubk
+          pubKType: credential
+        - pubKID: coinsphidentitysrvprvPubKID
+          pubK: coinsphidentitysrvprvPubK_pubk
+          pubKType: transaction
+        - pubKID: coinsphidentitysrvprvPubKID
+          pubK: coinsphidentitysrvprvPubK_pubk
+          pubKType: credential
+        - pubKID: unionbankidentitysrvprvPubKID
+          pubK: unionbankidentitysrvprvPubK_pubk
+          pubKType: transaction
+        - pubKID: unionbankidentitysrvprvPubKID
+          pubK: unionbankidentitysrvprvPubK_pubk
+          pubKType: credential
       intervalPublicKeyIDList:
         - pubKID: pioneer1PubKID
           nodeType: pioneer
@@ -172,6 +199,26 @@ genesis:
           nodeType: srv-prv
           nodeID: testfinancesrvprv
           serviceProviderType: finance
+        - pubKID: ekycphidentitysrvprvPubKID
+          nodeType: srv-prv
+          nodeID: ekycphidentitysrvprv
+          serviceProviderType: identity
+        - pubKID: mayaidentitysrvprvPubKID
+          nodeType: srv-prv
+          nodeID: mayaidentitysrvprv
+          serviceProviderType: identity
+        - pubKID: coinsphidentitysrvprvPubKID
+          nodeType: srv-prv
+          nodeID: coinsphidentitysrvprv
+          serviceProviderType: identity
+        - pubKID: coopnetidentitysrvprvPubKID
+          nodeType: srv-prv
+          nodeID: coopnetidentitysrvprv
+          serviceProviderType: identity
+        - pubKID: unionbankidentitysrvprvPubKID
+          nodeType: srv-prv
+          nodeID: unionbankidentitysrvprv
+          serviceProviderType: identity
     pricefeed:
       params:
         markets:
