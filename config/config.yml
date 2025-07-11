@@ -33,12 +33,12 @@ accounts:
 - name: testfinancesrvprv
   coins: ["10000000qdn"]
   mnemonic: "ill seed tent goose two trophy harsh noise winter conduct educate lady man spice sport charge primary fever acoustic famous message myth unlock dust"
-- name: secidentitysrvprv
-  coins: ["10000000000qdn"]
-  mnemonic: "canoe oppose eternal occur film common dirt tomorrow lottery fun mask quote result account nasty tuna seat miracle have idle trophy frog catalog kiss"
-- name: secdsvssrvprv
-  coins: ["10000000000qdn"]
-  mnemonic: "angry addict suit reform ostrich ride icon cushion park yellow wisdom mobile column sweet use anchor since tragic series ladder asthma dose prosper voice"
+#- name: secidentitysrvprv
+#  coins: ["10000000000qdn"]
+#  mnemonic: "canoe oppose eternal occur film common dirt tomorrow lottery fun mask quote result account nasty tuna seat miracle have idle trophy frog catalog kiss"
+#- name: secdsvssrvprv
+#  coins: ["10000000000qdn"]
+#  mnemonic: "angry addict suit reform ostrich ride icon cushion park yellow wisdom mobile column sweet use anchor since tragic series ladder asthma dose prosper voice"
 
 client:
   openapi:
@@ -48,6 +48,9 @@ validators:
   bonded: 10000qdn
   app:
     minimum-gas-prices: "0aqdn"
+    pruning: "custom"
+    pruning-keep-recent: "2"
+    pruning-interval: "5"
   config:
     log_level: "info"
     moniker: "pioneer1"
@@ -132,18 +135,18 @@ genesis:
         - pubKID: pioneer1PubKID
           pubK: pioneer1PubK_pubk
           pubKType: credential
-        - pubKID: secidentitysrvprvPubKID
-          pubK: secidentitysrvprvPubK_pubk
-          pubKType: transaction
-        - pubKID: secidentitysrvprvPubKID
-          pubK: secidentitysrvprvPubK_pubk
-          pubKType: credential
-        - pubKID: secdsvssrvprvPubKID
-          pubK: secdsvssrvprvPubK_pubk
-          pubKType: transaction
-        - pubKID: secdsvssrvprvPubKID
-          pubK: secdsvssrvprvPubK_pubk
-          pubKType: credential
+#        - pubKID: secidentitysrvprvPubKID
+#          pubK: secidentitysrvprvPubK_pubk
+#          pubKType: transaction
+#        - pubKID: secidentitysrvprvPubKID
+#          pubK: secidentitysrvprvPubK_pubk
+#          pubKType: credential
+#        - pubKID: secdsvssrvprvPubKID
+#          pubK: secdsvssrvprvPubK_pubk
+#          pubKType: transaction
+#        - pubKID: secdsvssrvprvPubKID
+#          pubK: secdsvssrvprvPubK_pubk
+#          pubKType: credential
         - pubKID: testfinancesrvprvPubKID
           pubK: testfinancesrvprvPubK_pubk
           pubKType: transaction
@@ -187,14 +190,14 @@ genesis:
         - pubKID: treasuryPubKID
           nodeType: treasury
           nodeID: treasury
-        - pubKID: secidentitysrvprvPubKID
-          nodeType: srv-prv
-          nodeID: secidentitysrvprv
-          serviceProviderType: identity
-        - pubKID: secdsvssrvprvPubKID
-          nodeType: srv-prv
-          nodeID: secdsvssrvprv
-          serviceProviderType: dsvs
+#        - pubKID: secidentitysrvprvPubKID
+#          nodeType: srv-prv
+#          nodeID: secidentitysrvprv
+#          serviceProviderType: identity
+#        - pubKID: secdsvssrvprvPubKID
+#          nodeType: srv-prv
+#          nodeID: secdsvssrvprv
+#          serviceProviderType: dsvs
         - pubKID: testfinancesrvprvPubKID
           nodeType: srv-prv
           nodeID: testfinancesrvprv

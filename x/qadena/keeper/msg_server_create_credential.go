@@ -21,19 +21,15 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 
 	c.ContextDebug(ctx, "create credential isCheckTx=", ctx.IsCheckTx())
 
-	creatorIntervalPubKID, found := k.GetIntervalPublicKeyIDByPubKID(ctx, msg.Creator)
-
-	if !found {
-		return nil, types.ErrServiceProviderUnauthorized
-	}
-
-	if creatorIntervalPubKID.GetServiceProviderType() != types.IdentityServiceProvider {
-		return nil, types.ErrServiceProviderUnauthorized
+	// check if the creator is an identity service provider
+	err := k.AuthenticateServiceProvider(ctx, msg.Creator, types.IdentityServiceProvider)
+	if err != nil {
+		return nil, err
 	}
 
 	ccPubK := make([]c.VSharePubKInfo, 0)
 
-	ccPubK, err := MsgServerAppendRequiredChainCCPubK(ctx, ccPubK, k.Keeper, "", false)
+	ccPubK, err = MsgServerAppendRequiredChainCCPubK(ctx, ccPubK, k.Keeper, "", false)
 
 	if err != nil {
 		return nil, err
@@ -51,7 +47,7 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 		return nil, types.ErrInvalidVShare
 	}
 
-	_, found = k.GetCredential(ctx, msg.CredentialID, msg.CredentialType)
+	_, found := k.GetCredential(ctx, msg.CredentialID, msg.CredentialType)
 
 	if found {
 		return nil, types.ErrCredentialExists

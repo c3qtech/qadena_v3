@@ -19,19 +19,15 @@ func (k msgServer) RemoveCredential(goCtx context.Context, msg *types.MsgRemoveC
 
 	c.ContextDebug(ctx, "remove credential", ctx.IsCheckTx(), msg.CredentialID, msg.CredentialType)
 
-	creatorIntervalPubKID, found := k.GetIntervalPublicKeyIDByPubKID(ctx, msg.Creator)
-
-	if !found {
-		return nil, types.ErrServiceProviderUnauthorized
-	}
-
-	if creatorIntervalPubKID.GetServiceProviderType() != types.IdentityServiceProvider {
-		return nil, types.ErrServiceProviderUnauthorized
+	// check if the creator is an identity service provider
+	err := k.AuthenticateServiceProvider(ctx, msg.Creator, types.IdentityServiceProvider)
+	if err != nil {
+		return nil, err
 	}
 
 	ccPubK := make([]c.VSharePubKInfo, 0)
 
-	ccPubK, err := MsgServerAppendRequiredChainCCPubK(ctx, ccPubK, k.Keeper, "", false)
+	ccPubK, err = MsgServerAppendRequiredChainCCPubK(ctx, ccPubK, k.Keeper, "", false)
 
 	if err != nil {
 		return nil, err

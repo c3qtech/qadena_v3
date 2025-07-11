@@ -17,19 +17,15 @@ import (
 func (k msgServer) CreateDocument(goCtx context.Context, msg *types.MsgCreateDocument) (*types.MsgCreateDocumentResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
-	creatorIntervalPubKID, found := k.qadenaKeeper.GetIntervalPublicKeyIDByPubKID(ctx, msg.Creator)
-
-	if !found {
-		return nil, types.ErrServiceProviderUnauthorized
-	}
-
-	if creatorIntervalPubKID.GetServiceProviderType() != qadenatypes.DSVSServiceProvider {
-		return nil, types.ErrServiceProviderUnauthorized
+	// check if the creator is a dsvs service provider
+	err := k.qadenaKeeper.AuthenticateServiceProvider(ctx, msg.Creator, qadenatypes.DSVSServiceProvider)
+	if err != nil {
+		return nil, err
 	}
 
 	ccPubK := make([]c.VSharePubKInfo, 0)
 
-	ccPubK, err := DSVSMsgServerAppendRequiredChainCCPubK(ctx, ccPubK, k.qadenaKeeper, "", false)
+	ccPubK, err = DSVSMsgServerAppendRequiredChainCCPubK(ctx, ccPubK, k.qadenaKeeper, "", false)
 
 	if err != nil {
 		return nil, err
@@ -55,7 +51,7 @@ func (k msgServer) CreateDocument(goCtx context.Context, msg *types.MsgCreateDoc
 
 	// need to check if the document already exists
 
-	_, found = k.GetDocument(ctx, msg.DocumentID)
+	_, found := k.GetDocument(ctx, msg.DocumentID)
 
 	if found {
 		return nil, types.ErrDocumentExists

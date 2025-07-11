@@ -88,6 +88,8 @@ service QadenaEnclave {
   rpc QueryFindCredential(QueryFindCredentialRequest) returns (QueryFindCredentialResponse) {}
   rpc QueryGetSubWalletIDByOriginalWalletID(Credential) returns (QueryGetSubWalletIDByOriginalWalletIDResponse) {}
 
+  rpc ValidateAuthenticateServiceProvider(ValidateAuthenticateServiceProviderRequest) returns (ValidateAuthenticateServiceProviderReply) {}
+
   // used to validate the "authorized signatory" (this allows a user to specify which eph wallet ID is allowed to sign documents)
   rpc ValidateAuthorizedSignatory (ValidateAuthorizedSignatoryRequest) returns (ValidateAuthorizedSignatoryReply) {}
 
@@ -194,6 +196,15 @@ message ExportPrivateKeyReply {
 
 message ExportPrivateStateReply {
   string state = 1;
+}
+
+message ValidateAuthenticateServiceProviderRequest {
+  string pubKID = 1;
+  string serviceProviderType = 2;
+}
+
+message ValidateAuthenticateServiceProviderReply {
+  bool status = 1;
 }
 
 message MsgInitEnclave {

@@ -83,6 +83,7 @@ var (
 
 	ErrSignatoryAlreadyExists = sdkerrors.Register(ModuleName, 1145, "Signatory already exists")
 
-	ErrInvalidStatus         = sdkerrors.Register(ModuleName, 1146, "Invalid status")
-	ErrUpgradeModeNotEnabled = sdkerrors.Register(ModuleName, 1147, "Enclave upgrade mode not enabled")
+	ErrInvalidStatus                = sdkerrors.Register(ModuleName, 1146, "Invalid status")
+	ErrUpgradeModeNotEnabled        = sdkerrors.Register(ModuleName, 1147, "Enclave upgrade mode not enabled")
+	ErrIntervalPublicKeyIDNotExists = sdkerrors.Register(ModuleName, 1148, "Interval public key ID not exists")
 )

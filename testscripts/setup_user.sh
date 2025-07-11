@@ -76,7 +76,7 @@ if [ -n "$acceptcredentialtypes" ] ; then
     echo "-------------------------"
     echo "$username Accept credential types $acceptcredentialtypes"
     echo "-------------------------"
-    qadenad_alias tx qadena create-wallet $username-eph2 $pioneer $pioneer-create-wallet-sponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "2" --accept-credential-types $acceptcredentialtypes --yes
+    qadenad_alias tx qadena create-wallet $username-eph2 $pioneer sec-create-wallet-sponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "2" --accept-credential-types $acceptcredentialtypes --yes
     echo "-------------------------"
     echo "$username Bind phone nameservice to $username-eph2"
     echo "-------------------------"
@@ -92,7 +92,7 @@ if [ -n "$requiresendertypes" ] ; then
     echo "-------------------------"
     echo "$username require sender credential types $requiresendertypes"
     echo "-------------------------"
-    qadenad_alias tx qadena create-wallet $username-eph3 $pioneer $pioneer-create-wallet-sponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "3" --require-sender-credential-types $requiresendertypes --yes
+    qadenad_alias tx qadena create-wallet $username-eph3 $pioneer sec-create-wallet-sponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "3" --require-sender-credential-types $requiresendertypes --yes
     echo "-------------------------"
     echo "$username Bind email nameservice to $username-eph3"
     echo "-------------------------"
@@ -108,6 +108,5 @@ if [ -n "$acceptpassword" ] ; then
     echo "-------------------------"
     echo "$username Accept password"
     echo "-------------------------"
-    qadenad_alias tx qadena create-wallet $username-eph4 $pioneer $pioneer-create-wallet-sponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "4" --accept-password="$acceptpassword" --yes
+    qadenad_alias tx qadena create-wallet $username-eph4 $pioneer sec-create-wallet-sponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "4" --accept-password="$acceptpassword" --yes
 fi
-

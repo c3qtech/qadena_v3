@@ -15,6 +15,7 @@ type QadenaKeeper interface {
 	EnclaveValidateAuthorizedSigner(ctx sdk.Context, creator string, signer *qadenatypes.VShareSignatory, requiredSignatories []*qadenatypes.VShareSignatory, completedSignatories []*qadenatypes.VShareSignatory) (bool, error)
 	GetIntervalPublicKeyID(ctx context.Context, nodeID string, nodeType string) (qadenatypes.IntervalPublicKeyID, bool)
 	GetIntervalPublicKeyIDByPubKID(ctx context.Context, pubKID string) (qadenatypes.IntervalPublicKeyID, bool)
+	AuthenticateServiceProvider(ctx sdk.Context, pubKID string, serviceProviderType string) error // returns nil if the pubKID is valid for the serviceProviderType
 	GetPioneerJar(ctx context.Context, pioneerID string) (qadenatypes.PioneerJar, bool)
 	GetPublicKey(ctx context.Context, pubKID string, pubKType string) (qadenatypes.PublicKey, bool)
 	GetWallet(ctx context.Context, walletID string) (val qadenatypes.Wallet, found bool)

@@ -198,17 +198,17 @@ else
 fi
 
 
-if $qadenabuildscripts/setPubKAndPubKID.sh secdsvssrvprv $genesisfile ; then
-else
-    echo "failed to modify config.yml"
-    exit 1
-fi
+# if $qadenabuildscripts/setPubKAndPubKID.sh secdsvssrvprv $genesisfile ; then
+#else
+#    echo "failed to modify config.yml"
+#    exit 1
+#fi
 
-if $qadenabuildscripts/setPubKAndPubKID.sh secidentitysrvprv $genesisfile ; then
-else
-    echo "failed to modify config.yml"
-    exit 1
-fi
+#if $qadenabuildscripts/setPubKAndPubKID.sh secidentitysrvprv $genesisfile ; then
+#else
+#    echo "failed to modify config.yml"
+#    exit 1
+#fi
 
 if $qadenabuildscripts/setPubKAndPubKID.sh ekycphidentitysrvprv $genesisfile ; then
 else

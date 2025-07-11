@@ -3742,6 +3742,25 @@ func (s *qadenaServer) getIntervalPublicKeyId(nodeID string, nodeType string) (k
 	return
 }
 
+func (s *qadenaServer) getIntervalPublicKeyIdByPubKID(pubKID string) (keyID string, serviceProviderType string, found bool) {
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.IntervalPublicKeyIDByPubKIDKeyPrefix))
+	b := store.Get(types.IntervalPublicKeyIDByPubKIDKey(pubKID))
+	var ipki types.IntervalPublicKeyID
+	if b == nil {
+		c.LoggerDebug(logger, "Couldn't find intervalpublickeyidbypubkid"+pubKID)
+		found = false
+	} else {
+		s.Cdc.MustUnmarshal(b, &ipki)
+
+		c.LoggerDebug(logger, "publicKey "+c.PrettyPrint(ipki))
+		found = true
+		keyID = ipki.PubKID
+		serviceProviderType = ipki.ServiceProviderType
+	}
+
+	return
+}
+
 func (s *qadenaServer) getAllIntervalPublicKeyIds() (arr []types.IntervalPublicKeyID) {
 	arr = make([]types.IntervalPublicKeyID, 0)
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.IntervalPublicKeyIDKeyPrefix))
@@ -3759,9 +3778,27 @@ func (s *qadenaServer) getAllIntervalPublicKeyIds() (arr []types.IntervalPublicK
 
 func (s *qadenaServer) setIntervalPublicKeyIdNoNotify(in types.IntervalPublicKeyID) {
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.IntervalPublicKeyIDKeyPrefix))
+	storeByPubKID := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.IntervalPublicKeyIDByPubKIDKeyPrefix))
+
+	current := store.Get(types.IntervalPublicKeyIDKey(in.NodeID, in.NodeType))
+	if current != nil {
+		var currentIntervalPublicKeyID types.IntervalPublicKeyID
+		s.Cdc.MustUnmarshal(current, &currentIntervalPublicKeyID)
+		// remove the old one by PubKID, so we don't keep growing the kvstore
+		storeByPubKID.Delete(types.IntervalPublicKeyIDByPubKIDKey(in.PubKID))
+	} else {
+		// make sure we don't have a duplicate one stored by PubKID
+		current = storeByPubKID.Get(types.IntervalPublicKeyIDByPubKIDKey(in.PubKID))
+		if current != nil {
+			c.LoggerError(logger, "setIntervalPublicKeyIdNoNotify err, duplicate PubKID")
+			panic("setIntervalPublicKeyIdNoNotify err, duplicate PubKID")
+		}
+	}
 
 	b := s.Cdc.MustMarshal(&in)
+	c.LoggerDebug(logger, "setIntervalPublicKeyIdNoNotify "+c.PrettyPrint(in))
 	store.Set(types.IntervalPublicKeyIDKey(in.NodeID, in.NodeType), b)
+	storeByPubKID.Set(types.IntervalPublicKeyIDByPubKIDKey(in.PubKID), b)
 }
 
 func (s *qadenaServer) getAllPioneers() (pioneers []string) {
@@ -5000,6 +5037,53 @@ func findPINAndPC(vcs types.EncryptableValidatedCredentials, credentialType stri
 		}
 	}
 	return "", nil
+}
+
+func (s *qadenaServer) ValidateAuthenticateServiceProvider(ctx context.Context, ValidateAuthenticateServiceProviderRequest *types.ValidateAuthenticateServiceProviderRequest) (*types.ValidateAuthenticateServiceProviderReply, error) {
+	c.LoggerDebug(logger, "ValidateAuthenticateServiceProvider pubKID: "+ValidateAuthenticateServiceProviderRequest.PubKID+" serviceProviderType: "+ValidateAuthenticateServiceProviderRequest.ServiceProviderType)
+
+	wallet, found := s.getWallet(ValidateAuthenticateServiceProviderRequest.PubKID)
+
+	if !found {
+		return &types.ValidateAuthenticateServiceProviderReply{Status: false}, types.ErrWalletNotExists
+	}
+
+	if wallet.EphemeralWalletAmountCount[types.QadenaTokenDenom] == types.QadenaRealWallet {
+		c.LoggerError(logger, "wallet is not an ephemeral wallet")
+		return &types.ValidateAuthenticateServiceProviderReply{Status: false}, types.ErrInvalidWallet
+	}
+
+	var vShareCreateWallet types.EncryptableCreateWallet
+
+	unprotoCreateWalletVShareBind := c.UnprotoizeVShareBindData(wallet.CreateWalletVShareBind)
+	err := c.VShareBDecryptAndProtoUnmarshal(s.getSSPrivK(unprotoCreateWalletVShareBind.GetSSIntervalPubKID()), s.getPubK(unprotoCreateWalletVShareBind.GetSSIntervalPubKID()), unprotoCreateWalletVShareBind, wallet.EncCreateWalletVShare, &vShareCreateWallet)
+
+	if err != nil {
+		c.LoggerError(logger, "couldn't decrypt vShareCreateWallet "+err.Error())
+		return &types.ValidateAuthenticateServiceProviderReply{Status: false}, err
+	}
+
+	c.LoggerDebug(logger, "vShareCreateWallet "+c.PrettyPrint(vShareCreateWallet))
+
+	realWalletID := vShareCreateWallet.DstEWalletID.WalletID
+
+	c.LoggerDebug(logger, "realWalletID "+realWalletID)
+
+	// find the interval by pubkid
+	keyID, serviceProviderType, found := s.getIntervalPublicKeyIdByPubKID(realWalletID)
+	if !found {
+		c.LoggerError(logger, "couldn't find interval public key ID")
+		return &types.ValidateAuthenticateServiceProviderReply{Status: false}, types.ErrIntervalPublicKeyIDNotExists
+	}
+
+	c.LoggerDebug(logger, "keyID "+keyID+" serviceProviderType "+serviceProviderType)
+
+	if serviceProviderType != ValidateAuthenticateServiceProviderRequest.ServiceProviderType {
+		c.LoggerError(logger, "service provider type doesn't match")
+		return &types.ValidateAuthenticateServiceProviderReply{Status: false}, types.ErrServiceProviderUnauthorized
+	}
+
+	return &types.ValidateAuthenticateServiceProviderReply{Status: true}, nil
 }
 
 func (s *qadenaServer) ValidateTransferPrime(ctx context.Context, msg *types.MsgTransferFunds) (*types.ValidateTransferPrimeReply, error) {

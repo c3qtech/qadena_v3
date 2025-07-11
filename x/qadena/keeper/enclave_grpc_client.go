@@ -225,6 +225,47 @@ func (k Keeper) ClientVerifyRemoteReport(sdkctx sdk.Context, remoteReportBytes [
 
 }
 
+// this will check if the pubKID is valid for the serviceProviderID
+func (k Keeper) AuthenticateServiceProvider(sdkctx sdk.Context, pubKID string, serviceProviderType string) error {
+	c.ContextDebug(sdkctx, "AuthenticateServiceProvider pubKID: "+pubKID+" serviceProviderType: "+serviceProviderType)
+	creatorIntervalPubKID, found := k.GetIntervalPublicKeyIDByPubKID(sdkctx, pubKID)
+
+	if !found {
+		c.ContextDebug(sdkctx, "couldn't find interval public key ID directly, will check via enclave")
+		return k.EnclaveValidateAuthenticateServiceProvider(sdkctx, pubKID, serviceProviderType)
+	}
+
+	c.ContextDebug(sdkctx, "creatorIntervalPubKID: "+creatorIntervalPubKID.String())
+
+	if creatorIntervalPubKID.GetServiceProviderType() != serviceProviderType {
+		return types.ErrServiceProviderUnauthorized
+	}
+
+	return nil
+}
+
+func (k Keeper) EnclaveValidateAuthenticateServiceProvider(sdkctx sdk.Context, pubKID string, serviceProviderType string) error {
+	if sdkctx.IsCheckTx() {
+		c.ContextDebug(sdkctx, "ValidateAuthenticateServiceProvider not called in checktx")
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	defer cancel()
+
+	r, err := EnclaveGRPCClient.ValidateAuthenticateServiceProvider(ctx, &types.ValidateAuthenticateServiceProviderRequest{PubKID: pubKID, ServiceProviderType: serviceProviderType})
+	if err != nil {
+		c.ContextError(sdkctx, "error returned by ValidateAuthenticateServiceProvider on enclave "+err.Error())
+		return err
+	}
+	c.ContextDebug(sdkctx, "ValidateAuthenticateServiceProvider returns "+strconv.FormatBool(r.GetStatus()))
+	if !r.Status {
+		return types.ErrServiceProviderUnauthorized
+	}
+
+	return nil
+}
+
 func (k Keeper) EnclaveValidateAuthorizedSigner(sdkctx sdk.Context, creator string, requestingSignatory *types.VShareSignatory, requiredSignatory []*types.VShareSignatory, completedSignatories []*types.VShareSignatory) (bool, error) {
 	if sdkctx.IsCheckTx() {
 		c.ContextDebug(sdkctx, "ValidateAuthorizedSigner not called in checktx")

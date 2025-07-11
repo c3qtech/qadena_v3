@@ -149,6 +149,7 @@ const (
 	QadenaEnclave_QueryGetRecoverKey_FullMethodName                    = "/qadena.qadena.QadenaEnclave/QueryGetRecoverKey"
 	QadenaEnclave_QueryFindCredential_FullMethodName                   = "/qadena.qadena.QadenaEnclave/QueryFindCredential"
 	QadenaEnclave_QueryGetSubWalletIDByOriginalWalletID_FullMethodName = "/qadena.qadena.QadenaEnclave/QueryGetSubWalletIDByOriginalWalletID"
+	QadenaEnclave_ValidateAuthenticateServiceProvider_FullMethodName   = "/qadena.qadena.QadenaEnclave/ValidateAuthenticateServiceProvider"
 	QadenaEnclave_ValidateAuthorizedSignatory_FullMethodName           = "/qadena.qadena.QadenaEnclave/ValidateAuthorizedSignatory"
 	QadenaEnclave_ValidateAuthorizedSigner_FullMethodName              = "/qadena.qadena.QadenaEnclave/ValidateAuthorizedSigner"
 	QadenaEnclave_SetPublicKey_FullMethodName                          = "/qadena.qadena.QadenaEnclave/SetPublicKey"
@@ -203,6 +204,7 @@ type QadenaEnclaveClient interface {
 	QueryGetRecoverKey(ctx context.Context, in *QueryGetRecoverKeyRequest, opts ...grpc.CallOption) (*QueryGetRecoverKeyResponse, error)
 	QueryFindCredential(ctx context.Context, in *QueryFindCredentialRequest, opts ...grpc.CallOption) (*QueryFindCredentialResponse, error)
 	QueryGetSubWalletIDByOriginalWalletID(ctx context.Context, in *Credential, opts ...grpc.CallOption) (*QueryGetSubWalletIDByOriginalWalletIDResponse, error)
+	ValidateAuthenticateServiceProvider(ctx context.Context, in *ValidateAuthenticateServiceProviderRequest, opts ...grpc.CallOption) (*ValidateAuthenticateServiceProviderReply, error)
 	// used to validate the "authorized signatory" (this allows a user to specify which eph wallet ID is allowed to sign documents)
 	ValidateAuthorizedSignatory(ctx context.Context, in *ValidateAuthorizedSignatoryRequest, opts ...grpc.CallOption) (*ValidateAuthorizedSignatoryReply, error)
 	// used to validate whether this signer can sign a document (is the signer's credentials enough to sign the document?)
@@ -455,6 +457,15 @@ func (c *qadenaEnclaveClient) QueryGetSubWalletIDByOriginalWalletID(ctx context.
 	return out, nil
 }
 
+func (c *qadenaEnclaveClient) ValidateAuthenticateServiceProvider(ctx context.Context, in *ValidateAuthenticateServiceProviderRequest, opts ...grpc.CallOption) (*ValidateAuthenticateServiceProviderReply, error) {
+	out := new(ValidateAuthenticateServiceProviderReply)
+	err := c.cc.Invoke(ctx, QadenaEnclave_ValidateAuthenticateServiceProvider_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *qadenaEnclaveClient) ValidateAuthorizedSignatory(ctx context.Context, in *ValidateAuthorizedSignatoryRequest, opts ...grpc.CallOption) (*ValidateAuthorizedSignatoryReply, error) {
 	out := new(ValidateAuthorizedSignatoryReply)
 	err := c.cc.Invoke(ctx, QadenaEnclave_ValidateAuthorizedSignatory_FullMethodName, in, out, opts...)
@@ -667,6 +678,7 @@ type QadenaEnclaveServer interface {
 	QueryGetRecoverKey(context.Context, *QueryGetRecoverKeyRequest) (*QueryGetRecoverKeyResponse, error)
 	QueryFindCredential(context.Context, *QueryFindCredentialRequest) (*QueryFindCredentialResponse, error)
 	QueryGetSubWalletIDByOriginalWalletID(context.Context, *Credential) (*QueryGetSubWalletIDByOriginalWalletIDResponse, error)
+	ValidateAuthenticateServiceProvider(context.Context, *ValidateAuthenticateServiceProviderRequest) (*ValidateAuthenticateServiceProviderReply, error)
 	// used to validate the "authorized signatory" (this allows a user to specify which eph wallet ID is allowed to sign documents)
 	ValidateAuthorizedSignatory(context.Context, *ValidateAuthorizedSignatoryRequest) (*ValidateAuthorizedSignatoryReply, error)
 	// used to validate whether this signer can sign a document (is the signer's credentials enough to sign the document?)
@@ -771,6 +783,9 @@ func (UnimplementedQadenaEnclaveServer) QueryFindCredential(context.Context, *Qu
 }
 func (UnimplementedQadenaEnclaveServer) QueryGetSubWalletIDByOriginalWalletID(context.Context, *Credential) (*QueryGetSubWalletIDByOriginalWalletIDResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method QueryGetSubWalletIDByOriginalWalletID not implemented")
+}
+func (UnimplementedQadenaEnclaveServer) ValidateAuthenticateServiceProvider(context.Context, *ValidateAuthenticateServiceProviderRequest) (*ValidateAuthenticateServiceProviderReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ValidateAuthenticateServiceProvider not implemented")
 }
 func (UnimplementedQadenaEnclaveServer) ValidateAuthorizedSignatory(context.Context, *ValidateAuthorizedSignatoryRequest) (*ValidateAuthorizedSignatoryReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ValidateAuthorizedSignatory not implemented")
@@ -1277,6 +1292,24 @@ func _QadenaEnclave_QueryGetSubWalletIDByOriginalWalletID_Handler(srv interface{
 	return interceptor(ctx, in, info, handler)
 }
 
+func _QadenaEnclave_ValidateAuthenticateServiceProvider_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateAuthenticateServiceProviderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QadenaEnclaveServer).ValidateAuthenticateServiceProvider(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QadenaEnclave_ValidateAuthenticateServiceProvider_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QadenaEnclaveServer).ValidateAuthenticateServiceProvider(ctx, req.(*ValidateAuthenticateServiceProviderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _QadenaEnclave_ValidateAuthorizedSignatory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ValidateAuthorizedSignatoryRequest)
 	if err := dec(in); err != nil {
@@ -1739,6 +1772,10 @@ var QadenaEnclave_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "QueryGetSubWalletIDByOriginalWalletID",
 			Handler:    _QadenaEnclave_QueryGetSubWalletIDByOriginalWalletID_Handler,
+		},
+		{
+			MethodName: "ValidateAuthenticateServiceProvider",
+			Handler:    _QadenaEnclave_ValidateAuthenticateServiceProvider_Handler,
 		},
 		{
 			MethodName: "ValidateAuthorizedSignatory",
