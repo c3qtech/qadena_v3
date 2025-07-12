@@ -26,16 +26,31 @@ identityprovider=${16}
 acceptcredentialtypes=${17}
 acceptpassword=${18}
 requiresendertypes=${19}
+eph_count=${20}
+createwalletsponsor=${21}
+
+echo "service provider: $serviceprovider"
+echo "required sender types: $requiresendertypes"
+echo "accept credential types: $acceptcredentialtypes"
+echo "accept password: $acceptpassword"
+echo "create wallet sponsor: $createwalletsponsor"
+echo "eph count: $eph_count"
 
 echo "-------------------------"
 echo "$username Create wallet"
 echo "-------------------------"
-qadenad_alias tx qadena create-wallet $username $pioneer sec-create-wallet-sponsor --account-mnemonic="$usermnemonic"  --service-provider $serviceprovider --yes
+qadenad_alias tx qadena create-wallet $username $pioneer $createwalletsponsor --account-mnemonic="$usermnemonic"  --service-provider "$serviceprovider" --yes
 
 echo "-------------------------"
 echo "$username Create wallet eph"
 echo "-------------------------"
-qadenad_alias tx qadena create-wallet $username-eph $pioneer sec-create-wallet-sponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "1" --yes
+if [ -n "$eph_count" ] ; then
+    for i in $(seq 1 $eph_count); do
+        qadenad_alias tx qadena create-wallet $username-eph$i $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "$i" --yes
+    done
+else
+    qadenad_alias tx qadena create-wallet $username-eph $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "1" --yes
+fi
 
 echo "-------------------------"
 echo "$username Create credential personal-info"
@@ -70,43 +85,61 @@ qadenad_alias tx qadena claim-credential $user_a $user_bf  email-contact-info --
 echo "-------------------------"
 echo "$username Setup DSVS authorized signatory as $username-eph"
 echo "-------------------------"
-qadenad_alias tx dsvs register-authorized-signatory $username-eph --from $username --yes
-
-if [ -n "$acceptcredentialtypes" ] ; then
-    echo "-------------------------"
-    echo "$username Accept credential types $acceptcredentialtypes"
-    echo "-------------------------"
-    qadenad_alias tx qadena create-wallet $username-eph2 $pioneer sec-create-wallet-sponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "2" --accept-credential-types $acceptcredentialtypes --yes
-    echo "-------------------------"
-    echo "$username Bind phone nameservice to $username-eph2"
-    echo "-------------------------"
-    qadenad_alias tx nameservice bind-credential $username phone-contact-info --from $username-eph2 --yes
+if [ -n "$eph_count" ] ; then
+    # Directly pass multiple wallet IDs as separate arguments
+    echo "Registering multiple ephemeral wallets as authorized signatories"
+    cmd="qadenad_alias tx dsvs register-authorized-signatory"
+    for i in $(seq 1 $eph_count); do
+        cmd="$cmd $username-eph$i"
+    done
+    cmd="$cmd --from $username --yes"
+    echo "Executing: $cmd"
+    eval $cmd
 else
-    echo "-------------------------"
-    echo "$username Bind phone nameservice to $username-eph"
-    echo "-------------------------"
-    qadenad_alias tx nameservice bind-credential $username phone-contact-info --from $username-eph --yes
+    qadenad_alias tx dsvs register-authorized-signatory $username-eph --from $username --yes
 fi
 
-if [ -n "$requiresendertypes" ] ; then
-    echo "-------------------------"
-    echo "$username require sender credential types $requiresendertypes"
-    echo "-------------------------"
-    qadenad_alias tx qadena create-wallet $username-eph3 $pioneer sec-create-wallet-sponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "3" --require-sender-credential-types $requiresendertypes --yes
-    echo "-------------------------"
-    echo "$username Bind email nameservice to $username-eph3"
-    echo "-------------------------"
-    qadenad_alias tx nameservice bind-credential $username email-contact-info --from $username-eph3 --yes
-else 
-    echo "-------------------------"
-    echo "$username Bind email nameservice to $username-eph"
-    echo "-------------------------"
-    qadenad_alias tx nameservice bind-credential $username email-contact-info --from $username-eph --yes
+# if eph_count = 1, then do this
+if [ "$eph_count" -eq 1 ]; then
+
+    if [ -n "$acceptcredentialtypes" ] ; then
+        echo "-------------------------"
+        echo "$username Accept credential types $acceptcredentialtypes"
+        echo "-------------------------"
+        qadenad_alias tx qadena create-wallet $username-eph2 $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "2" --accept-credential-types $acceptcredentialtypes --yes
+        echo "-------------------------"
+        echo "$username Bind phone nameservice to $username-eph2"
+        echo "-------------------------"
+        qadenad_alias tx nameservice bind-credential $username phone-contact-info --from $username-eph2 --yes
+    else
+        echo "-------------------------"
+        echo "$username Bind phone nameservice to $username-eph"
+        echo "-------------------------"
+        qadenad_alias tx nameservice bind-credential $username phone-contact-info --from $username-eph --yes
+    fi
+
+    if [ -n "$requiresendertypes" ] ; then
+        echo "-------------------------"
+        echo "$username require sender credential types $requiresendertypes"
+        echo "-------------------------"
+        qadenad_alias tx qadena create-wallet $username-eph3 $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "3" --require-sender-credential-types $requiresendertypes --yes
+        echo "-------------------------"
+        echo "$username Bind email nameservice to $username-eph3"
+        echo "-------------------------"
+        qadenad_alias tx nameservice bind-credential $username email-contact-info --from $username-eph3 --yes
+    else 
+        echo "-------------------------"
+        echo "$username Bind email nameservice to $username-eph"
+        echo "-------------------------"
+        qadenad_alias tx nameservice bind-credential $username email-contact-info --from $username-eph --yes
+    fi
+
+    if [ -n "$acceptpassword" ] ; then
+        echo "-------------------------"
+        echo "$username Accept password"
+        echo "-------------------------"
+        qadenad_alias tx qadena create-wallet $username-eph4 $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "4" --accept-password="$acceptpassword" --yes
+    fi
+
 fi
 
-if [ -n "$acceptpassword" ] ; then
-    echo "-------------------------"
-    echo "$username Accept password"
-    echo "-------------------------"
-    qadenad_alias tx qadena create-wallet $username-eph4 $pioneer sec-create-wallet-sponsor --link-to-real-wallet $username --account-mnemonic="$usermnemonic" --eph-account-index "4" --accept-password="$acceptpassword" --yes
-fi

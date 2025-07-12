@@ -20,27 +20,32 @@ var _ = strconv.Itoa(0)
 
 func CmdRegisterAuthorizedSignatory() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "register-authorized-signatory [eph-wallet-id]",
-		Short: "Broadcast message RegisterAuthorizedSignatory",
-		Args:  cobra.ExactArgs(1),
+		Use:   "register-authorized-signatory [eph-wallet-id]...",
+		Short: "Broadcast message RegisterAuthorizedSignatory with one or more ephemeral wallet IDs",
+		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) (err error) {
-			argEphWalletID := args[0]
+			// Process all ephemeral wallet IDs provided as arguments
+			ephWalletIDs := []string{}
 
 			ctx, err := client.GetClientTxContext(cmd)
 			if err != nil {
 				return err
 			}
 
-			// resolve argEphWalletID
-			ephWalletID, _, _, _, err := c.GetAddress(ctx, argEphWalletID)
-			if err != nil {
-				return err
+			// Resolve all ephemeral wallet IDs
+			for _, argEphWalletID := range args {
+				ephWalletID, _, _, _, err := c.GetAddress(ctx, argEphWalletID)
+				if err != nil {
+					return fmt.Errorf("failed to resolve wallet ID %s: %w", argEphWalletID, err)
+				}
+				ephWalletIDs = append(ephWalletIDs, ephWalletID)
+				fmt.Printf("Added ephemeral wallet ID: %s\n", ephWalletID)
 			}
 
-			// EncryptableAuthorizedSignatory
+			// EncryptableAuthorizedSignatory with multiple wallet IDs
 			authorizedSignatory := types.EncryptableAuthorizedSignatory{
 				Nonce:    c.Nonce(),
-				WalletID: ephWalletID,
+				WalletID: ephWalletIDs,
 			}
 
 			// get source wallet ID, source public key in bytes, source public key and source private key hex

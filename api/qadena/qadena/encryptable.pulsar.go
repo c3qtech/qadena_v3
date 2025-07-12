@@ -1610,6 +1610,52 @@ func (x *fastReflection_EncryptableClaimCredentialExtraParms) ProtoMethods() *pr
 	}
 }
 
+var _ protoreflect.List = (*_EncryptableAuthorizedSignatory_2_list)(nil)
+
+type _EncryptableAuthorizedSignatory_2_list struct {
+	list *[]string
+}
+
+func (x *_EncryptableAuthorizedSignatory_2_list) Len() int {
+	if x.list == nil {
+		return 0
+	}
+	return len(*x.list)
+}
+
+func (x *_EncryptableAuthorizedSignatory_2_list) Get(i int) protoreflect.Value {
+	return protoreflect.ValueOfString((*x.list)[i])
+}
+
+func (x *_EncryptableAuthorizedSignatory_2_list) Set(i int, value protoreflect.Value) {
+	valueUnwrapped := value.String()
+	concreteValue := valueUnwrapped
+	(*x.list)[i] = concreteValue
+}
+
+func (x *_EncryptableAuthorizedSignatory_2_list) Append(value protoreflect.Value) {
+	valueUnwrapped := value.String()
+	concreteValue := valueUnwrapped
+	*x.list = append(*x.list, concreteValue)
+}
+
+func (x *_EncryptableAuthorizedSignatory_2_list) AppendMutable() protoreflect.Value {
+	panic(fmt.Errorf("AppendMutable can not be called on message EncryptableAuthorizedSignatory at list field WalletID as it is not of Message kind"))
+}
+
+func (x *_EncryptableAuthorizedSignatory_2_list) Truncate(n int) {
+	*x.list = (*x.list)[:n]
+}
+
+func (x *_EncryptableAuthorizedSignatory_2_list) NewElement() protoreflect.Value {
+	v := ""
+	return protoreflect.ValueOfString(v)
+}
+
+func (x *_EncryptableAuthorizedSignatory_2_list) IsValid() bool {
+	return x.list != nil
+}
+
 var (
 	md_EncryptableAuthorizedSignatory          protoreflect.MessageDescriptor
 	fd_EncryptableAuthorizedSignatory_Nonce    protoreflect.FieldDescriptor
@@ -1694,8 +1740,8 @@ func (x *fastReflection_EncryptableAuthorizedSignatory) Range(f func(protoreflec
 			return
 		}
 	}
-	if x.WalletID != "" {
-		value := protoreflect.ValueOfString(x.WalletID)
+	if len(x.WalletID) != 0 {
+		value := protoreflect.ValueOfList(&_EncryptableAuthorizedSignatory_2_list{list: &x.WalletID})
 		if !f(fd_EncryptableAuthorizedSignatory_WalletID, value) {
 			return
 		}
@@ -1718,7 +1764,7 @@ func (x *fastReflection_EncryptableAuthorizedSignatory) Has(fd protoreflect.Fiel
 	case "qadena.qadena.EncryptableAuthorizedSignatory.Nonce":
 		return x.Nonce != ""
 	case "qadena.qadena.EncryptableAuthorizedSignatory.WalletID":
-		return x.WalletID != ""
+		return len(x.WalletID) != 0
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: qadena.qadena.EncryptableAuthorizedSignatory"))
@@ -1738,7 +1784,7 @@ func (x *fastReflection_EncryptableAuthorizedSignatory) Clear(fd protoreflect.Fi
 	case "qadena.qadena.EncryptableAuthorizedSignatory.Nonce":
 		x.Nonce = ""
 	case "qadena.qadena.EncryptableAuthorizedSignatory.WalletID":
-		x.WalletID = ""
+		x.WalletID = nil
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: qadena.qadena.EncryptableAuthorizedSignatory"))
@@ -1759,8 +1805,11 @@ func (x *fastReflection_EncryptableAuthorizedSignatory) Get(descriptor protorefl
 		value := x.Nonce
 		return protoreflect.ValueOfString(value)
 	case "qadena.qadena.EncryptableAuthorizedSignatory.WalletID":
-		value := x.WalletID
-		return protoreflect.ValueOfString(value)
+		if len(x.WalletID) == 0 {
+			return protoreflect.ValueOfList(&_EncryptableAuthorizedSignatory_2_list{})
+		}
+		listValue := &_EncryptableAuthorizedSignatory_2_list{list: &x.WalletID}
+		return protoreflect.ValueOfList(listValue)
 	default:
 		if descriptor.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: qadena.qadena.EncryptableAuthorizedSignatory"))
@@ -1784,7 +1833,9 @@ func (x *fastReflection_EncryptableAuthorizedSignatory) Set(fd protoreflect.Fiel
 	case "qadena.qadena.EncryptableAuthorizedSignatory.Nonce":
 		x.Nonce = value.Interface().(string)
 	case "qadena.qadena.EncryptableAuthorizedSignatory.WalletID":
-		x.WalletID = value.Interface().(string)
+		lv := value.List()
+		clv := lv.(*_EncryptableAuthorizedSignatory_2_list)
+		x.WalletID = *clv.list
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: qadena.qadena.EncryptableAuthorizedSignatory"))
@@ -1805,10 +1856,14 @@ func (x *fastReflection_EncryptableAuthorizedSignatory) Set(fd protoreflect.Fiel
 // Mutable is a mutating operation and unsafe for concurrent use.
 func (x *fastReflection_EncryptableAuthorizedSignatory) Mutable(fd protoreflect.FieldDescriptor) protoreflect.Value {
 	switch fd.FullName() {
+	case "qadena.qadena.EncryptableAuthorizedSignatory.WalletID":
+		if x.WalletID == nil {
+			x.WalletID = []string{}
+		}
+		value := &_EncryptableAuthorizedSignatory_2_list{list: &x.WalletID}
+		return protoreflect.ValueOfList(value)
 	case "qadena.qadena.EncryptableAuthorizedSignatory.Nonce":
 		panic(fmt.Errorf("field Nonce of message qadena.qadena.EncryptableAuthorizedSignatory is not mutable"))
-	case "qadena.qadena.EncryptableAuthorizedSignatory.WalletID":
-		panic(fmt.Errorf("field WalletID of message qadena.qadena.EncryptableAuthorizedSignatory is not mutable"))
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: qadena.qadena.EncryptableAuthorizedSignatory"))
@@ -1825,7 +1880,8 @@ func (x *fastReflection_EncryptableAuthorizedSignatory) NewField(fd protoreflect
 	case "qadena.qadena.EncryptableAuthorizedSignatory.Nonce":
 		return protoreflect.ValueOfString("")
 	case "qadena.qadena.EncryptableAuthorizedSignatory.WalletID":
-		return protoreflect.ValueOfString("")
+		list := []string{}
+		return protoreflect.ValueOfList(&_EncryptableAuthorizedSignatory_2_list{list: &list})
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: qadena.qadena.EncryptableAuthorizedSignatory"))
@@ -1899,9 +1955,11 @@ func (x *fastReflection_EncryptableAuthorizedSignatory) ProtoMethods() *protoifa
 		if l > 0 {
 			n += 1 + l + runtime.Sov(uint64(l))
 		}
-		l = len(x.WalletID)
-		if l > 0 {
-			n += 1 + l + runtime.Sov(uint64(l))
+		if len(x.WalletID) > 0 {
+			for _, s := range x.WalletID {
+				l = len(s)
+				n += 1 + l + runtime.Sov(uint64(l))
+			}
 		}
 		if x.unknownFields != nil {
 			n += len(x.unknownFields)
@@ -1933,11 +1991,13 @@ func (x *fastReflection_EncryptableAuthorizedSignatory) ProtoMethods() *protoifa
 			copy(dAtA[i:], x.unknownFields)
 		}
 		if len(x.WalletID) > 0 {
-			i -= len(x.WalletID)
-			copy(dAtA[i:], x.WalletID)
-			i = runtime.EncodeVarint(dAtA, i, uint64(len(x.WalletID)))
-			i--
-			dAtA[i] = 0x12
+			for iNdEx := len(x.WalletID) - 1; iNdEx >= 0; iNdEx-- {
+				i -= len(x.WalletID[iNdEx])
+				copy(dAtA[i:], x.WalletID[iNdEx])
+				i = runtime.EncodeVarint(dAtA, i, uint64(len(x.WalletID[iNdEx])))
+				i--
+				dAtA[i] = 0x12
+			}
 		}
 		if len(x.Nonce) > 0 {
 			i -= len(x.Nonce)
@@ -2057,7 +2117,7 @@ func (x *fastReflection_EncryptableAuthorizedSignatory) ProtoMethods() *protoifa
 				if postIndex > l {
 					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, io.ErrUnexpectedEOF
 				}
-				x.WalletID = string(dAtA[iNdEx:postIndex])
+				x.WalletID = append(x.WalletID, string(dAtA[iNdEx:postIndex]))
 				iNdEx = postIndex
 			default:
 				iNdEx = preIndex
@@ -17171,8 +17231,8 @@ type EncryptableAuthorizedSignatory struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Nonce    string `protobuf:"bytes,1,opt,name=Nonce,proto3" json:"Nonce,omitempty"`
-	WalletID string `protobuf:"bytes,2,opt,name=WalletID,proto3" json:"WalletID,omitempty"`
+	Nonce    string   `protobuf:"bytes,1,opt,name=Nonce,proto3" json:"Nonce,omitempty"`
+	WalletID []string `protobuf:"bytes,2,rep,name=WalletID,proto3" json:"WalletID,omitempty"`
 }
 
 func (x *EncryptableAuthorizedSignatory) Reset() {
@@ -17202,11 +17262,11 @@ func (x *EncryptableAuthorizedSignatory) GetNonce() string {
 	return ""
 }
 
-func (x *EncryptableAuthorizedSignatory) GetWalletID() string {
+func (x *EncryptableAuthorizedSignatory) GetWalletID() []string {
 	if x != nil {
 		return x.WalletID
 	}
-	return ""
+	return nil
 }
 
 type EncryptableSignatory struct {
@@ -18606,7 +18666,7 @@ var file_qadena_qadena_encryptable_proto_rawDesc = []byte{
 	0x7a, 0x65, 0x64, 0x53, 0x69, 0x67, 0x6e, 0x61, 0x74, 0x6f, 0x72, 0x79, 0x12, 0x14, 0x0a, 0x05,
 	0x4e, 0x6f, 0x6e, 0x63, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x4e, 0x6f, 0x6e,
 	0x63, 0x65, 0x12, 0x1a, 0x0a, 0x08, 0x57, 0x61, 0x6c, 0x6c, 0x65, 0x74, 0x49, 0x44, 0x18, 0x02,
-	0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x57, 0x61, 0x6c, 0x6c, 0x65, 0x74, 0x49, 0x44, 0x22, 0x64,
+	0x20, 0x03, 0x28, 0x09, 0x52, 0x08, 0x57, 0x61, 0x6c, 0x6c, 0x65, 0x74, 0x49, 0x44, 0x22, 0x64,
 	0x0a, 0x14, 0x45, 0x6e, 0x63, 0x72, 0x79, 0x70, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x53, 0x69, 0x67,
 	0x6e, 0x61, 0x74, 0x6f, 0x72, 0x79, 0x12, 0x14, 0x0a, 0x05, 0x4e, 0x6f, 0x6e, 0x63, 0x65, 0x18,
 	0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x4e, 0x6f, 0x6e, 0x63, 0x65, 0x12, 0x14, 0x0a, 0x05,

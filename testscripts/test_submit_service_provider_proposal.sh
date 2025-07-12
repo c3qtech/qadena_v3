@@ -76,3 +76,14 @@ echo $vote_hash
 
 # wait for the vote to be submitted
 qadenad_alias query wait-tx $vote_hash
+
+# wait until proposal is passed
+while true; do
+    stat=$(qadenad_alias query gov proposal $proposal_id --output json | jq -r '.proposal.status')
+    if [ "$stat" = "3" ]; then
+        echo "Proposal $proposal_id passed"
+        break
+    fi
+    echo "Waiting for proposal $proposal_id to pass..."
+    sleep 3
+done

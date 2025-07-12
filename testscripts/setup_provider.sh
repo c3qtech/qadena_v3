@@ -91,8 +91,17 @@ for i in $(seq 1 $count); do
     echo "$providername Create wallet eph$i"
     echo "-------------------------"
     qadenad_alias tx qadena create-wallet $providername-eph$i $pioneer $createwalletsponsor --link-to-real-wallet $providername --account-mnemonic="$providermnemonic" --eph-account-index "$i" --yes
-
+    # transfer funds to eph wallet
+    qadena_addr=$(qadenad_alias keys show $providername-eph$i --address)
+    result=$(qadenad_alias tx bank send treasury $qadena_addr  10000000000qdn --from treasury --yes --output json)
+    # get tx hash
+    tx_hash=$(echo $result | jq -r .txhash)
+    echo "tx hash: $tx_hash"
+    # wait for result
+    qadenad_alias query wait-tx $tx_hash
 done
 
 $qadenatestscripts/test_submit_service_provider_proposal.sh $providername add_service_provider_proposal $serviceProviderType
+
+
 

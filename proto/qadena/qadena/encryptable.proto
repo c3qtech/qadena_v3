@@ -45,7 +45,7 @@ message EncryptableClaimCredentialExtraParms {
 
 message EncryptableAuthorizedSignatory {
 	string Nonce = 1;
-	string WalletID = 2;
+	repeated string WalletID = 2;
 }
 
 message EncryptableSignatory {

@@ -4,11 +4,11 @@ accounts:
 - name: pioneer1
   coins: ["100000000qdn"]
   mnemonic: "nest gown ability blouse ski tortoise wall female across know accuse guard shy drive grunt assault cricket solar pave arrange actress ring more country"
-- name: sec-create-wallet-sponsor
+- name: create-wallet-sponsor
   coins: ["10000000000qdn"]
   mnemonic: "guilt decline utility scale crash envelope snap table dress coach tray use detect success lemon fatigue surround project warfare victory mean midnight address before"
 - name: treasury
-  coins: ["100000000000qdn"]
+  coins: ["100000000000000qdn"]
 - name: ekycphidentitysrvprv
   coins: ["10000000qdn"]
   mnemonic: "blood dish hybrid toddler upgrade squirrel gate hazard raven wrong prevent lake battle acquire crack agree slam please autumn damage best skin gym call"

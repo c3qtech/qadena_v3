@@ -3084,7 +3084,8 @@ func (s *qadenaServer) ValidateAuthorizedSigner(ctx context.Context, in *types.V
 		return nil, types.ErrUnauthorizedSigner
 	}
 
-	if eas.WalletID != in.Creator {
+	// if the wallet ID is not in the authorized signatory, return error
+	if !s.containsWalletID(eas.WalletID, in.Creator) {
 		return nil, types.ErrUnauthorizedSigner
 	}
 
@@ -3150,6 +3151,15 @@ func (s *qadenaServer) ValidateAuthorizedSigner(ctx context.Context, in *types.V
 	}
 
 	return &types.ValidateAuthorizedSignerReply{Status: false}, types.ErrUnauthorizedSigner
+}
+
+func (s *qadenaServer) containsWalletID(d []string, creator string) bool {
+	for _, walletID := range d {
+		if walletID == creator {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *qadenaServer) decryptSignatory(in *types.VShareSignatory, trusted bool) *types.EncryptableSignatory {
@@ -3261,61 +3271,66 @@ func (s *qadenaServer) ValidateAuthorizedSignatory(ctx context.Context, in *type
 		return nil, types.ErrUnauthorized
 	}
 
-	// now get the eph ephWallet
-	ephWallet, found := s.getWallet(eas.WalletID)
+	// for each item in eas.WalletID, get the wallet and check if it's an eph wallet
+	for _, currentWalletID := range eas.WalletID {
+		// now get the eph ephWallet
+		ephWallet, found := s.getWallet(currentWalletID)
 
-	if !found {
-		return nil, types.ErrWalletNotExists
-	}
+		if !found {
+			return nil, types.ErrWalletNotExists
+		}
 
-	if ephWallet.EphemeralWalletAmountCount[types.QadenaTokenDenom] == types.QadenaRealWallet {
-		c.LoggerError(logger, "wallet is not an eph wallet")
-		return nil, types.ErrInvalidWallet
-	}
+		if ephWallet.EphemeralWalletAmountCount[types.QadenaTokenDenom] == types.QadenaRealWallet {
+			c.LoggerError(logger, "wallet is not an eph wallet")
+			return nil, types.ErrInvalidWallet
+		}
 
-	var vShareCreateWallet types.EncryptableCreateWallet
+		var vShareCreateWallet types.EncryptableCreateWallet
 
-	unprotoCreateWalletVShareBind := c.UnprotoizeVShareBindData(ephWallet.CreateWalletVShareBind)
+		unprotoCreateWalletVShareBind := c.UnprotoizeVShareBindData(ephWallet.CreateWalletVShareBind)
 
-	err := c.VShareBDecryptAndProtoUnmarshal(s.getSSPrivK(unprotoCreateWalletVShareBind.GetSSIntervalPubKID()), s.getPubK(unprotoCreateWalletVShareBind.GetSSIntervalPubKID()), unprotoCreateWalletVShareBind, ephWallet.EncCreateWalletVShare, &vShareCreateWallet)
+		err := c.VShareBDecryptAndProtoUnmarshal(s.getSSPrivK(unprotoCreateWalletVShareBind.GetSSIntervalPubKID()), s.getPubK(unprotoCreateWalletVShareBind.GetSSIntervalPubKID()), unprotoCreateWalletVShareBind, ephWallet.EncCreateWalletVShare, &vShareCreateWallet)
 
-	if err != nil {
-		c.LoggerError(logger, "couldn't decrypt vShareCreateWallet "+err.Error())
-		return nil, err
-	}
+		if err != nil {
+			c.LoggerError(logger, "couldn't decrypt vShareCreateWallet "+err.Error())
+			return nil, err
+		}
 
-	c.LoggerDebug(logger, "vShareCreateWallet "+c.PrettyPrint(vShareCreateWallet))
+		c.LoggerDebug(logger, "vShareCreateWallet "+c.PrettyPrint(vShareCreateWallet))
 
-	if vShareCreateWallet.DstEWalletID.WalletID != in.Creator {
-		c.LoggerError(logger, "vShareCreateWallet.DstEWalletID.WalletID != Creator")
-		return nil, types.ErrUnauthorized
-	}
+		if vShareCreateWallet.DstEWalletID.WalletID != in.Creator {
+			c.LoggerError(logger, "vShareCreateWallet.DstEWalletID.WalletID != Creator")
+			return nil, types.ErrUnauthorized
+		}
 
-	// now check that we have a valid email credential
-	_, foundEmail := s.getCredential(creatorWallet.CredentialID, types.EmailContactCredentialType)
+		// now check that we have a valid email credential
+		_, foundEmail := s.getCredential(creatorWallet.CredentialID, types.EmailContactCredentialType)
 
-	if !foundEmail {
-		return nil, types.ErrCredentialNotExists
-	}
+		if !foundEmail {
+			return nil, types.ErrCredentialNotExists
+		}
 
-	_, foundPhone := s.getCredential(creatorWallet.CredentialID, types.PhoneContactCredentialType)
+		_, foundPhone := s.getCredential(creatorWallet.CredentialID, types.PhoneContactCredentialType)
 
-	if !foundPhone {
-		return nil, types.ErrCredentialNotExists
-	}
+		if !foundPhone {
+			return nil, types.ErrCredentialNotExists
+		}
 
-	// now go through the current signatories and check if the new signatory is already there
-	if in.CurrentSignatory != nil {
-		// loop through the current signatories
-		for _, currentSignatory := range in.CurrentSignatory {
-			checkEAS := s.decryptAuthorizedSignatory(currentSignatory, true) // we are decrypting something that's already been checked
+		// now go through the current signatories and check if the new signatory is already there
+		if in.CurrentSignatory != nil {
+			// loop through the current signatories
+			for _, currentSignatory := range in.CurrentSignatory {
+				checkEAS := s.decryptAuthorizedSignatory(currentSignatory, true) // we are decrypting something that's already been checked
 
-			if checkEAS == nil {
-				return nil, types.ErrUnauthorized
-			}
+				if checkEAS == nil {
+					return nil, types.ErrUnauthorized
+				}
 
-			if checkEAS.WalletID == eas.WalletID {
-				return nil, types.ErrSignatoryAlreadyExists
+				for _, checkEASWalletID := range checkEAS.WalletID {
+					if checkEASWalletID == currentWalletID {
+						return nil, types.ErrSignatoryAlreadyExists
+					}
+				}
 			}
 		}
 	}

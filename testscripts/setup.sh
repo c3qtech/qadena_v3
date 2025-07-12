@@ -14,7 +14,8 @@ no_execute="false"
 pioneer="pioneer1"
 identityprovider="secidentitysrvprv"
 serviceprovider="secdsvssrvprv"
-
+createwalletsponsor="create-wallet-sponsor"
+eph_count="1"
 
 # Parse options
 while [[ $# -gt 0 ]]; do
@@ -210,7 +211,7 @@ jq -c '.[]' "$usersjson" | while read -r user; do
         echo "Looking for $specific_user, skipping user: $name"
     else
     echo "Processing user: $name"
-        $qadenatestscripts/setup_user.sh "$name" "$mnemonic" "$pioneer" "$serviceprovider" "$firstname" "$middlename" "$lastname" "$birthdate" "$citizenship" "$residency" "$gender" "$email" "$phone" "$a" "$bf" "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes"> logs/"$name".log 2>&1 &
+        $qadenatestscripts/setup_user.sh "$name" "$mnemonic" "$pioneer" "$serviceprovider" "$firstname" "$middlename" "$lastname" "$birthdate" "$citizenship" "$residency" "$gender" "$email" "$phone" "$a" "$bf" "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" "$eph_count" "$createwalletsponsor" > logs/"$name".log 2>&1 &
 
         pid_list+=($!)  # Store process ID
 
