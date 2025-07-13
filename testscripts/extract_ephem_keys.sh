@@ -56,8 +56,12 @@ for name in "${names[@]}"; do
     echo "Processing $name..."
     # Use a dummy passphrase to export the key
     key=$(echo "dummy-passphrase" | qadenad_alias keys export "$name" 2>/dev/null)
+    
     if [ $? -eq 0 ]; then
-        # Store the entire key as a single element with newlines preserved
+        # Replace actual newlines and carriage returns with literal escape sequences
+        # Using perl for macOS compatibility with multiline replacements
+        key=$(echo "$key" | perl -pe 's/\n/\\\\n/g' | perl -pe 's/\r/\\\\r/g')
+        # Store the entire key as a single element with newline characters converted to \n literals
         keys+=("$key")
     else
         echo "Error exporting key for $name"
