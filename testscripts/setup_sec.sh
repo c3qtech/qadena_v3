@@ -68,9 +68,9 @@ for i in $(seq 1 $eph_count); do
 done
 
 
-$qadenatestscripts/extract_ephem_keys.sh --provider secidentitysrvprv
-$qadenatestscripts/extract_ephem_keys.sh --provider secdsvssrvprv
-$qadenatestscripts/extract_ephem_keys.sh --provider sec-create-wallet-sponsor
-$qadenatestscripts/extract_ephem_keys.sh --provider secdsvs
+$qadenatestscripts/extract_ephem_keys.sh --provider secidentitysrvprv --count $accountCount
+$qadenatestscripts/extract_ephem_keys.sh --provider secdsvssrvprv --count $accountCount
+$qadenatestscripts/extract_ephem_keys.sh --provider sec-create-wallet-sponsor --count $accountCount
+$qadenatestscripts/extract_ephem_keys.sh --provider secdsvs --count $accountCount
 
 
