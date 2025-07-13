@@ -8,12 +8,14 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+accountCount="30"
+
 createwalletsponsor="create-wallet-sponsor"
 
 identityprovidermnemonic="canoe oppose eternal occur film common dirt tomorrow lottery fun mask quote result account nasty tuna seat miracle have idle trophy frog catalog kiss"
 dsvsprovidermnemonic="angry addict suit reform ostrich ride icon cushion park yellow wisdom mobile column sweet use anchor since tragic series ladder asthma dose prosper voice"
-$qadenatestscripts/setup_provider.sh secidentitysrvprv identity --provider-mnemonic $identityprovidermnemonic --create-wallet-sponsor $createwalletsponsor --count 10
-$qadenatestscripts/setup_provider.sh secdsvssrvprv dsvs --provider-mnemonic $dsvsprovidermnemonic --create-wallet-sponsor $createwalletsponsor --count 10
+$qadenatestscripts/setup_provider.sh secidentitysrvprv identity --provider-mnemonic $identityprovidermnemonic --create-wallet-sponsor $createwalletsponsor --count $accountCount
+$qadenatestscripts/setup_provider.sh secdsvssrvprv dsvs --provider-mnemonic $dsvsprovidermnemonic --create-wallet-sponsor $createwalletsponsor --count $accountCount
 
 name="secdsvs"
 mnemonic="tide ugly fork short cushion girl earth stage anger away pig screen blood frequent link become crowd visa end present share helmet brain fit"
@@ -33,7 +35,7 @@ identityprovider="secidentitysrvprv"
 acceptcredentialtypes=""
 acceptpassword=""
 requiresendertypes=""
-eph_count="10"
+eph_count="$accountCount"
 
 $qadenatestscripts/setup_user.sh $name $mnemonic "pioneer1" "$serviceprovider" "$firstname" "$middlename" "$lastname" $birthdate $citizenship $residency $gender $email $phone $a $bf $identityprovider "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" $eph_count $createwalletsponsor
 # fund eph wallets
@@ -53,7 +55,7 @@ a="200"
 lastname="Sponsor"
 serviceprovider=""
 
-$qadenatestscripts/setup_user.sh $name $mnemonic "pioneer1" "$serviceprovider" $firstname $middlename $lastname $birthdate $citizenship $residency $gender $email $phone $a $bf $identityprovider "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" $eph_count $createwalletsponsor
+$qadenatestscripts/setup_user.sh $name $mnemonic "pioneer1" "$serviceprovider" "$firstname" "$middlename" "$lastname" $birthdate $citizenship $residency $gender $email $phone $a $bf $identityprovider "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" $eph_count $createwalletsponsor
 # fund eph wallets
 for i in $(seq 1 $eph_count); do
     qadena_addr=$(qadenad_alias keys show $name-eph$i --address)

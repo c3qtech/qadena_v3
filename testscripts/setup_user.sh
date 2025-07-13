@@ -82,21 +82,24 @@ echo "$username Claim credential email"
 echo "-------------------------"
 qadenad_alias tx qadena claim-credential $user_a $user_bf  email-contact-info --from $username --yes
 
-echo "-------------------------"
-echo "$username Setup DSVS authorized signatory as $username-eph"
-echo "-------------------------"
-if [ -n "$eph_count" ] ; then
-    # Directly pass multiple wallet IDs as separate arguments
-    echo "Registering multiple ephemeral wallets as authorized signatories"
-    cmd="qadenad_alias tx dsvs register-authorized-signatory"
-    for i in $(seq 1 $eph_count); do
-        cmd="$cmd $username-eph$i"
-    done
-    cmd="$cmd --from $username --yes"
-    echo "Executing: $cmd"
-    eval $cmd
-else
-    qadenad_alias tx dsvs register-authorized-signatory $username-eph --from $username --yes
+#if serviceprovider is not empty, then do this
+if [ -n "$serviceprovider" ] ; then
+    echo "-------------------------"
+    echo "$username Setup DSVS authorized signatory as $username-eph"
+    echo "-------------------------"
+    if [ -n "$eph_count" ] ; then
+        # Directly pass multiple wallet IDs as separate arguments
+        echo "Registering multiple ephemeral wallets as authorized signatories"
+        cmd="qadenad_alias tx dsvs register-authorized-signatory"
+        for i in $(seq 1 $eph_count); do
+            cmd="$cmd $username-eph$i"
+        done
+        cmd="$cmd --from $username --yes"
+        echo "Executing: $cmd"
+        eval $cmd
+    else
+        qadenad_alias tx dsvs register-authorized-signatory $username-eph --from $username --yes
+    fi
 fi
 
 # if eph_count = 1, then do this
