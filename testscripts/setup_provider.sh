@@ -98,7 +98,7 @@ for i in $(seq 1 $count); do
     tx_hash=$(echo $result | jq -r .txhash)
     echo "tx hash: $tx_hash"
     # wait for result
-    qadenad_alias query wait-tx $tx_hash
+    qadenad_alias query wait-tx $tx_hash --timeout 30s
 done
 
 $qadenatestscripts/test_submit_service_provider_proposal.sh $providername add_service_provider_proposal $serviceProviderType

@@ -38,7 +38,7 @@ submit_hash=$(qadenad_alias tx gov submit-proposal "test_data/$json_proposal.gen
 echo $submit_hash
 
 # wait for the proposal to be submitted
-qadenad_alias query wait-tx $submit_hash 
+qadenad_alias query wait-tx $submit_hash --timeout 30s
 
 # Get the proposal ID
 proposal_id=$(qadenad_alias query tx $submit_hash --output json | jq -r '.events[] | select(.type=="submit_proposal") | .attributes[] | select(.key=="proposal_id") | .value')
@@ -49,11 +49,11 @@ deposit_hash=$(qadenad_alias tx gov deposit $proposal_id 1000qdn --from pioneer1
 echo $deposit_hash
 
 # wait for the deposit to be submitted
-qadenad_alias query wait-tx $deposit_hash
+qadenad_alias query wait-tx $deposit_hash --timeout 30s
 
 # vote yes on the proposal
 vote_hash=$(qadenad_alias tx gov vote $proposal_id yes --from pioneer1 -y --output json | jq -r '.txhash')
 echo $vote_hash
 
 # wait for the vote to be submitted
-qadenad_alias query wait-tx $vote_hash
+qadenad_alias query wait-tx $vote_hash --timeout 30s

@@ -46,7 +46,7 @@ for i in $(seq 1 $eph_count); do
     tx_hash=$(echo $result | jq -r .txhash)
     echo "tx hash: $tx_hash"
     # wait for result
-    qadenad_alias query wait-tx $tx_hash
+    qadenad_alias query wait-tx $tx_hash --timeout 30s
 done
 
 name="sec-create-wallet-sponsor"
@@ -64,7 +64,7 @@ for i in $(seq 1 $eph_count); do
     tx_hash=$(echo $result | jq -r .txhash)
     echo "tx hash: $tx_hash"
     # wait for result
-    qadenad_alias query wait-tx $tx_hash
+    qadenad_alias query wait-tx $tx_hash --timeout 30s
 done
 
 
