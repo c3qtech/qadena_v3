@@ -34,6 +34,7 @@ done
 
 # Generate names array
 names=()
+names+="$provider"
 for i in $(seq 1 $count); do
     names+=("$provider-eph$i")
 done
