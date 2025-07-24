@@ -12,8 +12,8 @@ no_execute="false"
 
 # Define additional parameters
 pioneer="pioneer1"
-identityprovider="secidentitysrvprv"
-serviceprovider="secdsvssrvprv"
+identityprovider="testidentitysrvprv"
+serviceprovider="testdsvssrvprv"
 createwalletsponsor="create-wallet-sponsor"
 eph_count="1"
 

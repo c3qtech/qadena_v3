@@ -26,4 +26,5 @@ message Params {
   string ekyc_submit_new_app_royalty_percentage = 6;
   string ekyc_submit_reuse_app_royalty_percentage = 7;
   string ekyc_submit_reuse_provider_royalty_percentage = 8;
+  string ekyc_identity_owner_royalty_percentage = 9;
 }

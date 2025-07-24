@@ -25,6 +25,8 @@ var (
 	fd_Credential_findCredentialPedersenCommit protoreflect.FieldDescriptor
 	fd_Credential_providerWalletID             protoreflect.FieldDescriptor
 	fd_Credential_referenceCredentialID        protoreflect.FieldDescriptor
+	fd_Credential_identityOwnerWalletID        protoreflect.FieldDescriptor
+	fd_Credential_ekycAppWalletID              protoreflect.FieldDescriptor
 )
 
 func init() {
@@ -41,6 +43,8 @@ func init() {
 	fd_Credential_findCredentialPedersenCommit = md_Credential.Fields().ByName("findCredentialPedersenCommit")
 	fd_Credential_providerWalletID = md_Credential.Fields().ByName("providerWalletID")
 	fd_Credential_referenceCredentialID = md_Credential.Fields().ByName("referenceCredentialID")
+	fd_Credential_identityOwnerWalletID = md_Credential.Fields().ByName("identityOwnerWalletID")
+	fd_Credential_ekycAppWalletID = md_Credential.Fields().ByName("ekycAppWalletID")
 }
 
 var _ protoreflect.Message = (*fastReflection_Credential)(nil)
@@ -174,6 +178,18 @@ func (x *fastReflection_Credential) Range(f func(protoreflect.FieldDescriptor, p
 			return
 		}
 	}
+	if x.IdentityOwnerWalletID != "" {
+		value := protoreflect.ValueOfString(x.IdentityOwnerWalletID)
+		if !f(fd_Credential_identityOwnerWalletID, value) {
+			return
+		}
+	}
+	if x.EkycAppWalletID != "" {
+		value := protoreflect.ValueOfString(x.EkycAppWalletID)
+		if !f(fd_Credential_ekycAppWalletID, value) {
+			return
+		}
+	}
 }
 
 // Has reports whether a field is populated.
@@ -211,6 +227,10 @@ func (x *fastReflection_Credential) Has(fd protoreflect.FieldDescriptor) bool {
 		return x.ProviderWalletID != ""
 	case "qadena.qadena.Credential.referenceCredentialID":
 		return x.ReferenceCredentialID != ""
+	case "qadena.qadena.Credential.identityOwnerWalletID":
+		return x.IdentityOwnerWalletID != ""
+	case "qadena.qadena.Credential.ekycAppWalletID":
+		return x.EkycAppWalletID != ""
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: qadena.qadena.Credential"))
@@ -249,6 +269,10 @@ func (x *fastReflection_Credential) Clear(fd protoreflect.FieldDescriptor) {
 		x.ProviderWalletID = ""
 	case "qadena.qadena.Credential.referenceCredentialID":
 		x.ReferenceCredentialID = ""
+	case "qadena.qadena.Credential.identityOwnerWalletID":
+		x.IdentityOwnerWalletID = ""
+	case "qadena.qadena.Credential.ekycAppWalletID":
+		x.EkycAppWalletID = ""
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: qadena.qadena.Credential"))
@@ -298,6 +322,12 @@ func (x *fastReflection_Credential) Get(descriptor protoreflect.FieldDescriptor)
 	case "qadena.qadena.Credential.referenceCredentialID":
 		value := x.ReferenceCredentialID
 		return protoreflect.ValueOfString(value)
+	case "qadena.qadena.Credential.identityOwnerWalletID":
+		value := x.IdentityOwnerWalletID
+		return protoreflect.ValueOfString(value)
+	case "qadena.qadena.Credential.ekycAppWalletID":
+		value := x.EkycAppWalletID
+		return protoreflect.ValueOfString(value)
 	default:
 		if descriptor.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: qadena.qadena.Credential"))
@@ -340,6 +370,10 @@ func (x *fastReflection_Credential) Set(fd protoreflect.FieldDescriptor, value p
 		x.ProviderWalletID = value.Interface().(string)
 	case "qadena.qadena.Credential.referenceCredentialID":
 		x.ReferenceCredentialID = value.Interface().(string)
+	case "qadena.qadena.Credential.identityOwnerWalletID":
+		x.IdentityOwnerWalletID = value.Interface().(string)
+	case "qadena.qadena.Credential.ekycAppWalletID":
+		x.EkycAppWalletID = value.Interface().(string)
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: qadena.qadena.Credential"))
@@ -394,6 +428,10 @@ func (x *fastReflection_Credential) Mutable(fd protoreflect.FieldDescriptor) pro
 		panic(fmt.Errorf("field providerWalletID of message qadena.qadena.Credential is not mutable"))
 	case "qadena.qadena.Credential.referenceCredentialID":
 		panic(fmt.Errorf("field referenceCredentialID of message qadena.qadena.Credential is not mutable"))
+	case "qadena.qadena.Credential.identityOwnerWalletID":
+		panic(fmt.Errorf("field identityOwnerWalletID of message qadena.qadena.Credential is not mutable"))
+	case "qadena.qadena.Credential.ekycAppWalletID":
+		panic(fmt.Errorf("field ekycAppWalletID of message qadena.qadena.Credential is not mutable"))
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: qadena.qadena.Credential"))
@@ -432,6 +470,10 @@ func (x *fastReflection_Credential) NewField(fd protoreflect.FieldDescriptor) pr
 	case "qadena.qadena.Credential.providerWalletID":
 		return protoreflect.ValueOfString("")
 	case "qadena.qadena.Credential.referenceCredentialID":
+		return protoreflect.ValueOfString("")
+	case "qadena.qadena.Credential.identityOwnerWalletID":
+		return protoreflect.ValueOfString("")
+	case "qadena.qadena.Credential.ekycAppWalletID":
 		return protoreflect.ValueOfString("")
 	default:
 		if fd.IsExtension() {
@@ -546,6 +588,14 @@ func (x *fastReflection_Credential) ProtoMethods() *protoiface.Methods {
 		if l > 0 {
 			n += 1 + l + runtime.Sov(uint64(l))
 		}
+		l = len(x.IdentityOwnerWalletID)
+		if l > 0 {
+			n += 1 + l + runtime.Sov(uint64(l))
+		}
+		l = len(x.EkycAppWalletID)
+		if l > 0 {
+			n += 1 + l + runtime.Sov(uint64(l))
+		}
 		if x.unknownFields != nil {
 			n += len(x.unknownFields)
 		}
@@ -574,6 +624,20 @@ func (x *fastReflection_Credential) ProtoMethods() *protoiface.Methods {
 		if x.unknownFields != nil {
 			i -= len(x.unknownFields)
 			copy(dAtA[i:], x.unknownFields)
+		}
+		if len(x.EkycAppWalletID) > 0 {
+			i -= len(x.EkycAppWalletID)
+			copy(dAtA[i:], x.EkycAppWalletID)
+			i = runtime.EncodeVarint(dAtA, i, uint64(len(x.EkycAppWalletID)))
+			i--
+			dAtA[i] = 0x6a
+		}
+		if len(x.IdentityOwnerWalletID) > 0 {
+			i -= len(x.IdentityOwnerWalletID)
+			copy(dAtA[i:], x.IdentityOwnerWalletID)
+			i = runtime.EncodeVarint(dAtA, i, uint64(len(x.IdentityOwnerWalletID)))
+			i--
+			dAtA[i] = 0x62
 		}
 		if len(x.ReferenceCredentialID) > 0 {
 			i -= len(x.ReferenceCredentialID)
@@ -1100,6 +1164,70 @@ func (x *fastReflection_Credential) ProtoMethods() *protoiface.Methods {
 					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, io.ErrUnexpectedEOF
 				}
 				x.ReferenceCredentialID = string(dAtA[iNdEx:postIndex])
+				iNdEx = postIndex
+			case 12:
+				if wireType != 2 {
+					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, fmt.Errorf("proto: wrong wireType = %d for field IdentityOwnerWalletID", wireType)
+				}
+				var stringLen uint64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, runtime.ErrIntOverflow
+					}
+					if iNdEx >= l {
+						return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					stringLen |= uint64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				intStringLen := int(stringLen)
+				if intStringLen < 0 {
+					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, runtime.ErrInvalidLength
+				}
+				postIndex := iNdEx + intStringLen
+				if postIndex < 0 {
+					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, runtime.ErrInvalidLength
+				}
+				if postIndex > l {
+					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, io.ErrUnexpectedEOF
+				}
+				x.IdentityOwnerWalletID = string(dAtA[iNdEx:postIndex])
+				iNdEx = postIndex
+			case 13:
+				if wireType != 2 {
+					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, fmt.Errorf("proto: wrong wireType = %d for field EkycAppWalletID", wireType)
+				}
+				var stringLen uint64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, runtime.ErrIntOverflow
+					}
+					if iNdEx >= l {
+						return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					stringLen |= uint64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				intStringLen := int(stringLen)
+				if intStringLen < 0 {
+					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, runtime.ErrInvalidLength
+				}
+				postIndex := iNdEx + intStringLen
+				if postIndex < 0 {
+					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, runtime.ErrInvalidLength
+				}
+				if postIndex > l {
+					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, io.ErrUnexpectedEOF
+				}
+				x.EkycAppWalletID = string(dAtA[iNdEx:postIndex])
 				iNdEx = postIndex
 			default:
 				iNdEx = preIndex
@@ -2146,8 +2274,10 @@ type Credential struct {
 	EncCredentialInfoVShare      []byte           `protobuf:"bytes,7,opt,name=encCredentialInfoVShare,proto3" json:"encCredentialInfoVShare,omitempty"`
 	CredentialInfoVShareBind     *VShareBindData  `protobuf:"bytes,8,opt,name=credentialInfoVShareBind,proto3" json:"credentialInfoVShareBind,omitempty"`
 	FindCredentialPedersenCommit *BPedersenCommit `protobuf:"bytes,9,opt,name=findCredentialPedersenCommit,proto3" json:"findCredentialPedersenCommit,omitempty"`
-	ProviderWalletID             string           `protobuf:"bytes,10,opt,name=providerWalletID,proto3" json:"providerWalletID,omitempty"`
-	ReferenceCredentialID        string           `protobuf:"bytes,11,opt,name=referenceCredentialID,proto3" json:"referenceCredentialID,omitempty"`
+	ProviderWalletID             string           `protobuf:"bytes,10,opt,name=providerWalletID,proto3" json:"providerWalletID,omitempty"`           // the walletID of the identity provider that added this credential
+	ReferenceCredentialID        string           `protobuf:"bytes,11,opt,name=referenceCredentialID,proto3" json:"referenceCredentialID,omitempty"` // the credentialID of the reused credential (this will be used to pay incentives to the contributing eKYC provider)
+	IdentityOwnerWalletID        string           `protobuf:"bytes,12,opt,name=identityOwnerWalletID,proto3" json:"identityOwnerWalletID,omitempty"` // the walletID of the identity owner (an ephemeral/sub wallet in order to receive incentives)
+	EkycAppWalletID              string           `protobuf:"bytes,13,opt,name=ekycAppWalletID,proto3" json:"ekycAppWalletID,omitempty"`             // the walletID of the eKYC app/consortium for shareable eKYC
 }
 
 func (x *Credential) Reset() {
@@ -2243,6 +2373,20 @@ func (x *Credential) GetProviderWalletID() string {
 func (x *Credential) GetReferenceCredentialID() string {
 	if x != nil {
 		return x.ReferenceCredentialID
+	}
+	return ""
+}
+
+func (x *Credential) GetIdentityOwnerWalletID() string {
+	if x != nil {
+		return x.IdentityOwnerWalletID
+	}
+	return ""
+}
+
+func (x *Credential) GetEkycAppWalletID() string {
+	if x != nil {
+		return x.EkycAppWalletID
 	}
 	return ""
 }
@@ -2346,7 +2490,7 @@ var file_qadena_qadena_credential_proto_rawDesc = []byte{
 	0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x1a, 0x25, 0x71, 0x61, 0x64,
 	0x65, 0x6e, 0x61, 0x2f, 0x71, 0x61, 0x64, 0x65, 0x6e, 0x61, 0x2f, 0x76, 0x5f, 0x73, 0x68, 0x61,
 	0x72, 0x65, 0x5f, 0x62, 0x69, 0x6e, 0x64, 0x5f, 0x64, 0x61, 0x74, 0x61, 0x2e, 0x70, 0x72, 0x6f,
-	0x74, 0x6f, 0x22, 0xc0, 0x05, 0x0a, 0x0a, 0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61,
+	0x74, 0x6f, 0x22, 0xa0, 0x06, 0x0a, 0x0a, 0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61,
 	0x6c, 0x12, 0x22, 0x0a, 0x0c, 0x63, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x49,
 	0x44, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0c, 0x63, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74,
 	0x69, 0x61, 0x6c, 0x49, 0x44, 0x12, 0x26, 0x0a, 0x0e, 0x63, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74,
@@ -2390,7 +2534,13 @@ var file_qadena_qadena_credential_proto_rawDesc = []byte{
 	0x34, 0x0a, 0x15, 0x72, 0x65, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x43, 0x72, 0x65, 0x64,
 	0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x49, 0x44, 0x18, 0x0b, 0x20, 0x01, 0x28, 0x09, 0x52, 0x15,
 	0x72, 0x65, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74,
-	0x69, 0x61, 0x6c, 0x49, 0x44, 0x22, 0xcf, 0x01, 0x0a, 0x11, 0x4d, 0x73, 0x67, 0x42, 0x69, 0x6e,
+	0x69, 0x61, 0x6c, 0x49, 0x44, 0x12, 0x34, 0x0a, 0x15, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74,
+	0x79, 0x4f, 0x77, 0x6e, 0x65, 0x72, 0x57, 0x61, 0x6c, 0x6c, 0x65, 0x74, 0x49, 0x44, 0x18, 0x0c,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x15, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x4f, 0x77,
+	0x6e, 0x65, 0x72, 0x57, 0x61, 0x6c, 0x6c, 0x65, 0x74, 0x49, 0x44, 0x12, 0x28, 0x0a, 0x0f, 0x65,
+	0x6b, 0x79, 0x63, 0x41, 0x70, 0x70, 0x57, 0x61, 0x6c, 0x6c, 0x65, 0x74, 0x49, 0x44, 0x18, 0x0d,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x0f, 0x65, 0x6b, 0x79, 0x63, 0x41, 0x70, 0x70, 0x57, 0x61, 0x6c,
+	0x6c, 0x65, 0x74, 0x49, 0x44, 0x22, 0xcf, 0x01, 0x0a, 0x11, 0x4d, 0x73, 0x67, 0x42, 0x69, 0x6e,
 	0x64, 0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x12, 0x18, 0x0a, 0x07, 0x63,
 	0x72, 0x65, 0x61, 0x74, 0x6f, 0x72, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x63, 0x72,
 	0x65, 0x61, 0x74, 0x6f, 0x72, 0x12, 0x26, 0x0a, 0x0e, 0x63, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74,

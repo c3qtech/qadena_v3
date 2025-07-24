@@ -33,12 +33,12 @@ accounts:
 - name: testfinancesrvprv
   coins: ["10000000qdn"]
   mnemonic: "ill seed tent goose two trophy harsh noise winter conduct educate lady man spice sport charge primary fever acoustic famous message myth unlock dust"
-#- name: secidentitysrvprv
-#  coins: ["10000000000qdn"]
-#  mnemonic: "canoe oppose eternal occur film common dirt tomorrow lottery fun mask quote result account nasty tuna seat miracle have idle trophy frog catalog kiss"
-#- name: secdsvssrvprv
-#  coins: ["10000000000qdn"]
-#  mnemonic: "angry addict suit reform ostrich ride icon cushion park yellow wisdom mobile column sweet use anchor since tragic series ladder asthma dose prosper voice"
+- name: testidentitysrvprv
+  coins: ["10000000000qdn"]
+  mnemonic: "lemon onion exit success feature wait admit permit nation behind vintage summer oven weird blue flash motor maple fiber domain cement inmate slogan avoid"
+- name: testdsvssrvprv
+  coins: ["10000000000qdn"]
+  mnemonic: "twenty shoulder tomato hawk toilet pave famous critic undo beef country object perfect staff net dilemma fade insane enemy oven barrel organ cherry problem"
 
 client:
   openapi:
@@ -123,6 +123,7 @@ genesis:
         ekyc_submit_new_app_royalty_percentage: "70"
         ekyc_submit_reuse_app_royalty_percentage: "35"
         ekyc_submit_reuse_provider_royalty_percentage: "35"
+        ekyc_identity_owner_royalty_percentage: "5"
       enclaveIdentityList:
         - uniqueID: test-unique-id
           signerID: test-signer-id
@@ -135,18 +136,18 @@ genesis:
         - pubKID: pioneer1PubKID
           pubK: pioneer1PubK_pubk
           pubKType: credential
-#        - pubKID: secidentitysrvprvPubKID
-#          pubK: secidentitysrvprvPubK_pubk
-#          pubKType: transaction
-#        - pubKID: secidentitysrvprvPubKID
-#          pubK: secidentitysrvprvPubK_pubk
-#          pubKType: credential
-#        - pubKID: secdsvssrvprvPubKID
-#          pubK: secdsvssrvprvPubK_pubk
-#          pubKType: transaction
-#        - pubKID: secdsvssrvprvPubKID
-#          pubK: secdsvssrvprvPubK_pubk
-#          pubKType: credential
+        - pubKID: testidentitysrvprvPubKID
+          pubK: testidentitysrvprvPubK_pubk
+          pubKType: transaction
+        - pubKID: testidentitysrvprvPubKID
+          pubK: testidentitysrvprvPubK_pubk
+          pubKType: credential
+        - pubKID: testdsvssrvprvPubKID
+          pubK: testdsvssrvprvPubK_pubk
+          pubKType: transaction
+        - pubKID: testdsvssrvprvPubKID
+          pubK: testdsvssrvprvPubK_pubk
+          pubKType: credential
         - pubKID: testfinancesrvprvPubKID
           pubK: testfinancesrvprvPubK_pubk
           pubKType: transaction
@@ -190,14 +191,14 @@ genesis:
         - pubKID: treasuryPubKID
           nodeType: treasury
           nodeID: treasury
-#        - pubKID: secidentitysrvprvPubKID
-#          nodeType: srv-prv
-#          nodeID: secidentitysrvprv
-#          serviceProviderType: identity
-#        - pubKID: secdsvssrvprvPubKID
-#          nodeType: srv-prv
-#          nodeID: secdsvssrvprv
-#          serviceProviderType: dsvs
+        - pubKID: testidentitysrvprvPubKID
+          nodeType: srv-prv
+          nodeID: testidentitysrvprv
+          serviceProviderType: identity
+        - pubKID: testdsvssrvprvPubKID
+          nodeType: srv-prv
+          nodeID: testdsvssrvprv
+          serviceProviderType: dsvs
         - pubKID: testfinancesrvprvPubKID
           nodeType: srv-prv
           nodeID: testfinancesrvprv

@@ -307,6 +307,7 @@ message MsgCreateCredential {
   BPedersenCommit findCredentialPedersenCommit    =  9;
   string          eKYCAppWalletID                 = 10;
   string          referenceCredentialID           = 11;
+  string          identityOwnerWalletID           = 12;
 }
 
 message MsgCreateCredentialResponse {}

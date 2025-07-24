@@ -19,7 +19,7 @@ import (
 func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateCredential) (*types.MsgCreateCredentialResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
-	c.ContextDebug(ctx, "create credential isCheckTx=", ctx.IsCheckTx())
+	c.ContextDebug(ctx, "CreateCredential isCheckTx=", ctx.IsCheckTx())
 
 	// check if the creator is an identity service provider
 	err := k.AuthenticateServiceProvider(ctx, msg.Creator, types.IdentityServiceProvider)
@@ -35,14 +35,6 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 		return nil, err
 	}
 
-	/*
-		err = k.RegisterCreator(msg.Creator)
-		if err != nil {
-			c.ContextError(ctx, "error registering creator "+err.Error())
-			return nil, err
-		}
-	*/
-
 	if !c.ValidateVShare(ctx, msg.CredentialInfoVShareBind, msg.EncCredentialInfoVShare, ccPubK) {
 		return nil, types.ErrInvalidVShare
 	}
@@ -53,7 +45,7 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 		return nil, types.ErrCredentialExists
 	}
 
-	c.ContextDebug(ctx, "creating Credential")
+	c.ContextDebug(ctx, "CreateCredential Creating Credential")
 
 	moduleParams := k.GetParams(ctx)
 
@@ -64,8 +56,8 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 
 	c.ContextDebug(ctx, "createCredentialFee "+createCredentialFee)
 
-	// convert to coin
-	coin, err := sdk.ParseDecCoin(createCredentialFee)
+	// convert to createCredentialFeeCoin
+	createCredentialFeeCoin, err := sdk.ParseDecCoin(createCredentialFee)
 
 	if err != nil {
 		c.ContextError(ctx, "error parsing coin "+err.Error())
@@ -73,15 +65,15 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 	}
 
 	// display coin
-	c.ContextDebug(ctx, "createCredential fee "+coin.String())
+	c.ContextDebug(ctx, "createCredential fee "+createCredentialFeeCoin.String())
 
 	// if coin is not AQadenaTokenDenom, then let's do conversions
-	if !(coin.Denom == types.AQadenaTokenDenom || coin.Denom == types.QadenaTokenDenom) {
+	if !(createCredentialFeeCoin.Denom == types.AQadenaTokenDenom || createCredentialFeeCoin.Denom == types.QadenaTokenDenom) {
 		// check pricefeed
 
 		marketPrefix := "cn"
 
-		marketID := marketPrefix + ":" + types.QadenaTokenDenom + ":" + coin.Denom
+		marketID := marketPrefix + ":" + types.QadenaTokenDenom + ":" + createCredentialFeeCoin.Denom
 		cp, err := k.pricefeedKeeper.GetCurrentPrice(ctx, marketID)
 		var basePrice math.LegacyDec
 		if err != nil {
@@ -90,32 +82,37 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 			basePrice = cp.Price
 		}
 
-		c.ContextDebug(ctx, types.QadenaTokenDenom+" to "+coin.Denom+" base fee "+basePrice.String())
+		c.ContextDebug(ctx, types.QadenaTokenDenom+" to "+createCredentialFeeCoin.Denom+" base fee "+basePrice.String())
 
-		price := coin.Amount.Quo(basePrice)
+		price := createCredentialFeeCoin.Amount.Quo(basePrice)
 
 		c.ContextDebug(ctx, "createCredential fee in "+types.QadenaTokenDenom+" "+price.String())
 
-		coin, err = sdk.ParseDecCoin(price.String() + types.QadenaTokenDenom)
+		createCredentialFeeCoin, err = sdk.ParseDecCoin(price.String() + types.QadenaTokenDenom)
 		if err != nil {
 			c.ContextError(ctx, "error parsing coin "+err.Error())
 			return nil, err
 		}
 
-		c.ContextDebug(ctx, "createCredential fee "+coin.String())
-		normCoin := sdk.NormalizeDecCoin(coin)
+		c.ContextDebug(ctx, "createCredential fee "+createCredentialFeeCoin.String())
+		normCoin := sdk.NormalizeDecCoin(createCredentialFeeCoin)
 		c.ContextDebug(ctx, "createCredential fee equivalent "+normCoin.String())
 	}
 
-	// is this a new one or a renewal?
+	// is this a new one or a reuse?
 
-	var royaltyToApp math.LegacyDec
-	var royaltyToReference math.LegacyDec
+	var incentiveToEKYCApp math.LegacyDec
+	var incentiveToSharingIdentityProvider math.LegacyDec
+	var incentiveToIdentityOwner math.LegacyDec
+	var reusedCredential types.Credential
+	var ekycAppCredential types.Credential
+
+	var eKYCAppWalletID string // if this is set, we need to process it as an eKYCApp
 
 	if msg.ReferenceCredentialID == "" {
-		// new credential
+		// NEW CREDENTIAL FLOW
 
-		// check if we have enough funds to create credential
+		eKYCAppWalletID = msg.EKYCAppWalletID // set eKYCAppWalletID if this was created by the eKYCApp
 
 		// get the percentage for new app royalty
 		eKycSubmitNewAppRoyaltyPercentage := moduleParams.GetEkycSubmitNewAppRoyaltyPercentage()
@@ -129,12 +126,54 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 		}
 
 		// divide by 100
-		royaltyToApp = eKycSubmitNewAppRoyaltyPercentageDec.Quo(math.LegacyNewDec(100))
-		royaltyToReference = math.LegacyNewDec(0)
-	} else {
-		// renewal
+		incentiveToEKYCApp = eKycSubmitNewAppRoyaltyPercentageDec.Quo(math.LegacyNewDec(100))
 
-		// get the percentage for new app royalty
+		// there is no sharing identity provider for a new credential, so set to 0
+		incentiveToSharingIdentityProvider = math.LegacyNewDec(0)
+	} else {
+		if msg.EKYCAppWalletID != "" {
+			// not allowed, eKYCAppWalletID can only be set for new credentials
+			c.ContextError(ctx, "Cannot set EKYCAppWalletID when reusing credential")
+			return nil, types.ErrInvalidEKYCAppWalletID
+		}
+
+		// REUSE CREDENTIAL FLOW
+
+		// first, get credential that this is reusing
+		reusedCredential, found = k.GetCredential(ctx, msg.ReferenceCredentialID, types.PersonalInfoCredentialType)
+
+		if !found {
+			c.ContextError(ctx, "error getting reused credential "+msg.ReferenceCredentialID)
+			return nil, types.ErrCredentialNotExists
+		}
+
+		// TODO, we need to check if this is a valid reuse, possibly by comparing the reused credential with the new credential (somehow)
+
+		// display cred
+		c.ContextDebug(ctx, "reusedCredential "+reusedCredential.String())
+
+		// get the root credential
+
+		// we need to find the "root" credential by going up the chain of ReferenceCredentialID until we find one that has an empty ReferenceCredentialID
+		ekycAppCredential = reusedCredential
+		for ekycAppCredential.ReferenceCredentialID != "" {
+			ekycAppCredential, found = k.GetCredential(ctx, ekycAppCredential.ReferenceCredentialID, types.PersonalInfoCredentialType)
+			if !found {
+				c.ContextError(ctx, "error getting credential "+ekycAppCredential.ReferenceCredentialID)
+				return nil, types.ErrCredentialNotExists
+			}
+
+			if ekycAppCredential.EkycAppWalletID == "" {
+				c.ContextError(ctx, "ekycAppCredential.EkycAppWalletID is empty")
+				return nil, types.ErrInvalidEKYCAppWalletID
+			}
+		}
+
+		// log ekycAppCredential
+		c.ContextDebug(ctx, "ekycAppCredential "+ekycAppCredential.String())
+		eKYCAppWalletID = ekycAppCredential.EkycAppWalletID // set eKYCAppWalletID
+
+		// get the percentage for reuse app royalty
 		eKycSubmitReuseAppRoyaltyPercentage := moduleParams.GetEkycSubmitReuseAppRoyaltyPercentage()
 
 		// convert to Dec
@@ -146,12 +185,12 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 		}
 
 		// divide by 100
-		royaltyToApp = eKycSubmitReuseAppRoyaltyPercentageDec.Quo(math.LegacyNewDec(100))
+		incentiveToEKYCApp = eKycSubmitReuseAppRoyaltyPercentageDec.Quo(math.LegacyNewDec(100))
 
 		// get the percentage for new provider
 		eKycSubmitReuseProviderRoyaltyPercentage := moduleParams.GetEkycSubmitReuseProviderRoyaltyPercentage()
 
-		// conver to Dec
+		// convert to Dec
 		eKycSubmitReuseProviderRoyaltyPercentageDec, err := math.LegacyNewDecFromStr(eKycSubmitReuseProviderRoyaltyPercentage)
 
 		if err != nil {
@@ -160,44 +199,162 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 		}
 
 		// divide by 100
-		royaltyToReference = eKycSubmitReuseProviderRoyaltyPercentageDec.Quo(math.LegacyNewDec(100))
+		incentiveToSharingIdentityProvider = eKycSubmitReuseProviderRoyaltyPercentageDec.Quo(math.LegacyNewDec(100))
 
 	}
 
-	// calcaulate royalty to app
-	payToApp := coin.Amount.Mul(royaltyToApp)
+	var payToEKYCApp math.LegacyDec = math.LegacyNewDec(0)
+	var payToReusedIdentityProvider math.LegacyDec = math.LegacyNewDec(0)
+	var payToIdentityOwner math.LegacyDec = math.LegacyNewDec(0)
 
-	c.ContextDebug(ctx, "payToApp "+payToApp.String())
+	if eKYCAppWalletID != "" {
+		// this credential is an eKYCApp credential
 
-	payToAppCoin, err := sdk.ParseCoinNormalized(payToApp.String() + types.QadenaTokenDenom)
+		// we need to incentivize the EKYCApp and the identity provider that is sharing this credential and the identity owner
 
-	if err != nil {
-		c.ContextError(ctx, "error parsing payToAppCoin "+err.Error())
-		return nil, err
-	}
+		if ekycAppCredential.IdentityOwnerWalletID != "" {
+			// get the percentage for identity owner's incentive
+			eKycIdentityOwnerIncentivePercentage := moduleParams.EkycIdentityOwnerRoyaltyPercentage
 
-	// print payToAppCoin
-	c.ContextDebug(ctx, "payToAppCoin "+payToAppCoin.String())
+			// convert to Dec
+			eKycIdentityOwnerRoyaltyPercentageDec, err := math.LegacyNewDecFromStr(eKycIdentityOwnerIncentivePercentage)
 
-	// calculate royalty to reference
-	payToReference := coin.Amount.Mul(royaltyToReference)
+			if err != nil {
+				c.ContextError(ctx, "error parsing eKycIdentityOwnerRoyaltyPercentage "+err.Error())
+				return nil, err
+			}
 
-	c.ContextDebug(ctx, "payToReference "+payToReference.String())
+			// divide by 100
+			incentiveToIdentityOwner = eKycIdentityOwnerRoyaltyPercentageDec.Quo(math.LegacyNewDec(100))
 
-	payToReferenceCoin, err := sdk.ParseCoinNormalized(payToReference.String() + types.QadenaTokenDenom)
+			payToIdentityOwner = createCredentialFeeCoin.Amount.Mul(incentiveToIdentityOwner)
+		}
 
-	if err != nil {
-		c.ContextError(ctx, "error parsing payToReferenceCoin "+err.Error())
-		return nil, err
+		c.ContextDebug(ctx, "payToIdentityOwner "+payToIdentityOwner.String())
+
+		// calcaulate incentive to eKYC app
+		payToEKYCApp = createCredentialFeeCoin.Amount.Mul(incentiveToEKYCApp)
+
+		c.ContextDebug(ctx, "payToEKCYApp "+payToEKYCApp.String())
+
+		if reusedCredential.CredentialID != "" {
+			// calculate incentive to reference
+			payToReusedIdentityProvider = createCredentialFeeCoin.Amount.Mul(incentiveToSharingIdentityProvider)
+
+			c.ContextDebug(ctx, "payToReference "+payToReusedIdentityProvider.String())
+
+		}
+
+		creatorAddress, err := sdk.AccAddressFromBech32(msg.Creator)
+		if err != nil {
+			c.ContextDebug(ctx, "Invalid creator "+msg.Creator)
+			return nil, types.ErrInvalidCreator
+		}
+
+		// compute total incentives
+		totalIncentives := payToEKYCApp.Add(payToReusedIdentityProvider).Add(payToIdentityOwner)
+
+		totalIncentivesCoin, err := sdk.ParseCoinNormalized(totalIncentives.String() + types.QadenaTokenDenom)
+
+		if err != nil {
+			c.ContextError(ctx, "error parsing totalIncentivesCoin "+err.Error())
+			return nil, err
+		}
+
+		// transfer the total to module account
+		err = k.bankKeeper.SendCoinsFromAccountToModule(ctx, creatorAddress, types.ModuleName, sdk.NewCoins(totalIncentivesCoin))
+
+		if err != nil {
+			c.ContextError(ctx, "error sending total incentives to module account "+err.Error())
+			return nil, err
+		}
+
+		eKYCAppAddress, err := sdk.AccAddressFromBech32(eKYCAppWalletID)
+
+		if err != nil {
+			c.ContextDebug(ctx, "Invalid EKYCAppWalletID "+eKYCAppWalletID)
+			return nil, types.ErrInvalidEKYCAppWalletID
+		}
+
+		payToEKYCAppCoin, err := sdk.ParseCoinNormalized(payToEKYCApp.String() + types.QadenaTokenDenom)
+
+		if err != nil {
+			c.ContextError(ctx, "error parsing payToAppCoin "+err.Error())
+			return nil, err
+		}
+
+		// log payToAppCoin
+		c.ContextDebug(ctx, "payToEKYCAppCoin "+payToEKYCAppCoin.String())
+
+		// transfer to eKYC app address
+		err = k.bankKeeper.SendCoinsFromModuleToAccount(ctx, types.ModuleName, eKYCAppAddress, sdk.NewCoins(payToEKYCAppCoin))
+
+		if err != nil {
+			c.ContextError(ctx, "error sending coins to app account "+err.Error())
+			return nil, err
+		}
+
+		if !payToIdentityOwner.IsZero() {
+			identityOwnerAddress, err := sdk.AccAddressFromBech32(ekycAppCredential.IdentityOwnerWalletID)
+
+			if err != nil {
+				c.ContextDebug(ctx, "Invalid IdentityOwnerWalletID "+ekycAppCredential.IdentityOwnerWalletID)
+				return nil, types.ErrInvalidIdentityOwnerWalletID
+			}
+
+			payToIdentityOwnerCoin, err := sdk.ParseCoinNormalized(payToIdentityOwner.String() + types.QadenaTokenDenom)
+
+			if err != nil {
+				c.ContextError(ctx, "error parsing payToIdentityOwnerCoin "+err.Error())
+				return nil, err
+			}
+
+			// transfer to identity owner address
+			err = k.bankKeeper.SendCoinsFromModuleToAccount(ctx, types.ModuleName, identityOwnerAddress, sdk.NewCoins(payToIdentityOwnerCoin))
+
+			if err != nil {
+				c.ContextError(ctx, "error sending coins to identity owner account "+err.Error())
+				return nil, err
+			}
+
+		}
+
+		if !payToReusedIdentityProvider.IsZero() {
+			providerAddress, err := sdk.AccAddressFromBech32(reusedCredential.ProviderWalletID)
+
+			if err != nil {
+				c.ContextDebug(ctx, "Invalid ProviderWalletID "+reusedCredential.ProviderWalletID)
+				return nil, types.ErrInvalidEKYCProviderWalletID
+			}
+
+			payToReferenceCoin, err := sdk.ParseCoinNormalized(payToReusedIdentityProvider.String() + types.QadenaTokenDenom)
+
+			if err != nil {
+				c.ContextError(ctx, "error parsing payToReferenceCoin "+err.Error())
+				return nil, err
+			}
+
+			// transfer to app address
+			err = k.bankKeeper.SendCoinsFromModuleToAccount(ctx, types.ModuleName, providerAddress, sdk.NewCoins(payToReferenceCoin))
+
+			if err != nil {
+				c.ContextError(ctx, "error sending coins to app account "+err.Error())
+				return nil, err
+			}
+
+			// we need to incentivize the identity owner
+		}
 	}
 
 	// calculate gas
 
-	gas := coin.Amount.Sub(payToApp)
+	gas := createCredentialFeeCoin.Amount.Sub(payToEKYCApp)
 
-	gas = gas.Sub(payToReference)
+	gas = gas.Sub(payToReusedIdentityProvider)
 
-	c.ContextDebug(ctx, "gas "+gas.String())
+	gas = gas.Sub(payToIdentityOwner)
+
+	c.ContextDebug(ctx, "gas after paying incentives "+gas.String())
 
 	gasCoin, err := sdk.ParseCoinNormalized(gas.String() + types.QadenaTokenDenom)
 
@@ -216,79 +373,7 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 
 	ctx.GasMeter().ConsumeGas(consume, "createCredential")
 
-	creatorAddress, err := sdk.AccAddressFromBech32(msg.Creator)
-	if err != nil {
-		c.ContextDebug(ctx, "Invalid creator "+msg.Creator)
-		return nil, types.ErrInvalidCreator
-	}
-
-	if msg.EKYCAppWalletID != "" {
-		// we need to incentivize the EKYCAppWalletID
-
-		// transfer to module account
-		err = k.bankKeeper.SendCoinsFromAccountToModule(ctx, creatorAddress, types.ModuleName, sdk.NewCoins(payToAppCoin))
-
-		if err != nil {
-			c.ContextError(ctx, "error sending coins to module account "+err.Error())
-			return nil, err
-		}
-
-		appAddress, err := sdk.AccAddressFromBech32(msg.EKYCAppWalletID)
-
-		if err != nil {
-			c.ContextDebug(ctx, "Invalid EKYCAppWalletID "+msg.EKYCAppWalletID)
-			return nil, types.ErrInvalidEKYCAppWalletID
-		}
-
-		// transfer to app address
-		err = k.bankKeeper.SendCoinsFromModuleToAccount(ctx, types.ModuleName, appAddress, sdk.NewCoins(payToAppCoin))
-
-		if err != nil {
-			c.ContextError(ctx, "error sending coins to app account "+err.Error())
-			return nil, err
-		}
-	}
-
-	if msg.ReferenceCredentialID != "" {
-		// we need to incentivize the reference
-		// pay to reference
-		// get credential
-		cred, found := k.GetCredential(ctx, msg.ReferenceCredentialID, types.PersonalInfoCredentialType)
-
-		if !found {
-			c.ContextError(ctx, "error getting credential "+msg.ReferenceCredentialID)
-			return nil, types.ErrCredentialNotExists
-		}
-
-		// display cred
-		c.ContextDebug(ctx, "cred "+cred.String())
-
-		// transfer to module account
-		err = k.bankKeeper.SendCoinsFromAccountToModule(ctx, creatorAddress, types.ModuleName, sdk.NewCoins(payToReferenceCoin))
-
-		if err != nil {
-			c.ContextError(ctx, "error sending coins to module account "+err.Error())
-			return nil, err
-		}
-
-		providerAddress, err := sdk.AccAddressFromBech32(cred.ProviderWalletID)
-
-		if err != nil {
-			c.ContextDebug(ctx, "Invalid ProviderWalletID "+cred.ProviderWalletID)
-			return nil, types.ErrInvalidEKYCProviderWalletID
-		}
-
-		// transfer to app address
-		err = k.bankKeeper.SendCoinsFromModuleToAccount(ctx, types.ModuleName, providerAddress, sdk.NewCoins(payToReferenceCoin))
-
-		if err != nil {
-			c.ContextError(ctx, "error sending coins to app account "+err.Error())
-			return nil, err
-		}
-
-	}
-
-	cred := types.Credential{
+	newCredential := types.Credential{
 		CredentialID:                 msg.CredentialID,
 		CredentialType:               msg.CredentialType,
 		WalletID:                     "",
@@ -300,11 +385,13 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 		FindCredentialPedersenCommit: msg.FindCredentialPedersenCommit,
 		ReferenceCredentialID:        msg.ReferenceCredentialID,
 		ProviderWalletID:             msg.Creator,
+		IdentityOwnerWalletID:        msg.IdentityOwnerWalletID,
+		EkycAppWalletID:              msg.EKYCAppWalletID,
 	}
 
-	c.ContextDebug(ctx, "credential "+cred.String())
+	c.ContextDebug(ctx, "newCredential "+newCredential.String())
 
-	err = k.SetCredential(ctx, cred)
+	err = k.SetCredential(ctx, newCredential)
 	if err != nil {
 		c.ContextError(ctx, "error setting credential "+err.Error())
 		return nil, err
