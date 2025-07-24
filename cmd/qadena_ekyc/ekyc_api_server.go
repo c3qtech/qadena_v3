@@ -1749,6 +1749,7 @@ func (s *EKycServer) createSingleContactInfoCreateCredentialMsg(provider *Provid
 		findCredentialProtoPC,
 		s.privateEnclaveParams.EKYCWalletID,
 		referenceCredentialID,
+		"",
 	)
 
 	return msg, msg.ValidateBasic()
@@ -2503,6 +2504,7 @@ func (s *EKycServer) createPersonalInfoCreateCredentialMsg(provider *Provider, f
 		findCredentialProtoPC,
 		s.privateEnclaveParams.EKYCWalletID,
 		referenceCredentialID,
+		"",
 	)
 
 	return

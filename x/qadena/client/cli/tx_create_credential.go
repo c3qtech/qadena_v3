@@ -79,6 +79,7 @@ func createSingleContactInfoMessage(address string, credWalletID string, credent
 		findCredentialProtoPC,
 		"",
 		"",
+		"",
 	)
 
 	return msg, msg.ValidateBasic()
@@ -249,6 +250,7 @@ func CmdCreateCredential() *cobra.Command {
 					nil, //protoCredentialHashVShareBind,
 					nil, // encCredentialHashVShare,
 					findCredentialProtoPC,
+					"",
 					"",
 					"",
 				)
