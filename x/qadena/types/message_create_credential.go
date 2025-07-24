@@ -8,7 +8,7 @@ import (
 
 var _ sdk.Msg = &MsgCreateCredential{}
 
-func NewMsgCreateCredential(creator string, credentialID string, credentialType string, credentialPedersenCommit *BPedersenCommit, credentialInfoVShareBind *VShareBindData, encCredentialInfoVShare []byte, credentialHashVShareBind *VShareBindData, encCredentialHashVShare []byte, findCredentialPedersenCommit *BPedersenCommit, eKYCAppWalletID string, referenceCredentialID string) *MsgCreateCredential {
+func NewMsgCreateCredential(creator string, credentialID string, credentialType string, credentialPedersenCommit *BPedersenCommit, credentialInfoVShareBind *VShareBindData, encCredentialInfoVShare []byte, credentialHashVShareBind *VShareBindData, encCredentialHashVShare []byte, findCredentialPedersenCommit *BPedersenCommit, eKYCAppWalletID string, referenceCredentialID string, identityOwnerWalletID string) *MsgCreateCredential {
 	return &MsgCreateCredential{
 		Creator:                      creator,
 		CredentialID:                 credentialID,
@@ -21,6 +21,7 @@ func NewMsgCreateCredential(creator string, credentialID string, credentialType 
 		FindCredentialPedersenCommit: findCredentialPedersenCommit,
 		EKYCAppWalletID:              eKYCAppWalletID,
 		ReferenceCredentialID:        referenceCredentialID,
+		IdentityOwnerWalletID:        identityOwnerWalletID,
 	}
 }
 
