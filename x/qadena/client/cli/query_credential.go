@@ -2,8 +2,8 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
@@ -13,6 +13,117 @@ import (
 	"github.com/c3qtech/qadena_v3/x/qadena/types"
 	qadenatypes "github.com/c3qtech/qadena_v3/x/qadena/types"
 )
+
+// printCredential prints credential information in a nicely formatted way
+func printCredential(credential *types.Credential, decryptAsPrivKeyHex, decryptAsPubKey string) error {
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Printf("CREDENTIAL: %s\n", credential.CredentialID)
+	fmt.Println(strings.Repeat("=", 60))
+
+	// Basic Information
+	fmt.Printf("Type:                    %s\n", credential.CredentialType)
+	if credential.WalletID != "" {
+		fmt.Printf("CLAIMED BY Wallet ID:               %s\n", credential.WalletID)
+	}
+	if credential.ProviderWalletID != "" {
+		fmt.Printf("Provider Wallet ID:      %s\n", credential.ProviderWalletID)
+	}
+	if credential.IdentityOwnerWalletID != "" {
+		fmt.Printf("Identity Owner Wallet:   %s\n", credential.IdentityOwnerWalletID)
+	}
+	if credential.EkycAppWalletID != "" {
+		fmt.Printf("eKYC App Wallet ID:      %s\n", credential.EkycAppWalletID)
+	}
+	if credential.ReferenceCredentialID != "" {
+		fmt.Printf("Reference Credential:    %s\n", credential.ReferenceCredentialID)
+	}
+
+	fmt.Println(strings.Repeat("-", 40))
+
+	// Pedersen Commits
+	if credential.CredentialPedersenCommit != nil {
+		fmt.Println("Credential Pedersen Commit:")
+		fmt.Printf("  %s\n", c.PrettyPrint(credential.CredentialPedersenCommit))
+	}
+	if credential.FindCredentialPedersenCommit != nil {
+		fmt.Println("Find Credential Pedersen Commit:")
+		fmt.Printf("  %s\n", c.PrettyPrint(credential.FindCredentialPedersenCommit))
+	}
+
+	// Encrypted Data Information
+	if len(credential.EncCredentialInfoVShare) > 0 {
+		fmt.Printf("Encrypted Info VShare:   %d bytes\n", len(credential.EncCredentialInfoVShare))
+	}
+	if len(credential.EncCredentialHashVShare) > 0 {
+		fmt.Printf("Encrypted Hash VShare:   %d bytes\n", len(credential.EncCredentialHashVShare))
+	}
+
+	// VShare Bind Data
+	if credential.CredentialInfoVShareBind != nil {
+		fmt.Println("Info VShare Bind Data:")
+		fmt.Printf("  %s\n", c.PrettyPrint(credential.CredentialInfoVShareBind))
+	}
+	if credential.CredentialHashVShareBind != nil {
+		fmt.Println("Hash VShare Bind Data:")
+		fmt.Printf("  %s\n", c.PrettyPrint(credential.CredentialHashVShareBind))
+	}
+
+	// Decrypt and display credential content if decryption keys are provided
+	if decryptAsPrivKeyHex != "" && decryptAsPubKey != "" {
+		fmt.Println(strings.Repeat("-", 40))
+		fmt.Println("DECRYPTED CONTENT:")
+
+		// Decrypt credential info
+		if credential.CredentialInfoVShareBind != nil && len(credential.EncCredentialInfoVShare) > 0 {
+			unprotoVShareBind := c.UnprotoizeVShareBindData(credential.CredentialInfoVShareBind)
+
+			switch credential.CredentialType {
+			case "personal-info":
+				var p types.EncryptablePersonalInfo
+				err := c.VShareBDecryptAndProtoUnmarshal(decryptAsPrivKeyHex, decryptAsPubKey, unprotoVShareBind, credential.EncCredentialInfoVShare, &p)
+				if err != nil {
+					fmt.Printf("Failed to decrypt personal-info: %v\n", err)
+				} else {
+					fmt.Println("Personal Info:")
+					fmt.Printf("  %s\n", c.PrettyPrint(p))
+				}
+			case qadenatypes.FirstNamePersonalInfoCredentialType,
+				qadenatypes.MiddleNamePersonalInfoCredentialType,
+				qadenatypes.LastNamePersonalInfoCredentialType,
+				qadenatypes.PhoneContactCredentialType,
+				qadenatypes.EmailContactCredentialType:
+				var p types.EncryptableSingleContactInfo
+				err := c.VShareBDecryptAndProtoUnmarshal(decryptAsPrivKeyHex, decryptAsPubKey, unprotoVShareBind, credential.EncCredentialInfoVShare, &p)
+				if err != nil {
+					fmt.Printf("Failed to decrypt %s: %v\n", credential.CredentialType, err)
+				} else {
+					fmt.Printf("%s Info:\n", strings.Title(credential.CredentialType))
+					fmt.Printf("  %s\n", c.PrettyPrint(p))
+				}
+			default:
+				fmt.Printf("Unknown credential type for decryption: %s\n", credential.CredentialType)
+			}
+		}
+
+		// Decrypt credential hash if available
+		if credential.CredentialHashVShareBind != nil && len(credential.EncCredentialHashVShare) > 0 {
+			unprotoCredentialHashVShareBind := c.UnprotoizeVShareBindData(credential.CredentialHashVShareBind)
+			var credentialHash types.EncryptableString
+			err := c.VShareBDecryptAndProtoUnmarshal(decryptAsPrivKeyHex, decryptAsPubKey, unprotoCredentialHashVShareBind, credential.EncCredentialHashVShare, &credentialHash)
+			if err != nil {
+				fmt.Printf("Failed to decrypt credential hash: %v\n", err)
+			} else {
+				fmt.Println("Credential Hash:")
+				fmt.Printf("  %s\n", c.PrettyPrint(credentialHash))
+			}
+		}
+	}
+
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Println()
+
+	return nil
+}
 
 func CmdListCredential() *cobra.Command {
 	var argDecryptAs string
@@ -52,48 +163,9 @@ func CmdListCredential() *cobra.Command {
 				}
 
 				for _, credential := range res.Credential {
-					// unproto credential.VShareBind
-					unprotoVShareBind := c.UnprotoizeVShareBindData(credential.CredentialInfoVShareBind)
-
-					switch credential.CredentialType {
-					case "personal-info":
-						var p types.EncryptablePersonalInfo
-						err = c.VShareBDecryptAndProtoUnmarshal(decryptAsPrivKeyHex, decryptAsPubKey, unprotoVShareBind, credential.EncCredentialInfoVShare, &p)
-						if err != nil {
-							fmt.Println("Failed to decrypt personal-info for ", credential.CredentialID)
-							continue
-						}
-						fmt.Println(credential.CredentialID, credential.CredentialType, c.PrettyPrint(p))
-					case qadenatypes.FirstNamePersonalInfoCredentialType:
-						fallthrough
-					case qadenatypes.MiddleNamePersonalInfoCredentialType:
-						fallthrough
-					case qadenatypes.LastNamePersonalInfoCredentialType:
-						fallthrough
-					case qadenatypes.PhoneContactCredentialType:
-						fallthrough
-					case qadenatypes.EmailContactCredentialType:
-						var p types.EncryptableSingleContactInfo
-						err = c.VShareBDecryptAndProtoUnmarshal(decryptAsPrivKeyHex, decryptAsPubKey, unprotoVShareBind, credential.EncCredentialInfoVShare, &p)
-						if err != nil {
-							fmt.Println("Failed to decrypt personal-info for ", credential.CredentialID)
-							continue
-						}
-						fmt.Println(credential.CredentialID, credential.CredentialType, c.PrettyPrint(p))
-					default:
-						fmt.Println("unrecognized credential-type", credential.CredentialType)
-						return errors.New("bad args")
-					}
-
-					if credential.CredentialHashVShareBind != nil {
-						unprotoCredentialHashVShareBind := c.UnprotoizeVShareBindData(credential.CredentialHashVShareBind)
-						var credentialHash types.EncryptableString
-						err = c.VShareBDecryptAndProtoUnmarshal(decryptAsPrivKeyHex, decryptAsPubKey, unprotoCredentialHashVShareBind, credential.EncCredentialHashVShare, &credentialHash)
-						if err != nil {
-							fmt.Println("Failed to decrypt personal-info for ", credential.CredentialID)
-							continue
-						}
-						fmt.Println("CredentialHash", credential.CredentialID, c.PrettyPrint(credentialHash))
+					err = printCredential(&credential, decryptAsPrivKeyHex, decryptAsPubKey)
+					if err != nil {
+						return err
 					}
 				}
 				return nil
@@ -160,51 +232,9 @@ func CmdShowCredential() *cobra.Command {
 					continue
 				}
 
-				if credential.WalletID != "" {
-					fmt.Println(credentialID, "CREDENTIAL CLAIMED BY", credential.WalletID)
-				}
-
-				if argDecryptAs != "" {
-					// unproto credential.VShareBind
-					unprotoVShareBind := c.UnprotoizeVShareBindData(credential.CredentialInfoVShareBind)
-
-					switch argCredentialType {
-					case "personal-info":
-						var p types.EncryptablePersonalInfo
-						err = c.VShareBDecryptAndProtoUnmarshal(decryptAsPrivKeyHex, decryptAsPubKey, unprotoVShareBind, credential.EncCredentialInfoVShare, &p)
-						if err == nil {
-							fmt.Println(credentialID, argCredentialType, c.PrettyPrint(p))
-						}
-					case qadenatypes.FirstNamePersonalInfoCredentialType:
-						fallthrough
-					case qadenatypes.MiddleNamePersonalInfoCredentialType:
-						fallthrough
-					case qadenatypes.LastNamePersonalInfoCredentialType:
-						fallthrough
-					case qadenatypes.PhoneContactCredentialType:
-						fallthrough
-					case qadenatypes.EmailContactCredentialType:
-						var p types.EncryptableSingleContactInfo
-						err = c.VShareBDecryptAndProtoUnmarshal(decryptAsPrivKeyHex, decryptAsPubKey, unprotoVShareBind, credential.EncCredentialInfoVShare, &p)
-						if err == nil {
-							fmt.Println(credentialID, argCredentialType, c.PrettyPrint(p))
-						}
-					default:
-						fmt.Println("unrecognized credential-type", argCredentialType)
-						return errors.New("bad args")
-					}
-
-					if credential.CredentialHashVShareBind != nil {
-						unprotoCredentialHashVShareBind := c.UnprotoizeVShareBindData(credential.CredentialHashVShareBind)
-						var credentialHash types.EncryptableString
-						err = c.VShareBDecryptAndProtoUnmarshal(decryptAsPrivKeyHex, decryptAsPubKey, unprotoCredentialHashVShareBind, credential.EncCredentialHashVShare, &credentialHash)
-						if err == nil {
-							fmt.Println(credentialID, "CredentialHash", c.PrettyPrint(credentialHash))
-						}
-					}
-				} else {
-					fmt.Println("Credential")
-					fmt.Println(c.PrettyPrint(credential))
+				err = printCredential(&credential, decryptAsPrivKeyHex, decryptAsPubKey)
+				if err != nil {
+					return err
 				}
 			}
 

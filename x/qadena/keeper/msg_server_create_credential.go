@@ -112,7 +112,22 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 	if msg.ReferenceCredentialID == "" {
 		// NEW CREDENTIAL FLOW
 
-		eKYCAppWalletID = msg.EKYCAppWalletID // set eKYCAppWalletID if this was created by the eKYCApp
+		if msg.EKYCAppWalletID != "" {
+			// validate is valid walletID
+			_, found := k.GetWallet(ctx, msg.EKYCAppWalletID)
+			if !found {
+				return nil, types.ErrInvalidEKYCAppWalletID
+			}
+			eKYCAppWalletID = msg.EKYCAppWalletID // set eKYCAppWalletID if this was created by the eKYCApp
+		}
+
+		if msg.IdentityOwnerWalletID != "" {
+			// validate is valid walletID
+			_, found := k.GetWallet(ctx, msg.IdentityOwnerWalletID)
+			if !found {
+				return nil, types.ErrInvalidIdentityOwnerWalletID
+			}
+		}
 
 		// get the percentage for new app royalty
 		eKycSubmitNewAppRoyaltyPercentage := moduleParams.GetEkycSubmitNewAppRoyaltyPercentage()
@@ -135,6 +150,12 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 			// not allowed, eKYCAppWalletID can only be set for new credentials
 			c.ContextError(ctx, "Cannot set EKYCAppWalletID when reusing credential")
 			return nil, types.ErrInvalidEKYCAppWalletID
+		}
+
+		if msg.IdentityOwnerWalletID != "" {
+			// not allowed, identityOwnerWalletID can only be set for new credentials
+			c.ContextError(ctx, "Cannot set IdentityOwnerWalletID when reusing credential")
+			return nil, types.ErrInvalidIdentityOwnerWalletID
 		}
 
 		// REUSE CREDENTIAL FLOW
