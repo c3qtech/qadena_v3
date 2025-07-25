@@ -9,7 +9,7 @@ import (
 
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 
-	"cosmossdk.io/math"
+	cosmosmath "cosmossdk.io/math"
 )
 
 // AUTHORIZATION:
@@ -71,13 +71,13 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 	if !(createCredentialFeeCoin.Denom == types.AQadenaTokenDenom || createCredentialFeeCoin.Denom == types.QadenaTokenDenom) {
 		// check pricefeed
 
-		marketPrefix := "cn"
+		marketPrefix := "cn" // crypto == "cn", fiat == "fn"
 
 		marketID := marketPrefix + ":" + types.QadenaTokenDenom + ":" + createCredentialFeeCoin.Denom
 		cp, err := k.pricefeedKeeper.GetCurrentPrice(ctx, marketID)
-		var basePrice math.LegacyDec
+		var basePrice cosmosmath.LegacyDec
 		if err != nil {
-			basePrice = math.LegacyNewDecFromBigInt(c.BigIntZero)
+			basePrice = cosmosmath.LegacyNewDecFromBigInt(c.BigIntZero)
 		} else {
 			basePrice = cp.Price
 		}
@@ -101,39 +101,49 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 
 	// is this a new one or a reuse?
 
-	var incentiveToEKYCApp math.LegacyDec
-	var incentiveToSharingIdentityProvider math.LegacyDec
-	var incentiveToIdentityOwner math.LegacyDec
+	var incentiveToEKYCApp cosmosmath.LegacyDec
+	var incentiveToSharingIdentityProvider cosmosmath.LegacyDec
+	var incentiveToIdentityOwner cosmosmath.LegacyDec
 	var reusedCredential types.Credential
 	var ekycAppCredential types.Credential
 
 	var eKYCAppWalletID string // if this is set, we need to process it as an eKYCApp
+	var identityOwnerWalletID string
 
 	if msg.ReferenceCredentialID == "" {
 		// NEW CREDENTIAL FLOW
 
 		if msg.EKYCAppWalletID != "" {
-			// validate is valid walletID
-			_, found := k.GetWallet(ctx, msg.EKYCAppWalletID)
-			if !found {
+			// make sure this is a valid eKYCApp wallet
+			eKYCAppAddress, err := sdk.AccAddressFromBech32(msg.EKYCAppWalletID)
+			if err != nil {
+				return nil, types.ErrInvalidEKYCAppWalletID
+			}
+			account := k.accountKeeper.GetAccount(ctx, eKYCAppAddress)
+			if account == nil {
 				return nil, types.ErrInvalidEKYCAppWalletID
 			}
 			eKYCAppWalletID = msg.EKYCAppWalletID // set eKYCAppWalletID if this was created by the eKYCApp
 		}
 
 		if msg.IdentityOwnerWalletID != "" {
-			// validate is valid walletID
-			_, found := k.GetWallet(ctx, msg.IdentityOwnerWalletID)
-			if !found {
+			// make sure this is a valid identity owner wallet
+			identityOwnerAddress, err := sdk.AccAddressFromBech32(msg.IdentityOwnerWalletID)
+			if err != nil {
 				return nil, types.ErrInvalidIdentityOwnerWalletID
 			}
+			account := k.accountKeeper.GetAccount(ctx, identityOwnerAddress)
+			if account == nil {
+				return nil, types.ErrInvalidIdentityOwnerWalletID
+			}
+			identityOwnerWalletID = msg.IdentityOwnerWalletID
 		}
 
 		// get the percentage for new app royalty
 		eKycSubmitNewAppRoyaltyPercentage := moduleParams.GetEkycSubmitNewAppRoyaltyPercentage()
 
 		// convert to Dec
-		eKycSubmitNewAppRoyaltyPercentageDec, err := math.LegacyNewDecFromStr(eKycSubmitNewAppRoyaltyPercentage)
+		eKycSubmitNewAppRoyaltyPercentageDec, err := cosmosmath.LegacyNewDecFromStr(eKycSubmitNewAppRoyaltyPercentage)
 
 		if err != nil {
 			c.ContextError(ctx, "error parsing eKycSubmitNewAppRoyaltyPercentage "+err.Error())
@@ -141,10 +151,10 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 		}
 
 		// divide by 100
-		incentiveToEKYCApp = eKycSubmitNewAppRoyaltyPercentageDec.Quo(math.LegacyNewDec(100))
+		incentiveToEKYCApp = eKycSubmitNewAppRoyaltyPercentageDec.Quo(cosmosmath.LegacyNewDec(100))
 
 		// there is no sharing identity provider for a new credential, so set to 0
-		incentiveToSharingIdentityProvider = math.LegacyNewDec(0)
+		incentiveToSharingIdentityProvider = cosmosmath.LegacyNewDec(0)
 	} else {
 		if msg.EKYCAppWalletID != "" {
 			// not allowed, eKYCAppWalletID can only be set for new credentials
@@ -192,13 +202,14 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 
 		// log ekycAppCredential
 		c.ContextDebug(ctx, "ekycAppCredential "+ekycAppCredential.String())
-		eKYCAppWalletID = ekycAppCredential.EkycAppWalletID // set eKYCAppWalletID
+		eKYCAppWalletID = ekycAppCredential.EkycAppWalletID             // set eKYCAppWalletID
+		identityOwnerWalletID = ekycAppCredential.IdentityOwnerWalletID // set identityOwnerWalletID
 
 		// get the percentage for reuse app royalty
 		eKycSubmitReuseAppRoyaltyPercentage := moduleParams.GetEkycSubmitReuseAppRoyaltyPercentage()
 
 		// convert to Dec
-		eKycSubmitReuseAppRoyaltyPercentageDec, err := math.LegacyNewDecFromStr(eKycSubmitReuseAppRoyaltyPercentage)
+		eKycSubmitReuseAppRoyaltyPercentageDec, err := cosmosmath.LegacyNewDecFromStr(eKycSubmitReuseAppRoyaltyPercentage)
 
 		if err != nil {
 			c.ContextError(ctx, "error parsing eKycSubmitReuseAppRoyaltyPercentage "+err.Error())
@@ -206,13 +217,13 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 		}
 
 		// divide by 100
-		incentiveToEKYCApp = eKycSubmitReuseAppRoyaltyPercentageDec.Quo(math.LegacyNewDec(100))
+		incentiveToEKYCApp = eKycSubmitReuseAppRoyaltyPercentageDec.Quo(cosmosmath.LegacyNewDec(100))
 
 		// get the percentage for new provider
 		eKycSubmitReuseProviderRoyaltyPercentage := moduleParams.GetEkycSubmitReuseProviderRoyaltyPercentage()
 
 		// convert to Dec
-		eKycSubmitReuseProviderRoyaltyPercentageDec, err := math.LegacyNewDecFromStr(eKycSubmitReuseProviderRoyaltyPercentage)
+		eKycSubmitReuseProviderRoyaltyPercentageDec, err := cosmosmath.LegacyNewDecFromStr(eKycSubmitReuseProviderRoyaltyPercentage)
 
 		if err != nil {
 			c.ContextError(ctx, "error parsing eKycSubmitReuseProviderRoyaltyPercentage "+err.Error())
@@ -220,25 +231,25 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 		}
 
 		// divide by 100
-		incentiveToSharingIdentityProvider = eKycSubmitReuseProviderRoyaltyPercentageDec.Quo(math.LegacyNewDec(100))
+		incentiveToSharingIdentityProvider = eKycSubmitReuseProviderRoyaltyPercentageDec.Quo(cosmosmath.LegacyNewDec(100))
 
 	}
 
-	var payToEKYCApp math.LegacyDec = math.LegacyNewDec(0)
-	var payToReusedIdentityProvider math.LegacyDec = math.LegacyNewDec(0)
-	var payToIdentityOwner math.LegacyDec = math.LegacyNewDec(0)
+	var payToEKYCApp cosmosmath.LegacyDec = cosmosmath.LegacyNewDec(0)
+	var payToReusedIdentityProvider cosmosmath.LegacyDec = cosmosmath.LegacyNewDec(0)
+	var payToIdentityOwner cosmosmath.LegacyDec = cosmosmath.LegacyNewDec(0)
 
 	if eKYCAppWalletID != "" {
 		// this credential is an eKYCApp credential
 
 		// we need to incentivize the EKYCApp and the identity provider that is sharing this credential and the identity owner
 
-		if ekycAppCredential.IdentityOwnerWalletID != "" {
+		if identityOwnerWalletID != "" {
 			// get the percentage for identity owner's incentive
 			eKycIdentityOwnerIncentivePercentage := moduleParams.EkycIdentityOwnerRoyaltyPercentage
 
 			// convert to Dec
-			eKycIdentityOwnerRoyaltyPercentageDec, err := math.LegacyNewDecFromStr(eKycIdentityOwnerIncentivePercentage)
+			eKycIdentityOwnerRoyaltyPercentageDec, err := cosmosmath.LegacyNewDecFromStr(eKycIdentityOwnerIncentivePercentage)
 
 			if err != nil {
 				c.ContextError(ctx, "error parsing eKycIdentityOwnerRoyaltyPercentage "+err.Error())
@@ -246,7 +257,7 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 			}
 
 			// divide by 100
-			incentiveToIdentityOwner = eKycIdentityOwnerRoyaltyPercentageDec.Quo(math.LegacyNewDec(100))
+			incentiveToIdentityOwner = eKycIdentityOwnerRoyaltyPercentageDec.Quo(cosmosmath.LegacyNewDec(100))
 
 			payToIdentityOwner = createCredentialFeeCoin.Amount.Mul(incentiveToIdentityOwner)
 		}
@@ -316,10 +327,10 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 		}
 
 		if !payToIdentityOwner.IsZero() {
-			identityOwnerAddress, err := sdk.AccAddressFromBech32(ekycAppCredential.IdentityOwnerWalletID)
+			identityOwnerAddress, err := sdk.AccAddressFromBech32(identityOwnerWalletID)
 
 			if err != nil {
-				c.ContextDebug(ctx, "Invalid IdentityOwnerWalletID "+ekycAppCredential.IdentityOwnerWalletID)
+				c.ContextDebug(ctx, "Invalid IdentityOwnerWalletID "+identityOwnerWalletID)
 				return nil, types.ErrInvalidIdentityOwnerWalletID
 			}
 
@@ -369,30 +380,36 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 
 	// calculate gas
 
-	gas := createCredentialFeeCoin.Amount.Sub(payToEKYCApp)
+	gasFee := createCredentialFeeCoin.Amount.Sub(payToEKYCApp)
 
-	gas = gas.Sub(payToReusedIdentityProvider)
+	gasFee = gasFee.Sub(payToReusedIdentityProvider)
 
-	gas = gas.Sub(payToIdentityOwner)
+	gasFee = gasFee.Sub(payToIdentityOwner)
 
-	c.ContextDebug(ctx, "gas after paying incentives "+gas.String())
+	c.ContextDebug(ctx, "gas fee after paying incentives", gasFee.String())
 
-	gasCoin, err := sdk.ParseCoinNormalized(gas.String() + types.QadenaTokenDenom)
+	// convert fee to gas based on gas price
+	gas := gasFee.Quo(c.GasPriceInAQDN)
+
+	gasAsCoin, err := sdk.ParseCoinNormalized(gas.String() + types.QadenaTokenDenom)
 
 	if err != nil {
-		c.ContextError(ctx, "error parsing gasCoin", err.Error())
+		c.ContextError(ctx, "error parsing gasAsCoin", err.Error())
 		return nil, err
 	}
 
 	// print gasCoin
-	c.ContextDebug(ctx, "gas fee after paying royalties", gasCoin.String())
+	c.ContextDebug(ctx, "gas after paying incentives", gasAsCoin.String())
 
-	// consume gas
-	consume := gasCoin.Amount.Uint64() / c.GasPrice
+	var gasAsUint64 uint64
 
-	c.ContextDebug(ctx, "will consume gas", consume)
+	if gasAsCoin.Amount.IsInt64() {
+		gasAsUint64 = gasAsCoin.Amount.Uint64()
+	} else {
+		gasAsUint64 = ctx.GasMeter().Limit()
+	}
 
-	ctx.GasMeter().ConsumeGas(consume, "createCredential")
+	ctx.GasMeter().ConsumeGas(gasAsUint64, "createCredential")
 
 	newCredential := types.Credential{
 		CredentialID:                 msg.CredentialID,

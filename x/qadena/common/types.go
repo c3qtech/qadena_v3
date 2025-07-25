@@ -6,9 +6,12 @@ import (
 	time "time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	math "cosmossdk.io/math"
 )
 
 var GasPrice uint64 = 500000000 // aqdn NOTE THIS IS ALSO in config.yml
+var GasPriceInAQDN math.LegacyDec = math.LegacyNewDecFromInt(math.NewInt(int64(GasPrice)))
 
 type WalletAmount struct {
 	TransactionID            string

@@ -108,18 +108,18 @@ genesis:
     qadena:
       params:
         create_wallet_incentive:
-          amount: "30000000"
+          amount: "0"
           denom: "qdn"
         create_wallet_transparent_incentive:
-          amount: "9000000"
+          amount: "500000"
           denom: "qdn"
         create_ephemeral_wallet_incentive:
           amount: "0"
-          denom: "aqdn"
-        create_ephemeral_wallet_transparent_incentive:
-          amount: "5000000"
           denom: "qdn"
-        create_credential_fee: "0.10usd"
+        create_ephemeral_wallet_transparent_incentive:
+          amount: "500000"
+          denom: "qdn"
+        create_credential_fee: "25php"
         ekyc_submit_new_app_royalty_percentage: "70"
         ekyc_submit_reuse_app_royalty_percentage: "35"
         ekyc_submit_reuse_provider_royalty_percentage: "35"
@@ -234,6 +234,13 @@ genesis:
               - "coingecko-oraclePubKID"
               - "band-protocol-oraclePubKID"
           - active: true
+            baseAsset: "qdn"
+            marketId: "cn:qdn:php"
+            quoteAsset: "php"
+            oracles:
+              - "coingecko-oraclePubKID"
+              - "band-protocol-oraclePubKID"
+          - active: true
             baseAsset: "php"
             marketId: "fn:php:usd"
             quoteAsset: "usd"
@@ -261,25 +268,15 @@ genesis:
             oracles:
               - "coingecko-oraclePubKID"
               - "band-protocol-oraclePubKID"
-          - active: true
-            baseAsset: "btc-qdn"
-            marketId: "cw:qdnw.btc:usd"
-            quoteAsset: "usd"
-            oracles:
-              - "coingecko-oraclePubKID"
-              - "band-protocol-oraclePubKID"
-          - active: true
-            baseAsset: "eth-qdn"
-            marketId: "cw:qdnw.eth:usd"
-            quoteAsset: "usd"
-            oracles:
-              - "coingecko-oraclePubKID"
-              - "band-protocol-oraclePubKID"
       postedPriceList:
         - expiry: "2030-01-01T00:00:00Z"
           marketId: "cn:qdn:usd"
           oracleAddress: "band-protocol-oraclePubKID"
-          price: "0.01"
+          price: "0.00001"
+        - expiry: "2030-01-01T00:00:00Z"
+          marketId: "cn:qdn:php"
+          oracleAddress: "band-protocol-oraclePubKID"
+          price: "0.0005713"
         - expiry: "2030-01-01T00:00:00Z"
           marketId: "fn:php:usd"
           oracleAddress: "band-protocol-oraclePubKID"
@@ -294,13 +291,5 @@ genesis:
           price: "17217.06"
         - expiry: "2030-01-01T00:00:00Z"
           marketId: "cn:eth:usd"
-          oracleAddress: "band-protocol-oraclePubKID"
-          price: "1282.63"
-        - expiry: "2030-01-01T00:00:00Z"
-          marketId: "cw:qdnw.btc:usd"
-          oracleAddress: "band-protocol-oraclePubKID"
-          price: "17217.06"
-        - expiry: "2030-01-01T00:00:00Z"
-          marketId: "cw:qdnw.eth:usd"
           oracleAddress: "band-protocol-oraclePubKID"
           price: "1282.63"
