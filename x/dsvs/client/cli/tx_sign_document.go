@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strconv"
 
@@ -28,18 +29,43 @@ func CmdSignDocument() *cobra.Command {
 			argSignatoryEmail := args[2]
 			argSignatoryPhone := args[3]
 
-			// hash the first file contents
-			currentHashBytes, currentHash, err := hashFile(argDocument1)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Current file hash: %s\n", currentHash)
+			// Check if hash flag is set
+			useHash, _ := cmd.Flags().GetBool("hash")
+			
+			var currentHashBytes []byte
+			var currentHash string
+			var newHashBytes []byte
+			var newHash string
 
-			// hash the second file contents
-			newHashBytes, newHash, err := hashFile(argDocument2)
-			if err != nil {
-				return err
+			if useHash {
+				// Decode the first hex string
+				currentHashBytes, err = hex.DecodeString(argDocument1)
+				if err != nil {
+					return fmt.Errorf("failed to decode current hash hex string: %v", err)
+				}
+				currentHash = argDocument1
+
+				// Decode the second hex string
+				newHashBytes, err = hex.DecodeString(argDocument2)
+				if err != nil {
+					return fmt.Errorf("failed to decode new hash hex string: %v", err)
+				}
+				newHash = argDocument2
+			} else {
+				// hash the first file contents
+				currentHashBytes, currentHash, err = hashFile(argDocument1)
+				if err != nil {
+					return err
+				}
+
+				// hash the second file contents
+				newHashBytes, newHash, err = hashFile(argDocument2)
+				if err != nil {
+					return err
+				}
 			}
+
+			fmt.Printf("Current file hash: %s\n", currentHash)
 			fmt.Printf("New file hash: %s\n", newHash)
 
 			if currentHash == newHash {
@@ -133,6 +159,7 @@ func CmdSignDocument() *cobra.Command {
 	}
 
 	flags.AddTxFlagsToCmd(cmd)
+	cmd.Flags().Bool("hash", false, "If set, document-1 and document-2 are treated as hexadecimal hashes instead of file paths")
 
 	return cmd
 }
