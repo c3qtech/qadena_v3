@@ -49,6 +49,10 @@ while [[ $# -gt 0 ]]; do
             providermnemonic="$2"
             shift 2
             ;;
+        --provider-amount)
+            provideramount="$2"
+            shift 2
+            ;;
         --count)
             count="$2"
             shift 2
@@ -72,6 +76,7 @@ echo "providername: $providername"
 echo "serviceProviderType: $serviceProviderType"
 echo "pioneer: $pioneer"
 echo "createwalletsponsor: $createwalletsponsor"
+echo "provideramount: $provideramount"
 echo "count: $count"
 # Don't print the mnemonic for security reasons
 
@@ -85,6 +90,15 @@ echo "-------------------------"
 echo "$providername Create wallet"
 echo "-------------------------"
 qadenad_alias tx qadena create-wallet $providername $pioneer $createwalletsponsor --account-mnemonic="$providermnemonic"  --yes
+qadena_addr=$(qadenad_alias keys show $providername --address)
+echo "Sending $provideramount to $qadena_addr from treasury"
+result=$(qadenad_alias tx bank send treasury $qadena_addr  $provideramount --from treasury --yes --output json)
+echo "Result: $result"
+# get tx hash
+tx_hash=$(echo $result | jq -r .txhash)
+echo "tx hash: $tx_hash"
+# wait for result
+qadenad_alias query wait-tx $tx_hash --timeout 30s
 
 for i in $(seq 1 $count); do
     echo "-------------------------"
@@ -93,7 +107,9 @@ for i in $(seq 1 $count); do
     qadenad_alias tx qadena create-wallet $providername-eph$i $pioneer $createwalletsponsor --link-to-real-wallet $providername --account-mnemonic="$providermnemonic" --eph-account-index "$i" --yes
     # transfer funds to eph wallet
     qadena_addr=$(qadenad_alias keys show $providername-eph$i --address)
-    result=$(qadenad_alias tx bank send treasury $qadena_addr  10000000000qdn --from treasury --yes --output json)
+    echo "Sending $provideramount to $qadena_addr from treasury"
+    result=$(qadenad_alias tx bank send treasury $qadena_addr  $provideramount --from treasury --yes --output json)
+    echo "Result: $result"
     # get tx hash
     tx_hash=$(echo $result | jq -r .txhash)
     echo "tx hash: $tx_hash"

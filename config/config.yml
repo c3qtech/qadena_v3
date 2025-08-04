@@ -2,42 +2,42 @@ version: 1
 validation: sovereign
 accounts: 
 - name: pioneer1
-  coins: ["100000000qdn"]
+  coins: ["1000000qdn"]
   mnemonic: "nest gown ability blouse ski tortoise wall female across know accuse guard shy drive grunt assault cricket solar pave arrange actress ring more country"
 - name: create-wallet-sponsor
-  coins: ["10000000000qdn"]
+  coins: ["100000qdn"]
   mnemonic: "guilt decline utility scale crash envelope snap table dress coach tray use detect success lemon fatigue surround project warfare victory mean midnight address before"
 - name: treasury
-  coins: ["100000000000000qdn"]
+  coins: ["2000000000qdn"] # 2 billion 
 - name: ekycphidentitysrvprv
-  coins: ["10000000qdn"]
+  coins: ["1000000qdn"]
   mnemonic: "blood dish hybrid toddler upgrade squirrel gate hazard raven wrong prevent lake battle acquire crack agree slam please autumn damage best skin gym call"
 - name: coingecko-oracle
-  coins: ["10000000qdn"]
+  coins: ["100000qdn"]
   mnemonic: "area symptom room bomb atom relief give pole relief truly elbow unknown undo wild clutch ozone liar small occur off enjoy shop busy meadow"
 - name: band-protocol-oracle
-  coins: ["10000000qdn"]
+  coins: ["100000qdn"]
   mnemonic: "verb select bread spirit beyond snow slender lumber ramp rule tribe soldier help area remove guard cage knife witness era mule afford wage like"
 - name: coopnetidentitysrvprv
-  coins: ["10000000qdn"]
+  coins: ["1000000qdn"]
   mnemonic: "clarify whip jungle dune joke entry federal liquid pen journey reject flush evolve disorder slim upon stomach airport affair member occur code twice isolate"
 - name: mayaidentitysrvprv
-  coins: ["10000000qdn"]
+  coins: ["1000000qdn"]
   mnemonic: "penalty caution equip sound they soccer edge debris paddle add purity swap minute defense mass nature hood long diagram auction fat wish story minute"
 - name: coinsphidentitysrvprv
-  coins: ["10000000qdn"]
+  coins: ["1000000qdn"]
   mnemonic: "crunch theory census zoo olympic holiday they early chunk before humor word smile wisdom casual album nation perfect rotate toward have dress wear also"
 - name: unionbankidentitysrvprv
-  coins: ["10000000qdn"]
+  coins: ["1000000qdn"]
   mnemonic: "among umbrella kingdom vote demise fetch eternal era lab thumb artefact tourist mail cactus album nation tuna fresh rule caution patch guilt body bean"
 - name: testfinancesrvprv
-  coins: ["10000000qdn"]
+  coins: ["1000000qdn"]
   mnemonic: "ill seed tent goose two trophy harsh noise winter conduct educate lady man spice sport charge primary fever acoustic famous message myth unlock dust"
 - name: testidentitysrvprv
-  coins: ["10000000000qdn"]
+  coins: ["1000000qdn"]
   mnemonic: "lemon onion exit success feature wait admit permit nation behind vintage summer oven weird blue flash motor maple fiber domain cement inmate slogan avoid"
 - name: testdsvssrvprv
-  coins: ["10000000000qdn"]
+  coins: ["1000000qdn"]
   mnemonic: "twenty shoulder tomato hawk toilet pave famous critic undo beef country object perfect staff net dilemma fade insane enemy oven barrel organ cherry problem"
 
 client:
@@ -45,7 +45,7 @@ client:
     path: docs/static/openapi.yml
 validators:
 - name: pioneer1
-  bonded: 10000qdn
+  bonded: 100000qdn
   app:
     minimum-gas-prices: "0aqdn"
     pruning: "custom"
@@ -111,19 +111,19 @@ genesis:
           amount: "0"
           denom: "qdn"
         create_wallet_transparent_incentive:
-          amount: "500000"
+          amount: "500"
           denom: "qdn"
         create_ephemeral_wallet_incentive:
           amount: "0"
           denom: "qdn"
         create_ephemeral_wallet_transparent_incentive:
-          amount: "500000"
+          amount: "50"
           denom: "qdn"
-        create_credential_fee: "25php"
-        ekyc_submit_new_app_royalty_percentage: "70"
-        ekyc_submit_reuse_app_royalty_percentage: "35"
-        ekyc_submit_reuse_provider_royalty_percentage: "35"
-        ekyc_identity_owner_royalty_percentage: "5"
+        create_credential_fee: "20php"
+        ekyc_submit_new_app_royalty_percentage: "40"
+        ekyc_submit_reuse_app_royalty_percentage: "20"
+        ekyc_submit_reuse_provider_royalty_percentage: "20"
+        ekyc_identity_owner_royalty_percentage: "30"
       enclaveIdentityList:
         - uniqueID: test-unique-id
           signerID: test-signer-id
@@ -272,15 +272,15 @@ genesis:
         - expiry: "2030-01-01T00:00:00Z"
           marketId: "cn:qdn:usd"
           oracleAddress: "band-protocol-oraclePubKID"
-          price: "0.00001"
+          price: "0.01"
         - expiry: "2030-01-01T00:00:00Z"
           marketId: "cn:qdn:php"
           oracleAddress: "band-protocol-oraclePubKID"
-          price: "0.0005713"
+          price: "0.5713"
         - expiry: "2030-01-01T00:00:00Z"
           marketId: "fn:php:usd"
           oracleAddress: "band-protocol-oraclePubKID"
-          price: "0.0180729"
+          price: "0.0174"
         - expiry: "2030-01-01T00:00:00Z"
           marketId: "fn:aud:usd"
           oracleAddress: "band-protocol-oraclePubKID"

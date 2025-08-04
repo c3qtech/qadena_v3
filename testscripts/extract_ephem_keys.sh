@@ -34,11 +34,24 @@ done
 
 # Generate names array
 names=()
-names+="$provider"
-for i in $(seq 1 $count); do
-    names+=("$provider-eph$i")
-    names+=("$provider-eph$i-credential")
-done
+# Check if provider contains the %d placeholder
+if [[ "$provider" == *#* ]]; then
+    # For the base provider, replace %d with nothing
+    base_provider=${provider//\#/}
+    names+=("$base_provider")
+    
+    # For ephemeral keys, replace %d with the number
+    for i in $(seq 1 $count); do
+        curr_name=${provider//\#/-eph$i}
+        names+=("$curr_name")
+    done
+else
+    # Original behavior if no %d is present
+    names+=("$provider")
+    for i in $(seq 1 $count); do
+        names+=("$provider-eph$i")
+    done
+fi
 
 # Create JSON array of names
 names_json=$(printf '%s\n' "${names[@]}" | jq -R . | jq -s .)
