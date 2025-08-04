@@ -37,6 +37,7 @@ names=()
 names+="$provider"
 for i in $(seq 1 $count); do
     names+=("$provider-eph$i")
+    names+=("$provider-eph$i-credential")
 done
 
 # Create JSON array of names
