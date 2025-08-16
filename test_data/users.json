@@ -40,6 +40,7 @@
             "required": 2
         }
     },
+   
     {
         "name": "ann",
         "mnemonic": "inherit rebel absorb diamond leopard lens approve deny balcony toast merry text metal pair diamond lumber gravity song liberty pumpkin goddess nature slush basic",
@@ -172,6 +173,32 @@
         "residency": "PH",
         "email": "bhonchua@c3qtech.com",
         "phone": "+63288888809"
-    }
+    },
+    {
+        "name": "dory",
+        "mnemonic": "monkey put cigar claw learn ranch giant stable bundle universe away power illness trial ozone random vacuum normal pipe since voyage juice shuffle business",
+        "a": "11",
+        "bf": "5678",
+        "firstname": "Rhodora Roxas",
+        "middlename": "Roxas",
+        "lastname": "Villarica",
+        "birthdate": "1970-Feb-03",
+        "gender": "F",
+        "citizenship": "PH",
+        "residency": "PH",
+        "email": "doryvillarica@gmail.com",
+        "phone": "+63288888810",
+        "accept-credential-types": "first-name-personal-info",
+        "accept-password": "1234",
+        "require-sender-credential-types": "first-name-personal-info,middle-name-personal-info,last-name-personal-info",
+        "recovery" : {
+            "partners": [
+                "pioneer1",
+                "+63288888802",
+                "alvillarica@c3qtech.com"
+            ],
+            "required": 2
+        }
+    }    
 ]
 

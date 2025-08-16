@@ -91,5 +91,5 @@ usermod -aG docker $SUDO_USER
 echo "Now you need to:"
 echo "  exit"
 echo "...then log back in..."
-echo "  cd qadena_v2"
+echo "  cd qadena_v3"
 echo "  ./init.sh   OR   ./build.sh"
