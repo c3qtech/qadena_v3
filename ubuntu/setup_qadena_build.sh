@@ -61,6 +61,10 @@ apt-get install -y jq
 # ifconfig
 apt-get install -y net-tools
 
+# rotatelogs
+apt-get install -y apache2-utils
+
+
 # Add Docker's official GPG key:
 apt-get update
 apt-get install ca-certificates curl
@@ -83,13 +87,10 @@ usermod -aG docker $SUDO_USER
 
 (cd installers; gunzip dasel.gz; cp -f dasel /usr/local/bin)
 
-#git clone https://github.com/c3qtech/qadena_v2.git
-#chown -R "$SUDO_UID:$SUDO_GID" qadena_v2
-#cd qadena_v2
-#git config credential.helper store
-
 echo "Now you need to:"
 echo "  exit"
 echo "...then log back in..."
 echo "  cd qadena_v3"
-echo "  ./init.sh   OR   ./build.sh"
+echo "  buildscripts/init.sh   OR   buildscripts/build.sh"
+echo "...then when done..."
+echo "  scripts/run.sh"
