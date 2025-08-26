@@ -79,7 +79,27 @@ echo \
   tee /etc/apt/sources.list.d/docker.list > /dev/null
 apt-get update
 
-VERSION_STRING=5:28.0.4-1~ubuntu.22.04~jammy
+# check if ubuntu 22 or 24
+if command -v lsb_release >/dev/null 2>&1; then
+    DISTRO=$(lsb_release -is)
+    VERSION=$(lsb_release -rs)
+    
+    if [[ "$DISTRO" == "Ubuntu" ]]; then
+        if [[ "$VERSION" == "22.04" ]]; then
+            echo "Ubuntu 22.04 detected"
+            VERSION_STRING=5:28.0.4-1~ubuntu.22.04~jammy
+        elif [[ "$VERSION" == "24.04" ]]; then
+            echo "Ubuntu 24.04 detected"
+            VERSION_STRING=5:28.0.4-1~ubuntu.24.04~noble
+        else
+            echo "Ubuntu detected, but not version 22.04 or 24.04"
+        fi
+    else
+        echo "Not Ubuntu"
+    fi
+else
+    echo "lsb_release not installed, cannot determine distribution"
+fi
 apt-get install -y docker-ce=$VERSION_STRING docker-ce-cli=$VERSION_STRING containerd.io docker-buildx-plugin docker-compose-plugin
 
 groupadd docker
