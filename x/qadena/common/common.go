@@ -1649,9 +1649,37 @@ func validateVShare(ctx sdk.Context, vshare *VShareBindData, encVShare []byte, e
 	return true
 }
 
+func validateBulkVShare(ctx sdk.Context, vshare *VShareBindData, encVShare [][]byte, expectedPubK []VSharePubKInfo) bool {
+	for i := 0; i < len(expectedPubK); i++ {
+		if !vshare.FindVSharePubKInfo(expectedPubK[i]) {
+			ContextError(ctx, "FindVSharePubKInfo failed", expectedPubK[i])
+			return false
+		}
+	}
+
+	hash := sha256.New()
+
+	for _, enc := range encVShare {
+		hash.Write(enc)
+	}
+
+	hashed := hash.Sum(nil)
+
+	if !vshare.VShareBVerify(hashed) {
+		ContextError(ctx, "VShareBVerify failed")
+		return false
+	}
+	return true
+}
+
 func ValidateVShare(ctx sdk.Context, vshare *types.VShareBindData, encVShare []byte, expectedPubK []VSharePubKInfo) bool {
 	unprotoVShare := UnprotoizeVShareBindData(vshare)
 	return validateVShare(ctx, unprotoVShare, encVShare, expectedPubK)
+}
+
+func ValidateBulkVShare(ctx sdk.Context, vshare *types.VShareBindData, encVShare [][]byte, expectedPubK []VSharePubKInfo) bool {
+	unprotoVShare := UnprotoizeVShareBindData(vshare)
+	return validateBulkVShare(ctx, unprotoVShare, encVShare, expectedPubK)
 }
 
 func DSVSValidateVShare(ctx sdk.Context, vshare *dsvstypes.VShareBindData, encVShare []byte, expectedPubK []VSharePubKInfo) bool {

@@ -21,8 +21,14 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 
 	c.ContextDebug(ctx, "CreateCredential isCheckTx=", ctx.IsCheckTx())
 
+	creatorAddress, err := sdk.AccAddressFromBech32(msg.Creator)
+	if err != nil {
+		c.ContextDebug(ctx, "Invalid creator "+msg.Creator)
+		return nil, types.ErrInvalidCreator
+	}
+
 	// check if the creator is an identity service provider
-	err := k.AuthenticateServiceProvider(ctx, msg.Creator, types.IdentityServiceProvider)
+	err = k.AuthenticateServiceProvider(ctx, msg.Creator, types.IdentityServiceProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -95,8 +101,8 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 		}
 
 		c.ContextDebug(ctx, "createCredential fee "+createCredentialFeeCoin.String())
-		normCoin := sdk.NormalizeDecCoin(createCredentialFeeCoin)
-		c.ContextDebug(ctx, "createCredential fee equivalent "+normCoin.String())
+		//		normCoin := sdk.NormalizeDecCoin(createCredentialFeeCoin)
+		//		c.ContextDebug(ctx, "createCredential fee equivalent "+normCoin.String())
 	}
 
 	// is this a new one or a reuse?
@@ -275,12 +281,6 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 
 			c.ContextDebug(ctx, "payToReference "+payToReusedIdentityProvider.String())
 
-		}
-
-		creatorAddress, err := sdk.AccAddressFromBech32(msg.Creator)
-		if err != nil {
-			c.ContextDebug(ctx, "Invalid creator "+msg.Creator)
-			return nil, types.ErrInvalidCreator
 		}
 
 		// compute total incentives
