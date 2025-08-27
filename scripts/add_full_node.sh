@@ -72,7 +72,7 @@ if [[ $PIONEER == "" || $GENESIS_PIONEER_FIRST_IP_ADDRESS == "" ]] ; then
 fi
 
 echo "Stopping any running qadenad and qadenad_enclave processes..."
-$qadenascripts/stop_chain.sh --all
+$qadenascripts/stop_qadena.sh --all
 
 echo "Removing configuration directories from:  $QADENAHOME (config, data, keyring-test, enclave_config, enclave_data)"
 rm -f $QADENAHOME/config/public.pem
@@ -343,7 +343,7 @@ if [[ $REPLY == "y" ]] ; then
     if [ $IS_UP -eq 0 ] ; then
 		echo "Couldn't find balance for $PIONEERADDRESS"
 		echo "Stopping the enclave"
-		$qadenascripts/stop_chain.sh --enclave
+		$qadenascripts/stop_qadena.sh --enclave
 		exit 1
     fi
 
@@ -354,7 +354,7 @@ if [[ $REPLY == "y" ]] ; then
     if [[ $? != 0 ]] ; then
 		echo "Failed to syncrhonize my enclave with the Pioneer/Enclave on $GENESIS_PIONEER_FIRST_IP_ADDRESS"
 		echo "Stopping the enclave"
-		$qadenascripts/stop_chain.sh --enclave
+		$qadenascripts/stop_qadena.sh --enclave
 		exit 1
 	fi
 else
@@ -362,12 +362,12 @@ else
 	echo "Once that's done, you can start the full node by typing in:"
 	echo "  $qadenascripts/run.sh --sync-with-pioneer $GENESIS_PIONEER_FIRST_IP_ADDRESS"
 	echo "Stopping the enclave"
-	$qadenascripts/stop_chain.sh --enclave
+	$qadenascripts/stop_qadena.sh --enclave
 	exit 1
 fi
 
 echo "Stopping the enclave"
-$qadenascripts/stop_chain.sh --enclave
+$qadenascripts/stop_qadena.sh --enclave
 
 echo "Start the new qadena 'full-node' and wait until it synchronizes with the qadena network."
 echo "Once synchronized, if you want to make it a candidate validator by staking qadena, run ./add_validator.sh."

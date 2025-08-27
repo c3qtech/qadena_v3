@@ -44,7 +44,7 @@ if [ -z "$ADVERTISE_IP_ADDRESS" ] ; then
 fi
 
 echo "Stopping old qadenad and qadenad_enclave"
-$qadenascripts/stop_chain.sh --all
+$qadenascripts/stop_qadena.sh --all
 echo "Waiting 5 secs for the chain to die"
 sleep 5
 echo "Initializing..."

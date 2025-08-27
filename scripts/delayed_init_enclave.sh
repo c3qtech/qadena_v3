@@ -111,7 +111,7 @@ while true ; do
                     echo "[delayed_init_enclave - E] No progress in block height after 10 seconds"
                     echo "[delayed_init_enclave - E] Previous height: $LAST_BLOCK_HEIGHT, Current height: $CURRENT_BLOCK_HEIGHT"
                     echo "[delayed_init_enclave - E] Stopping qadenad due to sync stall"
-                    $qadenascripts/stop_chain.sh --chain --enclave
+                    $qadenascripts/stop_qadena.sh --chain --enclave
                     exit 1
                 else
                     echo "[delayed_init_enclave - I] qadenad is still catching up, making progress..."
@@ -133,7 +133,7 @@ while true ; do
             if [[ $COUNTER -ge $MAX_COUNTER ]] ; then
                 echo "[delayed_init_enclave - E] Could not detect that qadenad is caught up $COUNTER / $MAX_COUNTER"
                 echo "[delayed_init_enclave - E] Will stop it"
-                $qadenascripts/stop_chain.sh --chain --enclave
+                $qadenascripts/stop_qadena.sh --chain --enclave
                 exit 1
             fi
         fi

@@ -167,7 +167,7 @@ trap SIGINT
 
 if [[ $DEBUG != "no_qadenad_enclave" ]] ; then
     echo "run.sh: Stopping Qadena"
-    $qadenascripts/stop_chain.sh --all
+    $qadenascripts/stop_qadena.sh --all
 else
     echo "run.sh: Won't stop Enclave, this script didn't start it."
 fi

@@ -40,7 +40,7 @@ fi
 
 if [[ $skip_stop -eq 1 ]]; then
     echo "Killing old qadenad and qadenad_enclave if they're running"
-    $qadenascripts/stop_chain.sh --all
+    $qadenascripts/stop_qadena.sh --all
 fi
 
 echo "Waiting 5 secs for the chain to die"
