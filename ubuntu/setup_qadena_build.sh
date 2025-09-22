@@ -51,6 +51,14 @@ echo "deb [signed-by=/etc/apt/keyrings/intel-sgx-keyring.asc arch=amd64] https:/
 apt update
 apt install -y libsgx-dcap-default-qpl
 
+# check if running in Azure using "curl -H Metadata:true "http://169.254.169.254/metadata/instance?api-version=2021-02-01""
+if curl -m 4 -H Metadata:true "http://169.254.169.254/metadata/instance?api-version=2021-02-01" > /dev/null 2>&1 ; then
+    echo "Running in Azure, installing a default sgx_default_qcnl.conf that points to Azure PCCS"
+    cp azure_sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf
+else
+    echo "Not running in Azure, not installing a default sgx_default_qcnl.conf"
+fi
+
 # ego
 (cd installers; apt install -y ./ego_1.7.0_amd64_ubuntu-22.04.deb)
 apt install -y build-essential libssl-dev
