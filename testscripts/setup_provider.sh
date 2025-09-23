@@ -92,11 +92,16 @@ echo "-------------------------"
 qadenad_alias tx qadena create-wallet $providername $pioneer $createwalletsponsor --account-mnemonic="$providermnemonic"  --yes
 qadena_addr=$(qadenad_alias keys show $providername --address)
 echo "Sending $provideramount to $qadena_addr from treasury"
-result=$(qadenad_alias tx bank send treasury $qadena_addr  $provideramount --from treasury --yes --output json)
+result=$(qadenad_alias tx bank send treasury $qadena_addr  $provideramount --from treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"
 # get tx hash
 tx_hash=$(echo $result | jq -r .txhash)
 echo "tx hash: $tx_hash"
+# check if code is 0
+if [ $(echo $result | jq -r .code) -ne 0 ]; then
+    echo "Error: $(echo $result | jq -r .message)"
+    exit 1
+fi
 # wait for result
 qadenad_alias query wait-tx $tx_hash --timeout 30s
 
@@ -108,11 +113,16 @@ for i in $(seq 1 $count); do
     # transfer funds to eph wallet
     qadena_addr=$(qadenad_alias keys show $providername-eph$i --address)
     echo "Sending $provideramount to $qadena_addr from treasury"
-    result=$(qadenad_alias tx bank send treasury $qadena_addr  $provideramount --from treasury --yes --output json)
+    result=$(qadenad_alias tx bank send treasury $qadena_addr  $provideramount --from treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
     echo "Result: $result"
     # get tx hash
     tx_hash=$(echo $result | jq -r .txhash)
     echo "tx hash: $tx_hash"
+    # check if code is 0
+    if [ $(echo $result | jq -r .code) -ne 0 ]; then
+        echo "Error: $(echo $result | jq -r .message)"
+        exit 1
+    fi
     # wait for result
     qadenad_alias query wait-tx $tx_hash --timeout 30s
 done

@@ -50,7 +50,7 @@ echo "-------------------------"
 $qadenatestscripts/setup_user.sh $name $mnemonic "pioneer1" "$serviceprovider" "$firstname" "$middlename" "$lastname" $birthdate $citizenship $residency $gender $email $phone $a $bf $identityprovider "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" $eph_count $createwalletsponsor
 qadena_addr=$(qadenad_alias keys show $name --address)
 echo "Sending $signeramount to $qadena_addr from treasury"
-result=$(qadenad_alias tx bank send treasury $qadena_addr  $signeramount --from treasury --yes --output json)
+result=$(qadenad_alias tx bank send treasury $qadena_addr  $signeramount --from treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"
 # get tx hash
 tx_hash=$(echo $result | jq -r .txhash)
@@ -61,7 +61,7 @@ qadenad_alias query wait-tx $tx_hash --timeout 30s
 for i in $(seq 1 $eph_count); do
     qadena_addr=$(qadenad_alias keys show $name-eph$i --address)
     echo "Sending $signeramount to $qadena_addr from treasury"
-    result=$(qadenad_alias tx bank send treasury $qadena_addr  $signeramount --from treasury --yes --output json)
+    result=$(qadenad_alias tx bank send treasury $qadena_addr  $signeramount --from treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
     echo "Result: $result"
     # get tx hash
     tx_hash=$(echo $result | jq -r .txhash)
@@ -83,7 +83,7 @@ echo "-------------------------"
 $qadenatestscripts/setup_user.sh $name $mnemonic "pioneer1" "$serviceprovider" "$firstname" "$middlename" "$lastname" $birthdate $citizenship $residency $gender $email $phone $a $bf $identityprovider "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" $eph_count $createwalletsponsor
 qadena_addr=$(qadenad_alias keys show $name --address)
 echo "Sending $createwalletsponsoramount to $qadena_addr from treasury"
-result=$(qadenad_alias tx bank send treasury $qadena_addr  $createwalletsponsoramount --from treasury --yes --output json)
+result=$(qadenad_alias tx bank send treasury $qadena_addr  $createwalletsponsoramount --from treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"
 # get tx hash
 tx_hash=$(echo $result | jq -r .txhash)
@@ -95,7 +95,7 @@ qadenad_alias query wait-tx $tx_hash --timeout 30s
 for i in $(seq 1 $eph_count); do
     qadena_addr=$(qadenad_alias keys show $name-eph$i --address)
     echo "Sending $createwalletsponsoramount to $qadena_addr from treasury"
-    result=$(qadenad_alias tx bank send treasury $qadena_addr  $createwalletsponsoramount --from treasury --yes --output json)
+    result=$(qadenad_alias tx bank send treasury $qadena_addr  $createwalletsponsoramount --from treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
     echo "Result: $result"
     # get tx hash
     tx_hash=$(echo $result | jq -r .txhash)

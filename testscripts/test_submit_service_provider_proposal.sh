@@ -52,27 +52,57 @@ if [ -n "$serviceProviderType" ] ; then
     mv "test_data/$json_proposal-1.gen.json" "test_data/$json_proposal.gen.json"
 fi
 
-# submit json_proposal
-submit_hash=$(qadenad_alias tx gov submit-proposal "test_data/$json_proposal.gen.json" --from pioneer1 -y --output json | jq -r '.txhash')
-echo $submit_hash
+echo "-------------------------"
+echo "Submit proposal"
+echo "-------------------------"
 
+
+# submit json_proposal
+result=$(qadenad_alias tx gov submit-proposal "test_data/$json_proposal.gen.json" --from pioneer1 -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+echo "Result: $result"
+submit_hash=$(echo $result | jq -r .txhash)
+# check if code is 0
+if [ $(echo $result | jq -r .code) -ne 0 ]; then
+    echo "Error: $(echo $result | jq -r .message)"
+    exit 1
+fi
+
+echo "submit_hash: $submit_hash"
 # wait for the proposal to be submitted
 qadenad_alias query wait-tx $submit_hash --timeout 30s
 
 # Get the proposal ID
 proposal_id=$(qadenad_alias query tx $submit_hash --output json | jq -r '.events[] | select(.type=="submit_proposal") | .attributes[] | select(.key=="proposal_id") | .value')
-echo $proposal_id
+echo "proposal_id: $proposal_id"
+
+echo "-------------------------"
+echo "Deposit into proposal"
+echo "-------------------------"
 
 # deposit into the proposal
-deposit_hash=$(qadenad_alias tx gov deposit $proposal_id 1000qdn --from pioneer1 -y --output json | jq -r '.txhash')
-echo $deposit_hash
+result=$(qadenad_alias tx gov deposit $proposal_id 1000qdn --from pioneer1 -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+echo "Result: $result"
+deposit_hash=$(echo $result | jq -r .txhash)
+# check if code is 0
+if [ $(echo $result | jq -r .code) -ne 0 ]; then
+    echo "Error: $(echo $result | jq -r .message)"
+    exit 1
+fi
+echo "deposit_hash: $deposit_hash"
 
 # wait for the deposit to be submitted
 qadenad_alias query wait-tx $deposit_hash --timeout 30s
 
 # vote yes on the proposal
-vote_hash=$(qadenad_alias tx gov vote $proposal_id yes --from pioneer1 -y --output json | jq -r '.txhash')
-echo $vote_hash
+result=$(qadenad_alias tx gov vote $proposal_id yes --from pioneer1 -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+echo "Result: $result"
+vote_hash=$(echo $result | jq -r .txhash)
+echo "vote_hash: $vote_hash"
+# check if code is 0
+if [ $(echo $result | jq -r .code) -ne 0 ]; then
+    echo "Error: $(echo $result | jq -r .message)"
+    exit 1
+fi
 
 # wait for the vote to be submitted
 qadenad_alias query wait-tx $vote_hash --timeout 30s

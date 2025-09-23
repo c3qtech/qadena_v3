@@ -41,6 +41,14 @@ echo "Qadena home: $QADENAHOME"
 echo "Qadena bin: $qadenabin"
 echo "Qadena scripts: $qadenascripts"
 
+# extract minimum-gas-prices from config.yml
+minimum_gas_prices=$(dasel -f $QADENAHOME/config/config.yml 'validators.first().app.minimum-gas-prices')
+gas_adjustment=1.5
+
+# export
+export minimum_gas_prices
+export gas_adjustment
+
 # COMMON FUNCTIONS
 # Function to increment the number in a string
 increment_id() {

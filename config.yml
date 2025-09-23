@@ -49,8 +49,8 @@ validators:
   app:
     minimum-gas-prices: "500000000aqdn"
     pruning: "custom"
-    pruning-keep-recent: "2"
-    pruning-interval: "5"
+    pruning-keep-recent: "100"
+    pruning-interval: "10"
   config:
     log_level: "info"
     moniker: "pioneer1"
