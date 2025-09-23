@@ -117,11 +117,11 @@ echo "run.sh: -----------"
 echo "run.sh: -----------"
 
 if [[ $REAL_ENCLAVE == 1 ]] ; then
-    qadenad_alias start --pruning nothing --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --enclave-addr localhost:50051 --enclave-signer-id `ego signerid $QADENAHOME/config/public.pem` --enclave-unique-id `ego uniqueid $qadenabin/qadenad_enclave` --home=$QADENAHOME &
+    qadenad_alias start --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --enclave-addr localhost:50051 --enclave-signer-id `ego signerid $QADENAHOME/config/public.pem` --enclave-unique-id `ego uniqueid $qadenabin/qadenad_enclave` --home=$QADENAHOME &
     PIDS+=$!
     PROC_NAMES[$!]="qadenad (real enclave)"
 else
-    qadenad_alias start --pruning nothing --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --enclave-addr localhost:50051 --home=$QADENAHOME &
+    qadenad_alias start --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --enclave-addr localhost:50051 --home=$QADENAHOME &
     PIDS+=$!
     PROC_NAMES[$!]="qadenad"
 fi
