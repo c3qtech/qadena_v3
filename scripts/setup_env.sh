@@ -42,11 +42,14 @@ echo "Qadena bin: $qadenabin"
 echo "Qadena scripts: $qadenascripts"
 
 # extract minimum-gas-prices from config.yml
-minimum_gas_prices=$(dasel -f $QADENAHOME/config/config.yml 'validators.first().app.minimum-gas-prices')
+# check if config.yml exists
+if [[ -f "$QADENAHOME/config/config.yml" ]]; then
+    minimum_gas_prices=$(dasel -f $QADENAHOME/config/config.yml 'validators.first().app.minimum-gas-prices')
+    export minimum_gas_prices
+fi
 gas_adjustment=1.5
 
 # export
-export minimum_gas_prices
 export gas_adjustment
 
 # COMMON FUNCTIONS
