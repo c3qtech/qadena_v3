@@ -58,6 +58,8 @@ validators:
       timeout_propose: "3s"
     p2p:
       addr_book_strict: false
+    priv_validator_laddr: "tcp://0.0.0.0:26659"
+      
   client:
     chain-id: "qadena_1000-1"
 build:

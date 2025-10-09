@@ -1,7 +1,5 @@
 package main
 
-// EVERYTHING IN ONE FILE, NEED TO REFACTOR!!!
-
 import (
 	_ "embed"
 	"fmt"

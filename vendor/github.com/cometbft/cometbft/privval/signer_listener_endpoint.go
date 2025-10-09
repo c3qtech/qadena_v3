@@ -64,6 +64,7 @@ func NewSignerListenerEndpoint(
 
 // OnStart implements service.Service.
 func (sl *SignerListenerEndpoint) OnStart() error {
+	//	fmt.Println("SignerListenerEndpoint: Starting")
 	sl.connectRequestCh = make(chan struct{}, 1) // Buffer of 1 to allow `serviceLoop` to re-trigger itself.
 	sl.connectionAvailableCh = make(chan net.Conn)
 
@@ -74,7 +75,7 @@ func (sl *SignerListenerEndpoint) OnStart() error {
 	go sl.serviceLoop()
 	go sl.pingLoop()
 
-	sl.connectRequestCh <- struct{}{}
+	//	sl.connectRequestCh <- struct{}{}
 
 	return nil
 }
@@ -166,6 +167,7 @@ func (sl *SignerListenerEndpoint) acceptNewConnection() (net.Conn, error) {
 }
 
 func (sl *SignerListenerEndpoint) triggerConnect() {
+	//	fmt.Println("SignerListenerEndpoint: Triggering connect")
 	select {
 	case sl.connectRequestCh <- struct{}{}:
 	default:
@@ -173,6 +175,7 @@ func (sl *SignerListenerEndpoint) triggerConnect() {
 }
 
 func (sl *SignerListenerEndpoint) triggerReconnect() {
+	//	fmt.Println("SignerListenerEndpoint: Triggering reconnect")
 	sl.DropConnection()
 	sl.triggerConnect()
 }

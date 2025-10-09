@@ -1,2 +1,3 @@
-qadenad_enclave
-enclave_params.json
+signer_enclave
+priv_validator_key.json
+priv_validator.key

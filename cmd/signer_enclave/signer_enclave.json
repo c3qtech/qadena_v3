@@ -1,0 +1,22 @@
+{
+    "exe": "signer_enclave",
+    "key": "private.pem",
+    "debug": true,
+    "heapSize": 64,
+    "productID": 1,
+    "securityVersion": 2,
+    "mounts": [
+        {
+            "source": "/home",
+            "target": "/home",
+            "type": "hostfs",
+            "readOnly": false
+        },
+        {
+            "source": "/tmp",
+            "target": "/tmp",
+            "type": "hostfs",
+            "readOnly": false
+        }
+    ]
+}

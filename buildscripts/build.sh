@@ -117,6 +117,14 @@ if [[ $skip_enclave == 0 ]] ; then
         echo "************"
         exit 1
     fi
+
+    $qadenabuildscripts/build_signer_enclave.sh --title $TITLE $update_test_unique_id_flag $build_reproducible_flag
+    if [ $? -ne 0 ] ; then
+        echo "************"
+        echo "   $TITLE ERROR"
+        echo "************"
+        exit 1
+    fi
 fi
 
 echo "------------------"

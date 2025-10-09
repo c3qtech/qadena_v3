@@ -8,6 +8,7 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 # install scripts
 # get flags --enclave-only, --chain-only, --scripts-only
 install_enclave=0
+install_signer_enclave=0
 install_chain=0
 install_scripts=0
 install_testscripts=0
@@ -15,6 +16,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --enclave)
             install_enclave=1
+            shift
+            ;;
+        --signer-enclave)
+            install_signer_enclave=1
             shift
             ;;
         --chain)
@@ -31,13 +36,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --all)
             install_enclave=1
+            install_signer_enclave=1
             install_chain=1
             install_scripts=1
             install_testscripts=1
             shift
             ;;
         --help)
-            echo "Usage: install.sh [--enclave] [--chain] [--scripts] [--testscripts] [--all]"
+            echo "Usage: install.sh [--enclave] [--signer-enclave] [--chain] [--scripts] [--testscripts] [--all]"
             exit 0
             ;;
         *)
@@ -48,8 +54,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # need at least one
-if [[ $install_enclave -eq 0 && $install_chain -eq 0 && $install_scripts -eq 0 && $install_testscripts -eq 0 ]]; then
-    echo "Error: Need at least one option: --enclave, --chain, --scripts, or --all"
+if [[ $install_enclave -eq 0  && $install_signer_enclave -eq 0 && $install_chain -eq 0 && $install_scripts -eq 0 && $install_testscripts -eq 0 ]]; then
+    echo "Error: Need at least one option: --enclave, --signer-enclave, --chain, --scripts, or --all"
     exit 1
 fi
 
@@ -64,6 +70,19 @@ if [[ $install_enclave -eq 1 ]]; then
     fi
     cp $enclave_path/qadenad_enclave $qadenabin/qadenad_enclave.$unique_id
     cp $enclave_path/qadenad_enclave $qadenabin/qadenad_enclave
+fi
+
+if [[ $install_signer_enclave -eq 1 ]]; then
+    echo "Installing signer enclave"
+    signer_enclave_path="$qadenabuild/cmd/signer_enclave"
+    # check if reproducible_build_unique_id.txt exists and $enclave_path/qadenad_enclave
+    if [[ -f "$signer_enclave_path/reproducible_build_unique_id.txt" ]]; then
+        unique_id=$(cat "$signer_enclave_path/reproducible_build_unique_id.txt")
+    else
+        unique_id=$(cat "$signer_enclave_path/test_unique_id.txt")
+    fi
+    cp $signer_enclave_path/signer_enclave $qadenabin/signer_enclave.$unique_id
+    cp $signer_enclave_path/signer_enclave $qadenabin/signer_enclave
 fi
 
 if [[ $install_chain -eq 1 ]]; then

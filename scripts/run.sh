@@ -85,6 +85,7 @@ if [[ $DEBUG != "no_qadenad_enclave" ]] ; then
 #    fi
 fi
 
+
 IS_UP=0
 for i in {90..1}
 do
@@ -102,6 +103,40 @@ if [ $IS_UP -ne 1 ] ; then
     exit 1
 fi
 
+if [[ $DEBUG != "no_signer_enclave" ]] ; then
+        if [[ $REAL_ENCLAVE == 1 ]] ; then
+            $qadenascripts/run_realsignerenclave.sh &
+            PIDS+=$!
+            PROC_NAMES[$!]="run_realsignerenclave.sh"
+            echo "run.sh: signer enclave started by script, PID: $!"
+        else
+            $qadenascripts/run_signerenclave.sh &
+            PIDS+=$!
+            PROC_NAMES[$!]="run_signerenclave.sh"
+            echo "run.sh: signer enclave started by script, PID: $!"
+        fi
+fi
+
+# check if the signer enclave is up
+IS_UP=0
+for i in {90..1}
+do
+    # check via curl
+    curl -s http://localhost:26661/ping > /dev/null
+    if [ $? -eq 0 ] ; then
+        echo "run.sh: signer_enclave is up and running!"
+        IS_UP=1
+        break
+    else
+        echo "run.sh: signer_enclave is not yet up, waiting...$i"
+        sleep 1
+    fi
+done
+if [ $IS_UP -ne 1 ] ; then
+    echo "run.sh: Could not run the signer_enclave"
+    exit 1
+fi
+
 if [[ $SYNC_WITH_PIONEER != "" ]] ; then
     $qadenascripts/delayed_init_enclave.sh --sync-with-pioneer $SYNC_WITH_PIONEER &
 else
@@ -111,10 +146,10 @@ PIDS+=$!
 PROC_NAMES[$!]="delayed_init_enclave.sh"
 echo "run.sh: delayed_init_enclave.sh started, PID: $!"
 
-echo "run.sh: -----------"
-echo "run.sh: START CHAIN"
-echo "run.sh: -----------"
-echo "run.sh: -----------"
+echo "run.sh: ------------"
+echo "run.sh: START QADENA"
+echo "run.sh: ------------"
+echo "run.sh: ------------"
 
 if [[ $REAL_ENCLAVE == 1 ]] ; then
     qadenad_alias start --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --enclave-addr localhost:50051 --enclave-signer-id `ego signerid $QADENAHOME/config/public.pem` --enclave-unique-id `ego uniqueid $qadenabin/qadenad_enclave` --home=$QADENAHOME &
