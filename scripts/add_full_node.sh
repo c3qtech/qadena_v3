@@ -104,8 +104,10 @@ echo "Fixing up config.toml"
 
 new_external_address="${ADVERTISE_IP_ADDRESS}:26656"
 new_rpc_laddr_url="tcp://0.0.0.0:26657"
+new_priv_validator_laddr_url="tcp://0.0.0.0:26659"
 dasel put -v "$new_external_address" '.p2p.external_address' -f $QADENAHOME/config/config.toml
 dasel put -v "$new_rpc_laddr_url" '.rpc.laddr' -f $QADENAHOME/config/config.toml
+dasel put -v "$new_priv_validator_laddr_url" '.priv_validator_laddr' -f $QADENAHOME/config/config.toml
 dasel put -v "false" '.p2p.addr_book_strict' -f $QADENAHOME/config/config.toml
 
 new_log_level="info"
@@ -299,7 +301,7 @@ echo "PIONEER $PIONEER"
 PIONEERADDRESS=`qadenad_alias keys show $PIONEER -a --keyring-backend test`
 echo "PIONEER ADDRESS $PIONEERADDRESS"
 FULL="10"
-VALIDATOR="11000"
+VALIDATOR="110000"
 FULL_AQDN=`echo "$FULL * 1000000000000000000" | bc`
 
 echo ""

@@ -17,7 +17,7 @@ fi
 VALIDATOR=$1
 
 if [[ $VALIDATOR == "" ]] ; then
-    VALIDATOR="10000"
+    VALIDATOR="100000"
 fi
 
 IS_UP=0
