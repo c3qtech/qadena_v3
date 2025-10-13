@@ -62,6 +62,9 @@ func CmdCreateDocument() *cobra.Command {
 			argCompanyName := args[2]
 			argDocument := args[3]
 
+			// Get optional metadata flag
+			metadata, _ := cmd.Flags().GetString("metadata")
+
 			// hash the file contents
 			fileHashBytes, fileHash, err := hashFile(argDocument)
 			if err != nil {
@@ -131,6 +134,7 @@ func CmdCreateDocument() *cobra.Command {
 				CompanyName:       argCompanyName,
 				RequiredSignatory: requiredSignatory,
 				Hash:              fileHashBytes,
+				Metadata:          metadata,
 			}
 
 			if err := msgCD.ValidateBasic(); err != nil {
@@ -145,6 +149,7 @@ func CmdCreateDocument() *cobra.Command {
 	}
 
 	flags.AddTxFlagsToCmd(cmd)
+	cmd.Flags().String("metadata", "", "Optional metadata for the document")
 
 	return cmd
 }

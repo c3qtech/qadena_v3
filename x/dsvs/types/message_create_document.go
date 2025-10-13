@@ -8,6 +8,18 @@ import (
 
 var _ sdk.Msg = &MsgCreateDocument{}
 
+func NewMsgCreateDocumentWithMetadata(creator string, documentType string, companyName string, requiredSignatory []*VShareSignatory, hash []byte, metadata string) *MsgCreateDocument {
+	return &MsgCreateDocument{
+		Creator:           creator,
+		DocumentType:      documentType,
+		CompanyName:       companyName,
+		RequiredSignatory: requiredSignatory,
+		Hash:              hash,
+		Metadata:          metadata,
+	}
+}
+
+// optional metadata field
 func NewMsgCreateDocument(creator string, documentType string, companyName string, requiredSignatory []*VShareSignatory, hash []byte) *MsgCreateDocument {
 	return &MsgCreateDocument{
 		Creator:           creator,
@@ -15,6 +27,7 @@ func NewMsgCreateDocument(creator string, documentType string, companyName strin
 		CompanyName:       companyName,
 		RequiredSignatory: requiredSignatory,
 		Hash:              hash,
+		Metadata:          "",
 	}
 }
 

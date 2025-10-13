@@ -13,6 +13,6 @@ message Document {
   repeated VShareSignatory requiredSignatory = 4; 
   repeated VShareSignatory completedSignatory = 5; 
   repeated HashInfo hash = 6; 
-  
+  string metadata = 7;  
 }
 

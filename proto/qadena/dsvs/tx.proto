@@ -58,6 +58,7 @@ message MsgCreateDocument {
            string          companyName       = 4;
   repeated VShareSignatory requiredSignatory = 5;
            bytes           hash              = 6;
+           string          metadata          = 7;
 }
 
 message MsgCreateDocumentResponse {}

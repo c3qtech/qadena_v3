@@ -84,20 +84,23 @@ qadenad_alias tx qadena claim-credential $user_a $user_bf  email-contact-info --
 
 #if serviceprovider is not empty, then do this
 if [ -n "$serviceprovider" ] ; then
-    echo "-------------------------"
-    echo "$username Setup DSVS authorized signatory as $username-eph"
-    echo "-------------------------"
     if [ -n "$eph_count" ] ; then
         # Directly pass multiple wallet IDs as separate arguments
         echo "Registering multiple ephemeral wallets as authorized signatories"
         cmd="qadenad_alias tx dsvs register-authorized-signatory"
         for i in $(seq 1 $eph_count); do
+            echo "-------------------------"
+            echo "$username Setup DSVS authorized signatory as $username-eph$i"
+            echo "-------------------------"
             cmd="$cmd $username-eph$i"
         done
         cmd="$cmd --from $username --yes"
         echo "Executing: $cmd"
         eval $cmd
     else
+        echo "-------------------------"
+        echo "$username Setup DSVS authorized signatory as $username-eph"
+        echo "-------------------------"
         qadenad_alias tx dsvs register-authorized-signatory $username-eph --from $username --yes
     fi
 fi
@@ -115,10 +118,17 @@ if [ "$eph_count" -eq 1 ]; then
         echo "-------------------------"
         qadenad_alias tx nameservice bind-credential $username phone-contact-info --from $username-eph2 --yes
     else
-        echo "-------------------------"
-        echo "$username Bind phone nameservice to $username-eph"
-        echo "-------------------------"
-        qadenad_alias tx nameservice bind-credential $username phone-contact-info --from $username-eph --yes
+        if [ -n "$eph_count" ] ; then
+            echo "-------------------------"
+            echo "$username Bind phone nameservice to $username-eph1"
+            echo "-------------------------"
+            qadenad_alias tx nameservice bind-credential $username phone-contact-info --from $username-eph1 --yes
+        else
+            echo "-------------------------"
+            echo "$username Bind phone nameservice to $username-eph"
+            echo "-------------------------"
+            qadenad_alias tx nameservice bind-credential $username phone-contact-info --from $username-eph --yes
+        fi
     fi
 
     if [ -n "$requiresendertypes" ] ; then
@@ -131,10 +141,17 @@ if [ "$eph_count" -eq 1 ]; then
         echo "-------------------------"
         qadenad_alias tx nameservice bind-credential $username email-contact-info --from $username-eph3 --yes
     else 
-        echo "-------------------------"
-        echo "$username Bind email nameservice to $username-eph"
-        echo "-------------------------"
-        qadenad_alias tx nameservice bind-credential $username email-contact-info --from $username-eph --yes
+        if [ -n "$eph_count" ] ; then
+            echo "-------------------------"
+            echo "$username Bind email nameservice to $username-eph1"
+            echo "-------------------------"
+            qadenad_alias tx nameservice bind-credential $username email-contact-info --from $username-eph1 --yes
+        else
+            echo "-------------------------"
+            echo "$username Bind email nameservice to $username-eph"
+            echo "-------------------------"
+            qadenad_alias tx nameservice bind-credential $username email-contact-info --from $username-eph --yes
+        fi
     fi
 
     if [ -n "$acceptpassword" ] ; then
