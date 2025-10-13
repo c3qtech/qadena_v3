@@ -72,7 +72,8 @@ do
 	BALANCE=`echo $BALANCE_JSON | jq -r '.balances[] | select(.denom=="aqdn") | .amount'`
     ret=`bc <<< "$BALANCE >= $VALIDATOR_AQDN"`
     if [[ $ret = 1 ]] ; then
-      echo "$PIONEER has enough balance to become a validator!"
+      BALANCE_QDN=`echo "$BALANCE / 1000000000000000000" | bc`
+      echo "$PIONEER has enough balance (${BALANCE_QDN}qdn) to become a validator!"
       IS_UP=1
       break
     else
@@ -115,7 +116,9 @@ jq -n \
     "min-self-delegation": $min_self_delegation
 }' > validator.gen.json
 
-qadenad_alias tx staking create-validator validator.gen.json  --from "$PIONEER" --yes
+minimum_gas_prices=`dasel -f $QADENAHOME/config/config.yml 'validators.first().app.minimum-gas-prices'`
+
+qadenad_alias tx staking create-validator validator.gen.json  --from "$PIONEER" --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment --yes
 
 if [[ $? != 0 ]] ; then
     echo "Failed to 'create-validator' for $PIONEER"
