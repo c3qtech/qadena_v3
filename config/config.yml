@@ -55,7 +55,7 @@ validators:
     log_level: "info"
     moniker: "pioneer1"
     consensus:
-      timeout_propose: "3s"
+      timeout_propose: "5s"
     p2p:
       addr_book_strict: false
     priv_validator_laddr: "tcp://0.0.0.0:26659"
