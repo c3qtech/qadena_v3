@@ -1,5 +1,15 @@
 # Changelog
 
+## [v1.1.1] - 2024-12-19
+
+* [#120](https://github.com/cosmos/cosmos-db/pull/120) Skip unwanted logs from PebbleDB
+
+## [v1.1.0] - 2024-11-22
+
+* Allow full control in rocksdb opening
+* Make `Iteractor` and `Batch` interfaces more flexible by a type alias
+* Remove build tag for PebbleDB
+
 ## [v1.0.2] - 2024-02-26
 
 * Downgrade Go version in go.mod to 1.19

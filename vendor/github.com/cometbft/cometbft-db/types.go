@@ -68,6 +68,9 @@ type DB interface {
 
 	// Stats returns a map of property values for all keys and the size of the cache.
 	Stats() map[string]string
+
+	// Compact explicitly
+	Compact(start, end []byte) error
 }
 
 // Batch represents a group of writes. They may or may not be written atomically depending on the
@@ -133,11 +136,17 @@ type Iterator interface {
 	Next()
 
 	// Key returns the key at the current position. Panics if the iterator is invalid.
-	// CONTRACT: key readonly []byte
+	// Key returns the key of the current key/value pair, or nil if done.
+	// The caller should not modify the contents of the returned slice, and
+	// its contents may change on the next call to any 'seeks method'.
+	// Instead, the caller should make a copy and work on the copy.
 	Key() (key []byte)
 
 	// Value returns the value at the current position. Panics if the iterator is invalid.
-	// CONTRACT: value readonly []byte
+	// Value returns the value of the current key/value pair, or nil if done.
+	// The caller should not modify the contents of the returned slice, and
+	// its contents may change on the next call to any 'seeks method'.
+	// Instead, the caller should make a copy and work on the copy.
 	Value() (value []byte)
 
 	// Error returns the last error encountered by the iterator, if any.

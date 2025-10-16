@@ -1,5 +1,3 @@
-//go:build pebbledb
-
 package db
 
 import (
@@ -34,7 +32,7 @@ git reset --hard
 git checkout v0.14.0
 go mod edit -replace github.com/tendermint/tm-db=github.com/baabeetaa/tm-db@pebble
 go mod tidy
-go install -tags pebbledb -ldflags "-w -s -X github.com/cosmos/cosmos-sdk/types.DBBackend=pebbledb -X github.com/tendermint/tm-db.ForceSync=1" ./cmd/sifnoded
+go install -ldflags "-w -s -X github.com/cosmos/cosmos-sdk/types.DBBackend=pebbledb -X github.com/tendermint/tm-db.ForceSync=1" ./cmd/sifnoded
 
 $HOME/go/bin/sifnoded start --db_backend=pebbledb
 
@@ -44,7 +42,7 @@ git reset --hard
 git checkout v0.15.0
 go mod edit -replace github.com/tendermint/tm-db=github.com/baabeetaa/tm-db@pebble
 go mod tidy
-go install -tags pebbledb -ldflags "-w -s -X github.com/cosmos/cosmos-sdk/types.DBBackend=pebbledb" ./cmd/sifnoded
+go install -ldflags "-w -s -X github.com/cosmos/cosmos-sdk/types.DBBackend=pebbledb" ./cmd/sifnoded
 
 $HOME/go/bin/sifnoded start --db_backend=pebbledb
 
@@ -74,6 +72,7 @@ var _ DB = (*PebbleDB)(nil)
 
 func NewPebbleDB(name string, dir string, opts Options) (DB, error) {
 	do := &pebble.Options{
+		Logger:                   &fatalLogger{},          // pebble info logs are messing up the logs (not a cosmossdk.io/log logger)
 		MaxConcurrentCompactions: func() int { return 3 }, // default 1
 	}
 
@@ -98,7 +97,6 @@ func NewPebbleDB(name string, dir string, opts Options) (DB, error) {
 
 // Get implements DB.
 func (db *PebbleDB) Get(key []byte) ([]byte, error) {
-	// fmt.Println("PebbleDB.Get")
 	if len(key) == 0 {
 		return nil, errKeyEmpty
 	}
@@ -494,3 +492,13 @@ func (itr *pebbleDBIterator) assertIsValid() {
 		panic("iterator is invalid")
 	}
 }
+
+type fatalLogger struct {
+	pebble.Logger
+}
+
+func (*fatalLogger) Fatalf(format string, args ...interface{}) {
+	pebble.DefaultLogger.Fatalf(format, args...)
+}
+
+func (*fatalLogger) Infof(format string, args ...interface{}) {}
