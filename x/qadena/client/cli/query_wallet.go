@@ -18,7 +18,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/types/query"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 
-	ibctransfertypes "github.com/cosmos/ibc-go/v8/modules/apps/transfer/types"
+	//	ibctransfertypes "github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
 
 	//"math/big"
 
@@ -168,14 +168,16 @@ func CmdShowWallet() *cobra.Command {
 				return err
 			}
 
-			queryIbcClient := ibctransfertypes.NewQueryClient(clientCtx)
-			denomTracesParams := &ibctransfertypes.QueryDenomTracesRequest{
-				Pagination: &query.PageRequest{},
-			}
-			denomTracesRes, err := queryIbcClient.DenomTraces(ctx, denomTracesParams)
-			if err != nil {
-				return err
-			}
+			/*
+				queryIbcClient := ibctransfertypes.NewQueryClient(clientCtx)
+				denomTracesParams := &ibctransfertypes.QueryDenomTracesRequest{
+					Pagination: &query.PageRequest{},
+				}
+				denomTracesRes, err := queryIbcClient.DenomTraces(ctx, denomTracesParams)
+				if err != nil {
+					return err
+				}
+			*/
 
 			wallet, err := c.GetWallet(clientCtx, argWalletID)
 
@@ -501,8 +503,8 @@ func CmdShowWallet() *cobra.Command {
 				fmt.Println(c.PrettyPrint(wallet))
 				fmt.Println("All Balances")
 				fmt.Println(c.PrettyPrint(allBalancesRes))
-				fmt.Println("Denom Traces")
-				fmt.Println(c.PrettyPrint(denomTracesRes))
+				//fmt.Println("Denom Traces")
+				//fmt.Println(c.PrettyPrint(denomTracesRes))
 			}
 
 			return err

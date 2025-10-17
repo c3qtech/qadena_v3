@@ -72,7 +72,8 @@ type StateMachine interface {
 	// Check is ran after every action and should contain invariant checks.
 	//
 	// All other public methods should have a form ActionName(t *rapid.T)
-	// and are used as possible actions. At least one action has to be specified.
+	// or ActionName(t rapid.TB) and are used as possible actions.
+	// At least one action has to be specified.
 	Check(*T)
 }
 
@@ -88,9 +89,21 @@ func StateMachineActions(sm StateMachine) map[string]func(*T) {
 	actions := make(map[string]func(*T), n)
 	for i := 0; i < n; i++ {
 		name := t.Method(i).Name
+
+		if name == checkMethodName {
+			continue
+		}
+
 		m, ok := v.Method(i).Interface().(func(*T))
-		if ok && name != checkMethodName {
+		if ok {
 			actions[name] = m
+		}
+
+		m2, ok := v.Method(i).Interface().(func(TB))
+		if ok {
+			actions[name] = func(t *T) {
+				m2(t)
+			}
 		}
 	}
 

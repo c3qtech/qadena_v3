@@ -151,6 +151,8 @@ if [ ! -f $qadenabuild/config.yml ]; then
         fi
         cp `which qadena_v3d` $qadenabin/qadenad
     else
+        echo "FAAAAAIIIILLL"
+        exit 1
 	    rm $qadenabuild/config.yml
         echo "Failed to build chain, removing config.yml"
         exit 1

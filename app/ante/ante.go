@@ -13,6 +13,10 @@ import (
 	qadenamodulekeeper "github.com/c3qtech/qadena_v3/x/qadena/keeper"
 
 	authante "github.com/cosmos/cosmos-sdk/x/auth/ante"
+
+	corestoretypes "cosmossdk.io/core/store"
+	wasmkeeper "github.com/CosmWasm/wasmd/x/wasm/keeper"
+	wasmTypes "github.com/CosmWasm/wasmd/x/wasm/types"
 )
 
 // HandlerOptions are the options required for constructing a default SDK AnteHandler.
@@ -25,6 +29,9 @@ type HandlerOptions struct {
 	SigGasConsumer         func(meter storetypes.GasMeter, sig signing.SignatureV2, params types.Params) error
 	TxFeeChecker           authante.TxFeeChecker
 	QadenaKeeper           *qadenamodulekeeper.Keeper
+	NodeConfig             *wasmTypes.NodeConfig
+	TXCounterStoreService  corestoretypes.KVStoreService
+	WasmKeeper             *wasmkeeper.Keeper
 }
 
 // NewAnteHandler returns an AnteHandler that checks and increments sequence
@@ -47,8 +54,19 @@ func NewAnteHandler(options HandlerOptions) (sdk.AnteHandler, error) {
 		return nil, errorsmod.Wrap(sdkerrors.ErrLogic, "sign mode handler is required for ante builder")
 	}
 
+	if options.NodeConfig == nil {
+		return nil, errorsmod.Wrap(sdkerrors.ErrLogic, "wasm config is required for ante builder")
+	}
+	if options.TXCounterStoreService == nil {
+		return nil, errorsmod.Wrap(sdkerrors.ErrLogic, "wasm store service is required for ante builder")
+	}
+
 	anteDecorators := []sdk.AnteDecorator{
-		authante.NewSetUpContextDecorator(), // outermost AnteDecorator. SetUpContext must be called first
+		authante.NewSetUpContextDecorator(),                                              // outermost AnteDecorator. SetUpContext must be called first
+		wasmkeeper.NewLimitSimulationGasDecorator(options.NodeConfig.SimulationGasLimit), // after setup context to enforce limits early
+		wasmkeeper.NewCountTXDecorator(options.TXCounterStoreService),
+		wasmkeeper.NewGasRegisterDecorator(options.WasmKeeper.GetGasRegister()),
+		wasmkeeper.NewTxContractsDecorator(),
 		options.QadenaKeeper,
 		authante.NewExtensionOptionsDecorator(options.ExtensionOptionChecker),
 		authante.NewValidateBasicDecorator(),

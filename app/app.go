@@ -66,21 +66,25 @@ import (
 	slashingkeeper "github.com/cosmos/cosmos-sdk/x/slashing/keeper"
 	_ "github.com/cosmos/cosmos-sdk/x/staking" // import for side-effects
 	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
-	_ "github.com/cosmos/ibc-go/modules/capability" // import for side-effects
-	capabilitykeeper "github.com/cosmos/ibc-go/modules/capability/keeper"
-	_ "github.com/cosmos/ibc-go/v8/modules/apps/27-interchain-accounts" // import for side-effects
-	icacontrollerkeeper "github.com/cosmos/ibc-go/v8/modules/apps/27-interchain-accounts/controller/keeper"
-	icahostkeeper "github.com/cosmos/ibc-go/v8/modules/apps/27-interchain-accounts/host/keeper"
-	_ "github.com/cosmos/ibc-go/v8/modules/apps/29-fee" // import for side-effects
-	ibcfeekeeper "github.com/cosmos/ibc-go/v8/modules/apps/29-fee/keeper"
-	ibctransferkeeper "github.com/cosmos/ibc-go/v8/modules/apps/transfer/keeper"
-	ibckeeper "github.com/cosmos/ibc-go/v8/modules/core/keeper"
+	//	_ "github.com/cosmos/ibc-go/modules/capability" // import for side-effects
+	//	capabilitykeeper "github.com/cosmos/ibc-go/modules/capability/keeper"
+	_ "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts" // import for side-effects
+	icacontrollerkeeper "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/controller/keeper"
+	icahostkeeper "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/host/keeper"
+	// _ "github.com/cosmos/ibc-go/v10/modules/apps/29-fee" // import for side-effects
+	//ibcfeekeeper "github.com/cosmos/ibc-go/v10/modules/apps/29-fee/keeper"
+	ibctransferkeeper "github.com/cosmos/ibc-go/v10/modules/apps/transfer/keeper"
+	ibckeeper "github.com/cosmos/ibc-go/v10/modules/core/keeper"
 
 	nameservicemodulekeeper "github.com/c3qtech/qadena_v3/x/nameservice/keeper"
 	qadenamodulekeeper "github.com/c3qtech/qadena_v3/x/qadena/keeper"
 
 	dsvsmodulekeeper "github.com/c3qtech/qadena_v3/x/dsvs/keeper"
 	pricefeedmodulekeeper "github.com/c3qtech/qadena_v3/x/pricefeed/keeper"
+
+	// CosmWasm
+	wasmkeeper "github.com/CosmWasm/wasmd/x/wasm/keeper"
+	wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
 
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 
@@ -98,6 +102,8 @@ import (
 	cmdcfg "github.com/c3qtech/qadena_v3/cmd/config"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	tmproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	//enccodec "github.com/evmos/evmos/v18/encoding/codec"
 )
 
@@ -124,6 +130,7 @@ type App struct {
 	legacyAmino       *codec.LegacyAmino
 	appCodec          codec.Codec
 	txConfig          client.TxConfig
+	nodeConfig        wasmtypes.NodeConfig
 	interfaceRegistry codectypes.InterfaceRegistry
 
 	// keepers
@@ -147,24 +154,26 @@ type App struct {
 	CircuitBreakerKeeper circuitkeeper.Keeper
 
 	// IBC
-	IBCKeeper           *ibckeeper.Keeper // IBC Keeper must be a pointer in the app, so we can SetRouter on it correctly
-	CapabilityKeeper    *capabilitykeeper.Keeper
-	IBCFeeKeeper        ibcfeekeeper.Keeper
+	IBCKeeper *ibckeeper.Keeper // IBC Keeper must be a pointer in the app, so we can SetRouter on it correctly
+	// CapabilityKeeper *capabilitykeeper.Keeper
+	//	IBCFeeKeeper        ibcfeekeeper.Keeper
 	ICAControllerKeeper icacontrollerkeeper.Keeper
 	ICAHostKeeper       icahostkeeper.Keeper
 	TransferKeeper      ibctransferkeeper.Keeper
 
 	// Scoped IBC
-	ScopedIBCKeeper           capabilitykeeper.ScopedKeeper
-	ScopedIBCTransferKeeper   capabilitykeeper.ScopedKeeper
-	ScopedICAControllerKeeper capabilitykeeper.ScopedKeeper
-	ScopedICAHostKeeper       capabilitykeeper.ScopedKeeper
+	//	ScopedIBCKeeper           capabilitykeeper.ScopedKeeper
+	//	ScopedIBCTransferKeeper   capabilitykeeper.ScopedKeeper
+	//	ScopedICAControllerKeeper capabilitykeeper.ScopedKeeper
+	//	ScopedICAHostKeeper       capabilitykeeper.ScopedKeeper
 
 	QadenaKeeper      qadenamodulekeeper.Keeper
 	NameserviceKeeper nameservicemodulekeeper.Keeper
 	PricefeedKeeper   pricefeedmodulekeeper.Keeper
 	DsvsKeeper        dsvsmodulekeeper.Keeper
 	// this line is used by starport scaffolding # stargate/app/keeperDeclaration
+
+	WasmKeeper wasmkeeper.Keeper
 
 	// simulation manager
 	sm *module.SimulationManager
@@ -226,14 +235,19 @@ func newAnteHandler(app *App) (sdk.AnteHandler, error) {
 		sigGasConsumer = ante.EthSigVerificationGasConsumer
 	}
 
+	txCounterStoreKey := app.GetKey(wasmtypes.StoreKey)
+
 	anteHandler, err := ante.NewAnteHandler(
 		ante.HandlerOptions{
-			AccountKeeper:   app.AccountKeeper,
-			BankKeeper:      app.BankKeeper,
-			SignModeHandler: app.txConfig.SignModeHandler(),
-			FeegrantKeeper:  app.FeeGrantKeeper,
-			SigGasConsumer:  sigGasConsumer,
-			QadenaKeeper:    &app.QadenaKeeper,
+			AccountKeeper:         app.AccountKeeper,
+			BankKeeper:            app.BankKeeper,
+			SignModeHandler:       app.txConfig.SignModeHandler(),
+			FeegrantKeeper:        app.FeeGrantKeeper,
+			SigGasConsumer:        sigGasConsumer,
+			QadenaKeeper:          &app.QadenaKeeper,
+			WasmKeeper:            &app.WasmKeeper,
+			TXCounterStoreService: runtime.NewKVStoreService(txCounterStoreKey),
+			NodeConfig:            &app.nodeConfig,
 		},
 	)
 	if err != nil {
@@ -263,6 +277,7 @@ func New(
 	traceStore io.Writer,
 	loadLatest bool,
 	appOpts servertypes.AppOptions,
+	wasmOpts []wasmkeeper.Option,
 	baseAppOptions ...func(*baseapp.BaseApp),
 ) (*App, error) {
 	var (
@@ -280,7 +295,7 @@ func New(
 				// Passing the getter, the app IBC Keeper will always be accessible.
 				// This needs to be removed after IBC supports App Wiring.
 				app.GetIBCKeeper,
-				app.GetCapabilityScopedKeeper,
+				//				app.GetCapabilityScopedKeeper,
 				// Supply the logger
 				logger,
 
@@ -399,7 +414,7 @@ func New(
 	app.App = appBuilder.Build(db, traceStore, baseAppOptions...)
 
 	// Register legacy modules
-	if err := app.registerIBCModules(appOpts); err != nil {
+	if err := app.registerIBCAndWASMModules(appOpts, wasmOpts); err != nil {
 		return nil, err
 	}
 
@@ -439,6 +454,18 @@ func New(
 	}
 	app.SetAnteHandler(anteHandler)
 
+	// must be before Loading version
+	// requires the snapshot store to be created and registered as a BaseAppOption
+	// see cmd/wasmd/root.go: 206 - 214 approx
+	if manager := app.SnapshotManager(); manager != nil {
+		err := manager.RegisterExtensions(
+			wasmkeeper.NewWasmSnapshotter(app.CommitMultiStore(), &app.WasmKeeper),
+		)
+		if err != nil {
+			panic(fmt.Errorf("failed to register snapshot extension: %s", err))
+		}
+	}
+
 	postHandler, err := newPostHandler(app)
 	if err != nil {
 		panic(err)
@@ -451,6 +478,15 @@ func New(
 
 	if err := app.Load(loadLatest); err != nil {
 		return nil, err
+	}
+
+	if loadLatest {
+		ctx := app.BaseApp.NewUncachedContext(true, tmproto.Header{})
+
+		// Initialize pinned codes in wasmvm as they are not persisted there
+		if err := app.WasmKeeper.InitializePinnedCodes(ctx); err != nil {
+			panic(fmt.Sprintf("failed initialize pinned codes %s", err))
+		}
 	}
 
 	return app, nil
@@ -514,10 +550,12 @@ func (app *App) GetIBCKeeper() *ibckeeper.Keeper {
 	return app.IBCKeeper
 }
 
+/*
 // GetCapabilityScopedKeeper returns the capability scoped keeper.
 func (app *App) GetCapabilityScopedKeeper(moduleName string) capabilitykeeper.ScopedKeeper {
 	return app.CapabilityKeeper.ScopeToModule(moduleName)
 }
+*/
 
 // SimulationManager implements the SimulationApp interface.
 func (app *App) SimulationManager() *module.SimulationManager {

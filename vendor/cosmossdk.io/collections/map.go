@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"cosmossdk.io/collections/codec"
-	"cosmossdk.io/core/store"
+	store "cosmossdk.io/collections/corecompat"
 )
 
 // Map represents the basic collections object.
@@ -20,6 +20,22 @@ type Map[K, V any] struct {
 	sa     func(context.Context) store.KVStore
 	prefix []byte
 	name   string
+
+	// isSecondaryIndex indicates that this map represents a secondary index
+	// on another collection and that it should be skipped when generating
+	// a user facing schema
+	isSecondaryIndex bool
+}
+
+// withMapSecondaryIndex changes the behavior of the Map to be a secondary index.
+func withMapSecondaryIndex(isSecondaryIndex bool) func(opt *mapOptions) {
+	return func(opt *mapOptions) {
+		opt.isSecondaryIndex = isSecondaryIndex
+	}
+}
+
+type mapOptions struct {
+	isSecondaryIndex bool
 }
 
 // NewMap returns a Map given a StoreKey, a Prefix, human-readable name and the relative value and key encoders.
@@ -31,13 +47,19 @@ func NewMap[K, V any](
 	name string,
 	keyCodec codec.KeyCodec[K],
 	valueCodec codec.ValueCodec[V],
+	options ...func(opt *mapOptions),
 ) Map[K, V] {
+	o := new(mapOptions)
+	for _, opt := range options {
+		opt(o)
+	}
 	m := Map[K, V]{
-		kc:     keyCodec,
-		vc:     valueCodec,
-		sa:     schemaBuilder.schema.storeAccessor,
-		prefix: prefix.Bytes(),
-		name:   name,
+		kc:               keyCodec,
+		vc:               valueCodec,
+		sa:               schemaBuilder.schema.storeAccessor,
+		prefix:           prefix.Bytes(),
+		name:             name,
+		isSecondaryIndex: o.isSecondaryIndex,
 	}
 	schemaBuilder.addCollection(collectionImpl[K, V]{m})
 	return m
@@ -61,7 +83,7 @@ func (m Map[K, V]) Set(ctx context.Context, key K, value V) error {
 
 	valueBytes, err := m.vc.Encode(value)
 	if err != nil {
-		return fmt.Errorf("%w: value encode: %s", ErrEncoding, err) // TODO: use multi err wrapping in go1.20: https://github.com/golang/go/issues/53435
+		return fmt.Errorf("%w: value encode: %w", ErrEncoding, err)
 	}
 
 	kvStore := m.sa(ctx)
@@ -88,7 +110,7 @@ func (m Map[K, V]) Get(ctx context.Context, key K) (v V, err error) {
 
 	v, err = m.vc.Decode(valueBytes)
 	if err != nil {
-		return v, fmt.Errorf("%w: value decode: %s", ErrEncoding, err) // TODO: use multi err wrapping in go1.20: https://github.com/golang/go/issues/53435
+		return v, fmt.Errorf("%w: value decode: %w", ErrEncoding, err)
 	}
 	return v, nil
 }
@@ -201,6 +223,14 @@ func deleteDomain(s store.KVStore, start, end []byte) error {
 	return nil
 }
 
+// concatNew concatenates two byte slices, prefix and suffix, into a new byte slice and returns the result.
+func concatNew(prefix, suffix []byte) []byte {
+	b := make([]byte, len(prefix)+len(suffix))
+	copy(b, prefix)
+	copy(b[len(prefix):], suffix)
+	return b
+}
+
 // IterateRaw iterates over the collection. The iteration range is untyped, it uses raw
 // bytes. The resulting Iterator is typed.
 // A nil start iterates from the first key contained in the collection.
@@ -208,12 +238,12 @@ func deleteDomain(s store.KVStore, start, end []byte) error {
 // A nil start and a nil end iterates over every key contained in the collection.
 // TODO(tip): simplify after https://github.com/cosmos/cosmos-sdk/pull/14310 is merged
 func (m Map[K, V]) IterateRaw(ctx context.Context, start, end []byte, order Order) (Iterator[K, V], error) {
-	prefixedStart := append(m.prefix, start...)
+	prefixedStart := concatNew(m.prefix, start)
 	var prefixedEnd []byte
 	if end == nil {
 		prefixedEnd = nextBytesPrefixKey(m.prefix)
 	} else {
-		prefixedEnd = append(m.prefix, end...)
+		prefixedEnd = concatNew(m.prefix, end)
 	}
 
 	if bytes.Compare(prefixedStart, prefixedEnd) == 1 {
@@ -262,7 +292,7 @@ func EncodeKeyWithPrefix[K any](prefix []byte, kc codec.KeyCodec[K], key K) ([]b
 	// put key
 	_, err := kc.Encode(keyBytes[prefixLen:], key)
 	if err != nil {
-		return nil, fmt.Errorf("%w: key encode: %s", ErrEncoding, err) // TODO: use multi err wrapping in go1.20: https://github.com/golang/go/issues/53435
+		return nil, fmt.Errorf("%w: key encode: %w", ErrEncoding, err)
 	}
 	return keyBytes, nil
 }

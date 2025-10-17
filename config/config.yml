@@ -51,6 +51,9 @@ validators:
     pruning: "custom"
     pruning-keep-recent: "100"
     pruning-interval: "10"
+    wasm:
+      query_gas_limit: "300000"
+      memory_cache_size: "300"
   config:
     log_level: "info"
     moniker: "pioneer1"
@@ -107,6 +110,15 @@ genesis:
           - denom: "aqdn"
             amount: "1000000000000000000"
         voting_period: "300s"
+    wasm:
+      codes: []
+      contracts: []
+      params:
+        code_upload_access:
+          addresses: []
+          permission: "Everybody"
+        instantiate_default_permission: "Everybody"
+      sequences: []
     qadena:
       params:
         create_wallet_incentive:

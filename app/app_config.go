@@ -46,11 +46,11 @@ import (
 	paramstypes "github.com/cosmos/cosmos-sdk/x/params/types"
 	slashingtypes "github.com/cosmos/cosmos-sdk/x/slashing/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
-	capabilitytypes "github.com/cosmos/ibc-go/modules/capability/types"
-	icatypes "github.com/cosmos/ibc-go/v8/modules/apps/27-interchain-accounts/types"
-	ibcfeetypes "github.com/cosmos/ibc-go/v8/modules/apps/29-fee/types"
-	ibctransfertypes "github.com/cosmos/ibc-go/v8/modules/apps/transfer/types"
-	ibcexported "github.com/cosmos/ibc-go/v8/modules/core/exported"
+	//	capabilitytypes "github.com/cosmos/ibc-go/modules/capability/types"
+	icatypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/types"
+	// ibcfeetypes "github.com/cosmos/ibc-go/v10/modules/apps/29-fee/types"
+	ibctransfertypes "github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
+	ibcexported "github.com/cosmos/ibc-go/v10/modules/core/exported"
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	dsvsmodulev1 "github.com/c3qtech/qadena_v3/api/qadena/dsvs/module"
@@ -65,6 +65,8 @@ import (
 	pricefeedmoduletypes "github.com/c3qtech/qadena_v3/x/pricefeed/types"
 	_ "github.com/c3qtech/qadena_v3/x/qadena/module" // import for side-effects
 	qadenamoduletypes "github.com/c3qtech/qadena_v3/x/qadena/types"
+
+	wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
 	// this line is used by starport scaffolding # stargate/app/moduleImport
 )
 
@@ -77,7 +79,7 @@ var (
 	// can do so safely.
 	genesisModuleOrder = []string{
 		// cosmos-sdk/ibc modules
-		capabilitytypes.ModuleName,
+		//		capabilitytypes.ModuleName,
 		authtypes.ModuleName,
 		banktypes.ModuleName,
 		distrtypes.ModuleName,
@@ -92,7 +94,7 @@ var (
 		authz.ModuleName,
 		ibctransfertypes.ModuleName,
 		icatypes.ModuleName,
-		ibcfeetypes.ModuleName,
+		//		ibcfeetypes.ModuleName,
 		feegrant.ModuleName,
 		paramstypes.ModuleName,
 		upgradetypes.ModuleName,
@@ -106,6 +108,7 @@ var (
 		nameservicemoduletypes.ModuleName,
 		pricefeedmoduletypes.ModuleName,
 		dsvsmoduletypes.ModuleName,
+		wasmtypes.ModuleName,
 		// this line is used by starport scaffolding # stargate/app/initGenesis
 	}
 
@@ -124,16 +127,17 @@ var (
 		authz.ModuleName,
 		genutiltypes.ModuleName,
 		// ibc modules
-		capabilitytypes.ModuleName,
+		//		capabilitytypes.ModuleName,
 		ibcexported.ModuleName,
 		ibctransfertypes.ModuleName,
 		icatypes.ModuleName,
-		ibcfeetypes.ModuleName,
+		//		ibcfeetypes.ModuleName,
 		// chain modules
 		qadenamoduletypes.ModuleName,
 		nameservicemoduletypes.ModuleName,
 		pricefeedmoduletypes.ModuleName,
 		dsvsmoduletypes.ModuleName,
+		wasmtypes.ModuleName,
 		// this line is used by starport scaffolding # stargate/app/beginBlockers
 	}
 
@@ -148,14 +152,15 @@ var (
 		// ibc modules
 		ibcexported.ModuleName,
 		ibctransfertypes.ModuleName,
-		capabilitytypes.ModuleName,
+		//		capabilitytypes.ModuleName,
 		icatypes.ModuleName,
-		ibcfeetypes.ModuleName,
+		//		ibcfeetypes.ModuleName,
 		// chain modules
 		qadenamoduletypes.ModuleName,
 		nameservicemoduletypes.ModuleName,
 		pricefeedmoduletypes.ModuleName,
 		dsvsmoduletypes.ModuleName,
+		wasmtypes.ModuleName,
 		// this line is used by starport scaffolding # stargate/app/endBlockers
 	}
 
@@ -174,11 +179,12 @@ var (
 		{Account: govtypes.ModuleName, Permissions: []string{authtypes.Burner}},
 		{Account: nft.ModuleName},
 		{Account: ibctransfertypes.ModuleName, Permissions: []string{authtypes.Minter, authtypes.Burner}},
-		{Account: ibcfeetypes.ModuleName},
+		//		{Account: ibcfeetypes.ModuleName},
 		{Account: icatypes.ModuleName},
 		{Account: nameservicemoduletypes.ModuleName, Permissions: []string{authtypes.Minter, authtypes.Burner, authtypes.Staking}},
 		{Account: qadenamoduletypes.ModuleName}, // had to add this to make sure SendCoinsFromAccountToModule will work
 		{Account: dsvsmoduletypes.ModuleName, Permissions: []string{authtypes.Minter, authtypes.Burner, authtypes.Staking}},
+		{Account: wasmtypes.ModuleName, Permissions: []string{authtypes.Burner}},
 		// this line is used by starport scaffolding # stargate/app/maccPerms
 	}
 

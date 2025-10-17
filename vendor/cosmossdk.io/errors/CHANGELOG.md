@@ -31,6 +31,12 @@ Ref: https://keepachangelog.com/en/1.0.0/
 
 ## [Unreleased]
 
+## [v1.0.2](https://github.com/cosmos/cosmos-sdk/releases/tag/errors%2Fv1.0.2)
+
+### Improvements 
+
+* [#23901](https://github.com/cosmos/cosmos-sdk/pull/23901) Minor dependency improvements.
+
 ## [v1.0.1](https://github.com/cosmos/cosmos-sdk/releases/tag/errors%2Fv1.0.1)
 
 ### Improvements
