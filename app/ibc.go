@@ -10,6 +10,7 @@ import (
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 	govv1beta1 "github.com/cosmos/cosmos-sdk/x/gov/types/v1beta1"
 	paramstypes "github.com/cosmos/cosmos-sdk/x/params/types"
+
 	//	"github.com/cosmos/ibc-go/modules/capability"
 	//	capabilitykeeper "github.com/cosmos/ibc-go/modules/capability/keeper"
 	//	capabilitytypes "github.com/cosmos/ibc-go/modules/capability/types"
@@ -21,6 +22,7 @@ import (
 	icahostkeeper "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/host/keeper"
 	icahosttypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/host/types"
 	icatypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/types"
+
 	//ibcfee "github.com/cosmos/ibc-go/v10/modules/apps/29-fee"
 	//ibcfeekeeper "github.com/cosmos/ibc-go/v10/modules/apps/29-fee/keeper"
 	//ibcfeetypes "github.com/cosmos/ibc-go/v10/modules/apps/29-fee/types"
@@ -42,6 +44,7 @@ import (
 
 	// this line is used by starport scaffolding # ibc/app/import
 	"fmt"
+
 	wasm "github.com/CosmWasm/wasmd/x/wasm"
 	wasmkeeper "github.com/CosmWasm/wasmd/x/wasm/keeper"
 	wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
@@ -239,8 +242,7 @@ func (app *App) registerIBCAndWASMModules(appOpts servertypes.AppOptions, wasmOp
 		AddRoute(icahosttypes.SubModuleName, icaHostStack)
 	app.IBCKeeper.SetRouter(ibcRouter)
 
-	ibcRouterV2 := ibcapi.NewRouter().
-		AddRoute(ibctransfertypes.PortID, transferv2.NewIBCModule(app.TransferKeeper))
+	ibcRouterV2 := ibcapi.NewRouter().AddRoute(ibctransfertypes.PortID, transferv2.NewIBCModule(app.TransferKeeper))
 	app.IBCKeeper.SetRouterV2(ibcRouterV2)
 
 	clientKeeper := app.IBCKeeper.ClientKeeper
@@ -248,6 +250,21 @@ func (app *App) registerIBCAndWASMModules(appOpts servertypes.AppOptions, wasmOp
 
 	tmLightClientModule := ibctm.NewLightClientModule(app.appCodec, storeProvider)
 	clientKeeper.AddRoute(ibctm.ModuleName, &tmLightClientModule)
+
+	soloLightClientModule := solomachine.NewLightClientModule(app.appCodec, storeProvider)
+	clientKeeper.AddRoute(solomachine.ModuleName, &soloLightClientModule)
+
+	// register IBC modules
+	if err := app.RegisterModules(
+		wasm.NewAppModule(app.appCodec, &app.WasmKeeper, app.StakingKeeper, app.AccountKeeper, app.BankKeeper, app.MsgServiceRouter(), app.GetSubspace(wasmtypes.ModuleName)),
+		ibc.NewAppModule(app.IBCKeeper),
+		ibctransfer.NewAppModule(app.TransferKeeper),
+		icamodule.NewAppModule(&app.ICAControllerKeeper, &app.ICAHostKeeper),
+		ibctm.NewAppModule(tmLightClientModule),
+		solomachine.NewAppModule(soloLightClientModule),
+	); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -262,7 +279,7 @@ func RegisterIBCAndWASM(registry cdctypes.InterfaceRegistry) map[string]appmodul
 		icatypes.ModuleName:         icamodule.AppModule{},
 		ibctm.ModuleName:            ibctm.AppModule{},
 		solomachine.ModuleName:      solomachine.AppModule{},
-		wasm.ModuleName:             wasm.AppModule{},
+		wasmtypes.ModuleName:        wasm.AppModule{},
 	}
 
 	for name, m := range modules {
