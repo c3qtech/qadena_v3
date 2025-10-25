@@ -76,6 +76,7 @@ func (k msgServer) CreateDocument(goCtx context.Context, msg *types.MsgCreateDoc
 		DocumentType:      msg.DocumentType,
 		CompanyName:       msg.CompanyName,
 		RequiredSignatory: msg.RequiredSignatory,
+		Metadata:          msg.Metadata,
 		Hash:              hashInfoArray,
 	}
 
