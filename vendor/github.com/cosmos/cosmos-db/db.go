@@ -14,21 +14,20 @@ const (
 	//   - pure go
 	//   - stable
 	GoLevelDBBackend BackendType = "goleveldb"
-	// MemDBBackend represents in-memory key value store, which is mostly used
+	// MemDBBackend represents an in-memory key value store, which is mostly used
 	// for testing.
 	MemDBBackend BackendType = "memdb"
+	// PebbleDBBackend represents pebble (uses github.com/cockroachdb/pebble)
+	//   - pure go
+	PebbleDBBackend BackendType = "pebbledb"
 	// RocksDBBackend represents rocksdb (uses github.com/linxGnu/grocksdb)
 	//   - requires gcc
 	//   - use rocksdb build tag (go build -tags rocksdb)
 	RocksDBBackend BackendType = "rocksdb"
-	// PebbleDBDBBackend represents pebble (uses github.com/cockroachdb/pebble)
-	//   - pure go
-	//   - use pebble build tag (go build -tags pebbledb)
-	PebbleDBBackend BackendType = "pebbledb"
 )
 
 type (
-	dbCreator func(name string, dir string, opts Options) (DB, error)
+	dbCreator func(name, dir string, opts Options) (DB, error)
 
 	Options interface {
 		Get(string) interface{}

@@ -45,8 +45,8 @@ func (z *Int) Dec() string {
 	)
 	for {
 		// Obtain Q and R for divisor
-		var quot Int
-		rem := udivrem(quot[:], y[:], divisor)
+		var quot, rem Int
+		udivrem(quot[:], y[:], divisor, &rem)
 		y.Set(&quot) // Set Q for next loop
 		// Convert the R to ascii representation
 		buf = strconv.AppendUint(buf[:0], rem.Uint64(), 10)
@@ -79,8 +79,8 @@ func (z *Int) PrettyDec(separator byte) string {
 		comma   = 0
 	)
 	for {
-		var quot Int
-		rem := udivrem(quot[:], y[:], divisor)
+		var quot, rem Int
+		udivrem(quot[:], y[:], divisor, &rem)
 		y.Set(&quot) // Set Q for next loop
 		buf = strconv.AppendUint(buf[:0], rem.Uint64(), 10)
 		for j := len(buf) - 1; j >= 0; j-- {
@@ -177,6 +177,8 @@ var multipliers = [5]*Int{
 // fromDecimal is a helper function to only ever be called via SetFromDecimal
 // this function takes a string and chunks it up, calling ParseUint on it up to 5 times
 // these chunks are then multiplied by the proper power of 10, then added together.
+// Note: this method assumes that some basic validity-checks have already been performed
+// on the input 'bs'. See SetFromDecimal.
 func (z *Int) fromDecimal(bs string) error {
 	// first clear the input
 	z.Clear()

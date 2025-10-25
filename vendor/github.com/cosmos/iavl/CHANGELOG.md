@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.2.4 December 27, 2024
+
+- [#1026](https://github.com/cosmos/iavl/pull/1026)  Remove duplicated rootkey fetch when pruning
+
+## v1.2.3, December 16, 2024
+
+### Bug Fixes
+
+- [#1018](https://github.com/cosmos/iavl/pull/1018) Cache first version for legacy versions, fix performance regression after upgrade.
+
+## v1.2.2 November 26, 2024
+
+### Bug Fixes
+
+- [#1007](https://github.com/cosmos/iavl/pull/1007) Add the extra check for the reformatted root node in `GetNode`
+
+## v1.2.1 July 31, 2024
+
+### Improvements
+
+- [#961](https://github.com/cosmos/iavl/pull/961) Add new `GetLatestVersion` API to get the latest version.
+- [#965](https://github.com/cosmos/iavl/pull/965) Use expected interface for expected IAVL `Logger`.
+- [#970](https://github.com/cosmos/iavl/pull/970) Close the pruning process when the nodeDB is closed.
+- [#980](https://github.com/cosmos/iavl/pull/980) Use the `sdk/core/store.KVStoreWithBatch` interface instead of `iavl/db.DB` interface
+- [#1018](https://github.com/cosmos/iavl/pull/1018) Cache first version for legacy versions, fix performance regression after upgrade.
+
+## v1.2.0 May 13, 2024
+
+### Improvements
+
+- [#925](https://github.com/cosmos/iavl/pull/925) Add the `AsyncPruning` option to the `MutableTree` constructor to enable async pruning.
+
+## v1.1.4 May 8, 2024
+
+### Bug Fixes
+
+- [#943](https://github.com/cosmos/iavl/pull/943) Fix the `WorkingHash` with the `InitialVersion` option.
+
 ## v1.1.2 April 8, 2024
 
 ### Bug Fixes

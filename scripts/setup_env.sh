@@ -24,6 +24,7 @@ if [[ -d "$SCRIPT_DIR/../cmd" && -d "$SCRIPT_DIR/../x" ]]; then
     export qadenabuildscripts="$qadenabuild/buildscripts"
     export qadenascripts="$qadenabuild/scripts"
     export qadenatestscripts="$qadenabuild/testscripts"
+    export qadenatestdata="$qadenabuild/test_data"
     echo "Qadena build: $qadenabuild"
     echo "Qadena build scripts: $qadenabuildscripts"
 else
@@ -48,6 +49,8 @@ if [[ -f "$QADENAHOME/config/config.yml" ]]; then
     export minimum_gas_prices
 fi
 gas_adjustment=1.5
+
+gas_auto=auto
 
 # export
 export gas_adjustment

@@ -24,7 +24,7 @@
 //
 // Sub-loggers let you chain loggers with additional context:
 //
-//     sublogger := log.With().Str("component": "foo").Logger()
+//     sublogger := log.With().Str("component", "foo").Logger()
 //     sublogger.Info().Msg("hello world")
 //     // Output: {"time":1494567715,"level":"info","message":"hello world","component":"foo"}
 //
@@ -494,7 +494,7 @@ func (l *Logger) newEvent(level Level, done func(string)) *Event {
 	if level != NoLevel && LevelFieldName != "" {
 		e.Str(LevelFieldName, LevelFieldMarshalFunc(level))
 	}
-	if l.context != nil && len(l.context) > 1 {
+	if len(l.context) > 1 {
 		e.buf = enc.AppendObjectData(e.buf, l.context)
 	}
 	if l.stack {

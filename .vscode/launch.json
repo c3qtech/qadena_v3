@@ -10,7 +10,7 @@
             "request": "launch",
             "mode": "debug",
             "program": "${workspaceFolder}/cmd/qadenad",
-            "args": ["--home", "/Users/alvillarica/qadenax", "start", "--home", "/Users/alvillarica/qadenax", "--pruning", "nothing", "--grpc.address", "0.0.0.0:9090", "--enclave-addr", "localhost:50051"]
+            "args": ["--home", "/Users/alvillarica/qadenax", "start", "--home", "/Users/alvillarica/qadena", "--pruning", "nothing", "--grpc.address", "0.0.0.0:9090", "--enclave-addr", "localhost:50051"]
             
         },
         {

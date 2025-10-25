@@ -1767,8 +1767,9 @@ func (cs *State) finalizeCommit(height int64) {
 	stateCopy := cs.state.Copy()
 
 	// Execute and commit the block, update and save the state, and update the mempool.
-	// NOTE The block.AppHash wont reflect these txs until the next block.
-	stateCopy, err := cs.blockExec.ApplyBlock(
+	// We use apply verified block here because we have verified the block in this function already.
+	// NOTE The block.AppHash won't reflect these txs until the next block.
+	stateCopy, err := cs.blockExec.ApplyVerifiedBlock(
 		stateCopy,
 		types.BlockID{
 			Hash:          block.Hash(),
@@ -2191,6 +2192,14 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID) (added bool, err error
 			// Here, we verify the signature of the vote extension included in the vote
 			// message.
 			_, val := cs.state.Validators.GetByIndex(vote.ValidatorIndex)
+			if val == nil { // TODO: we should disconnect from this malicious peer
+				valsCount := cs.state.Validators.Size()
+				cs.Logger.Info("Peer sent us vote with invalid ValidatorIndex",
+					"peer", peerID,
+					"validator_index", vote.ValidatorIndex,
+					"len_validators", valsCount)
+				return added, ErrInvalidVote{Reason: fmt.Sprintf("ValidatorIndex %d is out of bounds [0, %d)", vote.ValidatorIndex, valsCount)}
+			}
 			if err := vote.VerifyExtension(cs.state.ChainID, val.PubKey); err != nil {
 				return false, err
 			}

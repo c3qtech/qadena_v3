@@ -3,6 +3,7 @@ package privval
 import (
 	"fmt"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/cometbft/cometbft/libs/log"
@@ -34,9 +35,10 @@ type SignerListenerEndpoint struct {
 	connectRequestCh      chan struct{}
 	connectionAvailableCh chan net.Conn
 
-	timeoutAccept time.Duration
-	pingTimer     *time.Ticker
-	pingInterval  time.Duration
+	timeoutAccept   time.Duration
+	acceptFailCount atomic.Uint32
+	pingTimer       *time.Ticker
+	pingInterval    time.Duration
 
 	instanceMtx cmtsync.Mutex // Ensures instance public methods access, i.e. SendRequest
 }
@@ -64,7 +66,6 @@ func NewSignerListenerEndpoint(
 
 // OnStart implements service.Service.
 func (sl *SignerListenerEndpoint) OnStart() error {
-	//	fmt.Println("SignerListenerEndpoint: Starting")
 	sl.connectRequestCh = make(chan struct{}, 1) // Buffer of 1 to allow `serviceLoop` to re-trigger itself.
 	sl.connectionAvailableCh = make(chan net.Conn)
 
@@ -75,7 +76,7 @@ func (sl *SignerListenerEndpoint) OnStart() error {
 	go sl.serviceLoop()
 	go sl.pingLoop()
 
-	//	sl.connectRequestCh <- struct{}{}
+	sl.connectRequestCh <- struct{}{}
 
 	return nil
 }
@@ -160,14 +161,15 @@ func (sl *SignerListenerEndpoint) acceptNewConnection() (net.Conn, error) {
 	sl.Logger.Info("SignerListener: Listening for new connection")
 	conn, err := sl.listener.Accept()
 	if err != nil {
+		sl.acceptFailCount.Add(1)
 		return nil, err
 	}
 
+	sl.acceptFailCount.Store(0)
 	return conn, nil
 }
 
 func (sl *SignerListenerEndpoint) triggerConnect() {
-	//	fmt.Println("SignerListenerEndpoint: Triggering connect")
 	select {
 	case sl.connectRequestCh <- struct{}{}:
 	default:
@@ -175,7 +177,6 @@ func (sl *SignerListenerEndpoint) triggerConnect() {
 }
 
 func (sl *SignerListenerEndpoint) triggerReconnect() {
-	//	fmt.Println("SignerListenerEndpoint: Triggering reconnect")
 	sl.DropConnection()
 	sl.triggerConnect()
 }
@@ -184,9 +185,17 @@ func (sl *SignerListenerEndpoint) serviceLoop() {
 	for {
 		select {
 		case <-sl.connectRequestCh:
+			// On start, listen timeouts can queue a duplicate connect request to queue
+			// while the first request connects.  Drop duplicate request.
+			if sl.IsConnected() {
+				sl.Logger.Debug("SignerListener: Connected. Drop Listen Request")
+				continue
+			}
+
+			// Listen for remote signer
 			conn, err := sl.acceptNewConnection()
 			if err != nil {
-				sl.Logger.Error("SignerListener: Error accepting connection", "err", err)
+				sl.Logger.Error("SignerListener: Error accepting connection", "err", err, "failures", sl.acceptFailCount.Load())
 				sl.triggerConnect()
 				continue
 			}

@@ -46,21 +46,62 @@ func (z *Int) ToBig() *big.Int {
 	if z == nil {
 		return nil
 	}
-	b := new(big.Int)
+	var b *big.Int
+	z.IntoBig(&b)
+	return b
+}
+
+// IntoBig sets a provided big.Int to the value of z.
+// Sets `nil` if z is nil (thus the double pointer).
+func (z *Int) IntoBig(b **big.Int) {
+	if z == nil {
+		*b = nil
+		return
+	}
+	if *b == nil {
+		*b = new(big.Int)
+	}
 	switch maxWords { // Compile-time check.
 	case 4: // 64-bit architectures.
-		words := [4]big.Word{big.Word(z[0]), big.Word(z[1]), big.Word(z[2]), big.Word(z[3])}
-		b.SetBits(words[:])
-	case 8: // 32-bit architectures.
-		words := [8]big.Word{
-			big.Word(z[0]), big.Word(z[0] >> 32),
-			big.Word(z[1]), big.Word(z[1] >> 32),
-			big.Word(z[2]), big.Word(z[2] >> 32),
-			big.Word(z[3]), big.Word(z[3] >> 32),
+		if words := (*b).Bits(); cap(words) >= 4 {
+			// Enough underlying space to set all the uint256 data
+			words = words[:4]
+
+			words[0] = big.Word(z[0])
+			words[1] = big.Word(z[1])
+			words[2] = big.Word(z[2])
+			words[3] = big.Word(z[3])
+
+			// Feed it back to normalize (up or down within the big.Int)
+			(*b).SetBits(words)
+		} else {
+			// Not enough space to set all the words, have to allocate
+			words := [4]big.Word{big.Word(z[0]), big.Word(z[1]), big.Word(z[2]), big.Word(z[3])}
+			(*b).SetBits(words[:])
 		}
-		b.SetBits(words[:])
+	case 8: // 32-bit architectures.
+		if words := (*b).Bits(); cap(words) >= 8 {
+			// Enough underlying space to set all the uint256 data
+			words = words[:8]
+
+			words[0], words[1] = big.Word(z[0]), big.Word(z[0]>>32)
+			words[2], words[3] = big.Word(z[1]), big.Word(z[1]>>32)
+			words[4], words[5] = big.Word(z[2]), big.Word(z[2]>>32)
+			words[6], words[7] = big.Word(z[3]), big.Word(z[3]>>32)
+
+			// Feed it back to normalize (up or down within the big.Int)
+			(*b).SetBits(words)
+		} else {
+			// Not enough space to set all the words, have to allocate
+			words := [8]big.Word{
+				big.Word(z[0]), big.Word(z[0] >> 32),
+				big.Word(z[1]), big.Word(z[1] >> 32),
+				big.Word(z[2]), big.Word(z[2] >> 32),
+				big.Word(z[3]), big.Word(z[3] >> 32),
+			}
+			(*b).SetBits(words[:])
+		}
 	}
-	return b
 }
 
 // FromBig is a convenience-constructor from big.Int.
@@ -195,7 +236,7 @@ func (z *Int) UnmarshalText(input []byte) error {
 	if len(input) >= 2 && input[0] == '0' && (input[1] == 'x' || input[1] == 'X') {
 		return z.fromHex(string(input))
 	}
-	return z.fromDecimal(string(input))
+	return z.SetFromDecimal(string(input))
 }
 
 // SetFromBig converts a big.Int to Int and sets the value to z.
@@ -446,7 +487,7 @@ func (z *Int) SetBytes21(in []byte) *Int {
 }
 
 func (z *Int) SetBytes29(in []byte) *Int {
-	_ = in[23] // bounds check hint to compiler; see golang.org/issue/14808
+	_ = in[28] // bounds check hint to compiler; see golang.org/issue/14808
 	z[3] = bigEndianUint40(in[0:5])
 	z[2] = binary.BigEndian.Uint64(in[5:13])
 	z[1] = binary.BigEndian.Uint64(in[13:21])
@@ -540,9 +581,41 @@ func bigEndianUint56(b []byte) uint64 {
 		uint64(b[2])<<32 | uint64(b[1])<<40 | uint64(b[0])<<48
 }
 
-// MarshalSSZTo implements the fastssz.Marshaler interface and serializes the
-// integer into an already pre-allocated buffer.
-func (z *Int) MarshalSSZTo(dst []byte) ([]byte, error) {
+// MarshalSSZAppend _almost_ implements the fastssz.Marshaler (see below) interface.
+// Originally, this method was named `MarshalSSZTo`, and ostensibly implemented the interface.
+// However, it was noted (https://github.com/holiman/uint256/issues/170) that the
+// actual implementation did not match the intended semantics of the interface: it
+// inserted the data instead of appending.
+//
+// Therefore, the `MarshalSSZTo` has been removed: to force users into making a choice:
+//   - Use `MarshalSSZAppend`: this is the method that appends to the destination buffer,
+//     and returns a potentially newly allocated buffer. This method will become `MarshalSSZTo`
+//     in some future release.
+//   - Or use `MarshalSSZInto`: this is the original method which places the data into
+//     the destination buffer, without ever reallocating.
+//
+// fastssz.Marshaler interface:
+//
+//	 https://github.com/ferranbt/fastssz/blob/main/interface.go#L4
+//		type Marshaler interface {
+//			MarshalSSZTo(dst []byte) ([]byte, error)
+//			MarshalSSZ() ([]byte, error)
+//			SizeSSZ() int
+//		}
+func (z *Int) MarshalSSZAppend(dst []byte) ([]byte, error) {
+	dst = binary.LittleEndian.AppendUint64(dst, z[0])
+	dst = binary.LittleEndian.AppendUint64(dst, z[1])
+	dst = binary.LittleEndian.AppendUint64(dst, z[2])
+	dst = binary.LittleEndian.AppendUint64(dst, z[3])
+	return dst, nil
+}
+
+// MarshalSSZInto is the first attempt to implement the fastssz.Marshaler interface,
+// but which does not obey the intended semantics. See MarshalSSZAppend and
+// - https://github.com/holiman/uint256/pull/171
+// - https://github.com/holiman/uint256/issues/170
+// @deprecated
+func (z *Int) MarshalSSZInto(dst []byte) ([]byte, error) {
 	if len(dst) < 32 {
 		return nil, fmt.Errorf("%w: have %d, want %d bytes", ErrBadBufferLength, len(dst), 32)
 	}
@@ -557,8 +630,7 @@ func (z *Int) MarshalSSZTo(dst []byte) ([]byte, error) {
 // MarshalSSZ implements the fastssz.Marshaler interface and returns the integer
 // marshalled into a newly allocated byte slice.
 func (z *Int) MarshalSSZ() ([]byte, error) {
-	blob := make([]byte, 32)
-	_, _ = z.MarshalSSZTo(blob) // ignore error, cannot fail, surely have 32 byte space in blob
+	blob, _ := z.MarshalSSZAppend(make([]byte, 0, 32)) // ignore error, cannot fail, surely have 32 byte space in blob
 	return blob, nil
 }
 
@@ -584,8 +656,9 @@ func (z *Int) UnmarshalSSZ(buf []byte) error {
 
 // HashTreeRoot implements the fastssz.HashRoot interface's non-dependent part.
 func (z *Int) HashTreeRoot() ([32]byte, error) {
+	b, _ := z.MarshalSSZAppend(make([]byte, 0, 32)) // ignore error, cannot fail
 	var hash [32]byte
-	_, _ = z.MarshalSSZTo(hash[:]) // ignore error, cannot fail
+	copy(hash[:], b)
 	return hash, nil
 }
 
@@ -639,7 +712,7 @@ func (z *Int) MarshalJSON() ([]byte, error) {
 func (z *Int) UnmarshalJSON(input []byte) error {
 	if len(input) < 2 || input[0] != '"' || input[len(input)-1] != '"' {
 		// if not quoted, it must be decimal
-		return z.fromDecimal(string(input))
+		return z.SetFromDecimal(string(input))
 	}
 	return z.UnmarshalText(input[1 : len(input)-1])
 }
