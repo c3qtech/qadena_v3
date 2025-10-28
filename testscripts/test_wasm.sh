@@ -10,8 +10,11 @@ cd $qadenabuild
 qadenad_alias keys add alice
 qadenad_alias keys add bob
 
-$qadenatestscripts/grant_from_treasury.sh alice 10qdn
-$qadenatestscripts/grant_from_treasury.sh bob 10qdn
+alice_qadena_addr=$(qadenad_alias keys show alice --address)
+bob_qadena_addr=$(qadenad_alias keys show bob --address)
+
+$qadenatestscripts/grant_from_treasury.sh $alice_qadena_addr 10qdn
+$qadenatestscripts/grant_from_treasury.sh $bob_qadena_addr 10qdn
 
 echo "-------------------------"
 echo "Alice balance:"

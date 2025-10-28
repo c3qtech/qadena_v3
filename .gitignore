@@ -7,6 +7,9 @@ release/
 *.log
 *.ign
 *.gen.json
+mnemonics.json
+variables.json
+*.proposal_id
 /config.yml
 node_modules/
 /test-results/

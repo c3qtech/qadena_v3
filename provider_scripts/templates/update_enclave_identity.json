@@ -1,0 +1,16 @@
+{
+ "messages": [
+  {
+   "@type": "/qadena.qadena.MsgUpdateEnclaveIdentity",
+   "authority": "qadena10d07y265gmmuvt4z0w9aw880jnsr700j5pc4em",
+   "uniqueID": "some-unique-id",
+   "signerID": "some-signer-id",
+   "status": "some-status"
+  }
+ ],
+ "metadata": "ipfs://CID",
+ "deposit": "1qdn",
+ "title": "update or add an enclave identity",
+ "summary": "update or add an enclave identity",
+ "expedited": true
+}

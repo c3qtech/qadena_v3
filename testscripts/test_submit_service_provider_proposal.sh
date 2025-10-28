@@ -91,13 +91,21 @@ fi
 echo "deposit_hash: $deposit_hash"
 
 # wait for the deposit to be submitted
-qadenad_alias query wait-tx $deposit_hash --timeout 30s
+result=$(qadenad_alias query wait-tx $deposit_hash --output json --timeout 30s)
+echo "Result: $result"
+
+# check if code is 0
+if [ $(echo $result | jq -r .code) -ne 0 ]; then
+    echo "Error: $(echo $result | jq -r .message)"
+    exit 1
+fi
+
+$qadenaproviderscripts/query_service_provider_proposal.sh $proposal_id --wait --status "PROPOSAL_STATUS_VOTING_PERIOD"
 
 # vote yes on the proposal
+gas_adjustment="2.0"
 result=$(qadenad_alias tx gov vote $proposal_id yes --from pioneer1 -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"
-vote_hash=$(echo $result | jq -r .txhash)
-echo "vote_hash: $vote_hash"
 # check if code is 0
 if [ $(echo $result | jq -r .code) -ne 0 ]; then
     echo "Error: $(echo $result | jq -r .message)"
@@ -105,15 +113,25 @@ if [ $(echo $result | jq -r .code) -ne 0 ]; then
 fi
 
 # wait for the vote to be submitted
-qadenad_alias query wait-tx $vote_hash --timeout 30s
+vote_hash=$(echo $result | jq -r .txhash)
+result=$(qadenad_alias query wait-tx $vote_hash --output json --timeout 30s)
+echo "Result: $result"
+
+# check if code is 0
+if [ $(echo $result | jq -r .code) -ne 0 ]; then
+    echo "Error: $(echo $result | jq -r .message)"
+    exit 1
+fi
 
 # wait until proposal is passed
 while true; do
     stat=$(qadenad_alias query gov proposal $proposal_id --output json | jq -r '.proposal.status')
-    if [ "$stat" = "3" ]; then
+    if [ "$stat" = "PROPOSAL_STATUS_PASSED" ]; then
         echo "Proposal $proposal_id passed"
         break
     fi
+    echo "Date: $(date -z UTC)"
+    echo "Proposal is:  $proposal_id $(qadenad_alias query gov proposal $proposal_id --output json)"
     echo "Waiting for proposal $proposal_id to pass..."
     sleep 3
 done

@@ -11,6 +11,7 @@ install_enclave=0
 install_signer_enclave=0
 install_chain=0
 install_scripts=0
+install_provider_scripts=0
 install_testscripts=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -30,6 +31,10 @@ while [[ $# -gt 0 ]]; do
             install_scripts=1
             shift
             ;;
+        --provider-scripts)
+            install_provider_scripts=1
+            shift
+            ;;
         --testscripts)
             install_testscripts=1
             shift
@@ -39,11 +44,12 @@ while [[ $# -gt 0 ]]; do
             install_signer_enclave=1
             install_chain=1
             install_scripts=1
+            install_provider_scripts=1
             install_testscripts=1
             shift
             ;;
         --help)
-            echo "Usage: install.sh [--enclave] [--signer-enclave] [--chain] [--scripts] [--testscripts] [--all]"
+            echo "Usage: install.sh [--enclave] [--signer-enclave] [--chain] [--scripts] [--provider-scripts] [--testscripts] [--all]"
             exit 0
             ;;
         *)
@@ -54,8 +60,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # need at least one
-if [[ $install_enclave -eq 0  && $install_signer_enclave -eq 0 && $install_chain -eq 0 && $install_scripts -eq 0 && $install_testscripts -eq 0 ]]; then
-    echo "Error: Need at least one option: --enclave, --signer-enclave, --chain, --scripts, or --all"
+if [[ $install_enclave -eq 0  && $install_signer_enclave -eq 0 && $install_chain -eq 0 && $install_scripts -eq 0 && $install_testscripts -eq 0 && $install_provider_scripts -eq 0 ]]; then
+    echo "Error: Need at least one option: --enclave, --signer-enclave, --chain, --scripts, --provider-scripts, or --all"
     exit 1
 fi
 
@@ -117,5 +123,16 @@ if [[ $install_testscripts -eq 1 ]]; then
     cp $qadenabuild/test_data/* "$QADENAHOME/test_data/"
 fi
 
+if [[ $install_provider_scripts -eq 1 ]]; then
+    echo "Installing provider scripts"
+    if [[ ! -d "$QADENAHOME/provider_scripts" ]] ; then
+        mkdir -p "$QADENAHOME/provider_scripts"
+    fi
+    cp $qadenaproviderscripts/* "$QADENAHOME/provider_scripts/"
+    if [[ ! -d "$QADENAHOME/veritas_scripts" ]] ; then
+        mkdir -p "$QADENAHOME/veritas_scripts"
+    fi
+    cp $qadenavertitascripts/* "$QADENAHOME/veritas_scripts/"
+fi
 
     

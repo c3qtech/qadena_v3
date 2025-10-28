@@ -25,6 +25,9 @@ if [[ -d "$SCRIPT_DIR/../cmd" && -d "$SCRIPT_DIR/../x" ]]; then
     export qadenascripts="$qadenabuild/scripts"
     export qadenatestscripts="$qadenabuild/testscripts"
     export qadenatestdata="$qadenabuild/test_data"
+    export qadenaproviderscripts="$qadenabuild/provider_scripts"
+    export veritasscripts="$qadenabuild/veritas_scripts"
+
     echo "Qadena build: $qadenabuild"
     echo "Qadena build scripts: $qadenabuildscripts"
 else
@@ -32,6 +35,8 @@ else
     export QADENAHOME="$(cd "$SCRIPT_DIR/.." && pwd)"
     export qadenascripts="$QADENAHOME/scripts"
     export qadenatestscripts="$QADENAHOME/testscripts"
+    export qadenaproviderscripts="$QADENAHOME/provider_scripts"
+    export veritasscripts="$QADENAHOME/veritas_scripts"
 fi
 
 export qadenabin="$QADENAHOME/bin"

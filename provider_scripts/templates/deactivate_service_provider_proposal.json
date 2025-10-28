@@ -1,0 +1,14 @@
+{
+ "messages": [
+  {
+   "@type": "/qadena.qadena.MsgDeactivateServiceProvider",
+   "authority": "qadena10d07y265gmmuvt4z0w9aw880jnsr700j5pc4em",
+   "nodeID": "someidentitysrvprv"
+  }
+ ],
+ "metadata": "ipfs://CID",
+ "deposit": "1qdn",
+ "title": "deactivate new identity",
+ "summary": "deactivate a new identity service provider",
+ "expedited": true
+}
