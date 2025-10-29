@@ -74,7 +74,6 @@ genesis:
     staking:
       params:
         bond_denom: "aqdn"
-        power_reduction: "1000000000000000000"
     "bank": {
       "denom_metadata": [
         {

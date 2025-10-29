@@ -21,7 +21,7 @@ git clone https://github.com/c3qtech/qadena_installers.git installers
 
 
 # go
-rm -rf /usr/local/go && tar -C /usr/local -xzf installers/go1.23.4.linux-amd64.tar.gz
+rm -rf /usr/local/go && tar -C /usr/local -xzf installers/go1.23.12.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 
 USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
