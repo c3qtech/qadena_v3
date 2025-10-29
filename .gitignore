@@ -9,6 +9,7 @@ release/
 *.gen.json
 mnemonics.json
 variables.json
+*-updated.yaml
 *.proposal_id
 /config.yml
 node_modules/

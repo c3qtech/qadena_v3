@@ -28,20 +28,32 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --help)
-            echo "Usage: $0 [--env-type <staging|production>] [--count <count>] [--input-template <file>]"
+            echo "Usage: $0 [--env-type <staging|production>] [--count <count>] --input-template <file>"
             echo "Generates AWS CloudFormation template with extracted ephemeral keys"
             echo "  --env-type: Environment type (staging or production)"
             echo "  --count: Number of ephemeral keys to extract per service (default: 2)"
-            echo "  --input-template: Input CloudFormation template to update (default: v2-cloud-formation-ssm-parameters.yml)"
+            echo "  --input-template: Input CloudFormation template to update (required)"
             exit 0
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--env-type <staging|production>] [--count <count>] [--input-template <file>]"
+            echo "Usage: $0 [--env-type <staging|production>] [--count <count>] --input-template <file>"
             exit 1
             ;;
     esac
 done
+
+# Validate required arguments
+if [ -z "$input_template" ]; then
+    echo "Error: --input-template is required"
+    echo "Usage: $0 [--env-type <staging|production>] [--count <count>] --input-template <file>"
+    exit 1
+fi
+
+if [ ! -f "$input_template" ]; then
+    echo "Error: Input template file does not exist: $input_template"
+    exit 1
+fi
 
 echo "Generating AWS CloudFormation template for environment: $env_type"
 echo "============================================================"
