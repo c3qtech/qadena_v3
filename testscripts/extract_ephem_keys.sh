@@ -38,7 +38,6 @@ names=()
 if [[ "$provider" == *#* ]]; then
     # For the base provider, replace %d with nothing
     base_provider=${provider//\#/}
-    names+=("$base_provider")
     
     # For ephemeral keys, replace %d with the number
     for i in $(seq 1 $count); do
@@ -47,7 +46,6 @@ if [[ "$provider" == *#* ]]; then
     done
 else
     # Original behavior if no %d is present
-    names+=("$provider")
     for i in $(seq 1 $count); do
         names+=("$provider-eph$i")
     done

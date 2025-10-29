@@ -55,32 +55,32 @@ fi
 echo "-------------------------"
 echo "$username Create credential personal-info"
 echo "-------------------------"
-qadenad_alias tx qadena create-credential $user_a $user_bf personal-info "$firstname" "$middlename" "$lastname" "$birthdate" "$citizenship" "$residency" "$gender" --from $identityprovider --yes
+qadenad_alias tx qadena create-credential $user_a $user_bf personal-info "$firstname" "$middlename" "$lastname" "$birthdate" "$citizenship" "$residency" "$gender" --from "$identityprovider" --yes
 
 echo "-------------------------"
 echo "$username Create credential phone"
 echo "-------------------------"
-qadenad_alias tx qadena create-credential $user_a $user_bf phone-contact-info $phone --from $identityprovider --yes
+qadenad_alias tx qadena create-credential $user_a $user_bf phone-contact-info $phone --from "$identityprovider" --yes
 
 echo "-------------------------"
 echo "$username Create credential email"
 echo "-------------------------"
-qadenad_alias tx qadena create-credential $user_a $user_bf email-contact-info $email --from $identityprovider --yes
+qadenad_alias tx qadena create-credential $user_a $user_bf email-contact-info $email --from "$identityprovider" --yes
 
 echo "-------------------------"
 echo "$username Claim credential personal-info"
 echo "-------------------------"
-qadenad_alias tx qadena claim-credential $user_a $user_bf  personal-info --from $username --yes
+qadenad_alias tx qadena claim-credential $user_a $user_bf  personal-info --from "$username" --yes
 
 echo "-------------------------"
 echo "$username Claim credential phone"
 echo "-------------------------"
-qadenad_alias tx qadena claim-credential $user_a $user_bf  phone-contact-info --from $username --yes
+qadenad_alias tx qadena claim-credential $user_a $user_bf  phone-contact-info --from "$username" --yes
 
 echo "-------------------------"
 echo "$username Claim credential email"
 echo "-------------------------"
-qadenad_alias tx qadena claim-credential $user_a $user_bf  email-contact-info --from $username --yes
+qadenad_alias tx qadena claim-credential $user_a $user_bf  email-contact-info --from "$username" --yes
 
 #if serviceprovider is not empty, then do this
 if [ -n "$serviceprovider" ] ; then
@@ -101,7 +101,7 @@ if [ -n "$serviceprovider" ] ; then
         echo "-------------------------"
         echo "$username Setup DSVS authorized signatory as $username-eph"
         echo "-------------------------"
-        qadenad_alias tx dsvs register-authorized-signatory $username-eph --from $username --yes
+        qadenad_alias tx dsvs register-authorized-signatory $username-eph --from "$username" --yes
     fi
 fi
 

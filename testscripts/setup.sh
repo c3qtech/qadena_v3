@@ -211,7 +211,7 @@ jq -c '.[]' "$usersjson" | while read -r user; do
         echo "Looking for $specific_user, skipping user: $name"
     else
     echo "Processing user: $name"
-        $qadenatestscripts/setup_user.sh "$name" "$mnemonic" "$pioneer" "$serviceprovider" "$firstname" "$middlename" "$lastname" "$birthdate" "$citizenship" "$residency" "$gender" "$email" "$phone" "$a" "$bf" "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" "$eph_count" "$createwalletsponsor" > logs/"$name".log 2>&1 &
+        $qadenaproviderscripts/create_user.sh "$name" "$mnemonic" "$pioneer" "$serviceprovider" "$firstname" "$middlename" "$lastname" "$birthdate" "$citizenship" "$residency" "$gender" "$email" "$phone" "$a" "$bf" "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" "$eph_count" "$createwalletsponsor" > logs/"$name".log 2>&1 &
 
         pid_list+=($!)  # Store process ID
 

@@ -17,7 +17,7 @@ done
 
 # Set variables from positional parameters
 if [[ ${#pos_args[@]} -gt 0 ]]; then
-    account="${pos_args[1]}"
+    validator="${pos_args[1]}"
 fi
 
 if [[ ${#pos_args[@]} -gt 1 ]]; then
@@ -25,23 +25,27 @@ if [[ ${#pos_args[@]} -gt 1 ]]; then
 fi
 
 # Debug info
-echo "account: $account"
+echo "validator: $validator"
 echo "amount: $amount"
 # Don't print the mnemonic for security reasons
 
-if [ -z "$account" ] || [ -z "$amount" ]; then
-    echo "Usage: $0 <account> <amount>"
+if [ -z "$validator" ] || [ -z "$amount" ]; then
+    echo "Usage: $0 <validator> <amount>"
     exit 1
 fi
 
 
 echo "-------------------------"
-echo "Grant from treasury"
+echo "Staking from treasury"
 echo "-------------------------"
-echo "Sending $amount to $account from treasury"
-qadena_address=$(qadenad_alias keys show $account -a)
+echo "Staking $amount to validator $validator from treasury"
+
+qadena_address=$(qadenad_alias keys show $validator -a)
 echo "Qadena address: $qadena_address"
-result=$(qadenad_alias tx bank send treasury $qadena_address  $amount --from treasury --yes --output json --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment)
+qadena_validator_address=$(qadenad_alias keys show $validator --bech val -a)
+echo "Qadena validator address: $qadena_validator_address"
+
+result=$(qadenad_alias tx staking delegate $qadena_validator_address $amount --from treasury -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"
 # get tx hash
 tx_hash=$(echo $result | jq -r .txhash)
@@ -52,7 +56,13 @@ if [ $(echo $result | jq -r .code) -ne 0 ]; then
     exit 1
 fi
 # wait for result
-qadenad_alias query wait-tx $tx_hash --timeout 30s
+result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
+echo "Result: $result"
+if [ $(echo $result | jq -r .code) -ne 0 ]; then
+    echo "ERROR ERROR ERROR"
+    echo "Error: $result"
+    exit 1
+fi
 
 echo "Done"
 

@@ -74,7 +74,6 @@ genesis:
     staking:
       params:
         bond_denom: "aqdn"
-        power_reduction: "1000000000000000000"
     "bank": {
       "denom_metadata": [
         {
@@ -105,12 +104,13 @@ genesis:
       params:
         expedited_min_deposit:
           - denom: "aqdn"
-            amount: "10000000000000000000"
+            amount: "10000000000000000000000000"
         expedited_voting_period: "30s"
+        max_deposit_period: "604800s"
         min_deposit:
           - denom: "aqdn"
-            amount: "1000000000000000000"
-        voting_period: "300s"
+            amount: "5000000000000000000000000"
+        voting_period: "604800s"
     wasm:
       codes: []
       contracts: []
