@@ -89,7 +89,7 @@ $qadenaproviderscripts/setup_treasury.sh --treasury-name sec-treasury --treasury
 echo "Send this information to QFI"
 echo "sec-treasury Qadena address:  $(qadenad_alias keys show sec-treasury --address)"
 
-echo "When QFI grants the necessary amount to sec-treasury, run:  $veritas_scripts/step_2.sh"
+echo "When QFI grants the necessary amount to sec-treasury, run:  $veritasscripts/step_2.sh"
 
 # create a json file containing all the mnemonics
 jq -n --arg sectreasurymnemonic "$sectreasurymnemonic" --arg signermnemonic "$signermnemonic" --arg createwalletsponsormnemonic "$createwalletsponsormnemonic" --arg identityprovidermnemonic "$identityprovidermnemonic" --arg dsvsprovidermnemonic "$dsvsprovidermnemonic" '{sectreasurymnemonic: $sectreasurymnemonic, signermnemonic: $signermnemonic, createwalletsponsormnemonic: $createwalletsponsormnemonic, identityprovidermnemonic: $identityprovidermnemonic, dsvsprovidermnemonic: $dsvsprovidermnemonic}' > mnemonics.json
