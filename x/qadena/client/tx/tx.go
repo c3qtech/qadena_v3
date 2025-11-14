@@ -25,15 +25,40 @@ import (
 	sdktypeserrors "github.com/cosmos/cosmos-sdk/types/errors"
 
 	// needed by CheckTxByHash
-	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 
+	abciv1beta1 "cosmossdk.io/api/cosmos/base/abci/v1beta1"
+	txtypes "cosmossdk.io/api/cosmos/tx/v1beta1"
 	"github.com/cosmos/cosmos-sdk/client/flags"
 )
+
+// QueryTxByHashGRPC queries for a single transaction by hash using gRPC instead of CometBFT RPC.
+// This is a replacement for authtx.QueryTx that uses the Cosmos SDK gRPC service.
+func QueryTxByHashGRPC(clientCtx client.Context, hashHexStr string) (*abciv1beta1.TxResponse, error) {
+	// Create the tx service client
+	fmt.Printf("%v | QueryTxByHashGRPC %s\n", time.Now().Format("2006-01-02 15:04:05"), hashHexStr)
+	txServiceClient := txtypes.NewServiceClient(clientCtx)
+
+	// Query the transaction using gRPC
+	grpcRes, err := txServiceClient.GetTx(context.Background(), &txtypes.GetTxRequest{
+		Hash: hashHexStr,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tx via gRPC: %w", err)
+	}
+
+	// Convert the gRPC response to TxResponse
+	// The grpcRes.TxResponse is already a *sdk.TxResponse
+	if grpcRes.TxResponse == nil {
+		return nil, fmt.Errorf("tx response is nil for hash %s", hashHexStr)
+	}
+
+	return grpcRes.TxResponse, nil
+}
 
 func CheckTxByHash(ctx client.Context, txHash string) (err error, success bool) {
 	for tryCount := 8; tryCount > 0; tryCount-- {
@@ -50,7 +75,8 @@ func CheckTxByHash(ctx client.Context, txHash string) (err error, success bool) 
 
 		// if hash is given, then query the tx by hash
 		fmt.Printf("%v | Querying tx %s\n", time.Now().Format("2006-01-02 15:04:05"), txHash)
-		output, err := authtx.QueryTx(ctx, txHash)
+		//output, err := authtx.QueryTx(ctx, txHash)
+		output, err := QueryTxByHashGRPC(ctx, txHash)
 		fmt.Printf("%v | Querying tx %s\n", time.Now().Format("2006-01-02 15:04:05"), output)
 		if err != nil {
 			hasError = true
@@ -60,7 +86,7 @@ func CheckTxByHash(ctx client.Context, txHash string) (err error, success bool) 
 			}
 		}
 
-		if output == nil || output.Empty() {
+		if output == nil /*|| output.Empty()*/ {
 			hasError = true
 			if tryCount == 0 {
 				fmt.Printf("%v | tx not found (output empty) %s\n", time.Now().Format("2006-01-02 15:04:05"), txHash)
