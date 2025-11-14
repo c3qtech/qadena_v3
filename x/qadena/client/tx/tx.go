@@ -77,7 +77,6 @@ func CheckTxByHash(ctx client.Context, txHash string) (err error, success bool) 
 		fmt.Printf("%v | Querying tx %s\n", time.Now().Format("2006-01-02 15:04:05"), txHash)
 		//output, err := authtx.QueryTx(ctx, txHash)
 		output, err := QueryTxByHashGRPC(ctx, txHash)
-		fmt.Printf("%v | Querying tx %s\n", time.Now().Format("2006-01-02 15:04:05"), output)
 		if err != nil {
 			hasError = true
 			if tryCount == 0 {
@@ -87,6 +86,7 @@ func CheckTxByHash(ctx client.Context, txHash string) (err error, success bool) 
 		}
 
 		if output == nil /*|| output.Empty()*/ {
+			fmt.Printf("%v | tx not found %s\n", time.Now().Format("2006-01-02 15:04:05"), txHash)
 			hasError = true
 			if tryCount == 0 {
 				fmt.Printf("%v | tx not found (output empty) %s\n", time.Now().Format("2006-01-02 15:04:05"), txHash)
