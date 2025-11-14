@@ -4,17 +4,21 @@
 SCRIPT_DIR="${0:A:h}"
 
 if grep sgx /proc/cpuinfo > /dev/null 2> /dev/null ; then
-    echo "SGX detected"
+    # echo to stderr
+    echo "SGX detected" >&2
     export REAL_ENCLAVE=1
 else
-    echo "SGX not detected"
+    # echo to stderr
+    echo "SGX not detected" >&2
     export REAL_ENCLAVE=0
 fi
 
 if [[ "$DOCKER_BUILD" = "1" ]]; then
-    echo "Docker build"
+    # echo to stderr
+    echo "Docker build" >&2
 else
-    echo "Host"
+    # echo to stderr
+    echo "Host" >&2
 fi
 
 # check SCRIPT_DIR/../cmd and SCRIPT_DIR/../x  -- if they exist, then we are in a build environment
@@ -28,13 +32,13 @@ if [[ -d "$SCRIPT_DIR/../cmd" && -d "$SCRIPT_DIR/../x" ]]; then
     export qadenaproviderscripts="$qadenabuild/provider_scripts"
     export veritasscripts="$qadenabuild/veritas_scripts"
 
-    echo "Qadena build: $qadenabuild"
-    echo "Qadena build scripts: $qadenabuildscripts"
+    echo "Qadena build: $qadenabuild" >&2
+    echo "Qadena build scripts: $qadenabuildscripts" >&2
 else
     # resolve $SCRIPT_DIR/.. to absolute path
     export QADENAHOME="$(cd "$SCRIPT_DIR/.." && pwd)"
     export qadenascripts="$QADENAHOME/scripts"
-    export qadenatestscripts="$QADENAHOME/testscripts"
+#    export qadenatestscripts="$QADENAHOME/testscripts"
     export qadenaproviderscripts="$QADENAHOME/provider_scripts"
     export veritasscripts="$QADENAHOME/veritas_scripts"
 fi
@@ -43,9 +47,10 @@ export qadenabin="$QADENAHOME/bin"
 alias qadenad_alias="$qadenabin/qadenad --home $QADENAHOME"
 export qadenad_binary="$qadenabin/qadenad"
 
-echo "Qadena home: $QADENAHOME"
-echo "Qadena bin: $qadenabin"
-echo "Qadena scripts: $qadenascripts"
+# echo to stderr
+echo "Qadena home: $QADENAHOME" >&2
+echo "Qadena bin: $qadenabin" >&2
+echo "Qadena scripts: $qadenascripts" >&2
 
 # extract minimum-gas-prices from config.yml
 # check if config.yml exists
