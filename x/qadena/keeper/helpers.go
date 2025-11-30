@@ -1,8 +1,6 @@
 package keeper
 
 import (
-	"fmt"
-
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 	"github.com/c3qtech/qadena_v3/x/qadena/types"
 
@@ -87,7 +85,7 @@ func (k Keeper) lockAccountAmount(ctx sdk.Context, accountAddress sdk.AccAddress
 		return err
 	}
 
-	fmt.Println(coin, "coins transferred from address", accountAddress, "to module", types.ModuleName)
+	c.ContextDebug(ctx, coin.String()+" coins transferred from address "+accountAddress.String()+" to module "+types.ModuleName)
 
 	return nil
 }

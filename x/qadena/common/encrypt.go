@@ -55,8 +55,10 @@ func SharedSecretNoNonceDecrypt(sharedSecret []byte, cipherText []byte) (plainTe
 
 func Encrypt(pub, plainText string) string {
 	pub = strings.TrimSuffix(pub, "_pubk")
-	fmt.Println("pub", pub)
-	fmt.Println("plainText", plainText, len(plainText))
+	if Debug && DebugFull {
+		fmt.Println("pub", pub)
+		fmt.Println("plainText", plainText, len(plainText))
+	}
 	pubkbytes, err := base64.StdEncoding.DecodeString(pub)
 
 	if err != nil {
@@ -75,7 +77,9 @@ func Encrypt(pub, plainText string) string {
 		return ""
 	}
 	cipherTextHex := hex.EncodeToString(cipherText)
-	fmt.Println("plaintext encrypted hex", cipherTextHex)
+	if Debug && DebugFull {
+		fmt.Println("plaintext encrypted hex", cipherTextHex)
+	}
 
 	return cipherTextHex
 }
@@ -87,8 +91,10 @@ func MarshalAndEncrypt(pubk string, v interface{}) string {
 
 func BEncrypt(pub string, plainText []byte) []byte {
 	pub = strings.TrimSuffix(pub, "_pubk")
-	fmt.Println("pub", pub)
-	fmt.Println("plainText", plainText, len(plainText))
+	if Debug && DebugFull {
+		fmt.Println("pub", pub)
+		fmt.Println("plainText", plainText, len(plainText))
+	}
 	pubkbytes, err := base64.StdEncoding.DecodeString(pub)
 
 	if err != nil {

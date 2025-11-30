@@ -97,6 +97,7 @@ fi
 
 if [[ $stop_signer_enclave -eq 1 ]] ; then
     echo "stop_qadena.sh: Stopping Qadena Signer Enclave"
+    pkill -KILL -f "run_signerenclave.sh"
     pkill -INT -f "signer_enclave"
 fi
 

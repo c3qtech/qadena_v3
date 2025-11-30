@@ -121,15 +121,19 @@ genesis:
       sequences: []
     qadena:
       params:
+        # main wallet granted by sponsor upon wallet creation (encrypted)
         create_wallet_incentive:
-          amount: "0"
+          amount: "500"
           denom: "qdn"
+        # main wallet granted by sponsor upon wallet creation (transparent)
         create_wallet_transparent_incentive:
           amount: "500"
           denom: "qdn"
+        # sub wallet granted by sponsor upon sub wallet creation (encrypted)
         create_ephemeral_wallet_incentive:
           amount: "0"
           denom: "qdn"
+        # sub wallet granted by sponsor upon sub wallet creation (transparent)
         create_ephemeral_wallet_transparent_incentive:
           amount: "50"
           denom: "qdn"

@@ -66,6 +66,7 @@ var (
 
 	// Enclave variables (similar to enclave.go)
 	realEnclave = false
+	debug       = false
 )
 
 // Web server handlers
@@ -86,7 +87,9 @@ func pingHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
-	log.Printf("Ping request from %s", r.RemoteAddr)
+	if debug {
+		log.Printf("Ping request from %s", r.RemoteAddr)
+	}
 }
 
 func startWebServer(port string) {
@@ -151,7 +154,9 @@ func loadOrGenerateSecretKey(path string) ed25519.PrivKey {
 	// Generate new key and save it
 	key := ed25519.GenPrivKey()
 	_ = ioutil.WriteFile(path, key[:], 0600)
-	log.Printf("Generated new secret connection key: %s", path)
+	if debug {
+		log.Printf("Generated new secret connection key: %s", path)
+	}
 	return key
 }
 
@@ -160,11 +165,15 @@ func loadKey(homePath string) (ed25519.PrivKey, tmcrypto.PubKey, error) {
 	unencryptedPath := filepath.Join(homePath, "config", "priv_validator_key.json")
 	encryptedPath := filepath.Join(homePath, "enclave_config", "priv_validator_key.json")
 
-	log.Printf("Checking for encrypted key at: %s", encryptedPath)
+	if debug {
+		log.Printf("Checking for encrypted key at: %s", encryptedPath)
+	}
 
 	// First try to load encrypted version
 	if encryptedData, err := ioutil.ReadFile(encryptedPath); err == nil {
-		log.Printf("Found encrypted key, attempting to decrypt")
+		if debug {
+			log.Printf("Found encrypted key, attempting to decrypt")
+		}
 
 		// Decrypt the data
 		decryptedData, err := unseal(encryptedData)
@@ -185,11 +194,15 @@ func loadKey(homePath string) (ed25519.PrivKey, tmcrypto.PubKey, error) {
 
 		var priv ed25519.PrivKey = privBytes
 		pub := priv.PubKey()
-		log.Printf("Successfully loaded encrypted key")
+		if debug {
+			log.Printf("Successfully loaded encrypted key")
+		}
 		return priv, pub, nil
 	}
 
-	log.Printf("No encrypted key found, checking for unencrypted key at: %s", unencryptedPath)
+	if debug {
+		log.Printf("No encrypted key found, checking for unencrypted key at: %s", unencryptedPath)
+	}
 
 	// Try to load unencrypted version
 	unencryptedData, err := ioutil.ReadFile(unencryptedPath)
@@ -197,7 +210,9 @@ func loadKey(homePath string) (ed25519.PrivKey, tmcrypto.PubKey, error) {
 		return nil, nil, fmt.Errorf("failed to read key file from both %s and %s: %w", encryptedPath, unencryptedPath, err)
 	}
 
-	log.Printf("Found unencrypted key, loading and encrypting")
+	if debug {
+		log.Printf("Found unencrypted key, loading and encrypting")
+	}
 
 	// Parse the unencrypted JSON
 	var key PrivValidatorKey
@@ -218,7 +233,7 @@ func loadKey(homePath string) (ed25519.PrivKey, tmcrypto.PubKey, error) {
 			// Save encrypted version
 			if err := os.WriteFile(encryptedPath, encryptedData, 0644); err != nil {
 				log.Printf("Warning: failed to save encrypted key: %v", err)
-			} else {
+			} else if debug {
 				log.Printf("Successfully saved encrypted key to: %s", encryptedPath)
 			}
 		}
@@ -256,10 +271,14 @@ func main() {
 	remoteAddr := flag.String("addr", "127.0.0.1:26659", "Remote validator address to connect to")
 	webPort := flag.String("web-port", "26661", "Web server port for ping/health endpoints")
 	realEnclaveFlag := flag.Bool("real-enclave", false, "Run in real enclave mode (SGX)")
+	debugFlag := flag.Bool("debug", false, "Enable debug logging")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	querySignerID := flag.Bool("query-signer-id", false, "Query signer ID and exit")
 	queryUniqueID := flag.Bool("query-unique-id", false, "Query unique ID and exit")
 	flag.Parse()
+
+	// Set global debug flag
+	debug = *debugFlag
 
 	// Set global realEnclave flag
 	realEnclave = *realEnclaveFlag
@@ -312,7 +331,9 @@ func main() {
 
 	// Load or generate secret connection key for P2P encryption
 	secretConnKey := loadOrGenerateSecretKey(secretKeyPath)
-	log.Printf("Secret connection key from %s, address: %X\n", secretKeyPath, secretConnKey.PubKey().Address())
+	if debug {
+		log.Printf("Secret connection key from %s, address: %X\n", secretKeyPath, secretConnKey.PubKey().Address())
+	}
 
 	// Start web server in background
 	go startWebServer(*webPort)
@@ -359,7 +380,9 @@ func main() {
 			log.Fatalf("Failed to dial remote validator after %d attempts: %v", maxRetries, err)
 		}
 
-		log.Printf("Connection attempt %d failed: %v. Retrying in 1 second...", attempt, err)
+		if debug {
+			log.Printf("Connection attempt %d failed: %v. Retrying in 1 second...", attempt, err)
+		}
 		time.Sleep(1 * time.Second)
 	}
 }
@@ -370,7 +393,9 @@ func handleConnection(conn net.Conn, priv ed25519.PrivKey, pub tmcrypto.PubKey) 
 		conn.Close()
 	}()
 
-	log.Printf("Handling connection from %s", conn.RemoteAddr())
+	if debug {
+		log.Printf("Handling connection from %s", conn.RemoteAddr())
+	}
 	const maxRemoteSignerMsgSize = 1024 * 10
 	protoReader := protoio.NewDelimitedReader(conn, maxRemoteSignerMsgSize)
 
@@ -384,7 +409,9 @@ func handleConnection(conn net.Conn, priv ed25519.PrivKey, pub tmcrypto.PubKey) 
 		switch sum := msg.Sum.(type) {
 		case *cmproto.Message_PubKeyRequest:
 			chainID := sum.PubKeyRequest.ChainId
-			log.Printf("PubKeyRequest for chain: %s", chainID)
+			if debug {
+				log.Printf("PubKeyRequest for chain: %s", chainID)
+			}
 			resp := &cmproto.Message{
 				Sum: &cmproto.Message_PubKeyResponse{
 					PubKeyResponse: &cmproto.PubKeyResponse{
@@ -397,10 +424,14 @@ func handleConnection(conn net.Conn, priv ed25519.PrivKey, pub tmcrypto.PubKey) 
 			sendMsg(conn, resp)
 
 		case *cmproto.Message_SignVoteRequest:
-			log.Println("SignVoteRequest ", sum.SignVoteRequest.Vote)
+			if debug {
+				log.Println("SignVoteRequest ", sum.SignVoteRequest.Vote)
+			}
 			vote := sum.SignVoteRequest.Vote
 			chainID := sum.SignVoteRequest.ChainId
-			log.Printf("Chain ID: %s", chainID)
+			if debug {
+				log.Printf("Chain ID: %s", chainID)
+			}
 			/*
 				if !canSign(vote.Height, vote.Round, int8(vote.Type)) {
 					log.Printf("Refusing to sign duplicate HRS: %d/%d/%d\n", vote.Height, vote.Round, vote.Type)
@@ -437,12 +468,16 @@ func handleConnection(conn net.Conn, priv ed25519.PrivKey, pub tmcrypto.PubKey) 
 						continue
 					}
 					vote.ExtensionSignature = extSig
-					log.Printf("Signed vote extension for non-nil precommit vote")
+					if debug {
+						log.Printf("Signed vote extension for non-nil precommit vote")
+					}
 				} else {
 					// For nil precommit votes, extension signature must NOT be present
 					vote.Extension = nil
 					vote.ExtensionSignature = nil
-					log.Printf("Nil precommit vote - no extension signature")
+					if debug {
+						log.Printf("Nil precommit vote - no extension signature")
+					}
 				}
 			}
 			saveState(SignerState{Height: vote.Height, Round: vote.Round, Step: int8(vote.Type)})
@@ -454,10 +489,14 @@ func handleConnection(conn net.Conn, priv ed25519.PrivKey, pub tmcrypto.PubKey) 
 			sendMsg(conn, resp)
 
 		case *cmproto.Message_SignProposalRequest:
-			log.Println("SignProposalRequest ", sum.SignProposalRequest.Proposal)
+			if debug {
+				log.Println("SignProposalRequest ", sum.SignProposalRequest.Proposal)
+			}
 			prop := sum.SignProposalRequest.Proposal
 			chainID := sum.SignProposalRequest.ChainId
-			log.Printf("Chain ID: %s", chainID)
+			if debug {
+				log.Printf("Chain ID: %s", chainID)
+			}
 			/*
 				if !canSign(prop.Height, prop.Round, 2) { // step=2 for proposals
 					log.Printf("Refusing to sign duplicate proposal HRS: %d/%d\n", prop.Height, prop.Round)
@@ -479,14 +518,17 @@ func handleConnection(conn net.Conn, priv ed25519.PrivKey, pub tmcrypto.PubKey) 
 				},
 			}
 			sendMsg(conn, resp)
-
 		case *cmproto.Message_PingRequest:
-			log.Printf("PingRequest from %s", conn.RemoteAddr())
+			if debug {
+				log.Printf("PingRequest from %s", conn.RemoteAddr())
+			}
 			resp := &cmproto.Message{
 				Sum: &cmproto.Message_PingResponse{PingResponse: &cmproto.PingResponse{}},
 			}
 			sendMsg(conn, resp)
-			log.Printf("PingResponse sent to %s", conn.RemoteAddr())
+			if debug {
+				log.Printf("PingResponse sent to %s", conn.RemoteAddr())
+			}
 		}
 	}
 }

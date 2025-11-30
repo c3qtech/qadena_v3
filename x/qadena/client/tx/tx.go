@@ -40,7 +40,9 @@ import (
 // This is a replacement for authtx.QueryTx that uses the Cosmos SDK gRPC service.
 func QueryTxByHashGRPC(clientCtx client.Context, hashHexStr string) (*abciv1beta1.TxResponse, error) {
 	// Create the tx service client
-	fmt.Printf("%v | QueryTxByHashGRPC %s\n", time.Now().Format("2006-01-02 15:04:05"), hashHexStr)
+	if c.Debug && c.DebugFull {
+		fmt.Printf("%v | QueryTxByHashGRPC %s\n", time.Now().Format("2006-01-02 15:04:05"), hashHexStr)
+	}
 	txServiceClient := txtypes.NewServiceClient(clientCtx)
 
 	// Query the transaction using gRPC
@@ -74,27 +76,37 @@ func CheckTxByHash(ctx client.Context, txHash string) (err error, success bool) 
 		*/
 
 		// if hash is given, then query the tx by hash
-		fmt.Printf("%v | Querying tx %s\n", time.Now().Format("2006-01-02 15:04:05"), txHash)
+		if c.Debug && c.DebugFull {
+			fmt.Printf("%v | Querying tx %s\n", time.Now().Format("2006-01-02 15:04:05"), txHash)
+		}
 		//output, err := authtx.QueryTx(ctx, txHash)
 		output, err := QueryTxByHashGRPC(ctx, txHash)
 		if err != nil {
 			hasError = true
 			if tryCount == 0 {
-				fmt.Printf("%v | error querying tx %s\n", time.Now().Format("2006-01-02 15:04:05"), err)
+				if c.Debug && c.DebugFull {
+					fmt.Printf("%v | error querying tx %s\n", time.Now().Format("2006-01-02 15:04:05"), err)
+				}
 				return err, false
 			}
 		}
 
 		if output == nil /*|| output.Empty()*/ {
-			fmt.Printf("%v | tx not found %s\n", time.Now().Format("2006-01-02 15:04:05"), txHash)
+			if c.Debug && c.DebugFull {
+				fmt.Printf("%v | tx not found %s\n", time.Now().Format("2006-01-02 15:04:05"), txHash)
+			}
 			hasError = true
 			if tryCount == 0 {
-				fmt.Printf("%v | tx not found (output empty) %s\n", time.Now().Format("2006-01-02 15:04:05"), txHash)
+				if c.Debug && c.DebugFull {
+					fmt.Printf("%v | tx not found (output empty) %s\n", time.Now().Format("2006-01-02 15:04:05"), txHash)
+				}
 				return fmt.Errorf("no transaction found with hash %s", txHash), false
 			}
 		} else if output.Code != 0 {
 			hasError = true
-			fmt.Printf("%v | tx failed %s %d %s\n", time.Now().Format("2006-01-02 15:04:05"), txHash, output.Code, output.RawLog)
+			if c.Debug && c.DebugFull {
+				fmt.Printf("%v | tx failed %s %d %s\n", time.Now().Format("2006-01-02 15:04:05"), txHash, output.Code, output.RawLog)
+			}
 			return fmt.Errorf("tx %s failed with %d: %s", txHash, output.Code, output.RawLog), false
 		}
 
@@ -114,7 +126,9 @@ func CheckTxCLIResponse(clientCtx client.Context, err error, res *sdk.TxResponse
 		st := status.Convert(err)
 		// if st.Code() == codes.Unauthenticated  & & st.Message contains "sequence mismatch"
 		if st.Code() == codes.Unknown && strings.Contains(st.Message(), "sequence mismatch") {
-			fmt.Printf("%v | got sequence mismatch, retrying...\n", time.Now().Format("2006-01-02 15:04:05"))
+			if c.Debug && c.DebugFull {
+				fmt.Printf("%v | got sequence mismatch, retrying...\n", time.Now().Format("2006-01-02 15:04:05"))
+			}
 			return err, true
 		}
 		return err, false
@@ -149,7 +163,9 @@ func CheckTxCLIResponse(clientCtx client.Context, err error, res *sdk.TxResponse
 
 // returns true if the sequence changed by more than 1 (meaning there many simultaneous transactions from this wallet), false otherwise; also returns true if we didn't detect a change
 func waitForSequenceChange(clientCtx client.Context, flagSet *pflag.FlagSet, oldSequence uint64) bool {
-	fmt.Printf("%v | waiting for sequence change from %d\n", time.Now().Format("2006-01-02 15:04:05"), oldSequence)
+	if c.Debug && c.DebugFull {
+		fmt.Printf("%v | waiting for sequence change from %d\n", time.Now().Format("2006-01-02 15:04:05"), oldSequence)
+	}
 	for i := 0; i < 15; i++ {
 		factory, err := NewFactoryCLI(clientCtx, flagSet)
 		if err != nil {
@@ -160,7 +176,9 @@ func waitForSequenceChange(clientCtx client.Context, flagSet *pflag.FlagSet, old
 			panic(err)
 		}
 		if factory.Sequence() > oldSequence {
-			fmt.Printf("%v | sequence changed from %d to %d\n", time.Now().Format("2006-01-02 15:04:05"), oldSequence, factory.Sequence())
+			if c.Debug && c.DebugFull {
+				fmt.Printf("%v | sequence changed from %d to %d\n", time.Now().Format("2006-01-02 15:04:05"), oldSequence, factory.Sequence())
+			}
 			if factory.Sequence() > oldSequence+1 {
 				return true
 			} else {
@@ -202,10 +220,14 @@ func GenerateOrBroadcastTxCLISync(clientCtx client.Context, flagSet *pflag.FlagS
 
 	gasPrice, err := flagSet.GetString(flags.FlagGasPrices)
 	if err != nil {
-		fmt.Printf("%v | got error %s\n", time.Now().Format("2006-01-02 15:04:05"), err)
+		if c.Debug && c.DebugFull {
+			fmt.Printf("%v | got error %s\n", time.Now().Format("2006-01-02 15:04:05"), err)
+		}
 		return err, nil
 	}
-	fmt.Printf("%v | flags.FlagGasPrices %s\n", time.Now().Format("2006-01-02 15:04:05"), gasPrice)
+	if c.Debug && c.DebugFull {
+		fmt.Printf("%v | flags.FlagGasPrices %s\n", time.Now().Format("2006-01-02 15:04:05"), gasPrice)
+	}
 	if gasPrice == "" {
 		flagSet.Set(flags.FlagGasPrices, "500000000aqdn")
 	}
@@ -238,10 +260,14 @@ func GenerateOrBroadcastTxCLISync(clientCtx client.Context, flagSet *pflag.FlagS
 		txf = txf.WithSequence(oldSequence - 1)
 		*/
 
-		fmt.Printf("%v | GenerateOrBroadcastTxCLISync\n", time.Now().Format("2006-01-02 15:04:05"))
+		if c.Debug && c.DebugFull {
+			fmt.Printf("%v | GenerateOrBroadcastTxCLISync\n", time.Now().Format("2006-01-02 15:04:05"))
+		}
 		err, res = GenerateOrBroadcastTxWithFactory(clientCtx, txf, msgs...)
 
-		fmt.Printf("%v | CheckTxCLIResponse\n", time.Now().Format("2006-01-02 15:04:05"))
+		if c.Debug && c.DebugFull {
+			fmt.Printf("%v | CheckTxCLIResponse\n", time.Now().Format("2006-01-02 15:04:05"))
+		}
 		err, shouldRetry = CheckTxCLIResponse(clientCtx, err, res, op)
 		if shouldRetry {
 			// delay for a bit
@@ -255,12 +281,16 @@ func GenerateOrBroadcastTxCLISync(clientCtx client.Context, flagSet *pflag.FlagS
 			if newBackoff && !backoff {
 				maxTries = 0
 				backoff = true
-				fmt.Printf("%v | backing off\n", time.Now().Format("2006-01-02 15:04:05"))
+				if c.Debug && c.DebugFull {
+					fmt.Printf("%v | backing off\n", time.Now().Format("2006-01-02 15:04:05"))
+				}
 				timeouts = backoffTimeouts
 			} else {
 				maxTries++
 				if maxTries == len(timeouts) {
-					fmt.Printf("%v | max retries exceeded\n", time.Now().Format("2006-01-02 15:04:05"))
+					if c.Debug && c.DebugFull {
+						fmt.Printf("%v | max retries exceeded\n", time.Now().Format("2006-01-02 15:04:05"))
+					}
 					return errors.New("max retries exceeded"), nil
 				}
 			}
@@ -273,7 +303,9 @@ func GenerateOrBroadcastTxCLISync(clientCtx client.Context, flagSet *pflag.FlagS
 	}
 
 	oldSequence := txf.Sequence()
-	fmt.Printf("%v | used sequence %d\n", time.Now().Format("2006-01-02 15:04:05"), oldSequence)
+	if c.Debug && c.DebugFull {
+		fmt.Printf("%v | used sequence %d\n", time.Now().Format("2006-01-02 15:04:05"), oldSequence)
+	}
 	waitForSequenceChange(clientCtx, flagSet, oldSequence)
 
 	// note: we get here even if the sequence number did not increase, but the chain may just be delayed in updating the sequence number

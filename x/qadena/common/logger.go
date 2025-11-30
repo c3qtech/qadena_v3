@@ -20,12 +20,28 @@ type qadenaLogger struct {
 
 func NewTMLogger(p string) log.Logger {
 	loggerPrefix = "[" + p + " - "
-	return log.NewLogger(os.Stdout)
+	return log.NewLogger(os.Stderr)
 }
 
 var loggerPrefix = "[qadena - "
 
+var debugEnabled = false
+
+// SetLogLevel enables or disables debug logging based on a simple level string.
+// If level is "debug" (case-insensitive), debug logs are emitted; otherwise they are suppressed.
+func SetLogLevel(level string) {
+	switch strings.ToLower(level) {
+	case "debug":
+		debugEnabled = true
+	default:
+		debugEnabled = false
+	}
+}
+
 func LoggerDebug(logger log.Logger, msg string, vals ...interface{}) {
+	if !debugEnabled {
+		return
+	}
 	var strArr []string
 
 	strArr = append(strArr, msg)
@@ -36,7 +52,7 @@ func LoggerDebug(logger log.Logger, msg string, vals ...interface{}) {
 
 	result := strings.Join(strArr, " ")
 
-	logger.Info(loggerPrefix + "D]: " + result)
+	logger.Debug(loggerPrefix + "D]: " + result)
 }
 
 func LoggerError(logger log.Logger, msg string, vals ...interface{}) {

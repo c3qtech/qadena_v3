@@ -64,12 +64,6 @@ PIDS=()
 declare -A PROC_NAMES
 
 if [[ $DEBUG != "no_qadenad_enclave" ]] ; then
-#    if [[ "$(uname -s)" == "Darwin" ]] ; then
-#        run_enclave_script="export $QADENAHOME=$QADENAHOME; export qadenabin=$qadenabin; cd $(pwd) && ./run_enclave.sh"
-#        osascript -e 'tell app "Terminal" to do script "'$run_enclave_script'"'
-#        sleep 1
-#        osascript -e 'tell app "Terminal" to set bounds of every window whose name contains "QADENAD Enclave Debug Window" to {800, 50, 1500, 400}'
-#    elif [[ "$(uname -s)" == "Linux" ]] ; then
         if [[ $REAL_ENCLAVE == 1 ]] ; then
             $qadenascripts/run_realenclave.sh &
             PIDS+=$!
@@ -81,8 +75,6 @@ if [[ $DEBUG != "no_qadenad_enclave" ]] ; then
             PROC_NAMES[$!]="run_enclave.sh"
             echo "run.sh: enclave started by script, PID: $!"
         fi
-#        sleep 10
-#    fi
 fi
 
 
@@ -172,7 +164,14 @@ while [ $KILLED -eq 0 ] ; do
     if ! kill -0 $pid 2>/dev/null; then
       wait $pid
       RC=$?
-      echo "run.sh: Process ${PROC_NAMES[$pid]} (PID $pid) has exited with RC $RC."
+
+      proc_name=${PROC_NAMES[$pid]}
+      # if proc_name is delayed_init_enclave.sh, and RC is 0, report is as normal exit
+      if [ "$proc_name" = "delayed_init_enclave.sh" ] && [ $RC -eq 0 ] ; then
+        echo "run.sh: Process ${proc_name} (PID $pid) is done."
+      else
+        echo "run.sh: Process ${proc_name} (PID $pid) has exited with RC $RC."
+      fi
 
       # remove $pid from arrays
       unset "PROC_NAMES[$pid]"

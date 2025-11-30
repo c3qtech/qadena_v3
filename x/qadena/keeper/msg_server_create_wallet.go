@@ -2,7 +2,6 @@ package keeper
 
 import (
 	"context"
-	"fmt"
 
 	// "math/big"
 
@@ -101,7 +100,7 @@ func (k msgServer) CreateWallet(goCtx context.Context, msg *types.MsgCreateWalle
 	c.ContextDebug(ctx, "walletAmountPC "+c.PrettyPrint(walletAmountPC))
 	c.ContextDebug(ctx, "transparentWalletAmountPC "+c.PrettyPrint(transparentWalletAmountPC))
 
-	fmt.Println("nodeparams", k.nodeParams, "wallettype", walletType)
+	c.ContextDebug(ctx, "nodeparams and wallet type", "nodeparams", c.PrettyPrint(k.nodeParams), "walletType", walletType)
 
 	accountAddress, err := sdk.AccAddressFromBech32(msg.Creator)
 	if err != nil {

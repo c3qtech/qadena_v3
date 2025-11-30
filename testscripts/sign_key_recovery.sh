@@ -11,8 +11,8 @@ qadenad_alias query qadena show-recover-key recover-al
 qadenad_alias query qadena show-recover-key recover-ann
 qadenad_alias query qadena show-recover-key recover-victor
 
-qadenad_alias tx qadena sign-recover-key al-eph --from victor-eph --is-user --yes
-qadenad_alias tx qadena sign-recover-key al-eph --from pioneer1 --yes
+qadenad_alias tx qadena sign-recover-key al-eph1 --from victor-eph1 --is-user --yes
+qadenad_alias tx qadena sign-recover-key al-eph1 --from pioneer1 --yes
 
-qadenad_alias tx qadena sign-recover-key ann-eph2 --from victor-eph --is-user --yes
+qadenad_alias tx qadena sign-recover-key ann-eph1 --from victor-eph1 --is-user --yes
 

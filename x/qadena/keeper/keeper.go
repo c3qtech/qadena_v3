@@ -150,14 +150,14 @@ func MsgServerGetJarForPioneer(ctx sdk.Context, qadenaKeeper Keeper, pioneerID s
 
 func MsgServerAppendRequiredChainCCPubK(ctx sdk.Context, ccPubK []c.VSharePubKInfo, qadenaKeeper Keeper, pioneerID string, excludeSSIntervalPubK bool) ([]c.VSharePubKInfo, error) {
 	if excludeSSIntervalPubK && pioneerID == "" {
-		fmt.Println("Logic error")
+		c.ContextError(ctx, "Logic error")
 		return nil, fmt.Errorf("Logic error")
 	}
 	if !excludeSSIntervalPubK {
 		ssIntervalPubKID, ssIntervalPubK, _, err := MsgServerGetIntervalPublicKey(ctx, qadenaKeeper, types.SSNodeID, types.SSNodeType)
 
 		if err != nil {
-			fmt.Println("Couldn't get interval public key")
+			c.ContextError(ctx, "Couldn't get interval public key")
 			return nil, err
 		}
 
@@ -167,27 +167,27 @@ func MsgServerAppendRequiredChainCCPubK(ctx sdk.Context, ccPubK []c.VSharePubKIn
 			NodeType: types.SSNodeType,
 		})
 
-		fmt.Println("ssIntervalPubKID", ssIntervalPubKID, "ssIntervalPubK", ssIntervalPubK)
+		c.ContextDebug(ctx, "ssIntervalPubKID", "id", ssIntervalPubKID, "pubk", ssIntervalPubK)
 	}
 
 	if pioneerID != "" {
 		jarID, err := MsgServerGetJarForPioneer(ctx, qadenaKeeper, pioneerID)
 
 		if err != nil {
-			fmt.Println("Couldn't get jar for pioneer", pioneerID)
+			c.ContextError(ctx, "Couldn't get jar for pioneer", "pioneerID", pioneerID)
 			return nil, err
 		}
 
-		fmt.Println("jarID", jarID)
+		c.ContextDebug(ctx, "jarID", "jarID", jarID)
 
 		jarIntervalPubKID, jarIntervalPubK, _, err := MsgServerGetIntervalPublicKey(ctx, qadenaKeeper, jarID, types.JarNodeType)
 
 		if err != nil {
-			fmt.Println("Couldn't get jar interval public key", jarID, types.JarNodeType)
+			c.ContextError(ctx, "Couldn't get jar interval public key", "jarID", jarID, "nodeType", types.JarNodeType)
 			return nil, err
 		}
 
-		fmt.Println("jarIntervalPubKID", jarIntervalPubKID, "jarIntervalPubK", jarIntervalPubK)
+		c.ContextDebug(ctx, "jarIntervalPubKID", "id", jarIntervalPubKID, "pubk", jarIntervalPubK)
 
 		ccPubK = append(ccPubK, c.VSharePubKInfo{
 			PubK:     jarIntervalPubK,
@@ -226,7 +226,7 @@ func MsgServerAppendOptionalServiceProvidersCCPubK(ctx sdk.Context, ccPubK []c.V
 	for i := range serviceProviderID {
 		_, pubK, serviceProviderType, err := MsgServerGetIntervalPublicKey(ctx, qadenaKeeper, serviceProviderID[i], types.ServiceProviderNodeType)
 		if err != nil {
-			fmt.Println("Couldn't get service provider interval public key", serviceProviderID[i], types.ServiceProviderNodeType)
+			c.ContextError(ctx, "Couldn't get service provider interval public key", "serviceProviderID", serviceProviderID[i], "nodeType", types.ServiceProviderNodeType)
 			return nil, err
 		}
 

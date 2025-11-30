@@ -1179,7 +1179,7 @@ func (s *qadenaServer) GenerateSecretShare(nodeID string, nodeType string) (msgP
 	var pwalletAddr sdk.AccAddress
 	pwalletAddr, err = sdk.AccAddressFromBech32(s.getPrivateEnclaveParamsPioneerWalletID())
 	if err != nil {
-		fmt.Println("couldn't convert to addr", s.getPrivateEnclaveParamsPioneerWalletID(), err)
+		c.LoggerError(logger, "couldn't convert to addr", s.getPrivateEnclaveParamsPioneerWalletID(), err)
 		return
 	}
 	report, err = s.getRemoteReport(strings.Join([]string{
@@ -1637,7 +1637,7 @@ func (s *qadenaServer) updateSSIntervalKey() bool {
 	var pwalletAddr sdk.AccAddress
 	pwalletAddr, err = sdk.AccAddressFromBech32(s.getPrivateEnclaveParamsPioneerWalletID())
 	if err != nil {
-		fmt.Println("couldn't convert to addr", s.getPrivateEnclaveParamsPioneerWalletID(), err)
+		c.LoggerError(logger, "couldn't convert to addr "+s.getPrivateEnclaveParamsPioneerWalletID()+" "+err.Error())
 		return false
 	}
 
@@ -2753,7 +2753,7 @@ func (s *qadenaServer) SetProtectKey(ctx context.Context, in *types.ProtectKey) 
 		return nil, types.ErrInvalidWallet
 	}
 
-	fmt.Print("EncWalletVShare: ")
+	c.LoggerDebug(logger, "EncWalletVShare: ")
 
 	unprotoSubWalletCreateWalletVShareBind := c.UnprotoizeVShareBindData(subWallet.CreateWalletVShareBind)
 	// decrypt the destination wallet id
@@ -2877,28 +2877,28 @@ func (s *qadenaServer) ClaimCredential(ctx context.Context, in *types.MsgClaimCr
 	unprotoCredentialPC := c.UnprotoizeBPedersenCommit(ipCredential.CredentialPedersenCommit)
 
 	if !c.ValidateSubPedersenCommit(unprotoCredentialPC, c.UnprotoizeBPedersenCommit(encryptableClaimCredentialExtraParms.NewCredentialPC), c.UnprotoizeEncryptablePedersenCommit(encryptableClaimCredentialExtraParms.ZeroPC)) {
-		fmt.Println("failed to validate credentialPC - newCredentialPC - zeroPC = 0")
+		c.LoggerError(logger, "failed to validate credentialPC - newCredentialPC - zeroPC = 0")
 		return nil, types.ErrGenericPedersen
 	}
 
 	// validate that the client changed the credential's CredentialPC, but the hash is still the same
-	fmt.Println("validated ZeroPC")
+	c.LoggerDebug(logger, "validated ZeroPC")
 
 	// check ClaimPC
 
 	if wallet.EphemeralWalletAmountCount[types.QadenaTokenDenom] != types.QadenaRealWallet {
-		fmt.Println("can't claim ipCredential on subwallet")
+		c.LoggerError(logger, "can't claim ipCredential on subwallet")
 		return nil, types.ErrInvalidWallet
 	}
 
 	unprotoWalletAmountPC := c.UnprotoizeBPedersenCommit(wallet.WalletAmount[types.QadenaTokenDenom].WalletAmountPedersenCommit)
 
 	if !c.ValidateAddPedersenCommit(unprotoWalletAmountPC, c.UnprotoizeBPedersenCommit(encryptableClaimCredentialExtraParms.NewCredentialPC), c.UnprotoizeBPedersenCommit(encryptableClaimCredentialExtraParms.ClaimPC)) {
-		fmt.Println("failed to validate ClaimPC")
+		c.LoggerError(logger, "failed to validate ClaimPC")
 		return nil, types.ErrGenericPedersen
 	}
 
-	fmt.Println("validated ClaimPC")
+	c.LoggerDebug(logger, "validated ClaimPC")
 
 	var checkPC *c.PedersenCommit
 	var pin string
@@ -4676,14 +4676,14 @@ func (s *qadenaServer) enclaveGetJarForPioneer(pioneerID string) (jarID string, 
 
 func (s *qadenaServer) enclaveAppendRequiredChainCCPubK(ccPubK []c.VSharePubKInfo, pioneerID string, excludeSSIntervalPubK bool) ([]c.VSharePubKInfo, error) {
 	if excludeSSIntervalPubK && pioneerID == "" {
-		fmt.Println("Logic error")
+		c.LoggerError(logger, "Logic error")
 		return nil, fmt.Errorf("Logic error")
 	}
 	if !excludeSSIntervalPubK {
 		ssIntervalPubKID, ssIntervalPubK, _, err := s.enclaveGetIntervalPublicKey(types.SSNodeID, types.SSNodeType)
 
 		if err != nil {
-			fmt.Println("Couldn't get interval public key")
+			c.LoggerError(logger, "Couldn't get interval public key")
 			return nil, err
 		}
 
@@ -4693,27 +4693,27 @@ func (s *qadenaServer) enclaveAppendRequiredChainCCPubK(ccPubK []c.VSharePubKInf
 			NodeType: types.SSNodeType,
 		})
 
-		fmt.Println("ssIntervalPubKID", ssIntervalPubKID, "ssIntervalPubK", ssIntervalPubK)
+		c.LoggerDebug(logger, "ssIntervalPubKID", ssIntervalPubKID, "ssIntervalPubK", ssIntervalPubK)
 	}
 
 	if pioneerID != "" {
 		jarID, err := s.enclaveGetJarForPioneer(pioneerID)
 
 		if err != nil {
-			fmt.Println("Couldn't get jar for pioneer", pioneerID)
+			c.LoggerError(logger, "Couldn't get jar for pioneer", pioneerID)
 			return nil, err
 		}
 
-		fmt.Println("jarID", jarID)
+		c.LoggerDebug(logger, "jarID", jarID)
 
 		jarIntervalPubKID, jarIntervalPubK, _, err := s.enclaveGetIntervalPublicKey(jarID, types.JarNodeType)
 
 		if err != nil {
-			fmt.Println("Couldn't get jar interval public key", jarID, types.JarNodeType)
+			c.LoggerError(logger, "Couldn't get jar interval public key", jarID, types.JarNodeType)
 			return nil, err
 		}
 
-		fmt.Println("jarIntervalPubKID", jarIntervalPubKID, "jarIntervalPubK", jarIntervalPubK)
+		c.LoggerDebug(logger, "jarIntervalPubKID", jarIntervalPubKID, "jarIntervalPubK", jarIntervalPubK)
 
 		ccPubK = append(ccPubK, c.VSharePubKInfo{
 			PubK:     jarIntervalPubK,
@@ -4730,7 +4730,7 @@ func (s *qadenaServer) enclaveAppendOptionalServiceProvidersCCPubK(ccPubK []c.VS
 	for i := range serviceProviderID {
 		_, pubK, serviceProviderType, err := s.enclaveGetIntervalPublicKey(serviceProviderID[i], types.ServiceProviderNodeType)
 		if err != nil {
-			fmt.Println("Couldn't get service provider interval public key", serviceProviderID[i], types.ServiceProviderNodeType)
+			c.LoggerError(logger, "Couldn't get service provider interval public key", serviceProviderID[i], types.ServiceProviderNodeType)
 			return nil, err
 		}
 
@@ -4880,7 +4880,7 @@ func (s *qadenaServer) ValidateDestinationWallet(ctx context.Context, msg *types
 	// decrypt the destination wallet id
 	var vShareCreateWallet types.EncryptableCreateWallet
 
-	fmt.Print("EncCreateWalletVShare: ")
+	c.LoggerDebug(logger, "EncCreateWalletVShare: ")
 
 	unprotoMsgCreateWalletVShareBind := c.UnprotoizeVShareBindData(msg.CreateWalletVShareBind)
 
@@ -4991,7 +4991,7 @@ func (s *qadenaServer) ValidateCredential(ctx context.Context, msg *types.MsgBin
 		return &types.ValidateCredentialReply{Status: false}, types.ErrInvalidWallet
 	}
 
-	fmt.Print("EncWalletVShare: ")
+	c.LoggerDebug(logger, "EncWalletVShare: ")
 
 	unprotoEphCreateWalletVShareBind := c.UnprotoizeVShareBindData(ephWallet.CreateWalletVShareBind)
 	// decrypt the destination wallet id
@@ -5138,7 +5138,7 @@ func (s *qadenaServer) ValidateTransferPrime(ctx context.Context, msg *types.Msg
 
 	var vShareTransferFunds types.EncryptableTransferFunds
 
-	fmt.Print("EncTransferFundsVShare: ")
+	c.LoggerDebug(logger, "EncTransferFundsVShare: ")
 
 	err = c.VShareBDecryptAndProtoUnmarshal(s.getSharedEnclaveParamsJarPrivK(), s.getSharedEnclaveParamsJarPubK(), unprotoMsgTransferFundsVShareBind, msg.EncTransferFundsVShare, &vShareTransferFunds)
 	if err != nil {
@@ -5207,7 +5207,7 @@ func (s *qadenaServer) ValidateTransferPrime(ctx context.Context, msg *types.Msg
 	if dstWallet.SenderOptions != "" {
 		senderOptions := strings.Split(dstWallet.SenderOptions, ",")
 
-		fmt.Println("senderOptions" + c.PrettyPrint(senderOptions))
+		c.LoggerDebug(logger, "senderOptions"+c.PrettyPrint(senderOptions))
 
 		if findSenderOption(senderOptions, types.RequireSenderFirstNamePersonalInfoSenderOption) {
 			srcWallet, found := s.getWallet(msg.Creator)
@@ -5470,8 +5470,8 @@ func (s *qadenaServer) ValidateTransferPrime(ctx context.Context, msg *types.Msg
 		)
 	}
 
-	fmt.Println("sameWallet::", sameWallet)
-	fmt.Println("mustUpdateSrcWallet::", mustUpdateSrcWallet)
+	c.LoggerDebug(logger, "sameWallet::", sameWallet)
+	c.LoggerDebug(logger, "mustUpdateSrcWallet::", mustUpdateSrcWallet)
 
 	dstWallet.EphemeralWalletAmountCount[token]++
 
@@ -5493,12 +5493,12 @@ func (s *qadenaServer) ValidateTransferDoublePrime(ctx context.Context, msg *typ
 
 	c.LoggerDebug(logger, "it's mine, we can decode")
 
-	fmt.Print("EncAnonymizerBankTransferBlindingFactor ")
+	c.LoggerDebug(logger, "EncAnonymizerBankTransferBlindingFactor ")
 	var bankTransferBFProto types.BInt
 	unprotoMsgAnonBankTransferBF := c.UnprotoizeVShareBindData(msg.AnonReceiveFundsVShareBind)
 	err := c.VShareBDecryptAndProtoUnmarshal(s.getSharedEnclaveParamsJarPrivK(), s.getSharedEnclaveParamsJarPubK(), unprotoMsgAnonBankTransferBF, msg.EncAnonReceiveFundsVShare, &bankTransferBFProto)
 	if err != nil {
-		fmt.Println("failed to decrypt EncAnonymizerBankTransferBlindingFactor")
+		c.LoggerError(logger, "failed to decrypt EncAnonymizerBankTransferBlindingFactor")
 		return &types.ValidateTransferDoublePrimeReply{UpdateDestinationWallet: false}, err
 	}
 	bankTransferBF := c.UnprotoizeBInt(&bankTransferBFProto)
@@ -5510,14 +5510,14 @@ func (s *qadenaServer) ValidateTransferDoublePrime(ctx context.Context, msg *typ
 
 	// decrypt the ephemeral wallet ID
 	var vShareReceiveFunds types.EncryptableReceiveFunds
-	fmt.Print("EncReceiveFundsVShare ")
+	c.LoggerDebug(logger, "EncReceiveFundsVShare ")
 
 	err = c.VShareBDecryptAndProtoUnmarshal(s.getSharedEnclaveParamsJarPrivK(), s.getSharedEnclaveParamsJarPubK(), unprotoMsgReceiveFundsVShareBind, msg.EncReceiveFundsVShare, &vShareReceiveFunds)
 	if err != nil {
 		return nil, err
 	}
 
-	fmt.Print("EncJarSrcEWalletID ")
+	c.LoggerDebug(logger, "EncJarSrcEWalletID ")
 	srcEWalletID := vShareReceiveFunds.EphEWalletID
 
 	srcWallet, found := s.getWallet(srcEWalletID.WalletID)
@@ -5533,7 +5533,7 @@ func (s *qadenaServer) ValidateTransferDoublePrime(ctx context.Context, msg *typ
 		dequeue = false
 	}
 
-	fmt.Print("EncWalletVShare: ")
+	c.LoggerDebug(logger, "EncWalletVShare: ")
 
 	unprotoSrcWalletCreateWalletVShareBind := c.UnprotoizeVShareBindData(srcWallet.CreateWalletVShareBind)
 	// decrypt the destination wallet id
@@ -5759,7 +5759,7 @@ func (s *qadenaServer) ScanTransaction(ctx context.Context, st *types.MsgScanTra
 
 	var vShareTransferFunds types.EncryptableTransferFunds
 
-	fmt.Print("EncTransferFundsVShare: ")
+	c.LoggerDebug(logger, "EncTransferFundsVShare: ")
 
 	err = c.VShareBDecryptAndProtoUnmarshal(s.getSharedEnclaveParamsJarPrivK(), s.getSharedEnclaveParamsJarPubK(), unprotoMsgTransferFundsVShareBind, msg.EncTransferFundsVShare, &vShareTransferFunds)
 	if err != nil {
@@ -5800,7 +5800,7 @@ func (s *qadenaServer) ScanTransaction(ctx context.Context, st *types.MsgScanTra
 		return nil, err
 	}
 
-	fmt.Print("EncWalletVShare: ")
+	c.LoggerDebug(logger, "EncWalletVShare: ")
 
 	unprotoDstWalletCreateWalletVShareBind := c.UnprotoizeVShareBindData(dstEWallet.CreateWalletVShareBind)
 	// decrypt the destination wallet id
@@ -6022,11 +6022,15 @@ func main() {
 	querySignerID := flag.Bool("signer-id", false, "Query signer ID")
 	queryUniqueID := flag.Bool("unique-id", false, "Query unique ID")
 	queryVersion := flag.Bool("version", false, "Query version")
+	logLevel := flag.String("log-level", "info", "Log level (debug or info)")
 
 	enclaveUpgradeModeArg := flag.Bool("upgrade-mode", false, "Enclave upgrade mode")
 	upgradeFromEnclave := flag.String("upgrade-from-enclave-unique-id", "", "Unique ID of old enclave running on this node")
 
 	flag.Parse()
+
+	// configure logging level (defaults to info when flag omitted)
+	c.SetLogLevel(*logLevel)
 
 	enclaveUpgradeMode = *enclaveUpgradeModeArg
 
@@ -6247,18 +6251,18 @@ func main() {
 		if err != nil {
 			st, ok := status.FromError(err)
 			if ok {
-				fmt.Println("grpcstatus code", c.PrettyPrint(st.Code()))
-				fmt.Println("grpcstatus message", c.PrettyPrint(st.Message()))
+				c.LoggerDebug(logger, "grpcstatus code", c.PrettyPrint(st.Code()))
+				c.LoggerDebug(logger, "grpcstatus message", c.PrettyPrint(st.Message()))
 
 				sdkErr := types.ErrRemoteReportNotVerified
 
-				fmt.Println("Cosmos Error:", sdkErr.GRPCStatus().Message())
+				c.LoggerDebug(logger, "Cosmos Error:", sdkErr.GRPCStatus().Message())
 
-				fmt.Println("Cosmos Error Code:", sdkErr.ABCICode())
-				fmt.Println("Cosmos Error Description:", sdkErr.Error())
+				c.LoggerDebug(logger, "Cosmos Error Code:", sdkErr.ABCICode())
+				c.LoggerDebug(logger, "Cosmos Error Description:", sdkErr.Error())
 
 				if sdkErr.GRPCStatus().Message() == st.Message() {
-					fmt.Println("Cosmos Error:", sdkErr.GRPCStatus().Message())
+					c.LoggerDebug(logger, "Cosmos Error:", sdkErr.GRPCStatus().Message())
 					os.Exit(5)
 				}
 			}

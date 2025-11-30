@@ -105,7 +105,7 @@ var SuspiciousThreshold = "10000usd"
 var Seed = rand.NewSource(time.Now().UnixNano())
 var Random = rand.New(Seed)
 
-var Debug bool = true
+var Debug bool = false
 var DebugFull bool = false
 
 // if this is enabled, you can see the encrypted values -- this is good for debugging
@@ -635,7 +635,9 @@ func ClientAppendRequiredChainCCPubK(ctx client.Context, ccPubK []VSharePubKInfo
 			NodeType: types.SSNodeType,
 		})
 
-		fmt.Println("ssIntervalPubKID", ssIntervalPubKID, "ssIntervalPubK", ssIntervalPubK)
+		if Debug && DebugFull {
+			fmt.Println("ssIntervalPubKID", ssIntervalPubKID, "ssIntervalPubK", ssIntervalPubK)
+		}
 	}
 
 	if pioneerID != "" {
@@ -646,7 +648,9 @@ func ClientAppendRequiredChainCCPubK(ctx client.Context, ccPubK []VSharePubKInfo
 			return nil, err
 		}
 
-		fmt.Println("jarID", jarID)
+		if Debug && DebugFull {
+			fmt.Println("jarID", jarID)
+		}
 
 		jarIntervalPubKID, jarIntervalPubK, err := GetIntervalPublicKey(ctx, jarID, types.JarNodeType)
 
@@ -655,7 +659,9 @@ func ClientAppendRequiredChainCCPubK(ctx client.Context, ccPubK []VSharePubKInfo
 			return nil, err
 		}
 
-		fmt.Println("jarIntervalPubKID", jarIntervalPubKID, "jarIntervalPubK", jarIntervalPubK)
+		if Debug && DebugFull {
+			fmt.Println("jarIntervalPubKID", jarIntervalPubKID, "jarIntervalPubK", jarIntervalPubK)
+		}
 
 		ccPubK = append(ccPubK, VSharePubKInfo{
 			PubK:     jarIntervalPubK,

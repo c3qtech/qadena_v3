@@ -13,5 +13,5 @@ partners=$4
 echo "-------------------------"
 echo "Protect $user's seed phrase"
 echo "-------------------------"
-qadenad_alias tx qadena protect-key "$mnemonic" $required ${(s: :)partners} --from $user-eph --yes
+qadenad_alias tx qadena protect-key "$mnemonic" $required ${(s: :)partners} --from $user-eph1 --yes
 

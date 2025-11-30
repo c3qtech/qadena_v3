@@ -101,14 +101,14 @@ func DSVSMsgServerGetJarForPioneer(ctx sdk.Context, qadenaKeeper types.QadenaKee
 
 func DSVSMsgServerAppendRequiredChainCCPubK(ctx sdk.Context, ccPubK []c.VSharePubKInfo, qadenaKeeper types.QadenaKeeper, pioneerID string, excludeSSIntervalPubK bool) ([]c.VSharePubKInfo, error) {
 	if excludeSSIntervalPubK && pioneerID == "" {
-		fmt.Println("Logic error")
+		c.ContextError(ctx, "Logic error")
 		return nil, fmt.Errorf("Logic error")
 	}
 	if !excludeSSIntervalPubK {
 		ssIntervalPubKID, ssIntervalPubK, _, err := DSVSMsgServerGetIntervalPublicKey(ctx, qadenaKeeper, qadenatypes.SSNodeID, qadenatypes.SSNodeType)
 
 		if err != nil {
-			fmt.Println("Couldn't get interval public key")
+			c.ContextError(ctx, "Couldn't get interval public key")
 			return nil, err
 		}
 
@@ -118,27 +118,27 @@ func DSVSMsgServerAppendRequiredChainCCPubK(ctx sdk.Context, ccPubK []c.VSharePu
 			NodeType: qadenatypes.SSNodeType,
 		})
 
-		fmt.Println("ssIntervalPubKID", ssIntervalPubKID, "ssIntervalPubK", ssIntervalPubK)
+		c.ContextDebug(ctx, "ssIntervalPubKID", "id", ssIntervalPubKID, "pubk", ssIntervalPubK)
 	}
 
 	if pioneerID != "" {
 		jarID, err := DSVSMsgServerGetJarForPioneer(ctx, qadenaKeeper, pioneerID)
 
 		if err != nil {
-			fmt.Println("Couldn't get jar for pioneer", pioneerID)
+			c.ContextError(ctx, "Couldn't get jar for pioneer", "pioneerID", pioneerID)
 			return nil, err
 		}
 
-		fmt.Println("jarID", jarID)
+		c.ContextDebug(ctx, "jarID", "jarID", jarID)
 
 		jarIntervalPubKID, jarIntervalPubK, _, err := DSVSMsgServerGetIntervalPublicKey(ctx, qadenaKeeper, jarID, qadenatypes.JarNodeType)
 
 		if err != nil {
-			fmt.Println("Couldn't get jar interval public key", jarID, qadenatypes.JarNodeType)
+			c.ContextError(ctx, "Couldn't get jar interval public key", "jarID", jarID, "nodeType", qadenatypes.JarNodeType)
 			return nil, err
 		}
 
-		fmt.Println("jarIntervalPubKID", jarIntervalPubKID, "jarIntervalPubK", jarIntervalPubK)
+		c.ContextDebug(ctx, "jarIntervalPubKID", "id", jarIntervalPubKID, "pubk", jarIntervalPubK)
 
 		ccPubK = append(ccPubK, c.VSharePubKInfo{
 			PubK:     jarIntervalPubK,

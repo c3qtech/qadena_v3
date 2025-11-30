@@ -7,8 +7,6 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"fmt"
-
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 	qadenatypes "github.com/c3qtech/qadena_v3/x/qadena/types"
 )
@@ -16,7 +14,7 @@ import (
 func (k msgServer) BindCredential(goCtx context.Context, msg *types.MsgBindCredential) (*types.MsgBindCredentialResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
-	fmt.Println(msg, c.PrettyPrint(msg))
+	c.ContextDebug(ctx, "BindCredential msg", "msg", c.PrettyPrint(msg))
 
 	credentialPC := c.ConvertNSToQBPedersenCommit(msg.CredentialPedersenCommit)
 
