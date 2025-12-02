@@ -25,21 +25,21 @@ func NewTMLogger(p string) log.Logger {
 
 var loggerPrefix = "[qadena - "
 
-var debugEnabled = false
+var LogLevelDebugEnabled = true
 
 // SetLogLevel enables or disables debug logging based on a simple level string.
 // If level is "debug" (case-insensitive), debug logs are emitted; otherwise they are suppressed.
 func SetLogLevel(level string) {
 	switch strings.ToLower(level) {
 	case "debug":
-		debugEnabled = true
+		LogLevelDebugEnabled = true
 	default:
-		debugEnabled = false
+		LogLevelDebugEnabled = false
 	}
 }
 
 func LoggerDebug(logger log.Logger, msg string, vals ...interface{}) {
-	if !debugEnabled {
+	if !LogLevelDebugEnabled {
 		return
 	}
 	var strArr []string
@@ -84,8 +84,11 @@ func LoggerInfo(logger log.Logger, msg string, vals ...interface{}) {
 }
 
 func ContextDebug(ctx sdk.Context, msg string, keyvals ...interface{}) {
-	//	ctx.Logger().Debug("[qadena]: "+msg, keyvals)
-	LoggerDebug(ctx.Logger(), msg, keyvals...)
+	if !LogLevelDebugEnabled {
+		return
+	}
+	ctx.Logger().Debug("[qadena]: "+msg, keyvals)
+	//LoggerDebug(ctx.Logger(), msg, keyvals...)
 }
 
 func ContextError(ctx sdk.Context, msg string, keyvals ...interface{}) {

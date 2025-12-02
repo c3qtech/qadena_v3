@@ -26,9 +26,17 @@ CHAINID=$(jq -r '.chain_id' "$QADENAHOME/config/genesis.json")
 # enable core dumps
 ulimit -c unlimited
 
+# read the config and check log level
+log_level=$(grep "log_level" $QADENAHOME/config/config.toml | awk '{print $3}' | tr -d '"')
+if [[ $log_level == "debug" ]] ; then
+    log_level="debug"
+else
+    log_level="info"
+fi
+
 # run qadenad_enclave until it exits with 20 or 10
 while true; do
-    $qadenabin/qadenad_enclave --home=$QADENAHOME --chain-id=$CHAINID
+    $qadenabin/qadenad_enclave --home=$QADENAHOME --chain-id=$CHAINID --log-level $log_level
     ret=$?
     if [[ $ret -eq 20 || $ret -eq 10 || $ret -eq 126 ]]; then
         echo "run_enclave.sh: qadenad_enclave exited with $ret"

@@ -45,18 +45,20 @@ func CmdListPublicKey() *cobra.Command {
 
 func CmdShowPublicKey() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "show-public-key [pub-kid]",
+		Use:   "show-public-key [pub-kid] [pubk-type (e.g. credential, transaction, enclave)]",
 		Short: "shows a PublicKey",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			clientCtx := client.GetClientContextFromCmd(cmd)
 
 			queryClient := types.NewQueryClient(clientCtx)
 
 			argPubKID := args[0]
+			argPubKType := args[1]
 
 			params := &types.QueryGetPublicKeyRequest{
-				PubKID: argPubKID,
+				PubKID:   argPubKID,
+				PubKType: argPubKType,
 			}
 
 			res, err := queryClient.PublicKey(context.Background(), params)
