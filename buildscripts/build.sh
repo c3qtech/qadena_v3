@@ -71,7 +71,7 @@ if [[ ! -d "$qadenabin" ]] ; then
     mkdir -p "$qadenabin"
 fi
 
-chain_path="$(pwd)/cmd/qadenad"
+chain_path="$qadenabuild/cmd/qadenad"
 
 cd $qadenabuild
 
