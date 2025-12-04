@@ -87,4 +87,8 @@ var (
 	ErrUpgradeModeNotEnabled        = sdkerrors.Register(ModuleName, 1147, "Enclave upgrade mode not enabled")
 	ErrIntervalPublicKeyIDNotExists = sdkerrors.Register(ModuleName, 1148, "Interval public key ID not exists")
 	ErrInvalidIdentityOwnerWalletID = sdkerrors.Register(ModuleName, 1149, "Invalid identity owner wallet ID")
+
+	ErrAlreadySignedSignRecoverKey = sdkerrors.Register(ModuleName, 1150, "Already signed recover key")
+
+	ErrNotEnoughSignatoriesQueryGetRecoverKey = sdkerrors.Register(ModuleName, 1151, "Not enough signatories")
 )

@@ -76,7 +76,16 @@
         "citizenship": "PH",
         "residency": "PH",
         "email": "jillquimba@c3qtech.com",
-        "phone": "+63288888803"
+        "phone": "+63288888803",
+        "recovery" : {
+            "partners": [
+                "testidentitysrvprv",
+                "pioneer1",
+                "victortorres@c3qtech.com"
+            ],
+            "required": 3
+        }
+
     },
     {
         "name": "victor",

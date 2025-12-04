@@ -331,6 +331,8 @@ message QueryAllProtectKeyResponse {
 
 message QueryGetRecoverKeyRequest {
   string walletID = 1;
+  int64 timestamp = 2;
+  bytes timestampSignature = 3;
 }
 
 message QueryGetRecoverKeyResponse {

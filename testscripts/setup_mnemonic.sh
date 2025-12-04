@@ -9,6 +9,7 @@ kelvinmnemonic="bronze spider school hurt jump stadium blue nuclear glass chef i
 recoveralmnemonic="join total tent make bone program uncle pitch prize body night snake chest mass switch glad opera security evidence catch maid behave gloom ahead"
 recoverannmnemonic="puppy acid muffin pottery flock theory ghost sugar hope thumb gasp misery edge abuse soul moon quiz multiply market pyramid judge build action replace"
 recovervictormnemonic="wasp top capable bullet maximum famous club resemble dizzy aim random trigger success gift month manual enrich carpet gorilla vacant salute certain possible leg"
+recoverjillmnemonic="kite scorpion bread ethics spirit real casino dragon basket project mistake immense spell limb duty swift cluster steak horn hip steak slight proud dwarf"
 secdsvsmnemonic="tide ugly fork short cushion girl earth stage anger away pig screen blood frequent link become crowd visa end present share helmet brain fit"
 
 # users claim = findXY
@@ -41,3 +42,6 @@ secdsvs_bf="5678"
 
 jill_a="10234"
 jill_bf="5678"
+
+jill_recover_a="11234"
+jill_recover_bf="5678"

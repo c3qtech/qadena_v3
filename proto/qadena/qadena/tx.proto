@@ -155,6 +155,7 @@ message MsgAddServiceProvider {
   string pubKID    = 2;
   string nodeID   = 3;
   string serviceProviderType = 4;
+  string homePioneerID = 5;
 }
 
 message MsgAddServiceProviderResponse {}

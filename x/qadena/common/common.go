@@ -192,6 +192,11 @@ func StoreHashByPrefixStore(ctx sdktypes.Context, prefixStore prefix.Store) (str
 	return hex.EncodeToString(h.Sum(nil)), count
 }
 
+func IsBech32Address(address string) bool {
+	_, err := sdktypes.AccAddressFromBech32(address)
+	return err == nil
+}
+
 func GetAddressByName(ctx client.Context, name string, passphrase string) (walletID string, walletAddr sdktypes.AccAddress, pubK string, privK string, armorPrivK string, err error) {
 	var privKHex string
 	walletID, _, pubK, privKHex, err = GetAddress(ctx, name)
@@ -849,6 +854,36 @@ func GetServiceProviderPublicKeyAndType(ctx client.Context, intervalNodeID strin
 	return res2.PublicKey.PubK, res.IntervalPublicKeyID.ServiceProviderType, nil
 }
 
+// returns pubk and service provider type
+func GetServiceProviderHomePioneerID(ctx client.Context, intervalNodeID string) (string, error) {
+	intervalNodeType := types.ServiceProviderNodeType
+	// we need to get a bunch of interval pubkid and pubk
+	queryClient := types.NewQueryClient(ctx)
+
+	if Debug && DebugFull {
+		fmt.Println("getIntervalPublicKey", intervalNodeID, intervalNodeType)
+	}
+
+	params := &types.QueryGetIntervalPublicKeyIDRequest{
+		NodeID:   intervalNodeID,
+		NodeType: intervalNodeType,
+	}
+
+	res, err := queryClient.IntervalPublicKeyID(context.Background(), params)
+	if err != nil {
+		fmt.Println("err", err)
+		return "", err
+	}
+
+	homePioneerID := res.IntervalPublicKeyID.HomePioneerID
+
+	if Debug && DebugFull {
+		fmt.Println("homePioneerID", homePioneerID)
+	}
+
+	return homePioneerID, nil
+}
+
 func GetPublicKey(ctx client.Context, pubKID string, pubKType string) (string, error) {
 	// we need to get a bunch of interval pubkid and pubk
 	queryClient := types.NewQueryClient(ctx)
@@ -893,9 +928,9 @@ func GetIncentives(ctx client.Context) (createWalletIncentive, createEphemeralWa
 func GetProtectKey(ctx client.Context, walletID string, signerWalletID string) ([]byte, int, error) {
 	queryClient := types.NewQueryClient(ctx)
 
-	if Debug && DebugFull {
-		fmt.Println("GetProtectKey", walletID, signerWalletID)
-	}
+	//	if Debug && DebugFull {
+	fmt.Println("GetProtectKey", walletID, signerWalletID)
+	//}
 
 	params := &types.QueryGetProtectKeyRequest{
 		WalletID: walletID,
@@ -907,7 +942,11 @@ func GetProtectKey(ctx client.Context, walletID string, signerWalletID string) (
 	}
 
 	for _, recoverShare := range res.GetProtectKey().RecoverShare {
+		fmt.Println("recoverShare", recoverShare)
+		fmt.Println("signerWalletID", signerWalletID)
+		fmt.Println("recoverShare.WalletID", recoverShare.WalletID)
 		if recoverShare.WalletID == signerWalletID {
+			fmt.Println("found")
 			return recoverShare.EncWalletPubKShare, int(res.GetProtectKey().Threshold), nil
 		}
 	}

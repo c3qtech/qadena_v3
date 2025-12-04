@@ -34,6 +34,7 @@ func (k msgServer) AddServiceProvider(goCtx context.Context, msg *types.MsgAddSe
 		ServiceProviderType: msg.ServiceProviderType,
 		ExternalIPAddress:   "",
 		RemoteReport:        []byte(""),
+		HomePioneerID:       msg.HomePioneerID,
 	}
 
 	k.Keeper.SetIntervalPublicKeyID(ctx, intervalPublicKeyId)

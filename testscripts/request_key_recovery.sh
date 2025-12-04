@@ -26,3 +26,11 @@ qadenad_alias tx qadena create-wallet recover-victor pioneer1 --account-mnemonic
 qadenad_alias tx qadena create-credential $victor_recover_a $victor_recover_bf personal-info "victor" "v" "torres" "1980-Jan-02" "ph" "ph" "M" --from testidentitysrvprv --yes || exit 1
 
 qadenad_alias tx qadena claim-credential $victor_recover_a $victor_recover_bf personal-info --from recover-victor --recover-key --yes
+
+# jill
+
+qadenad_alias tx qadena create-wallet recover-jill pioneer1 --account-mnemonic="$recoverjillmnemonic" create-wallet-sponsor --yes
+
+qadenad_alias tx qadena create-credential $jill_recover_a $jill_recover_bf personal-info "jill" "lava" "quimba" "1980-Jan-01" "ph" "ph" "f" --from testidentitysrvprv --yes || exit 1
+
+qadenad_alias tx qadena claim-credential $jill_recover_a $jill_recover_bf personal-info --from recover-jill --recover-key --yes

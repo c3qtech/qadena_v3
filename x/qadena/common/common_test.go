@@ -12,6 +12,8 @@ import (
 	// big
 	"math/big"
 
+	"github.com/hashicorp/vault/shamir"
+
 	cmdcfg "github.com/c3qtech/qadena_v3/cmd/config"
 	qadenakr "github.com/c3qtech/qadena_v3/crypto/keyring"
 
@@ -155,6 +157,28 @@ func TestAddress(t *testing.T) {
 
 	b64 := ecPoint.B64Address()
 	fmt.Println("b64", b64)
+
+}
+
+func TestShamir(t *testing.T) {
+
+	// split the mnemonic into 3 shares
+	byteShares, err := shamir.Split([]byte("1234"), 3, 2)
+	if err != nil {
+		t.Errorf("Error splitting mnemonic: %v", err)
+	}
+
+	// print byteShares in hex
+	for i, byteShare := range byteShares {
+		fmt.Println("byteShare", i, "", hex.EncodeToString(byteShare))
+	}
+
+	// recombine the shares
+	recombinedMnemonic, err := shamir.Combine(byteShares)
+	if err != nil {
+		t.Errorf("Error combining shares: %v", err)
+	}
+	fmt.Println("recombinedMnemonic", string(recombinedMnemonic))
 
 }
 

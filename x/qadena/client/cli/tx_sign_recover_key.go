@@ -22,6 +22,7 @@ var _ = strconv.Itoa(0)
 
 func CmdSignRecoverKey() *cobra.Command {
 	var argIsUser bool
+	var argIsServiceProvider bool
 
 	cmd := &cobra.Command{
 		Use:   "sign-recover-key [wallet-id]",
@@ -51,6 +52,7 @@ func CmdSignRecoverKey() *cobra.Command {
 			var recoverShare types.RecoverShare
 
 			if argIsUser {
+				fmt.Println("isUser")
 				srcWalletID, _, _, _, err := c.GetAddress(ctx, ctx.GetFromAddress().String())
 				if err != nil {
 					return err
@@ -95,11 +97,64 @@ func CmdSignRecoverKey() *cobra.Command {
 				} else {
 					var stringShare string
 					_, err = c.BDecryptAndUnmarshal(srcCredPrivateKey, encWalletPubKShare, &stringShare)
+					fmt.Println("stringShare", stringShare)
 					encShare := c.MarshalAndBEncrypt(pioneerEnclavePubK, stringShare)
 					recoverShare = types.RecoverShare{WalletID: sourceWallet.HomePioneerID,
 						EncWalletPubKShare: encShare,
 					}
 				}
+			} else if argIsServiceProvider {
+				fmt.Println("isServiceProvider", ctx.GetFromName())
+				homePioneerID, err := c.GetServiceProviderHomePioneerID(ctx, ctx.GetFromName())
+				if err != nil {
+					fmt.Println("GetServiceProviderHomePioneerID failed")
+					return err
+				}
+
+				fmt.Println("homePioneerID", homePioneerID)
+
+				pioneerWalletID, _, err := c.GetIntervalPublicKey(ctx, homePioneerID, types.PioneerNodeType)
+				if err != nil {
+					fmt.Println("GetIntervalPublicKey failed")
+					return err
+				}
+
+				pioneerEnclavePubK, err := c.GetPublicKey(ctx, pioneerWalletID, types.EnclavePubKType)
+				if err != nil {
+					fmt.Println("GetPublicKey enclave failed")
+					return err
+				}
+
+				encWalletPubKShare, threshold, err := c.GetProtectKey(ctx, dstWalletID, ctx.GetFromName())
+				if err != nil {
+					fmt.Println("GetProtectKey failed")
+					return err
+				}
+
+				// srcCredPrivateKey will be used to decrypt the share that was retrieved
+				_, _, srcCredPubKey, srcCredPrivKeyHex, err := c.GetAddress(ctx, ctx.GetFromName())
+				if err != nil {
+					return err
+				}
+				srcCredPrivateKey := srcCredPrivKeyHex + "_privkhex:" + srcCredPubKey + "_privk"
+
+				if threshold == 1 {
+					var seedPhrase string
+					_, err = c.BDecryptAndUnmarshal(srcCredPrivateKey, encWalletPubKShare, &seedPhrase)
+					encShare := c.MarshalAndBEncrypt(pioneerEnclavePubK, seedPhrase)
+					recoverShare = types.RecoverShare{WalletID: homePioneerID,
+						EncWalletPubKShare: encShare,
+					}
+				} else {
+					var stringShare string
+					_, err = c.BDecryptAndUnmarshal(srcCredPrivateKey, encWalletPubKShare, &stringShare)
+					fmt.Println("stringShare", stringShare)
+					encShare := c.MarshalAndBEncrypt(pioneerEnclavePubK, stringShare)
+					recoverShare = types.RecoverShare{WalletID: homePioneerID,
+						EncWalletPubKShare: encShare,
+					}
+				}
+
 			}
 
 			var dstEWalletID types.EncryptableSignRecoverKeyEWalletID
@@ -132,6 +187,7 @@ func CmdSignRecoverKey() *cobra.Command {
 
 	flags.AddTxFlagsToCmd(cmd)
 	cmd.Flags().BoolVar(&argIsUser, "is-user", false, "Is a user, send recoverShare")
+	cmd.Flags().BoolVar(&argIsServiceProvider, "is-service-provider", false, "Is a service provider, send recoverShare")
 
 	return cmd
 }

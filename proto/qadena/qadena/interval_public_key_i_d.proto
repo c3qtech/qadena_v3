@@ -10,5 +10,6 @@ message IntervalPublicKeyID {
   string externalIPAddress = 4; 
   string serviceProviderType = 5;  
   bytes remoteReport = 6;  
+  string homePioneerID = 7;
 }
 

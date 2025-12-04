@@ -2116,7 +2116,7 @@ func (s *qadenaServer) QueryGetRecoverKey(goCtx context.Context, in *types.Query
 
 	if len(recoverKey.Signatory) < int(protectKey.Threshold) {
 		c.LoggerError(logger, "not enough signatories")
-		return nil, types.ErrInvalidQueryGetRecoverKey
+		return nil, types.ErrNotEnoughSignatoriesQueryGetRecoverKey
 	}
 
 	var recoverShare []*types.RecoverShare
@@ -3417,70 +3417,80 @@ func (s *qadenaServer) SignRecoverKey(ctx context.Context, in *types.MsgSignReco
 			return nil, err
 		}
 
-		c.LoggerDebug(logger, "dstEWalletID "+c.PrettyPrint(dstEWalletID))
+		c.LoggerDebug(logger, "SignRecoverKey: dstEWalletID "+c.PrettyPrint(dstEWalletID))
 
 		recoverKey, found := s.getRecoverKeyByOriginalWalletID(dstEWalletID.WalletID)
 
 		if !found {
-			c.LoggerDebug(logger, "Couldn't find recover key "+dstEWalletID.WalletID)
+			c.LoggerDebug(logger, "SignRecoverKey: Couldn't find recover key "+dstEWalletID.WalletID)
 			return nil, types.ErrInvalidSignRecoverKey
 		}
 
-		c.LoggerDebug(logger, "recoverKey "+c.PrettyPrint(recoverKey))
+		c.LoggerDebug(logger, "SignRecoverKey: recoverKey "+c.PrettyPrint(recoverKey))
 
 		protectKey, found := s.getProtectKey(dstEWalletID.WalletID)
 
 		if !found {
-			c.LoggerDebug(logger, "Couldn't find protect key "+dstEWalletID.WalletID)
+			c.LoggerDebug(logger, "SignRecoverKey: Couldn't find protect key "+dstEWalletID.WalletID)
 			return nil, types.ErrInvalidSignRecoverKey
 		}
 
-		c.LoggerDebug(logger, "protectKey "+c.PrettyPrint(protectKey))
+		c.LoggerDebug(logger, "SignRecoverKey: protectKey "+c.PrettyPrint(protectKey))
 
-		found = false
-
-		updateRecoverKey := false
-
+		// find the canonical name of the signer
+		var signerName string
 		for _, recoverShare := range protectKey.RecoverShare {
-			pioneerWalletID, _, foundPioneerID := s.getIntervalPublicKeyId(recoverShare.WalletID, types.PioneerNodeType)
-
-			if recoverShare.WalletID == in.Creator || (foundPioneerID && pioneerWalletID == in.Creator) {
-				// found
-				found = true
-				signed := false
-				for _, signature := range recoverKey.Signatory {
-					if signature == in.Creator {
-						signed = true
+			// check if recoverShare.WalletID is a bech32 address
+			if !c.IsBech32Address(recoverShare.WalletID) {
+				walletID, _, foundPioneerID := s.getIntervalPublicKeyId(recoverShare.WalletID, types.PioneerNodeType)
+				if foundPioneerID {
+					// it's a canonical name
+					if walletID == in.Creator {
+						signerName = recoverShare.WalletID
+						break
 					}
-				}
-				if !signed {
-					recoverKey.Signatory = append(recoverKey.Signatory, recoverShare.WalletID)
-					if in.RecoverShare != nil && in.RecoverShare.WalletID != "" {
-						recoverKey.RecoverShare = append(recoverKey.RecoverShare, in.RecoverShare)
-					}
-					updateRecoverKey = true
-					//					changedRecoverKeys = append(changedRecoverKeys, dstEWalletID.WalletID)
 				} else {
-					c.LoggerDebug(logger, "already signed")
-					return nil, types.ErrInvalidSignRecoverKey
+					// check if service provider
+					walletID, _, foundServiceProviderID := s.getIntervalPublicKeyId(recoverShare.WalletID, types.ServiceProviderNodeType)
+					if foundServiceProviderID {
+						// it's a canonical name
+						if walletID == in.Creator {
+							signerName = recoverShare.WalletID
+							break
+						}
+					}
 				}
-				break
+			} else {
+				// it's a canonical name
+				if recoverShare.WalletID == in.Creator {
+					signerName = recoverShare.WalletID
+				}
 			}
 		}
 
-		if updateRecoverKey {
-			s.setRecoverKeyByOriginalWalletID(dstEWalletID.WalletID, &recoverKey)
-		}
-
-		if !found {
+		if signerName == "" {
+			c.LoggerDebug(logger, "SignRecoverKey: Couldn't find signer name")
 			return nil, types.ErrInvalidSignRecoverKey
 		}
 
-	} else {
-		return nil, types.ErrInvalidSignRecoverKey
+		c.LoggerDebug(logger, "SignRecoverKey: signerName "+signerName)
+
+		for _, signature := range recoverKey.Signatory {
+			if signature == signerName {
+				c.LoggerDebug(logger, "SignRecoverKey: already signed")
+				return nil, types.ErrAlreadySignedSignRecoverKey
+			}
+		}
+
+		recoverKey.Signatory = append(recoverKey.Signatory, signerName)
+		if in.RecoverShare != nil && in.RecoverShare.WalletID != "" {
+			recoverKey.RecoverShare = append(recoverKey.RecoverShare, in.RecoverShare)
+		}
+		s.setRecoverKeyByOriginalWalletID(dstEWalletID.WalletID, &recoverKey)
+		return &types.SignRecoverKeyReply{Status: true}, nil
 	}
 
-	return &types.SignRecoverKeyReply{Status: true}, nil
+	return nil, types.ErrInvalidSignRecoverKey
 }
 
 func (s *qadenaServer) recoverKeyByCredential(ctx context.Context, in *types.Credential, encWalletIDVShare []byte, walletIDVShareBind *types.VShareBindData) (*types.RecoverKeyReply, error) {
@@ -3741,12 +3751,12 @@ func (s *qadenaServer) getIntervalPublicKeyId(nodeID string, nodeType string) (k
 	))
 	var ipki types.IntervalPublicKeyID
 	if b == nil {
-		c.LoggerDebug(logger, "Couldn't find intervalpublickeyid"+nodeID+" "+nodeType)
+		c.LoggerDebug(logger, "Couldn't find intervalPublicKeyId", nodeID, nodeType)
 		found = false
 	} else {
 		s.Cdc.MustUnmarshal(b, &ipki)
 
-		c.LoggerDebug(logger, "publicKey "+c.PrettyPrint(ipki))
+		c.LoggerDebug(logger, "getIntervalPublicKeyId", c.PrettyPrint(ipki))
 		found = true
 		keyID = ipki.PubKID
 		serviceProviderType = ipki.ServiceProviderType

@@ -5,7 +5,8 @@
    "authority": "qadena10d07y265gmmuvt4z0w9aw880jnsr700j5pc4em",
    "pubKID": "qadena1q4yan8zlmmxvq0al0lurj7m83t24wlsyryl3ah",
    "nodeID": "newidentitysrvprv",
-   "serviceProviderType": "identity"
+   "serviceProviderType": "identity",
+   "homePioneerID": "pioneer1"
   }
  ],
  "metadata": "ipfs://CID",

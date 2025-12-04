@@ -35,7 +35,6 @@ func GetQueryCmd() *cobra.Command {
 	cmd.AddCommand(CmdShowSuspiciousTransaction())
 
 	cmd.AddCommand(CmdListIntervalPublicKeyId())
-	//	cmd.AddCommand(CmdListRecoverKey()) // unsupported
 	cmd.AddCommand(CmdQueryParams())
 	cmd.AddCommand(CmdListPublicKey())
 	cmd.AddCommand(CmdShowPublicKey())

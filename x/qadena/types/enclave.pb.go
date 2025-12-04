@@ -3445,6 +3445,7 @@ func _Greeter_SayHello_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+var Greeter_serviceDesc = _Greeter_serviceDesc
 var _Greeter_serviceDesc = grpc.ServiceDesc{
 	ServiceName: "qadena.qadena.Greeter",
 	HandlerType: (*GreeterServer)(nil),
@@ -4945,6 +4946,7 @@ func _QadenaEnclave_GetStoreHash_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+var QadenaEnclave_serviceDesc = _QadenaEnclave_serviceDesc
 var _QadenaEnclave_serviceDesc = grpc.ServiceDesc{
 	ServiceName: "qadena.qadena.QadenaEnclave",
 	HandlerType: (*QadenaEnclaveServer)(nil),

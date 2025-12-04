@@ -214,34 +214,42 @@ genesis:
           nodeType: srv-prv
           nodeID: testidentitysrvprv
           serviceProviderType: identity
+          homePioneerID: pioneer1
         - pubKID: testdsvssrvprvPubKID
           nodeType: srv-prv
           nodeID: testdsvssrvprv
           serviceProviderType: dsvs
+          homePioneerID: pioneer1
         - pubKID: testfinancesrvprvPubKID
           nodeType: srv-prv
           nodeID: testfinancesrvprv
           serviceProviderType: finance
+          homePioneerID: pioneer1
         - pubKID: ekycphidentitysrvprvPubKID
           nodeType: srv-prv
           nodeID: ekycphidentitysrvprv
           serviceProviderType: identity
+          homePioneerID: pioneer1
         - pubKID: mayaidentitysrvprvPubKID
           nodeType: srv-prv
           nodeID: mayaidentitysrvprv
           serviceProviderType: identity
+          homePioneerID: pioneer1
         - pubKID: coinsphidentitysrvprvPubKID
           nodeType: srv-prv
           nodeID: coinsphidentitysrvprv
           serviceProviderType: identity
+          homePioneerID: pioneer1
         - pubKID: coopnetidentitysrvprvPubKID
           nodeType: srv-prv
           nodeID: coopnetidentitysrvprv
           serviceProviderType: identity
+          homePioneerID: pioneer1
         - pubKID: unionbankidentitysrvprvPubKID
           nodeType: srv-prv
           nodeID: unionbankidentitysrvprv
           serviceProviderType: identity
+          homePioneerID: pioneer1
     pricefeed:
       params:
         markets:

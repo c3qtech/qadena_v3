@@ -12,15 +12,15 @@ source "$qadenatestscripts/setup_mnemonic.sh"
 echo "-------------------------"
 echo "Protect al's seed phrase"
 echo "-------------------------"
-qadenad_alias tx qadena protect-key "$almnemonic" 2 pioneer1 "+639065551234" victortorres@c3qtech.com --from al-eph --yes
+qadenad_alias tx qadena protect-key "$almnemonic" 2 pioneer1 "+63288888802" victortorres@c3qtech.com --from al-eph1 --yes
 
 echo "-------------------------"
 echo "Protect ann's seed phrase"
 echo "-------------------------"
-qadenad_alias tx qadena protect-key "$annmnemonic" 1 victortorres@c3qtech.com --from ann-eph2 --yes
+qadenad_alias tx qadena protect-key "$annmnemonic" 1 victortorres@c3qtech.com --from ann-eph1 --yes
 
 echo "-------------------------"
 echo "Protect victor's seed phrase"
 echo "-------------------------"
-qadenad_alias tx qadena protect-key "$victormnemonic" 0 pioneer1 --from victor-eph --yes
+qadenad_alias tx qadena protect-key "$victormnemonic" 0 pioneer1 --from victor-eph1 --yes
 

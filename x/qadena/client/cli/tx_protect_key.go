@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/base64"
 	"strconv"
 
 	"github.com/hashicorp/vault/shamir"
@@ -71,6 +72,7 @@ func CmdProtectKey() *cobra.Command {
 				// check if an address
 
 				isPioneerID := false
+				isServiceProviderID := false
 
 				walletID, _, _, _, err := c.GetAddress(ctx, id)
 
@@ -80,14 +82,32 @@ func CmdProtectKey() *cobra.Command {
 					if err == nil {
 						fmt.Println("it's a pioneer ID")
 						isPioneerID = true
+					} else {
+						_, _, err = c.GetIntervalPublicKey(ctx, id, types.ServiceProviderNodeType)
+						if err == nil {
+							fmt.Println("it's a service provider ID")
+							isServiceProviderID = true
+						} else {
+							fmt.Println("it's neither a pioneer ID nor service provider ID")
+						}
 					}
 				} else {
 					fmt.Println("GetAddress failed")
 					// check if it's a pioneer name
-					walletID, walletPubK, err = c.GetIntervalPublicKey(ctx, id, types.PioneerNodeType)
-					if err != nil {
-						fmt.Println("GetIntervalPublicKey failed")
-						// check via naming service
+					walletID, _, err = c.GetIntervalPublicKey(ctx, id, types.PioneerNodeType)
+					if err == nil {
+						fmt.Println("GetIntervalPublicKey success, it's a pioneer ID")
+						isPioneerID = true
+					} else {
+						walletID, _, err = c.GetIntervalPublicKey(ctx, id, types.ServiceProviderNodeType)
+						if err == nil {
+							fmt.Println("it's a service provider ID")
+							isServiceProviderID = true
+						} else {
+							fmt.Println("it's neither a pioneer ID nor service provider ID")
+						}
+
+						// check via naming service if it's a phone number or email address
 						walletID, err = c.FindSubWallet(ctx, id, types.PhoneContactCredentialType)
 						if err != nil {
 							fmt.Println("FindSubWallet 'phone' failed")
@@ -101,9 +121,6 @@ func CmdProtectKey() *cobra.Command {
 						} else {
 							fmt.Println("FindSubWallet 'phone' success")
 						}
-					} else {
-						fmt.Println("GetIntervalPublicKey success, it's a pioneer ID")
-						isPioneerID = true
 					}
 				}
 				walletPubK, err = c.GetPublicKey(ctx, walletID, types.EnclavePubKType)
@@ -121,9 +138,11 @@ func CmdProtectKey() *cobra.Command {
 					fmt.Println("GetPublicKey 'enclave' success")
 				}
 
+				fmt.Println("isPioneerID", isPioneerID)
+				fmt.Println("isServiceProviderID", isServiceProviderID)
 				fmt.Println("walletID", walletID, "walletPubK", walletPubK)
 
-				if isPioneerID {
+				if isPioneerID || isServiceProviderID {
 					walletIDs = append(walletIDs, id)
 				} else {
 					walletIDs = append(walletIDs, walletID)
@@ -146,14 +165,23 @@ func CmdProtectKey() *cobra.Command {
 			} else {
 				// create shares
 				var byteShares [][]byte
+
+				fmt.Println("accountMnemonic", accountMnemonic)
+				fmt.Println("recoveryPartners", recoveryPartners)
+				fmt.Println("threshold", threshold)
 				byteShares, err := shamir.Split([]byte(accountMnemonic), recoveryPartners, threshold)
+
+				// print byteshares in hex
+				for i, byteShare := range byteShares {
+					fmt.Println("byteShare base64", i, "", base64.StdEncoding.EncodeToString(byteShare))
+				}
 
 				if err != nil {
 					fmt.Println("err creating shamir share " + err.Error())
 					return err
 				}
 				for i, byteShare := range byteShares {
-					encShare := c.MarshalAndBEncrypt(walletPubKs[i], string(byteShare))
+					encShare := c.MarshalAndBEncrypt(walletPubKs[i], base64.StdEncoding.EncodeToString(byteShare))
 					share := &types.RecoverShare{WalletID: walletIDs[i],
 						EncWalletPubKShare: encShare,
 					}
