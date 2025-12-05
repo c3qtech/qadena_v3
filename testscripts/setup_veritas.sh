@@ -21,7 +21,8 @@ createwalletsponsoramount="100000qdn"
 
 pioneer="pioneer1"
 
-count = 30
+#
+count=30
 
 echo "-------------------------"
 echo "Staking from treasury to pioneer1"
