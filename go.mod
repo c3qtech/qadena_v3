@@ -1,8 +1,8 @@
 module github.com/c3qtech/qadena_v3
 
-go 1.23.8
+go 1.23.12
 
-toolchain go1.23.12
+// toolchain go1.23.12
 
 replace (
 	// fix upstream GHSA-h395-qcrw-5vmq vulnerability.
