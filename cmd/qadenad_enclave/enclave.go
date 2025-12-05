@@ -2115,7 +2115,7 @@ func (s *qadenaServer) QueryGetRecoverKey(goCtx context.Context, in *types.Query
 	}
 
 	if len(recoverKey.Signatory) < int(protectKey.Threshold) {
-		c.LoggerError(logger, "not enough signatories")
+		c.LoggerError(logger, "Not enough signatories")
 		return nil, types.ErrNotEnoughSignatoriesQueryGetRecoverKey
 	}
 
