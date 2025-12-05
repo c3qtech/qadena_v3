@@ -135,10 +135,29 @@ acceptpassword=""
 requiresendertypes=""
 eph_count="$count"
 
+# compute per-account amount
+if [ $count -gt 0 ]; then
+    echo "count is greater than 0"
+    # Extract numeric prefix (digits)
+    numeric_part=${signeramount%%[!0-9]*}
+
+    # Extract suffix (non-digits after the number)
+    token_suffix=${signeramount#$numeric_part}
+
+    # Divide
+    per_account_amount=$(( numeric_part / (count + 1) ))$token_suffix
+
+    # Output
+    echo "per_account_amount: $per_account_amount"
+else
+    echo "count is 0"
+    per_account_amount=$signeramount
+fi
+
 $qadenaproviderscripts/create_user.sh $name $mnemonic $pioneer "$dsvsserviceprovider" "$firstname" "$middlename" "$lastname" $birthdate $citizenship $residency $gender $email $phone $a $bf $identityprovider "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" $eph_count "sec-treasury"
 qadena_addr=$(qadenad_alias keys show $name --address)
-echo "Sending $signeramount to $qadena_addr from sec-treasury"
-result=$(qadenad_alias tx bank send sec-treasury $qadena_addr  $signeramount --from sec-treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+echo "Sending $per_account_amount to $qadena_addr from sec-treasury"
+result=$(qadenad_alias tx bank send sec-treasury $qadena_addr  $per_account_amount --from sec-treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"
 # get tx hash
 tx_hash=$(echo $result | jq -r .txhash)
@@ -147,14 +166,14 @@ echo "tx hash: $tx_hash"
 result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
 echo "Result: $result"
 if [ $(echo $result | jq -r .code) -ne 0 ]; then
-    echo "Failed to send $signeramount to $qadena_addr from sec-treasury"
+    echo "Failed to send $per_account_amount to $qadena_addr from sec-treasury"
     exit 1
 fi
 # fund eph wallets
 for i in $(seq 1 $eph_count); do
     qadena_addr=$(qadenad_alias keys show $name-eph$i --address)
-    echo "Sending $signeramount to $qadena_addr from sec-treasury"
-    result=$(qadenad_alias tx bank send sec-treasury $qadena_addr  $signeramount --from sec-treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+    echo "Sending $per_account_amount to $qadena_addr from sec-treasury"
+    result=$(qadenad_alias tx bank send sec-treasury $qadena_addr  $per_account_amount --from sec-treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
     echo "Result: $result"
     # get tx hash
     tx_hash=$(echo $result | jq -r .txhash)
@@ -163,7 +182,7 @@ for i in $(seq 1 $eph_count); do
     result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
     echo "Result: $result"
     if [ $(echo $result | jq -r .code) -ne 0 ]; then
-        echo "Failed to send $signeramount to $qadena_addr from sec-treasury"
+        echo "Failed to send $per_account_amount to $qadena_addr from sec-treasury"
         exit 1
     fi
 done
