@@ -38,7 +38,7 @@ $veritasscripts/step_1.sh --count $count --provideramount $provideramount --sign
 echo "-------------------------"
 echo "Granting 1M qdn from treasury to sec-treasury"
 echo "-------------------------"
-$qadenatestscripts/grant_from_treasury.sh sec-treasury 1000000qdn
+$qadenatestscripts/grant_from_treasury.sh sec-treasury 20000000qdn
 
 $veritasscripts/step_2.sh
 
