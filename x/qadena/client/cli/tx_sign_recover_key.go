@@ -90,6 +90,11 @@ func CmdSignRecoverKey() *cobra.Command {
 				if threshold == 1 {
 					var seedPhrase string
 					_, err = c.BDecryptAndUnmarshal(srcCredPrivateKey, encWalletPubKShare, &seedPhrase)
+					if err != nil {
+						fmt.Println("BDecryptAndUnmarshal failed", err)
+						return err
+					}
+
 					encShare := c.MarshalAndBEncrypt(pioneerEnclavePubK, seedPhrase)
 					recoverShare = types.RecoverShare{WalletID: sourceWallet.HomePioneerID,
 						EncWalletPubKShare: encShare,
@@ -97,12 +102,17 @@ func CmdSignRecoverKey() *cobra.Command {
 				} else {
 					var stringShare string
 					_, err = c.BDecryptAndUnmarshal(srcCredPrivateKey, encWalletPubKShare, &stringShare)
+					if err != nil {
+						fmt.Println("BDecryptAndUnmarshal failed", err)
+						return err
+					}
 					fmt.Println("stringShare", stringShare)
 					encShare := c.MarshalAndBEncrypt(pioneerEnclavePubK, stringShare)
 					recoverShare = types.RecoverShare{WalletID: sourceWallet.HomePioneerID,
 						EncWalletPubKShare: encShare,
 					}
 				}
+
 			} else if argIsServiceProvider {
 				fmt.Println("isServiceProvider", ctx.GetFromName())
 				homePioneerID, err := c.GetServiceProviderHomePioneerID(ctx, ctx.GetFromName())
@@ -141,6 +151,10 @@ func CmdSignRecoverKey() *cobra.Command {
 				if threshold == 1 {
 					var seedPhrase string
 					_, err = c.BDecryptAndUnmarshal(srcCredPrivateKey, encWalletPubKShare, &seedPhrase)
+					if err != nil {
+						fmt.Println("BDecryptAndUnmarshal failed", err)
+						return err
+					}
 					encShare := c.MarshalAndBEncrypt(pioneerEnclavePubK, seedPhrase)
 					recoverShare = types.RecoverShare{WalletID: homePioneerID,
 						EncWalletPubKShare: encShare,
@@ -148,17 +162,16 @@ func CmdSignRecoverKey() *cobra.Command {
 				} else {
 					var stringShare string
 					_, err = c.BDecryptAndUnmarshal(srcCredPrivateKey, encWalletPubKShare, &stringShare)
+					if err != nil {
+						fmt.Println("BDecryptAndUnmarshal failed", err)
+						return err
+					}
 					fmt.Println("stringShare", stringShare)
 					encShare := c.MarshalAndBEncrypt(pioneerEnclavePubK, stringShare)
 					recoverShare = types.RecoverShare{WalletID: homePioneerID,
 						EncWalletPubKShare: encShare,
 					}
 				}
-				if err != nil {
-					fmt.Println("BDecryptAndUnmarshal failed", err)
-					return err
-				}
-
 			}
 
 			var dstEWalletID types.EncryptableSignRecoverKeyEWalletID
