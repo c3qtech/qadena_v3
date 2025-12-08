@@ -60,6 +60,7 @@ if [[ $stop_qadena -eq 0 && $stop_enclave -eq 0 && $stop_init_enclave -eq 0 ]] ;
     stop_qadena=1
     stop_enclave=1
     stop_init_enclave=1
+    stop_signer_enclave=1
 fi
 
 
