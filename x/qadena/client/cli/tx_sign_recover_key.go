@@ -154,6 +154,10 @@ func CmdSignRecoverKey() *cobra.Command {
 						EncWalletPubKShare: encShare,
 					}
 				}
+				if err != nil {
+					fmt.Println("BDecryptAndUnmarshal failed", err)
+					return err
+				}
 
 			}
 
