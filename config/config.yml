@@ -52,7 +52,7 @@ validators:
       query_gas_limit: "300000"
       memory_cache_size: "300"
   config:
-    log_level: "debug"
+    log_level: "info"
     moniker: "pioneer1"
     consensus:
       timeout_propose: "5s"
