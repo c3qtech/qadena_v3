@@ -9,9 +9,6 @@ accounts:
   mnemonic: "guilt decline utility scale crash envelope snap table dress coach tray use detect success lemon fatigue surround project warfare victory mean midnight address before"
 - name: treasury
   coins: ["2000000000qdn"] # 2 billion 
-- name: ekycphidentitysrvprv
-  coins: ["1000000qdn"]
-  mnemonic: "blood dish hybrid toddler upgrade squirrel gate hazard raven wrong prevent lake battle acquire crack agree slam please autumn damage best skin gym call"
 - name: coingecko-oracle
   coins: ["100000qdn"]
   mnemonic: "area symptom room bomb atom relief give pole relief truly elbow unknown undo wild clutch ozone liar small occur off enjoy shop busy meadow"
@@ -55,7 +52,7 @@ validators:
       query_gas_limit: "300000"
       memory_cache_size: "300"
   config:
-    log_level: "info"
+    log_level: "debug"
     moniker: "pioneer1"
     consensus:
       timeout_propose: "5s"
@@ -173,12 +170,6 @@ genesis:
         - pubKID: testfinancesrvprvPubKID
           pubK: testfinancesrvprvPubK_pubk
           pubKType: credential
-        - pubKID: ekycphidentitysrvprvPubKID
-          pubK: ekycphidentitysrvprvPubK_pubk
-          pubKType: transaction
-        - pubKID: ekycphidentitysrvprvPubKID
-          pubK: ekycphidentitysrvprvPubK_pubk
-          pubKType: credential
         - pubKID: mayaidentitysrvprvPubKID
           pubK: mayaidentitysrvprvPubK_pubk
           pubKType: transaction
@@ -224,11 +215,6 @@ genesis:
           nodeType: srv-prv
           nodeID: testfinancesrvprv
           serviceProviderType: finance
-          homePioneerID: pioneer1
-        - pubKID: ekycphidentitysrvprvPubKID
-          nodeType: srv-prv
-          nodeID: ekycphidentitysrvprv
-          serviceProviderType: identity
           homePioneerID: pioneer1
         - pubKID: mayaidentitysrvprvPubKID
           nodeType: srv-prv

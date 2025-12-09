@@ -32,13 +32,13 @@ echo "-------------------------"
 $qadenatestscripts/gov_stake_from_treasury.sh pioneer1 10000000qdn
 
 
-$veritasscripts/step_1.sh --count $count --provideramount $provideramount --signeramount $signeramount --createwalletsponsoramount $createwalletsponsoramount --pioneer $pioneer --sectreasurymnemonic $sectreasurymnemonic --signermnemonic $signermnemonic --createwalletsponsormnemonic $createwalletsponsormnemonic --identityprovidermnemonic $identityprovidermnemonic --dsvsprovidermnemonic $dsvsprovidermnemonic
+$veritasscripts/step_1.sh --count $count --provideramount $provideramount --signeramount $signeramount --createwalletsponsoramount $createwalletsponsoramount --pioneer $pioneer --treasurymnemonic $sectreasurymnemonic --signermnemonic $signermnemonic --createwalletsponsormnemonic $createwalletsponsormnemonic --identityprovidermnemonic $identityprovidermnemonic --dsvsprovidermnemonic $dsvsprovidermnemonic
 
-# grants 1M qdn from "treasury" to "sec-treasury"
+# grants 2M qdn from "treasury" to "sec-treasury"
 echo "-------------------------"
-echo "Granting 1M qdn from treasury to sec-treasury"
+echo "Granting 2M qdn from treasury to sec-treasury"
 echo "-------------------------"
-$qadenatestscripts/grant_from_treasury.sh sec-treasury 20000000qdn
+$qadenatestscripts/grant_from_treasury.sh sec-treasury 2000000qdn
 
 $veritasscripts/step_2.sh
 

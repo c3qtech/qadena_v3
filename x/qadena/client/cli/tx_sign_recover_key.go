@@ -142,7 +142,7 @@ func CmdSignRecoverKey() *cobra.Command {
 				}
 
 				// srcCredPrivateKey will be used to decrypt the share that was retrieved
-				_, _, srcCredPubKey, srcCredPrivKeyHex, err := c.GetAddress(ctx, ctx.GetFromName())
+				_, _, srcCredPubKey, srcCredPrivKeyHex, err := c.GetAddress(ctx, ctx.GetFromName()+"-credential")
 				if err != nil {
 					return err
 				}

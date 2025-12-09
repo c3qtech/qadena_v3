@@ -13,14 +13,27 @@ signeramount=$(jq -r .signeramount variables.json)
 createwalletsponsoramount=$(jq -r .createwalletsponsoramount variables.json)
 pioneer=$(jq -r .pioneer variables.json)
 count=$(jq -r .count variables.json)
+identityprovidername=$(jq -r .identityprovidername variables.json)
+dsvsprovidername=$(jq -r .dsvsprovidername variables.json)
+createwalletsponsorname=$(jq -r .createwalletsponsorname variables.json)
+dsvsname=$(jq -r .dsvsname variables.json)
+email=$(jq -r .email variables.json)
+avalue=$(jq -r .avalue variables.json)
+phone=$(jq -r .phone variables.json)
+firstname=$(jq -r .firstname variables.json)
+birthdate=$(jq -r .birthdate variables.json)
+treasuryname=$(jq -r .treasuryname variables.json)
+
+
+
 
 # read mnemonics from json file
 createwalletsponsormnemonic=$(jq -r .createwalletsponsormnemonic mnemonics.json)
 signermnemonic=$(jq -r .signermnemonic mnemonics.json)
 
-# read proposal id from secidentity.proposal_id
-identityproposal_id=$(cat $qadenaproviderscripts/proposals/secidentitysrvprv.proposal_id)
-dsvsproposal_id=$(cat $qadenaproviderscripts/proposals/secdsvssrvprv.proposal_id)
+# read proposal id from identityprovidername.proposal_id
+identityproposal_id=$(cat $qadenaproviderscripts/proposals/$identityprovidername.proposal_id)
+dsvsproposal_id=$(cat $qadenaproviderscripts/proposals/$dsvsprovidername.proposal_id)
 echo "Waiting for approval of providers"
 
 $qadenaproviderscripts/query_service_provider_proposal.sh $identityproposal_id --wait
@@ -33,24 +46,20 @@ echo "Providers approved"
 # Create wallet sponsor
 ########################################################
 
-name="sec-create-wallet-sponsor"
+name="$createwalletsponsorname"
 echo "-------------------------"
 echo "Setting up $name"
 echo "-------------------------"
 
 mnemonic=$createwalletsponsormnemonic
-a="200"
+a="$avalue"
 bf="5678"
-firstname="SEC"
 middlename=""
 lastname="Create Wallet Sponsor"
-birthdate="1936-Oct-26"
 gender="M"
 citizenship="PH"
 residency="PH"
-email="no-reply@sec.gov.ph"
-phone="+63288888800"
-identityprovider="secidentitysrvprv"
+identityprovider="$identityprovidername"
 dsvsserviceprovider=""
 acceptcredentialtypes=""
 acceptpassword=""
@@ -76,10 +85,12 @@ else
     per_account_amount=$createwalletsponsoramount
 fi
 
-$qadenaproviderscripts/create_user.sh $name $mnemonic $pioneer "$dsvsserviceprovider" "$firstname" "$middlename" "$lastname" $birthdate $citizenship $residency $gender $email $phone $a $bf "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" $eph_count "sec-treasury"
+echo "create-user.sh" $name $mnemonic $pioneer "$dsvsserviceprovider" "$firstname" "$middlename" "$lastname" $birthdate $citizenship $residency $gender $email $phone $a $bf "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" $eph_count "$treasuryname"
+
+$qadenaproviderscripts/create_user.sh $name $mnemonic $pioneer "$dsvsserviceprovider" "$firstname" "$middlename" "$lastname" $birthdate $citizenship $residency $gender $email $phone $a $bf "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" $eph_count "$treasuryname"
 qadena_addr=$(qadenad_alias keys show $name --address)
-echo "Sending $per_account_amount to $qadena_addr from sec-treasury"
-result=$(qadenad_alias tx bank send sec-treasury $qadena_addr  $per_account_amount --from sec-treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+echo "Sending $per_account_amount to $qadena_addr from $treasuryname"
+result=$(qadenad_alias tx bank send $treasuryname $qadena_addr  $per_account_amount --from $treasuryname --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"
 # get tx hash
 tx_hash=$(echo $result | jq -r .txhash)
@@ -88,15 +99,15 @@ echo "tx hash: $tx_hash"
 result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
 echo "Result: $result"
 if [ $(echo $result | jq -r .code) -ne 0 ]; then
-    echo "Failed to send $per_account_amount to $qadena_addr from sec-treasury"
+    echo "Failed to send $per_account_amount to $qadena_addr from $treasuryname"
     exit 1
 fi
 
 # fund eph wallets
 for i in $(seq 1 $eph_count); do
     qadena_addr=$(qadenad_alias keys show $name-eph$i --address)
-    echo "Sending $per_account_amount to $qadena_addr from sec-treasury"
-    result=$(qadenad_alias tx bank send sec-treasury $qadena_addr  $per_account_amount --from sec-treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+    echo "Sending $per_account_amount to $qadena_addr from $treasuryname"
+    result=$(qadenad_alias tx bank send $treasuryname $qadena_addr  $per_account_amount --from $treasuryname --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
     echo "Result: $result"
     # get tx hash
     tx_hash=$(echo $result | jq -r .txhash)
@@ -105,31 +116,28 @@ for i in $(seq 1 $eph_count); do
     result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
     echo "Result: $result"
     if [ $(echo $result | jq -r .code) -ne 0 ]; then
-        echo "Failed to send $per_account_amount to $qadena_addr from sec-treasury"
+        echo "Failed to send $per_account_amount to $qadena_addr from $treasuryname"
         exit 1
     fi
 done
 
 
-name="secdsvs"
+name="$dsvsname"
 echo "-------------------------"
 echo "Setting up $name"
 echo "-------------------------"
 
 mnemonic=$signermnemonic
-a="100"
+# add 1 to avalue
+avalue=$((avalue + 1))
+a="$avalue"
 bf="5678"
-firstname="SEC"
 middlename=""
-lastname="Signatory"
-birthdate="1936-Oct-26"
 gender="F"
 citizenship="PH"
 residency="PH"
-email="no-reply@sec.gov.ph"
-phone="+63288888800"
-dsvsserviceprovider="secdsvssrvprv"
-identityprovider="secidentitysrvprv"
+dsvsserviceprovider="$dsvsprovidername"
+identityprovider="$identityprovidername"
 acceptcredentialtypes=""
 acceptpassword=""
 requiresendertypes=""
@@ -154,10 +162,10 @@ else
     per_account_amount=$signeramount
 fi
 
-$qadenaproviderscripts/create_user.sh $name $mnemonic $pioneer "$dsvsserviceprovider" "$firstname" "$middlename" "$lastname" $birthdate $citizenship $residency $gender $email $phone $a $bf $identityprovider "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" $eph_count "sec-treasury"
+$qadenaproviderscripts/create_user.sh $name $mnemonic $pioneer "$dsvsserviceprovider" "$firstname" "$middlename" "$lastname" $birthdate $citizenship $residency $gender $email $phone $a $bf $identityprovider "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" $eph_count "$treasuryname"
 qadena_addr=$(qadenad_alias keys show $name --address)
-echo "Sending $per_account_amount to $qadena_addr from sec-treasury"
-result=$(qadenad_alias tx bank send sec-treasury $qadena_addr  $per_account_amount --from sec-treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+echo "Sending $per_account_amount to $qadena_addr from $treasuryname"
+result=$(qadenad_alias tx bank send $treasuryname $qadena_addr  $per_account_amount --from $treasuryname --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"
 # get tx hash
 tx_hash=$(echo $result | jq -r .txhash)
@@ -166,14 +174,14 @@ echo "tx hash: $tx_hash"
 result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
 echo "Result: $result"
 if [ $(echo $result | jq -r .code) -ne 0 ]; then
-    echo "Failed to send $per_account_amount to $qadena_addr from sec-treasury"
+    echo "Failed to send $per_account_amount to $qadena_addr from $treasuryname"
     exit 1
 fi
 # fund eph wallets
 for i in $(seq 1 $eph_count); do
     qadena_addr=$(qadenad_alias keys show $name-eph$i --address)
-    echo "Sending $per_account_amount to $qadena_addr from sec-treasury"
-    result=$(qadenad_alias tx bank send sec-treasury $qadena_addr  $per_account_amount --from sec-treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+    echo "Sending $per_account_amount to $qadena_addr from $treasuryname"
+    result=$(qadenad_alias tx bank send $treasuryname $qadena_addr  $per_account_amount --from $treasuryname --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
     echo "Result: $result"
     # get tx hash
     tx_hash=$(echo $result | jq -r .txhash)
@@ -182,16 +190,16 @@ for i in $(seq 1 $eph_count); do
     result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
     echo "Result: $result"
     if [ $(echo $result | jq -r .code) -ne 0 ]; then
-        echo "Failed to send $per_account_amount to $qadena_addr from sec-treasury"
+        echo "Failed to send $per_account_amount to $qadena_addr from $treasuryname"
         exit 1
     fi
 done
 
-$qadenatestscripts/extract_ephem_keys.sh --provider secidentitysrvprv# --count $count
-$qadenatestscripts/extract_ephem_keys.sh --provider secdsvssrvprv# --count $count
-$qadenatestscripts/extract_ephem_keys.sh --provider sec-create-wallet-sponsor# --count $count
-$qadenatestscripts/extract_ephem_keys.sh --provider secdsvs# --count $count
-$qadenatestscripts/extract_ephem_keys.sh --provider secdsvs#-credential --count $count
+$qadenatestscripts/extract_ephem_keys.sh --provider $identityprovidername# --count $count
+$qadenatestscripts/extract_ephem_keys.sh --provider $dsvsprovidername# --count $count
+$qadenatestscripts/extract_ephem_keys.sh --provider $createwalletsponsorname# --count $count
+$qadenatestscripts/extract_ephem_keys.sh --provider $dsvsname# --count $count
+$qadenatestscripts/extract_ephem_keys.sh --provider $dsvsname#-credential --count $count
 
 
 
