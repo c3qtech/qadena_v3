@@ -9,12 +9,17 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 provider="secidentitysrvprv"
 count=10
 include_base_provider=false
+include_base_provider_credential=false
 
 # Process command line arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --include-base-provider)
             include_base_provider=true
+            shift
+            ;;
+        --include-base-provider-credential)
+            include_base_provider_credential=true
             shift
             ;;
         --provider)
@@ -48,7 +53,11 @@ if [[ "$provider" == *#* ]]; then
     if [ "$include_base_provider" = true ]; then
         names+=("$base_provider")
     fi
-    
+
+    if [ "$include_base_provider_credential" = true ]; then
+        names+=("$base_provider-credential")
+    fi
+
     # For ephemeral keys, replace %d with the number
     for i in $(seq 1 $count); do
         curr_name=${provider//\#/-eph$i}
