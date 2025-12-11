@@ -8,10 +8,15 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 # Default provider name
 provider="secidentitysrvprv"
 count=10
+include_base_provider=false
 
 # Process command line arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --include-base-provider)
+            include_base_provider=true
+            shift
+            ;;
         --provider)
             provider="$2"
             shift 2
@@ -36,6 +41,7 @@ done
 names=()
 # Check if provider contains the %d placeholder
 if [[ "$provider" == *#* ]]; then
+    echo "Provider name contains %d placeholder"
     # For the base provider, replace %d with nothing
     base_provider=${provider//\#/}
     
@@ -44,8 +50,11 @@ if [[ "$provider" == *#* ]]; then
         curr_name=${provider//\#/-eph$i}
         names+=("$curr_name")
     done
+    if [ "$include_base_provider" = true ]; then
+        names+=("$base_provider")
+    fi
 else
-    # Original behavior if no %d is present
+        # Original behavior if no %d is present
     for i in $(seq 1 $count); do
         names+=("$provider-eph$i")
     done
