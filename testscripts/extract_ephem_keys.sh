@@ -45,14 +45,15 @@ if [[ "$provider" == *#* ]]; then
     # For the base provider, replace %d with nothing
     base_provider=${provider//\#/}
     
+    if [ "$include_base_provider" = true ]; then
+        names+=("$base_provider")
+    fi
+    
     # For ephemeral keys, replace %d with the number
     for i in $(seq 1 $count); do
         curr_name=${provider//\#/-eph$i}
         names+=("$curr_name")
     done
-    if [ "$include_base_provider" = true ]; then
-        names+=("$base_provider")
-    fi
 else
         # Original behavior if no %d is present
     for i in $(seq 1 $count); do

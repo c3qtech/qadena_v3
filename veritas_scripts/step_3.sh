@@ -196,8 +196,8 @@ for i in $(seq 1 $eph_count); do
 done
 
 $qadenatestscripts/extract_ephem_keys.sh --provider $identityprovidername# --count $count --include-base-provider
-$qadenatestscripts/extract_ephem_keys.sh --provider $dsvsprovidername# --count $count
-$qadenatestscripts/extract_ephem_keys.sh --provider $createwalletsponsorname# --count $count
+$qadenatestscripts/extract_ephem_keys.sh --provider $dsvsprovidername# --count $count --include-base-provider
+$qadenatestscripts/extract_ephem_keys.sh --provider $createwalletsponsorname# --count $count --include-base-provider
 $qadenatestscripts/extract_ephem_keys.sh --provider $dsvsname# --count $count
 $qadenatestscripts/extract_ephem_keys.sh --provider $dsvsname#-credential --count $count
 
