@@ -72,7 +72,7 @@ fi
 
 # Create JSON array of names
 names_json=$(printf '%s\n' "${names[@]}" | jq -R . | jq -s .)
-names_base64=$(echo "$names_json" | base64)
+names_base64=$(echo "$names_json" | base64 -w 0)
 
 echo "Names JSON array:"
 echo "$names_json"
