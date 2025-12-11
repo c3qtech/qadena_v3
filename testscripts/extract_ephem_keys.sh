@@ -103,7 +103,7 @@ done
 
 # Create JSON array of keys, preserving each key as a single element
 keys_json=$(for key in "${keys[@]}"; do echo -n "$key" | jq -Rs .; done | jq -s .)
-keys_base64=$(echo "$keys_json" | base64)
+keys_base64=$(echo "$keys_json" | base64 -w 0)
 
 echo "Private keys JSON array:"
 echo "$keys_json"
