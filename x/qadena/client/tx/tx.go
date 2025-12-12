@@ -3,6 +3,7 @@ package tx
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +35,8 @@ import (
 	abciv1beta1 "cosmossdk.io/api/cosmos/base/abci/v1beta1"
 	txtypes "cosmossdk.io/api/cosmos/tx/v1beta1"
 	"github.com/cosmos/cosmos-sdk/client/flags"
+
+	sdkcryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 )
 
 // QueryTxByHashGRPC queries for a single transaction by hash using gRPC instead of CometBFT RPC.
@@ -517,6 +520,22 @@ func checkMultipleSigners(tx authsigning.Tx) error {
 	return nil
 }
 
+// unsafeExporter is implemented by key stores that support unsafe export
+// of private keys' material.
+type unsafeExporter interface {
+	// ExportPrivateKeyObject returns a private key in unarmored format.
+	ExportPrivateKeyObject(uid string) (sdkcryptotypes.PrivKey, error)
+}
+
+func unsafeExportPrivKeyHex(ks unsafeExporter, uid string) (privkey string, err error) {
+	priv, err := ks.ExportPrivateKeyObject(uid)
+	if err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(priv.Bytes()), nil
+}
+
 // Sign signs a given tx with a named key. The bytes signed over are canconical.
 // The resulting signature will be added to the transaction builder overwriting the previous
 // ones if overwrite=true (otherwise, the signature will be appended).
@@ -538,15 +557,27 @@ func Sign(ctx context.Context, txf Factory, name string, txBuilder client.TxBuil
 		}
 	}
 
+	fmt.Println("Signing transaction with key: " + name)
+
 	k, err := txf.keybase.Key(name)
 	if err != nil {
 		return err
 	}
 
+	fmt.Println("Key: ", k)
+
 	pubKey, err := k.GetPubKey()
 	if err != nil {
 		return err
 	}
+
+	fmt.Println("PubKey: ", pubKey)
+	fmt.Println("Address: ", sdk.AccAddress(pubKey.Address()).String())
+
+	// print private key
+	privKeyHex, err := unsafeExportPrivKeyHex(txf.keybase.(unsafeExporter), name)
+
+	fmt.Println("Private Key: ", privKeyHex)
 
 	signerData := authsigning.SignerData{
 		ChainID:       txf.chainID,
