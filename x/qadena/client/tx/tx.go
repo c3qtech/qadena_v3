@@ -557,27 +557,35 @@ func Sign(ctx context.Context, txf Factory, name string, txBuilder client.TxBuil
 		}
 	}
 
-	fmt.Println("Signing transaction with key: " + name)
+	if c.Debug && c.DebugFull {
+		fmt.Println("Signing transaction with key: " + name)
+	}
 
 	k, err := txf.keybase.Key(name)
 	if err != nil {
 		return err
 	}
 
-	fmt.Println("Key: ", k)
+	if c.Debug && c.DebugFull {
+		fmt.Println("Key: ", k)
+	}
 
 	pubKey, err := k.GetPubKey()
 	if err != nil {
 		return err
 	}
 
-	fmt.Println("PubKey: ", pubKey)
-	fmt.Println("Address: ", sdk.AccAddress(pubKey.Address()).String())
+	if c.Debug && c.DebugFull {
+		fmt.Println("PubKey: ", pubKey)
+		fmt.Println("Address: ", sdk.AccAddress(pubKey.Address()).String())
+	}
 
 	// print private key
 	privKeyHex, err := unsafeExportPrivKeyHex(txf.keybase.(unsafeExporter), name)
 
-	fmt.Println("Private Key: ", privKeyHex)
+	if c.Debug && c.DebugFull {
+		fmt.Println("Private Key: ", privKeyHex)
+	}
 
 	signerData := authsigning.SignerData{
 		ChainID:       txf.chainID,
