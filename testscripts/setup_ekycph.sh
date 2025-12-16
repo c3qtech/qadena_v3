@@ -15,6 +15,18 @@ createwalletsponsormnemonic="situate chase law sure moon cute another possible s
 identityprovidermnemonic="ten input amount super napkin lend job surface chase garlic observe warm soap abstract jeans sting chat priority brave mansion bracket spin evoke despair"
 dsvsprovidermnemonic="verb next spot entry congress electric fiction admit manage speed depart muscle any move adapt color portion cabin play bag eye upper couch vessel"
 
+
+config_yml_treasurymnemonic="eyebrow unaware jealous actor annual farm radio open sword memory other secret twelve reduce festival buddy peace fun film return sniff december february post"
+
+# check if "treasury" key exists by "qadenad "
+if qadenad_alias keys show treasury > /dev/null 2>&1; then
+    echo "treasury key already exists"
+else
+    echo "treasury key not found, adding it now"
+    echo $config_yml_treasurymnemonic | qadenad_alias keys add treasury --recover
+fi
+
+
 provideramount="100000qdn"
 signeramount="100000qdn"
 createwalletsponsoramount="100000qdn"
@@ -34,17 +46,40 @@ firstname="EKYCPH"
 birthdate="2025-Jan-01"
 phone="+6320000000"
 
+# accept 1 parameter, the pioneer name
+# accept named parameters to override all these mnemonics
+# Process command line arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --pioneer)
+            pioneer="$2"
+            shift 2
+            ;;
+        --help)
+            echo "Usage: $0 [--pioneer <pioneer>]"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--pioneer <pioneer>]"
+            exit 1
+            ;;
+    esac
+done
+
+
+
 
 
 #
 count=2
 
 echo "-------------------------"
-echo "Staking from treasury to pioneer1"
+echo "Staking from treasury to $pioneer"
 echo "-------------------------"
 
 # need to stake from treasury to pioneer1, do this only once
-$qadenatestscripts/gov_stake_from_treasury.sh pioneer1 10000000qdn
+$qadenatestscripts/gov_stake_from_treasury.sh $pioneer 10000000qdn
 
 
 $veritasscripts/step_1.sh --count $count --provideramount $provideramount --signeramount $signeramount --createwalletsponsoramount $createwalletsponsoramount --createwalletsponsorname $createwalletsponsorname --pioneer $pioneer --treasurymnemonic $ekycphtreasurymnemonic --signermnemonic $signermnemonic --createwalletsponsormnemonic $createwalletsponsormnemonic --identityprovidermnemonic $identityprovidermnemonic --dsvsprovidermnemonic $dsvsprovidermnemonic --treasuryname $treasuryname --identityprovidername $identityprovidername --dsvsprovidername $dsvsprovidername --email $email --avalue $avalue --firstname $firstname --birthdate $birthdate --phone $phone --dsvsname $dsvsname

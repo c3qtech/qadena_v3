@@ -9,6 +9,7 @@ accounts:
   mnemonic: "guilt decline utility scale crash envelope snap table dress coach tray use detect success lemon fatigue surround project warfare victory mean midnight address before"
 - name: treasury
   coins: ["2000000000qdn"] # 2 billion 
+  mnemonic: "eyebrow unaware jealous actor annual farm radio open sword memory other secret twelve reduce festival buddy peace fun film return sniff december february post"
 - name: coingecko-oracle
   coins: ["100000qdn"]
   mnemonic: "area symptom room bomb atom relief give pole relief truly elbow unknown undo wild clutch ozone liar small occur off enjoy shop busy meadow"

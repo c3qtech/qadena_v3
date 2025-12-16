@@ -56,7 +56,9 @@ done
 
 if [[ $ADVERTISE_IP_ADDRESS == "" ]] ; then
     ADVERTISE_IP_ADDRESS=`$qadenabuildscripts/get_default_ip.sh`
-    if [[ $ADVERTISE_IP_ADDRESS == "" ]] ; then
+    # if get_default_ip.sh fails, it will exit 1
+
+    if [[ $ADVERTISE_IP_ADDRESS == "" || $? != 0 ]] ; then
 	echo "Failed to get a default IP address for your node."
 	echo "Args: init.sh [--advertise-ip-address <ip>]"
 	echo "Example:  init.sh --advertise-ip-address 192.168.86.100"

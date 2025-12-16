@@ -48,6 +48,11 @@ echo "Qadena validator address: $qadena_validator_address"
 result=$(qadenad_alias tx staking delegate $qadena_validator_address $amount --from treasury -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"
 # get tx hash
+
+
+
+
+
 tx_hash=$(echo $result | jq -r .txhash)
 echo "tx hash: $tx_hash"
 # check if code is 0

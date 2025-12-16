@@ -21,6 +21,8 @@ git clone https://github.com/c3qtech/qadena_installers.git installers
 
 
 # go
+# wget https://go.dev/dl/go1.23.12.linux-arm64.tar.gz
+# wget https://go.dev/dl/go1.23.12.linux-amd64.tar.gz
 rm -rf /usr/local/go && tar -C /usr/local -xzf installers/go1.23.12.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 
@@ -64,6 +66,7 @@ fi
 apt install -y build-essential libssl-dev
 
 # ignite
+# wget https://github.com/ignite/cli/releases/download/v28.8.2/ignite_28.8.2_linux_arm64.tar.gz
 (cd installers; tar -xvf ./ignite_28.8.2_linux_amd64.tar.gz -C /usr/local/bin)
 
 # jq
@@ -122,6 +125,10 @@ fi
 
 groupadd docker
 usermod -aG docker $SUDO_USER
+
+# dasel
+# go install github.com/tomwright/dasel/v2/cmd/dasel@master
+# cp ~/go/bin/dasel /usr/local/bin
 
 (cd installers; gunzip dasel.gz; cp -f dasel /usr/local/bin)
 
