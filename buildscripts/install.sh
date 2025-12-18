@@ -106,7 +106,6 @@ if [[ $install_scripts -eq 1 ]]; then
         mkdir -p "$QADENAHOME/scripts"
     fi
     cp $qadenascripts/* "$QADENAHOME/scripts/"
-    cp $qadenabuildscripts/setPioneerID.sh "$QADENAHOME/scripts/"
     cp $qadenabuild/config.yml "$QADENAHOME/config"
     cp $qadenabuild/cmd/qadenad_enclave/public.pem "$QADENAHOME/config/public.pem"
 fi

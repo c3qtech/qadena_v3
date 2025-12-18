@@ -255,7 +255,7 @@ cp config/node_params.json $qadenaconfig
 #echo "Copying enclave_params.json"
 #cp config/enclave_params.json $qadenaconfig
 echo "Fixing up node_params.json..."
-$qadenabuildscripts/setPioneerID.sh pioneer1 $nodeparamsfile
+$qadenascripts/setPioneerID.sh pioneer1 $nodeparamsfile
 #echo "Fixing up enclave_params.json..."
 
 

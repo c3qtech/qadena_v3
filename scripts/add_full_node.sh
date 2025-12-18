@@ -5,14 +5,14 @@ show_manual_funding_instructions() {
 	echo "Once that's done, you can continue converting this node to a full node by typing in:"
 	echo "  $qadenascripts/add_full_node.sh $1 $2 $3 $4"
 	echo "Stopping the enclave for now"
-	$qadenascripts/stop_qadena.sh --enclave
+	$qadenascripts/stop_qadena.sh --enclave > /dev/null
 	exit 0
 }
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
 
-source "$SCRIPT_DIR/../scripts/setup_env.sh"
+source "$SCRIPT_DIR/../scripts/setup_env.sh" 2> /dev/null
 
 # if REAL_ENCLAVE, check if running as root
 if [[ $REAL_ENCLAVE -eq 1 ]]; then
@@ -59,7 +59,7 @@ ADVERTISE_IP_ADDRESS=$2
 GENESIS_PIONEER_FIRST_IP_ADDRESS=$3
 GENESIS_PIONEER_SECOND_IP_ADDRESS=$4
 
-if [[ $PIONEER == "" || $GENESIS_PIONEER_FIRST_IP_ADDRESS == "" ]] ; then
+if [[ $PIONEER == "" || $PIONEER == "--help" || $GENESIS_PIONEER_FIRST_IP_ADDRESS == "" ]] ; then
     echo "Args: add_full_node.sh new-pioneer-id new-pioneer-advertise-ip-address genesis-pioneer-first-ip-address [optional: genesis-pioneer-second-ip-address]"
     echo "Example 1 (adding the second node):  add_full_node.sh pioneer2 192.168.86.133 192.168.86.109"
     echo "Example 2 (adding the 3rd node):  add_full_node.sh pioneer3 192.168.86.140 192.168.86.109 192.168.86.133"
@@ -68,27 +68,30 @@ fi
 
 CONTINUE_AFTER_FUNDING=0
 
-if [ -d "$QADENAHOME/enclave_config" ] && [ -n "$(ls -A "$QADENAHOME/enclave_config")" ] && [ -f "$QADENAHOME/config/genesis.json" ]; then
+if [ -d "$QADENAHOME/enclave_config" ] && [ -f "$QADENAHOME/config/genesis.json" ]; then
 	# use dasel to extract the moniker from config.yml
 	MONIKER=`dasel -f $QADENAHOME/config/config.toml '.moniker' | tr -d "'"`
 
 	# if the moniker matches the default "pioneer1", then most likely it was a test node
 	if [[ $MONIKER == "pioneer1" ]] ; then
-		echo "***********************************"
-		echo "* WARNING:  THIS NODE LOOKS LIKE  *"
-		echo "* IT IS ALREADY INITIALIZED, MOST *"
-		echo "* LIKELY AS A STANDALONE NODE.    *"
-		echo "***********************************"
+		echo "*************************************"
+		echo "* WARNING:  THIS NODE LOOKS LIKE    *"
+		echo "* IT IS ALREADY INITIALIZED, MOST   *"
+		echo "* LIKELY AS A STANDALONE NODE.      *"
+		echo "* Current Pioneer name: '$MONIKER'  *"
+		echo "*************************************"
+		echo ""
 		REPLY=""
 		while [[ $REPLY != "y" && $REPLY != "n" ]]; do
-			read REPLY\?"Are you sure you want to proceed with making this a full node?  This will erase all existing configuration data.  (y/N) "
+			echo "You are about to make this node into a full node, with a new Pioneer name '$PIONEER'."
+			read REPLY\?"This will erase all existing configuration data.  Proceed? (y/n) "
 			if [[ $REPLY == "y" ]] ; then
 				echo "Ok, will make this a full node."
 			elif [[ $REPLY == "n" ]] ; then
 				echo "Got it, will not proceed."
 				exit 0
 			else
-				echo "Invalid option.  Please try again."
+				echo "Invalid option $REPLY.  Please try again."
 			fi
 		done
 	else
@@ -104,7 +107,7 @@ if [ -d "$QADENAHOME/enclave_config" ] && [ -n "$(ls -A "$QADENAHOME/enclave_con
 				elif [[ $REPLY == "c" ]] ; then
 					CONTINUE_AFTER_FUNDING=1
 				else
-					echo "Invalid option.  Please try again."
+					echo "Invalid option $REPLY.  Please try again."
 				fi
 			done
 		else
@@ -119,33 +122,33 @@ if [ -d "$QADENAHOME/enclave_config" ] && [ -n "$(ls -A "$QADENAHOME/enclave_con
 				elif [[ $REPLY == "c" ]] ; then
 					CONTINUE_AFTER_FUNDING=1
 				else
-					echo "Invalid option.  Please try again."
+					echo "Invalid option $REPLY.  Please try again."
 				fi
 			done
 		fi
 	fi
+else
+	echo "You would like to make this node a full node."
 fi
 
 if [[ $CONTINUE_AFTER_FUNDING -eq 1 ]]; then
 	echo "Ok, will continue after receiving funding."
 else
-	echo "STARTING FROM SCRATCH, ERASING ALL EXISTING CONFIGURATION DATA"
-	# re-confirm
 	REPLY=""
 	while [[ $REPLY != "y" && $REPLY != "n" ]]; do
-		read REPLY\?"Are you sure you want to start from scratch?  This will erase all existing configuration data.  (y/N) "
+		read REPLY\?"Final confirmation.  Are you really sure? (y/n) "
 		if [[ $REPLY == "y" ]] ; then
 			echo "Ok, will start from scratch."
 		elif [[ $REPLY == "n" ]] ; then
 			echo "Got it, will not proceed."
 			exit 0
 		else
-			echo "Invalid option.  Please try again."
+			echo "Invalid option $REPLY.  Please try again."
 		fi
 	done
 
 	echo "Stopping any running qadenad and qadenad_enclave processes..."
-	$qadenascripts/stop_qadena.sh --all
+	$qadenascripts/stop_qadena.sh --all > /dev/null
 
 	echo "Removing configuration directories from:  $QADENAHOME (config, data, keyring-test, enclave_config, enclave_data)"
 	rm -f $QADENAHOME/config/public.pem
@@ -313,43 +316,6 @@ else
 
 	dasel put -v "$new_persistent_peers" '.p2p.persistent_peers' -f $QADENAHOME/config/config.toml
 
-	echo "DEBUG $DEBUG"
-
-	if [[ $REAL_ENCLAVE == 1 ]] ; then
-		$qadenascripts/run_realenclave.sh &
-		sleep 10
-	else
-		$qadenascripts/run_enclave.sh $DEBUG &
-	fi
-
-	# wait for socket to come up
-	IS_UP=0
-	for i in {90..1}
-	do
-		if [[ "$(uname -s)" == "Darwin" ]] ; then
-		listen=`netstat -an`
-		else
-		listen=`netstat -l`
-		fi
-		
-		if echo $listen | grep 50051 > /dev/null ; then
-		echo "qadenad_enclave is up and running!"
-		IS_UP=1
-
-
-		if [[ "$(uname -s)" == "Darwin" ]] ; then
-			echo -n -e "\033]0;\007"
-		fi
-		break
-		else
-		echo "qadenad_enclave is not yet up, waiting...$i"
-		sleep 1
-		fi
-	done
-	if [ $IS_UP -ne 1 ] ; then
-		echo "Could not run the qadenad_enclave"
-		exit 1
-	fi
 
 	qadenad_alias query --node "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657" qadena show-interval-public-key-id $PIONEER pioneer
 
@@ -358,7 +324,7 @@ else
 		exit 1
 	fi
 
-	echo "If I couldn't find $PIONEER, that's good."
+	echo "$PIONEER does not already exist (the name can be used), that's good."
 
 	qadenad_alias keys add $PIONEER --keyring-backend test
 
@@ -370,6 +336,45 @@ else
 	echo ""
 
 fi
+
+echo "DEBUG $DEBUG"
+
+if [[ $REAL_ENCLAVE == 1 ]] ; then
+	$qadenascripts/run_realenclave.sh &
+	sleep 10
+else
+	$qadenascripts/run_enclave.sh $DEBUG &
+fi
+
+# wait for socket to come up
+IS_UP=0
+for i in {90..1}
+do
+	if [[ "$(uname -s)" == "Darwin" ]] ; then
+	listen=`netstat -an`
+	else
+	listen=`netstat -l`
+	fi
+	
+	if echo $listen | grep 50051 > /dev/null ; then
+	echo "qadenad_enclave is up and running!"
+	IS_UP=1
+
+
+	if [[ "$(uname -s)" == "Darwin" ]] ; then
+		echo -n -e "\033]0;\007"
+	fi
+	break
+	else
+	echo "qadenad_enclave is not yet up, waiting...$i"
+	sleep 1
+	fi
+done
+if [ $IS_UP -ne 1 ] ; then
+	echo "Could not run the qadenad_enclave"
+	exit 1
+fi
+
 
 echo "PIONEER $PIONEER"
 
@@ -390,56 +395,61 @@ echo "    ~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $PIONEERADD
 echo ""
 echo "(PRODUCTION) Full Node:  Please purchase and send at least ${FULL}qdn to $PIONEERADDRESS"
 echo "(PRODUCTION) Validator Node:  Please purchase and send at least ${VALIDATOR}qdn to $PIONEERADDRESS"
-read REPLY\?"Are you done sending funds to $PIONEERADDRESS? (y/N) "
-if [[ $REPLY == "y" ]] ; then
+REPLY=""
+while [[ $REPLY != "y" && $REPLY != "n" ]]; do
+	read REPLY\?"Are you done sending funds to $PIONEERADDRESS? (y/n) "
+	if [[ $REPLY == "y" ]] ; then
 
-    echo "I will attempt to detect when $PIONEERADDRESS has at least ${FULL}qdn."
-    
-    IS_UP=0
-    for i in {120..1}
-    do
-	BALANCE_JSON=`qadenad_alias --node "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657" query bank balances $PIONEERADDRESS --output json`
-	BALANCE=`echo $BALANCE_JSON | jq -r '.balances[] | select(.denom=="aqdn") | .amount'`
-	if [[ $BALANCE != "" ]] ; then
-	    ret=`echo "$BALANCE >= $FULL_AQDN" | bc`
-	    #    echo "ret $ret"
-	    if [[ $ret = 1 ]] ; then
-		echo "$PIONEER has enough funds!"
-		IS_UP=1
-		break
-	    else
-		echo "Balance is ${BALANCE}aqdn, not enough.  Waiting...$i"
-		sleep 3
-	    fi
-	else
-	    echo "No balance detected yet"
-	    sleep 3
-	fi
-    done
+		echo "I will attempt to detect when $PIONEERADDRESS has at least ${FULL}qdn."
+		
+		IS_UP=0
+		for i in {120..1}
+		do
+		BALANCE_JSON=`qadenad_alias --node "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657" query bank balances $PIONEERADDRESS --output json`
+		BALANCE=`echo $BALANCE_JSON | jq -r '.balances[] | select(.denom=="aqdn") | .amount'`
+		if [[ $BALANCE != "" ]] ; then
+			ret=`echo "$BALANCE >= $FULL_AQDN" | bc`
+			#    echo "ret $ret"
+			if [[ $ret = 1 ]] ; then
+			echo "$PIONEER has enough funds!"
+			IS_UP=1
+			break
+			else
+			echo "Balance is ${BALANCE}aqdn, not enough.  Waiting...$i"
+			sleep 3
+			fi
+		else
+			echo "No balance detected yet"
+			sleep 3
+		fi
+		done
 
-    if [ $IS_UP -eq 0 ] ; then
-		echo "Couldn't find balance for $PIONEERADDRESS"
-		echo "Stopping the enclave"
-		$qadenascripts/stop_qadena.sh --enclave
+		if [ $IS_UP -eq 0 ] ; then
+			echo "Couldn't find balance for $PIONEERADDRESS"
+			echo "Stopping the enclave"
+			$qadenascripts/stop_qadena.sh --enclave > /dev/null
+			show_manual_funding_instructions
+		fi
+
+		# ask the enclave to sync with another enclave and get the necessary keys for a full-node to be able to sync with the chain
+		
+		qadenad_alias enclave sync-enclave $PIONEER $ADVERTISE_IP_ADDRESS "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657"
+		
+		if [[ $? != 0 ]] ; then
+			echo "Failed to syncrhonize my enclave with the Pioneer/Enclave on $GENESIS_PIONEER_FIRST_IP_ADDRESS"
+			echo "Stopping the enclave"
+			$qadenascripts/stop_qadena.sh --enclave &> /dev/null
+			exit 1
+		fi
+	elif [[ $REPLY == "n" ]] ; then
 		show_manual_funding_instructions
-    fi
-
-    # ask the enclave to sync with another enclave and get the necessary keys for a full-node to be able to sync with the chain
-    
-    qadenad_alias enclave sync-enclave $PIONEER $ADVERTISE_IP_ADDRESS "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657"
-    
-    if [[ $? != 0 ]] ; then
-		echo "Failed to syncrhonize my enclave with the Pioneer/Enclave on $GENESIS_PIONEER_FIRST_IP_ADDRESS"
-		echo "Stopping the enclave"
-		$qadenascripts/stop_qadena.sh --enclave
-		exit 1
+	else
+		echo "Invalid option $REPLY.  Please try again."
 	fi
-else
-    show_manual_funding_instructions
-fi
+done
 
 echo "Stopping the enclave"
-$qadenascripts/stop_qadena.sh --enclave
+$qadenascripts/stop_qadena.sh --enclave  > /dev/null
 
 echo "Start the new qadena 'full-node' and wait until it synchronizes with the qadena network."
 echo "Once synchronized, if you want to make it a candidate validator by staking qadena, run ./add_validator.sh."
@@ -452,7 +462,7 @@ while [[ $REPLY != "y" && $REPLY != "n" ]]; do
 		$qadenascripts/run.sh --sync-with-pioneer $GENESIS_PIONEER_FIRST_IP_ADDRESS
 	elif [[ $REPLY == "n" ]] ; then
 		echo "Ok, will not start it now.  You can do so later by typing in:"
-		echo "  $qadenascript2s/run.sh --sync-with-pioneer $GENESIS_PIONEER_FIRST_IP_ADDRESS"
+		echo "  $qadenascripts/run.sh --sync-with-pioneer $GENESIS_PIONEER_FIRST_IP_ADDRESS"
 	else
 		echo "Invalid option $REPLY.  Please try again."
 	fi
