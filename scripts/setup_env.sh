@@ -47,6 +47,8 @@ export qadenabin="$QADENAHOME/bin"
 alias qadenad_alias="$qadenabin/qadenad --home $QADENAHOME"
 export qadenad_binary="$qadenabin/qadenad"
 
+export LD_LIBRARY_PATH="$qadenabin:$LD_LIBRARY_PATH"
+
 # echo to stderr
 echo "Qadena home: $QADENAHOME" >&2
 echo "Qadena bin: $qadenabin" >&2

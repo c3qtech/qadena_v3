@@ -317,8 +317,8 @@ func main() {
 	log.Printf("Signer version: %s", version)
 
 	// Construct file paths relative to home directory
-	secretKeyPath := filepath.Join(*homePath, "secret_connection.key")
-	stateFilePath := filepath.Join(*homePath, "signer_state.json")
+	secretKeyPath := filepath.Join(*homePath, "enclave_data", "secret_connection.key")
+	stateFilePath := filepath.Join(*homePath, "enclave_data", "signer_state.json")
 
 	// Update global state file path
 	stateFile = stateFilePath

@@ -98,6 +98,7 @@ if [[ $install_chain -eq 1 ]]; then
     VERSION=$(cat "$VERSION_FILE")
     cp $chain_path/qadenad "$qadenabin/qadenad"
     cp $chain_path/qadenad $qadenabin/qadenad.$VERSION
+    cp $qadenabuild/vendor/github.com/CosmWasm/wasmvm/v2/internal/api/*.so $qadenabin/
 fi
 
 if [[ $install_scripts -eq 1 ]]; then
