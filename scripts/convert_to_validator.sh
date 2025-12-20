@@ -13,11 +13,34 @@ if [[ $REAL_ENCLAVE -eq 1 ]]; then
     fi
 fi
 
+VALIDATOR_STAKE="100000"
 
-VALIDATOR=$1
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --validator-stake)
+      if [[ -n "$2" && "$2" != --* ]]; then
+        VALIDATOR_STAKE="$2"
+        shift 2
+      else
+        echo "Error: --validator-stake requires an argument"
+        exit 1
+      fi
+      ;;
+    --help)
+      echo "Usage: convert_to_validator.sh [--validator-stake <validator-stake> (in QDN)]"
+      exit 0
+      ;;      
+    *)
+      echo "Unknown option: $1"
+      exit 1
+      ;;
+  esac
+done
 
-if [[ $VALIDATOR == "" ]] ; then
-    VALIDATOR="100000"
+
+if [[ $VALIDATOR_STAKE == "" ]] ; then
+    echo "Error: --validator-stake requires an argument (in QDN)"
+    exit 1
 fi
 
 IS_UP=0
@@ -61,16 +84,16 @@ echo "PIONEER $PIONEER"
 
 PIONEERADDRESS=`qadenad_alias keys show $PIONEER -a --keyring-backend test`
 
-VALIDATOR_AQDN=`echo "$VALIDATOR * 1000000000000000000" | bc`
+VALIDATOR_STAKE_AQDN=`echo "$VALIDATOR_STAKE * 1000000000000000000" | bc`
 
-echo "I will attempt to detect when $PIONEERADDRESS has at least ${VALIDATOR}qdn."
+echo "I will attempt to detect when $PIONEERADDRESS has at least ${VALIDATOR_STAKE}qdn."
 
 IS_UP=0
 for i in {120..1}
 do
     BALANCE_JSON=`qadenad_alias query bank balances $PIONEERADDRESS --output json`
 	BALANCE=`echo $BALANCE_JSON | jq -r '.balances[] | select(.denom=="aqdn") | .amount'`
-    ret=`bc <<< "$BALANCE >= $VALIDATOR_AQDN"`
+    ret=`bc <<< "$BALANCE >= $VALIDATOR_STAKE_AQDN"`
     if [[ $ret = 1 ]] ; then
       BALANCE_QDN=`echo "$BALANCE / 1000000000000000000" | bc`
       echo "$PIONEER has enough balance (${BALANCE_QDN}qdn) to become a validator!"
@@ -78,8 +101,8 @@ do
       break
     else
         BALANCE_QDN=`echo "$BALANCE / 1000000000000000000" | bc`
-        echo "$PIONEER balance is ${BALANCE_QDN}qdn, not enough to become a validator (need to send ${VALIDATOR}qdn).  Waiting...$i"
-        echo "    $QADENAHOME/bin/qadenad --home $QADENAHOME tx bank send treasury $PIONEERADDRESS ${VALIDATOR}qdn --yes"
+        echo "$PIONEER balance is ${BALANCE_QDN}qdn, not enough to become a validator (need to send ${VALIDATOR_STAKE}qdn).  Waiting...$i"
+        echo "    $QADENAHOME/bin/qadenad --home $QADENAHOME tx bank send treasury $PIONEERADDRESS ${VALIDATOR_STAKE}qdn --yes"
         sleep 3
     fi
 done
@@ -91,7 +114,7 @@ fi
 
 # create validator json
 validator_pubkey=`qadenad_alias tendermint show-validator`
-validator_amount="${VALIDATOR}qdn"
+validator_amount="${VALIDATOR_STAKE}qdn"
 validator_moniker="$PIONEER"
 validator_commission_rate="0.10"
 validator_commission_max_rate="0.20"

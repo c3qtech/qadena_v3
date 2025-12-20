@@ -54,15 +54,66 @@ else
   exit 1
 fi
 
-PIONEER=$1
-ADVERTISE_IP_ADDRESS=$2
-GENESIS_PIONEER_FIRST_IP_ADDRESS=$3
-GENESIS_PIONEER_SECOND_IP_ADDRESS=$4
+ADVERTISE_IP_ADDRESS=""
+PIONEER=""
+GENESIS_PIONEER_FIRST_IP_ADDRESS=""
+GENESIS_PIONEER_SECOND_IP_ADDRESS=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --advertise-ip-address)
+      if [[ -n "$2" && "$2" != --* ]]; then
+        ADVERTISE_IP_ADDRESS="$2"
+        shift 2
+      else
+        echo "Error: --advertise-ip-address requires an argument"
+        exit 1
+      fi
+      ;;
+	--pioneer)
+      if [[ -n "$2" && "$2" != --* ]]; then
+        PIONEER="$2"
+        shift 2
+      else
+        echo "Error: --pioneer requires an argument"
+        exit 1
+      fi
+      ;;
+	--genesis-pioneer-first-ip-address)
+      if [[ -n "$2" && "$2" != --* ]]; then
+        GENESIS_PIONEER_FIRST_IP_ADDRESS="$2"
+        shift 2
+      else
+        echo "Error: --genesis-pioneer-first-ip-address requires an argument"
+        exit 1
+      fi
+      ;;
+	--genesis-pioneer-second-ip-address)
+      if [[ -n "$2" && "$2" != --* ]]; then
+        GENESIS_PIONEER_SECOND_IP_ADDRESS="$2"
+        shift 2
+      else
+        echo "Error: --genesis-pioneer-second-ip-address requires an argument"
+        exit 1
+      fi
+      ;;
+    --help)
+      echo "Usage: add_full_node.sh --pioneer <pioneer> --advertise-ip-address <advertise-ip-address> --genesis-pioneer-first-ip-address <genesis-pioneer-first-ip-address> [optional: --genesis-pioneer-second-ip-address <genesis-pioneer-second-ip-address>]"
+	  echo "Example 1 (adding the second node):  add_full_node.sh --pioneer pioneer2 --advertise-ip-address 192.168.86.133 --genesis-pioneer-first-ip-address 192.168.86.109"
+	  echo "Example 2 (adding the 3rd node):  add_full_node.sh --pioneer pioneer3 --advertise-ip-address 192.168.86.140 --genesis-pioneer-first-ip-address 192.168.86.109 --genesis-pioneer-second-ip-address 192.168.86.133"
+      exit 0
+      ;;      
+    *)
+      echo "Unknown option: $1"
+      exit 1
+      ;;
+  esac
+done
 
 if [[ $PIONEER == "" || $PIONEER == "--help" || $GENESIS_PIONEER_FIRST_IP_ADDRESS == "" ]] ; then
-    echo "Args: add_full_node.sh new-pioneer-id new-pioneer-advertise-ip-address genesis-pioneer-first-ip-address [optional: genesis-pioneer-second-ip-address]"
-    echo "Example 1 (adding the second node):  add_full_node.sh pioneer2 192.168.86.133 192.168.86.109"
-    echo "Example 2 (adding the 3rd node):  add_full_node.sh pioneer3 192.168.86.140 192.168.86.109 192.168.86.133"
+    echo "Args: add_full_node.sh --pioneer <pioneer> --advertise-ip-address <advertise-ip-address> --genesis-pioneer-first-ip-address <genesis-pioneer-first-ip-address> [optional: --genesis-pioneer-second-ip-address <genesis-pioneer-second-ip-address>]"
+    echo "Example 1 (adding the second node):  add_full_node.sh --pioneer pioneer2 --advertise-ip-address 192.168.86.133 --genesis-pioneer-first-ip-address 192.168.86.109"
+    echo "Example 2 (adding the 3rd node):  add_full_node.sh --pioneer pioneer3 --advertise-ip-address 192.168.86.140 --genesis-pioneer-first-ip-address 192.168.86.109 --genesis-pioneer-second-ip-address 192.168.86.133"
     exit 1
 fi
 
