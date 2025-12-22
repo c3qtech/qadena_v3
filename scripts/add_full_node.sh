@@ -3,7 +3,11 @@
 show_manual_funding_instructions() {
     echo "Ok, in order to continue, you'll need to add funds as shown above."
 	echo "Once that's done, you can continue converting this node to a full node by typing in:"
-	echo "  $qadenascripts/add_full_node.sh $1 $2 $3 $4"
+	if [[ $GENESIS_PIONEER_SECOND_IP_ADDRESS == "" ]]; then
+		echo "  ~/qadena/scripts/add_full_node.sh --pioneer $PIONEER --advertise-ip-address $ADVERTISE_IP_ADDRESS --genesis-pioneer-first-ip-address $GENESIS_PIONEER_FIRST_IP_ADDRESS"
+	else
+		echo "  ~qadena/scripts/add_full_node.sh --pioneer $PIONEER --advertise-ip-address $ADVERTISE_IP_ADDRESS --genesis-pioneer-first-ip-address $GENESIS_PIONEER_FIRST_IP_ADDRESS --genesis-pioneer-second-ip-address $GENESIS_PIONEER_SECOND_IP_ADDRESS"
+	fi
 	echo "Stopping the enclave for now"
 	$qadenascripts/stop_qadena.sh --enclave > /dev/null
 	exit 0
@@ -437,12 +441,17 @@ FULL_AQDN=`echo "$FULL * 1000000000000000000" | bc`
 
 echo ""
 echo "This node is *almost* a Qadena 'full-node'"
-echo "(TESTNET) Please execute this on the one of the validators"
-echo ""
-echo "  For full node:"
-echo "    ~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $PIONEERADDRESS ${FULL}qdn --yes --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment"
-echo "  For validator node:"
-echo "    ~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $PIONEERADDRESS ${VALIDATOR}qdn --yes --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment"
+#echo "(TESTNET) Please execute this on the one of the validators"
+#echo ""
+#echo "  For full node:"
+#echo "    ~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $PIONEERADDRESS ${FULL}qdn --yes --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment"
+#echo "  For validator node:"
+#echo "    ~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $PIONEERADDRESS ${VALIDATOR}qdn --yes --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment"
+#echo ""
+echo "(TESTNET) Please send an email to qadenatestnet@c3qtech.com with the subject 'Qadena Testnet Full Node'"
+echo "(TESTNET) and include the Pioneer name, the Pioneer address ($PIONEERADDRESS), the Pioneer public IP address of the node."
+echo "(TESTNET) If you're going to run a full-node, request for ${FULL}qdn to be sent to $PIONEERADDRESS."
+echo "(TESTNET) If you're going to run a validator node, request for ${VALIDATOR}qdn to be sent to $PIONEERADDRESS."
 echo ""
 echo "(PRODUCTION) Full Node:  Please purchase and send at least ${FULL}qdn to $PIONEERADDRESS"
 echo "(PRODUCTION) Validator Node:  Please purchase and send at least ${VALIDATOR}qdn to $PIONEERADDRESS"
