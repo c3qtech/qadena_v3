@@ -10,6 +10,7 @@ provider="secidentitysrvprv"
 count=10
 include_base_provider=false
 include_base_provider_credential=false
+json=false
 
 # Process command line arguments
 while [[ $# -gt 0 ]]; do
@@ -30,13 +31,17 @@ while [[ $# -gt 0 ]]; do
             count="$2"
             shift 2
             ;;
+        --json)
+            json=true
+            shift
+            ;;
         --help)
-            echo "Usage: $0 [--provider <providername>] [--count <count>]"
+            echo "Usage: $0 [--provider <providername>] [--count <count>] [--json]"  >&2
             exit 0
             ;;
         *)
-            echo "Unknown option: $1"
-            echo "Usage: $0 [--provider <providername>] [--count <count>]"
+            echo "Unknown option: $1" >&2
+            echo "Usage: $0 [--provider <providername>] [--count <count>] [--json]" >&2
             exit 1
             ;;
     esac
@@ -46,7 +51,7 @@ done
 names=()
 # Check if provider contains the %d placeholder
 if [[ "$provider" == *#* ]]; then
-    echo "Provider name contains %d placeholder"
+    echo "Provider name contains %d placeholder" >&2
     # For the base provider, replace %d with nothing
     base_provider=${provider//\#/}
     
@@ -74,18 +79,23 @@ fi
 names_json=$(printf '%s\n' "${names[@]}" | jq -R . | jq -s .)
 names_base64=$(echo "$names_json" | base64 -w 0)
 
-echo "Names JSON array:"
-echo "$names_json"
-echo
-echo "Names Base64:"
-echo "$names_base64"
-echo
+echo "Names JSON array:" >&2
+echo "$names_json" >&2
+echo >&2
+echo "Names Base64:" >&2
+if [ "$json" = true ]; then
+  echo '{'
+  echo '  "names": "'$names_base64'",'
+else
+  echo "$names_base64"
+fi
+echo >&2
 
 # Extract private keys
-echo "Extracting private keys..."
+echo "Extracting private keys..." >&2
 keys=()
 for name in "${names[@]}"; do
-    echo "Processing $name..."
+    echo "Processing $name..." >&2
     # Use a dummy passphrase to export the key
     key=$(echo "dummy-passphrase" | qadenad_alias keys export "$name" 2>/dev/null)
     
@@ -96,7 +106,7 @@ for name in "${names[@]}"; do
         # Store the entire key as a single element with newline characters converted to \n literals
         keys+=("$key")
     else
-        echo "Error exporting key for $name"
+        echo "Error exporting key for $name" >&2
         keys+=("error")
     fi
 done
@@ -105,8 +115,13 @@ done
 keys_json=$(for key in "${keys[@]}"; do echo -n "$key" | jq -Rs .; done | jq -s .)
 keys_base64=$(echo "$keys_json" | base64 -w 0)
 
-echo "Private keys JSON array:"
-echo "$keys_json"
-echo
-echo "Private keys Base64:"
-echo "$keys_base64"
+echo "Private keys JSON array:" >&2
+echo "$keys_json" >&2
+echo >&2
+echo "Private keys Base64:" >&2
+if [ "$json" = true ]; then
+    echo '  "private_keys": "'$keys_base64'"'
+    echo '}'
+else
+    echo "$keys_base64"
+fi

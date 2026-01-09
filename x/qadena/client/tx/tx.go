@@ -128,6 +128,9 @@ func CheckTxCLIResponse(clientCtx client.Context, err error, res *sdk.TxResponse
 	if err != nil {
 		st := status.Convert(err)
 		// if st.Code() == codes.Unauthenticated  & & st.Message contains "sequence mismatch"
+		if c.Debug && c.DebugFull {
+			clientCtx.PrintProto(res)
+		}
 		if st.Code() == codes.Unknown && strings.Contains(st.Message(), "sequence mismatch") {
 			if c.Debug && c.DebugFull {
 				fmt.Printf("%v | got sequence mismatch, retrying...\n", time.Now().Format("2006-01-02 15:04:05"))
