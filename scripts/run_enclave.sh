@@ -15,12 +15,6 @@ if [[ ! -d "$QADENAHOME/enclave_data" ]] ; then
     mkdir "$QADENAHOME/enclave_data"
 fi
 
-
-if [[ "$(uname -s)" == "Darwin" ]] ; then
-    echo "run_enclave.sh: setting window title..."
-    echo -n -e "\033]0;QADENAD Enclave Debug Window\007"
-fi
-
 CHAINID=$(jq -r '.chain_id' "$QADENAHOME/config/genesis.json")
 
 # enable core dumps

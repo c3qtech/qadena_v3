@@ -32,10 +32,6 @@ if [[ ! -d "$ekychome/uploads" ]] ; then
 fi
 
 
-if [[ "$(uname -s)" == "Darwin" ]] ; then
-    echo -n -e "\033]0;QADENA EKYC Enclave Debug Window\007"
-fi
-
 cmd=$user_go_path/qadena_ekyc
 cmdx1=
 cmdx2=

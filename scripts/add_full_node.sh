@@ -416,9 +416,6 @@ do
 	IS_UP=1
 
 
-	if [[ "$(uname -s)" == "Darwin" ]] ; then
-		echo -n -e "\033]0;\007"
-	fi
 	break
 	else
 	echo "qadenad_enclave is not yet up, waiting...$i"
