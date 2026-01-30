@@ -179,7 +179,9 @@ func waitForSequenceChange(clientCtx client.Context, flagSet *pflag.FlagSet, old
 		}
 		factory, err = factory.Prepare(clientCtx)
 		if err != nil {
-			panic(err)
+			fmt.Printf("%v | waitForSequenceChange: factory.Prepare error: %v\n", time.Now().Format("2006-01-02 15:04:05"), err)
+			time.Sleep(500 * time.Millisecond)
+			continue
 		}
 		if factory.Sequence() > oldSequence {
 			if c.Debug && c.DebugFull {
