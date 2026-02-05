@@ -117,6 +117,14 @@ genesis:
           permission: "Everybody"
         instantiate_default_permission: "Everybody"
       sequences: []
+    crisis:
+      constant_fee:
+        amount: "1000000"
+        denom: "qdn"
+    protocolpool:
+      params:
+        enabled_distribution_denoms:
+          - "aqdn"
     qadena:
       params:
         # main wallet granted by sponsor upon wallet creation (encrypted)
