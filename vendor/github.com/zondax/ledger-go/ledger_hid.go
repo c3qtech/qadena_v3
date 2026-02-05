@@ -2,7 +2,7 @@
 // +build !ledger_mock,!ledger_zemu
 
 /*******************************************************************************
-*   (c) 2018 - 2022 ZondaX AG
+*   (c) Zondax AG
 *
 *  Licensed under the Apache License, Version 2.0 (the "License");
 *  you may not use this file except in compliance with the License.
@@ -44,45 +44,50 @@ type LedgerDeviceHID struct {
 }
 
 // list of supported product ids as well as their corresponding interfaces
-var supportedLedgerProductID = map[uint16]int{
-	0x4011: 0, // Ledger Nano X
-	0x1011: 0, // Ledger Nano S
-	0x1:    0, // Ledger Nano S
-	0x5011: 0, // Ledger Nano S Plus
-	0x5:    0, // Ledger Nano S Plus
+// based on https://github.com/LedgerHQ/ledger-live/blob/develop/libs/ledgerjs/packages/devices/src/index.ts
+var supportedLedgerProductID = map[uint8]int{
+	0x40: 0, // Ledger Nano X
+	0x10: 0, // Ledger Nano S
+	0x50: 0, // Ledger Nano S Plus
+	0x60: 0, // Ledger Stax
+	0x70: 0, // Ledger Flex
 }
 
-func NewLedgerAdmin() *LedgerAdminHID {
+func NewLedgerAdmin() LedgerAdmin {
 	return &LedgerAdminHID{}
 }
 
 func (admin *LedgerAdminHID) ListDevices() ([]string, error) {
 	devices := hid.Enumerate(0, 0)
-
 	if len(devices) == 0 {
-		fmt.Printf("No devices. Ledger LOCKED OR Other Program/Web Browser may have control of device.")
+		log.Debug("No devices. Ledger LOCKED OR Other Program/Web Browser may have control of device.")
 	}
 
 	for _, d := range devices {
-		fmt.Printf("============ %s\n", d.Path)
-		fmt.Printf("VendorID      : %x\n", d.VendorID)
-		fmt.Printf("ProductID     : %x\n", d.ProductID)
-		fmt.Printf("Release       : %x\n", d.Release)
-		fmt.Printf("Serial        : %x\n", d.Serial)
-		fmt.Printf("Manufacturer  : %s\n", d.Manufacturer)
-		fmt.Printf("Product       : %s\n", d.Product)
-		fmt.Printf("UsagePage     : %x\n", d.UsagePage)
-		fmt.Printf("Usage         : %x\n", d.Usage)
-		fmt.Printf("\n")
+		logDeviceInfo(d)
 	}
 
 	return []string{}, nil
 }
 
+func logDeviceInfo(d hid.DeviceInfo) {
+	log.Debugf("============ %s", d.Path)
+	log.Debugf("VendorID      : %x", d.VendorID)
+	log.Debugf("ProductID     : %x", d.ProductID)
+	log.Debugf("Release       : %x", d.Release)
+	log.Debugf("Serial        : %x", d.Serial)
+	log.Debugf("Manufacturer  : %s", d.Manufacturer)
+	log.Debugf("Product       : %s", d.Product)
+	log.Debugf("UsagePage     : %x", d.UsagePage)
+	log.Debugf("Usage         : %x", d.Usage)
+}
+
 func isLedgerDevice(d hid.DeviceInfo) bool {
 	deviceFound := d.UsagePage == UsagePageLedgerNanoS
+
 	// Workarounds for possible empty usage pages
-	if interfaceID, supported := supportedLedgerProductID[d.ProductID]; deviceFound || (supported && (interfaceID == d.Interface)) {
+	productIDMM := uint8(d.ProductID >> 8)
+	if interfaceID, supported := supportedLedgerProductID[productIDMM]; deviceFound || (supported && (interfaceID == d.Interface)) {
 		return true
 	}
 
@@ -131,7 +136,7 @@ func (admin *LedgerAdminHID) Connect(requiredIndex int) (LedgerDevice, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("LedgerHID device (idx %d) not found. Ledger LOCKED OR Other Program/Web Browser may have control of device.", requiredIndex)
+	return nil, fmt.Errorf("LedgerHID device (idx %d) not found: device may be locked or in use by another application", requiredIndex)
 }
 
 func (ledger *LedgerDeviceHID) write(buffer []byte) (int, error) {
@@ -209,6 +214,7 @@ func (ledger *LedgerDeviceHID) drainRead() {
 }
 
 func (ledger *LedgerDeviceHID) Exchange(command []byte) ([]byte, error) {
+	log.Debugf("Sending command: %X", command)
 	// Purge messages that arrived after previous exchange completed
 	ledger.drainRead()
 
@@ -249,6 +255,7 @@ func (ledger *LedgerDeviceHID) Exchange(command []byte) ([]byte, error) {
 		return response[:swOffset], errors.New(ErrorMessage(sw))
 	}
 
+	log.Debugf("Received response: %X", response)
 	return response[:swOffset], nil
 }
 

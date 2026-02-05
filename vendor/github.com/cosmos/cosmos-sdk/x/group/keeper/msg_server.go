@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	errorsmod "cosmossdk.io/errors"
@@ -781,33 +782,40 @@ func (k Keeper) Vote(goCtx context.Context, msg *group.MsgVote) (*group.MsgVoteR
 // doTallyAndUpdate performs a tally, and, if the tally result is final, then:
 // - updates the proposal's `Status` and `FinalTallyResult` fields,
 // - prune all the votes.
-func (k Keeper) doTallyAndUpdate(ctx sdk.Context, p *group.Proposal, groupInfo group.GroupInfo, policyInfo group.GroupPolicyInfo) error {
+func (k Keeper) doTallyAndUpdate(ctx sdk.Context, proposal *group.Proposal, groupInfo group.GroupInfo, policyInfo group.GroupPolicyInfo) error {
 	policy, err := policyInfo.GetDecisionPolicy()
 	if err != nil {
 		return err
 	}
 
-	tallyResult, err := k.Tally(ctx, *p, policyInfo.GroupId)
-	if err != nil {
-		return err
+	var result group.DecisionPolicyResult
+	tallyResult, err := k.Tally(ctx, *proposal, policyInfo.GroupId)
+	if err == nil {
+		result, err = policy.Allow(tallyResult, groupInfo.TotalWeight)
 	}
-
-	result, err := policy.Allow(tallyResult, groupInfo.TotalWeight)
 	if err != nil {
-		return errorsmod.Wrap(err, "policy allow")
+		if err := k.pruneVotes(ctx, proposal.Id); err != nil {
+			return err
+		}
+		proposal.Status = group.PROPOSAL_STATUS_REJECTED
+		return ctx.EventManager().EmitTypedEvents(
+			&group.EventTallyError{
+				ProposalId:   proposal.Id,
+				ErrorMessage: err.Error(),
+			})
 	}
 
 	// If the result was final (i.e. enough votes to pass) or if the voting
 	// period ended, then we consider the proposal as final.
-	if isFinal := result.Final || ctx.BlockTime().After(p.VotingPeriodEnd); isFinal {
-		if err := k.pruneVotes(ctx, p.Id); err != nil {
+	if isFinal := result.Final || ctx.BlockTime().After(proposal.VotingPeriodEnd); isFinal {
+		if err := k.pruneVotes(ctx, proposal.Id); err != nil {
 			return err
 		}
-		p.FinalTallyResult = tallyResult
+		proposal.FinalTallyResult = tallyResult
 		if result.Allow {
-			p.Status = group.PROPOSAL_STATUS_ACCEPTED
+			proposal.Status = group.PROPOSAL_STATUS_ACCEPTED
 		} else {
-			p.Status = group.PROPOSAL_STATUS_REJECTED
+			proposal.Status = group.PROPOSAL_STATUS_REJECTED
 		}
 
 	}
@@ -1156,13 +1164,7 @@ func (k Keeper) validateMembers(members []group.MemberRequest) error {
 
 // isProposer checks that an address is a proposer of a given proposal.
 func isProposer(proposal group.Proposal, address string) bool {
-	for _, proposer := range proposal.Proposers {
-		if proposer == address {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(proposal.Proposers, address)
 }
 
 func validateMsgs(msgs []sdk.Msg) error {

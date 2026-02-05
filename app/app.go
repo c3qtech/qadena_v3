@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -88,6 +89,13 @@ import (
 	// CosmWasm
 	wasmkeeper "github.com/CosmWasm/wasmd/x/wasm/keeper"
 	wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
+
+	// sdk 53.5
+	upgradetypes "cosmossdk.io/x/upgrade/types"
+	epochskeeper "github.com/cosmos/cosmos-sdk/x/epochs/keeper"
+	epochstypes "github.com/cosmos/cosmos-sdk/x/epochs/types"
+	protocolpoolkeeper "github.com/cosmos/cosmos-sdk/x/protocolpool/keeper"
+	protocolpooltypes "github.com/cosmos/cosmos-sdk/x/protocolpool/types"
 
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 
@@ -178,6 +186,10 @@ type App struct {
 
 	WasmKeeper wasmkeeper.Keeper
 
+	// sdk 53.5
+	ProtocolPoolKeeper protocolpoolkeeper.Keeper
+	EpochsKeeper       epochskeeper.Keeper
+
 	// simulation manager
 	sm *module.SimulationManager
 }
@@ -254,6 +266,13 @@ func newAnteHandler(app *App) (sdk.AnteHandler, error) {
 			WasmKeeper:            &app.WasmKeeper,
 			TXCounterStoreService: runtime.NewKVStoreService(txCounterStoreKey),
 			NodeConfig:            &app.nodeConfig,
+			SigVerifyOptions: []sdkante.SigVerificationDecoratorOption{
+				// change below as needed.
+				sdkante.WithUnorderedTxGasCost(sdkante.DefaultUnorderedTxGasCost),
+				sdkante.WithMaxUnorderedTxTimeoutDuration(sdkante.DefaultMaxTimeoutDuration),
+			},
+			ExtensionOptionChecker: nil,
+			TxFeeChecker:           nil,
 		},
 	)
 	if err != nil {
@@ -261,6 +280,33 @@ func newAnteHandler(app *App) (sdk.AnteHandler, error) {
 	}
 
 	return anteHandler, nil
+}
+
+const UpgradeName = "v050-to-v053"
+
+func (app *App) RegisterUpgradeHandlers() {
+	app.UpgradeKeeper.SetUpgradeHandler(
+		UpgradeName,
+		func(ctx context.Context, _ upgradetypes.Plan, fromVM module.VersionMap) (module.VersionMap, error) {
+			return app.ModuleManager.RunMigrations(ctx, app.Configurator(), fromVM)
+		},
+	)
+
+	upgradeInfo, err := app.UpgradeKeeper.ReadUpgradeInfoFromDisk()
+	if err != nil {
+		panic(err)
+	}
+	if upgradeInfo.Name == UpgradeName && !app.UpgradeKeeper.IsSkipHeight(upgradeInfo.Height) {
+		storeUpgrades := storetypes.StoreUpgrades{
+			Added: []string{
+				epochstypes.ModuleName,       // if not adding x/epochs to your chain, remove this line.
+				protocolpooltypes.ModuleName, // if not adding x/protocolpool to your chain, remove this line.
+			},
+		}
+
+		// configure store loader that checks if version == upgradeHeight and applies store upgrades
+		app.SetStoreLoader(upgradetypes.UpgradeStoreLoader(upgradeInfo.Height, &storeUpgrades))
+	}
 }
 
 func newPostHandler(app *App) (sdk.PostHandler, error) {
@@ -374,6 +420,8 @@ func New(
 		&app.NameserviceKeeper,
 		&app.PricefeedKeeper,
 		&app.DsvsKeeper,
+		&app.ProtocolPoolKeeper, // sdk 53.5
+		&app.EpochsKeeper,       // sdk 53.5
 		// this line is used by starport scaffolding # stargate/app/keeperDefinition
 	); err != nil {
 		panic(err)
@@ -452,6 +500,8 @@ func New(
 	// 	app.UpgradeKeeper.SetModuleVersionMap(ctx, app.ModuleManager.GetVersionMap())
 	// 	return app.App.InitChainer(ctx, req)
 	// })
+
+	app.RegisterUpgradeHandlers()
 
 	// qadena
 	anteHandler, err := newAnteHandler(app)

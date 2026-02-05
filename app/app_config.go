@@ -67,6 +67,15 @@ import (
 	qadenamoduletypes "github.com/c3qtech/qadena_v3/x/qadena/types"
 
 	wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
+
+	// sdk 53.5
+	protocolpoolmodulev1 "cosmossdk.io/api/cosmos/protocolpool/module/v1"
+	_ "github.com/cosmos/cosmos-sdk/x/protocolpool" // import for side-effects
+	protocolpooltypes "github.com/cosmos/cosmos-sdk/x/protocolpool/types"
+
+	epochsmodulev1 "cosmossdk.io/api/cosmos/epochs/module/v1"
+	_ "github.com/cosmos/cosmos-sdk/x/epochs" // import for side-effects
+	epochstypes "github.com/cosmos/cosmos-sdk/x/epochs/types"
 	// this line is used by starport scaffolding # stargate/app/moduleImport
 )
 
@@ -81,6 +90,45 @@ var (
 		// cosmos-sdk/ibc modules
 		//		capabilitytypes.ModuleName,
 		authtypes.ModuleName,
+		banktypes.ModuleName,
+		distrtypes.ModuleName,
+		protocolpooltypes.ModuleName, // sdk 53.5, must be after distrtypes
+		stakingtypes.ModuleName,
+		slashingtypes.ModuleName,
+		govtypes.ModuleName,
+		minttypes.ModuleName,
+		crisistypes.ModuleName,
+		ibcexported.ModuleName,
+		genutiltypes.ModuleName,
+		evidencetypes.ModuleName,
+		authz.ModuleName,
+		ibctransfertypes.ModuleName,
+		icatypes.ModuleName,
+		//		ibcfeetypes.ModuleName,
+		feegrant.ModuleName,
+		paramstypes.ModuleName,
+		upgradetypes.ModuleName,
+		vestingtypes.ModuleName,
+		nft.ModuleName,
+		group.ModuleName,
+		consensustypes.ModuleName,
+		circuittypes.ModuleName,
+		// chain modules
+		qadenamoduletypes.ModuleName,
+		nameservicemoduletypes.ModuleName,
+		pricefeedmoduletypes.ModuleName,
+		dsvsmoduletypes.ModuleName,
+		wasmtypes.ModuleName,
+		epochstypes.ModuleName,
+		// this line is used by starport scaffolding # stargate/app/initGenesis
+	}
+
+	// sdk 53.5, added this because protocolpool needs to be before banktypes when exporting
+	exportGenesisModuleOrder = []string{
+		// cosmos-sdk/ibc modules
+		//		capabilitytypes.ModuleName,
+		authtypes.ModuleName,
+		protocolpooltypes.ModuleName, // sdk 53.5, must be before banktypes
 		banktypes.ModuleName,
 		distrtypes.ModuleName,
 		stakingtypes.ModuleName,
@@ -109,6 +157,7 @@ var (
 		pricefeedmoduletypes.ModuleName,
 		dsvsmoduletypes.ModuleName,
 		wasmtypes.ModuleName,
+		epochstypes.ModuleName,
 		// this line is used by starport scaffolding # stargate/app/initGenesis
 	}
 
@@ -121,6 +170,7 @@ var (
 		// cosmos sdk modules
 		minttypes.ModuleName,
 		distrtypes.ModuleName,
+		protocolpooltypes.ModuleName, // sdk 53.5, must be after distrtypes
 		slashingtypes.ModuleName,
 		evidencetypes.ModuleName,
 		stakingtypes.ModuleName,
@@ -138,6 +188,7 @@ var (
 		pricefeedmoduletypes.ModuleName,
 		dsvsmoduletypes.ModuleName,
 		wasmtypes.ModuleName,
+		epochstypes.ModuleName,
 		// this line is used by starport scaffolding # stargate/app/beginBlockers
 	}
 
@@ -161,11 +212,13 @@ var (
 		pricefeedmoduletypes.ModuleName,
 		dsvsmoduletypes.ModuleName,
 		wasmtypes.ModuleName,
+		protocolpooltypes.ModuleName, // sdk 53.5 order does not matter
 		// this line is used by starport scaffolding # stargate/app/endBlockers
 	}
 
 	preBlockers = []string{
 		upgradetypes.ModuleName,
+		authtypes.ModuleName,
 		// this line is used by starport scaffolding # stargate/app/preBlockers
 	}
 
@@ -185,6 +238,11 @@ var (
 		{Account: qadenamoduletypes.ModuleName}, // had to add this to make sure SendCoinsFromAccountToModule will work
 		{Account: dsvsmoduletypes.ModuleName, Permissions: []string{authtypes.Minter, authtypes.Burner, authtypes.Staking}},
 		{Account: wasmtypes.ModuleName, Permissions: []string{authtypes.Burner}},
+
+		// sdk 53.5
+		{Account: protocolpooltypes.ModuleName},
+		{Account: protocolpooltypes.ProtocolPoolEscrowAccount},
+
 		// this line is used by starport scaffolding # stargate/app/maccPerms
 	}
 
@@ -217,6 +275,7 @@ var (
 							KvStoreKey: "acc",
 						},
 					},
+					ExportGenesis: exportGenesisModuleOrder,
 					// When ExportGenesis is not specified, the export genesis module order
 					// is equal to the init genesis order
 					// ExportGenesis: genesisModuleOrder,
@@ -229,9 +288,11 @@ var (
 				Config: appconfig.WrapAny(&authmodulev1.Module{
 					Bech32Prefix:             AccountAddressPrefix,
 					ModuleAccountPermissions: moduleAccPerms,
+
 					// By default modules authority is the governance module. This is configurable with the following:
 					// Authority: "group", // A custom module authority can be set using a module name
 					// Authority: "cosmos1cwwv22j5ca08ggdv9c2uky355k908694z577tv", // or a specific address
+					EnableUnorderedTransactions: true, // sdk 53.5, remove this line if you do not want unordered transactions.
 				}),
 			},
 			{
@@ -284,6 +345,15 @@ var (
 			{
 				Name:   distrtypes.ModuleName,
 				Config: appconfig.WrapAny(&distrmodulev1.Module{}),
+			},
+			// sdk 53.5
+			{
+				Name:   protocolpooltypes.ModuleName,
+				Config: appconfig.WrapAny(&protocolpoolmodulev1.Module{}),
+			},
+			{
+				Name:   epochstypes.ModuleName,
+				Config: appconfig.WrapAny(&epochsmodulev1.Module{}),
 			},
 			{
 				Name:   evidencetypes.ModuleName,

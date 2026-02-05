@@ -32,6 +32,7 @@ type HandlerOptions struct {
 	NodeConfig             *wasmTypes.NodeConfig
 	TXCounterStoreService  corestoretypes.KVStoreService
 	WasmKeeper             *wasmkeeper.Keeper
+	SigVerifyOptions       []authante.SigVerificationDecoratorOption
 }
 
 // NewAnteHandler returns an AnteHandler that checks and increments sequence
@@ -77,7 +78,7 @@ func NewAnteHandler(options HandlerOptions) (sdk.AnteHandler, error) {
 		authante.NewSetPubKeyDecorator(options.AccountKeeper), // SetPubKeyDecorator must be called before all signature verification decorators
 		authante.NewValidateSigCountDecorator(options.AccountKeeper),
 		authante.NewSigGasConsumeDecorator(options.AccountKeeper, options.SigGasConsumer),
-		authante.NewSigVerificationDecorator(options.AccountKeeper, options.SignModeHandler),
+		authante.NewSigVerificationDecorator(options.AccountKeeper, options.SignModeHandler, options.SigVerifyOptions...),
 		authante.NewIncrementSequenceDecorator(options.AccountKeeper),
 	}
 

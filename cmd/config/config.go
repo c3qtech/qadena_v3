@@ -11,7 +11,9 @@ import (
 
 const (
 	QadenaUsesEthSecP256k1 = false
-	QadenaCoinType         = 744
+	//
+	//QadenaCoinType         = 744
+	QadenaCoinType = 60
 
 	// Bech32Prefix defines the Bech32 prefix used for EthAccounts
 	Bech32Prefix = "qadena"

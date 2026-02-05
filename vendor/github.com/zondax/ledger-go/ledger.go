@@ -1,5 +1,5 @@
 /*******************************************************************************
-*   (c) 2018 - 2022 ZondaX AG
+*   (c) Zondax AG
 *
 *  Licensed under the Apache License, Version 2.0 (the "License");
 *  you may not use this file except in compliance with the License.
@@ -16,12 +16,14 @@
 
 package ledger_go
 
+// LedgerAdmin defines the interface for managing Ledger devices.
 type LedgerAdmin interface {
 	CountDevices() int
 	ListDevices() ([]string, error)
 	Connect(deviceIndex int) (LedgerDevice, error)
 }
 
+// LedgerDevice defines the interface for interacting with a Ledger device.
 type LedgerDevice interface {
 	Exchange(command []byte) ([]byte, error)
 	Close() error

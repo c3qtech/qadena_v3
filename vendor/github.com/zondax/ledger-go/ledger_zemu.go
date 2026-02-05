@@ -2,7 +2,7 @@
 // +build ledger_zemu
 
 /*******************************************************************************
-*   (c) 2018 - 2022 ZondaX AG
+*   (c) Zondax AG
 *
 *  Licensed under the Apache License, Version 2.0 (the "License");
 *  you may not use this file except in compliance with the License.
@@ -27,6 +27,11 @@ import (
 	"google.golang.org/grpc"
 )
 
+const (
+	defaultGrpcURL  = "localhost"
+	defaultGrpcPort = "3002"
+)
+
 type LedgerAdminZemu struct {
 	grpcURL  string
 	grpcPort string
@@ -39,9 +44,8 @@ type LedgerDeviceZemu struct {
 
 func NewLedgerAdmin() *LedgerAdminZemu {
 	return &LedgerAdminZemu{
-		//TODO get this from flag value or from Zemu response
-		grpcURL:  "localhost",
-		grpcPort: "3002",
+		grpcURL:  defaultGrpcURL,
+		grpcPort: defaultGrpcPort,
 	}
 }
 
