@@ -30,6 +30,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/c3qtech/qadena_v3/x/qadena/client/cli"
+	evmethsecp256k1 "github.com/cosmos/evm/crypto/ethsecp256k1"
 )
 
 var (
@@ -65,11 +66,17 @@ func (AppModuleBasic) Name() string {
 
 // RegisterLegacyAminoCodec registers the amino codec for the module, which is used
 // to marshal and unmarshal structs to/from []byte in order to persist them in the module's KVStore.
-func (AppModuleBasic) RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {}
+func (AppModuleBasic) RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
+	cdc.RegisterConcrete(&evmethsecp256k1.PubKey{},
+		evmethsecp256k1.PubKeyName, nil)
+	cdc.RegisterConcrete(&evmethsecp256k1.PrivKey{},
+		evmethsecp256k1.PrivKeyName, nil)
+}
 
 // RegisterInterfaces registers a module's interface types and their concrete implementations as proto.Message.
 func (a AppModuleBasic) RegisterInterfaces(reg cdctypes.InterfaceRegistry) {
 	types.RegisterInterfaces(reg)
+
 }
 
 // DefaultGenesis returns a default GenesisState for the module, marshalled to json.RawMessage.

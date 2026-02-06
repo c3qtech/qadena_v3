@@ -115,7 +115,9 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	tmproto "github.com/cometbft/cometbft/proto/tendermint/types"
-	//enccodec "github.com/evmos/evmos/v18/encoding/codec"
+
+	evmcryptocodec "github.com/cosmos/evm/crypto/codec"
+	evmeip712 "github.com/cosmos/evm/ethereum/eip712"
 )
 
 const (
@@ -429,6 +431,10 @@ func New(
 
 	// qadena
 	c.LoggerInfo(logger, "Starting qadena node", cosmossdkversion.Version)
+
+	evmcryptocodec.RegisterInterfaces(app.interfaceRegistry)
+	evmeip712.RegisterInterfaces(app.interfaceRegistry)
+
 	//enccodec.RegisterInterfaces(app.interfaceRegistry)
 	app.QadenaKeeper.LoadNodeParams(DefaultNodeHome)
 	//	app.App.BaseApp.SetQadenaKeeper(app.QadenaKeeper)

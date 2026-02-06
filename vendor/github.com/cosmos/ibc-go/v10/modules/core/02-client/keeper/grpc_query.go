@@ -173,7 +173,7 @@ func (q *queryServer) ConsensusStates(goCtx context.Context, req *types.QueryCon
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
 	var consensusStates []types.ConsensusStateWithHeight
-	store := prefix.NewStore(runtime.KVStoreAdapter(q.storeService.OpenKVStore(ctx)), host.FullClientKey(req.ClientId, []byte(fmt.Sprintf("%s/", host.KeyConsensusStatePrefix))))
+	store := prefix.NewStore(runtime.KVStoreAdapter(q.storeService.OpenKVStore(ctx)), host.FullClientKey(req.ClientId, fmt.Appendf(nil, "%s/", host.KeyConsensusStatePrefix)))
 
 	pageRes, err := query.FilteredPaginate(store, req.Pagination, func(key, value []byte, accumulate bool) (bool, error) {
 		// filter any metadata stored under consensus state key
@@ -217,7 +217,7 @@ func (q *queryServer) ConsensusStateHeights(goCtx context.Context, req *types.Qu
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
 	var consensusStateHeights []types.Height
-	store := prefix.NewStore(runtime.KVStoreAdapter(q.storeService.OpenKVStore(ctx)), host.FullClientKey(req.ClientId, []byte(fmt.Sprintf("%s/", host.KeyConsensusStatePrefix))))
+	store := prefix.NewStore(runtime.KVStoreAdapter(q.storeService.OpenKVStore(ctx)), host.FullClientKey(req.ClientId, fmt.Appendf(nil, "%s/", host.KeyConsensusStatePrefix)))
 
 	pageRes, err := query.FilteredPaginate(store, req.Pagination, func(key, _ []byte, accumulate bool) (bool, error) {
 		// filter any metadata stored under consensus state key
@@ -258,6 +258,24 @@ func (q *queryServer) ClientStatus(goCtx context.Context, req *types.QueryClient
 
 	return &types.QueryClientStatusResponse{
 		Status: clientStatus.String(),
+	}, nil
+}
+
+// ClientCreator implements the Query/ClientCreator gRPC method
+func (q *queryServer) ClientCreator(goCtx context.Context, req *types.QueryClientCreatorRequest) (*types.QueryClientCreatorResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "empty request")
+	}
+
+	if err := host.ClientIdentifierValidator(req.ClientId); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	ctx := sdk.UnwrapSDKContext(goCtx)
+	creator := q.GetClientCreator(ctx, req.ClientId)
+
+	return &types.QueryClientCreatorResponse{
+		Creator: creator.String(),
 	}, nil
 }
 

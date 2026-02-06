@@ -25,13 +25,14 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/c3qtech/qadena_v3/app"
-	qadenakr "github.com/c3qtech/qadena_v3/crypto/keyring"
-	//cryptocodec "github.com/evmos/evmos/v18/crypto/codec"
-	//"github.com/evmos/evmos/v18/crypto/ethsecp256k1"
-	//legacycodec "github.com/cosmos/cosmos-sdk/codec/legacy"
-	//"github.com/evmos/evmos/v18/crypto/hd"
-	//enccodec "github.com/evmos/evmos/v18/encoding/codec"
-	//cmdcfg "github.com/c3qtech/qadena_v3/cmd/config"
+	cmdcfg "github.com/c3qtech/qadena_v3/cmd/config"
+	//	qadenakr "github.com/c3qtech/qadena_v3/crypto/keyring"
+	evmcryptocodec "github.com/cosmos/evm/crypto/codec"
+	evmeip712 "github.com/cosmos/evm/ethereum/eip712"
+
+	evmhd "github.com/cosmos/evm/crypto/hd"
+
+	enccodec "github.com/cosmos/cosmos-sdk/std"
 )
 
 // NewRootCmd creates a new root command for qadenad. It is called once in the main function.
@@ -123,11 +124,11 @@ func NewRootCmd() *cobra.Command {
 		flags.FlagKeyringBackend: "test",
 	})
 
-	//if cmdcfg.QadenaUsesEthSecP256k1 {
-	//	overwriteFlagDefaults(rootCmd, map[string]string{
-	//		flags.FlagKeyType: string(hd.EthSecp256k1.Name()),
-	//	})
-	//}
+	if cmdcfg.QadenaUsesEthSecP256k1 {
+		overwriteFlagDefaults(rootCmd, map[string]string{
+			flags.FlagKeyType: string(evmhd.EthSecp256k1.Name()),
+		})
+	}
 
 	if err := autoCliOpts.EnhanceRootCommand(rootCmd); err != nil {
 		panic(err)
@@ -152,30 +153,21 @@ func overwriteFlagDefaults(c *cobra.Command, defaults map[string]string) {
 	}
 }
 
-// RegisterLegacyAminoCodec registers Interfaces from types, crypto, and SDK std.
-func RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
-
-	//	sdk.RegisterLegacyAminoCodec(legacycodec.Cdc)
-	//	cryptocodec.RegisterCrypto(legacycodec.Cdc)
-	//  codec.RegisterEvidences(legacycodec.Cdc)
-
-	// legacycodec.Cdc.RegisterConcrete(&ethsecp256k1.PubKey{},
-	//
-	//	ethsecp256k1.PubKeyName, nil)
-	//
-	// legacycodec.Cdc.RegisterConcrete(&ethsecp256k1.PrivKey{},
-	//
-	//	ethsecp256k1.PrivKeyName, nil)
-}
-
 func ProvideClientContext(
 	appCodec codec.Codec,
 	interfaceRegistry codectypes.InterfaceRegistry,
 	txConfig client.TxConfig,
 	legacyAmino *codec.LegacyAmino,
 ) client.Context {
-	//enccodec.RegisterInterfaces(interfaceRegistry)
-	RegisterLegacyAminoCodec(legacyAmino)
+
+	if cmdcfg.QadenaUsesEthSecP256k1 {
+		evmcryptocodec.RegisterInterfaces(interfaceRegistry)
+		evmeip712.RegisterInterfaces(interfaceRegistry)
+		legacyAmino = codec.NewLegacyAmino()
+		evmcryptocodec.RegisterCrypto(legacyAmino)
+	} else {
+		enccodec.RegisterLegacyAminoCodec(legacyAmino)
+	}
 
 	clientCtx := client.Context{}.
 		WithCodec(appCodec).
@@ -185,8 +177,9 @@ func ProvideClientContext(
 		WithInput(os.Stdin).
 		WithAccountRetriever(types.AccountRetriever{}).
 		WithHomeDir(app.DefaultNodeHome).
-		WithKeyringOptions(qadenakr.Option()). // qadena
-		WithViper(app.Name)                    // env variable prefix
+		WithKeyringOptions(evmhd.EthSecp256k1Option()). // COSMOS EVM
+		WithLedgerHasProtobuf(true).                    // COSMOS EVM
+		WithViper(app.Name)                             // env variable prefix
 
 	// Read the config again to overwrite the default values with the values from the config file
 	clientCtx, _ = config.ReadFromClientConfig(clientCtx)

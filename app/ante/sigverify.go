@@ -12,7 +12,7 @@ import (
 
 	errorsmod "cosmossdk.io/errors"
 	storetypes "cosmossdk.io/store/types"
-	//"github.com/evmos/evmos/v18/crypto/ethsecp256k1"
+	"github.com/cosmos/evm/crypto/ethsecp256k1"
 )
 
 var _ authante.SignatureVerificationGasConsumer = EthSigVerificationGasConsumer
@@ -37,11 +37,11 @@ func EthSigVerificationGasConsumer(
 	pubkey := sig.PubKey
 	switch pubkey := pubkey.(type) {
 
-	/*	case *ethsecp256k1.PubKey:
+	case *ethsecp256k1.PubKey:
 		// Ethereum keys
 		meter.ConsumeGas(secp256k1VerifyCost, "ante verify: eth_secp256k1")
 		return nil
-	*/
+
 	case *ed25519.PubKey:
 		// Validator keys
 		meter.ConsumeGas(params.SigVerifyCostED25519, "ante verify: ed25519")

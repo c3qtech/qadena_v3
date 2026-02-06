@@ -14,7 +14,6 @@ replace (
 
 require (
 	cosmossdk.io/api v0.9.2
-	cosmossdk.io/client/v2 v2.0.0-beta.3
 	cosmossdk.io/core v0.11.3
 	cosmossdk.io/depinject v1.2.1
 	cosmossdk.io/errors v1.0.2
@@ -23,11 +22,11 @@ require (
 	cosmossdk.io/store v1.1.2
 	cosmossdk.io/tools/confix v0.1.2
 	cosmossdk.io/x/circuit v0.1.1
-	cosmossdk.io/x/evidence v0.1.1
-	cosmossdk.io/x/feegrant v0.1.1
+	cosmossdk.io/x/evidence v0.2.0
+	cosmossdk.io/x/feegrant v0.2.0
 	cosmossdk.io/x/nft v0.1.1
 	cosmossdk.io/x/tx v0.14.0
-	cosmossdk.io/x/upgrade v0.1.4
+	cosmossdk.io/x/upgrade v0.2.0
 	github.com/amonsat/fullname_parser v0.0.0-20180221140204-0879740fa92c
 	github.com/btcsuite/btcd/btcec/v2 v2.3.5
 	github.com/bufbuild/buf v1.34.0
@@ -64,8 +63,10 @@ require (
 )
 
 require (
+	cosmossdk.io/client/v2 v2.0.0-beta.7
 	github.com/CosmWasm/wasmd v0.55.1
-	github.com/cosmos/ibc-go/v10 v10.0.0
+	github.com/cosmos/evm v0.5.1
+	github.com/cosmos/ibc-go/v10 v10.3.1-0.20250909102629-ed3b125c7b6f
 )
 
 require (
@@ -126,6 +127,9 @@ require (
 	github.com/bombsimon/wsl/v4 v4.5.0 // indirect
 	github.com/breml/bidichk v0.3.2 // indirect
 	github.com/breml/errchkjson v0.4.0 // indirect
+	github.com/btcsuite/btcd v0.24.2 // indirect
+	github.com/btcsuite/btcd/btcutil v1.1.6 // indirect
+	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0 // indirect
 	github.com/bufbuild/protocompile v0.14.1 // indirect
 	github.com/bufbuild/protoplugin v0.0.0-20240323223605-e2735f6c31ee // indirect
 	github.com/bufbuild/protovalidate-go v0.6.2 // indirect
@@ -153,6 +157,7 @@ require (
 	github.com/cockroachdb/redact v1.1.6 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 // indirect
 	github.com/cometbft/cometbft-db v0.14.1 // indirect
+	github.com/consensys/gnark-crypto v0.18.0 // indirect
 	github.com/containerd/stargz-snapshotter/estargz v0.15.1 // indirect
 	github.com/cosmos/btcutil v1.0.5 // indirect
 	github.com/cosmos/gogogateway v1.2.0 // indirect
@@ -160,8 +165,10 @@ require (
 	github.com/cosmos/ics23/go v0.11.0 // indirect
 	github.com/cosmos/ledger-cosmos-go v0.16.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.6 // indirect
-	github.com/creachadair/atomicfile v0.3.1 // indirect
-	github.com/creachadair/tomledit v0.0.24 // indirect
+	github.com/crate-crypto/go-eth-kzg v1.3.0 // indirect
+	github.com/crate-crypto/go-ipa v0.0.0-20240724233137-53bbb0ceb27a // indirect
+	github.com/creachadair/atomicfile v0.3.7 // indirect
+	github.com/creachadair/tomledit v0.0.28 // indirect
 	github.com/curioswitch/go-reassign v0.3.0 // indirect
 	github.com/daixiang0/gci v0.13.5 // indirect
 	github.com/danieljoos/wincred v1.2.1 // indirect
@@ -183,6 +190,8 @@ require (
 	github.com/emicklei/dot v1.6.2 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.32.4 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.2.1 // indirect
+	github.com/ethereum/c-kzg-4844/v2 v2.1.0 // indirect
+	github.com/ethereum/go-verkle v0.2.2 // indirect
 	github.com/ettle/strcase v0.2.0 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/fatih/structtag v1.2.0 // indirect
@@ -240,7 +249,7 @@ require (
 	github.com/google/go-containerregistry v0.19.2 // indirect
 	github.com/google/gofuzz v1.2.0 // indirect
 	github.com/google/orderedcode v0.0.1 // indirect
-	github.com/google/pprof v0.0.0-20241210010833-40e02aabc2ad // indirect
+	github.com/google/pprof v0.0.0-20250403155104-27863c87afa6 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
@@ -378,15 +387,21 @@ require (
 	github.com/stoewer/go-strcase v1.3.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
+	github.com/supranational/blst v0.3.14 // indirect
 	github.com/tdakkota/asciicheck v0.4.1 // indirect
 	github.com/tendermint/go-amino v0.16.0 // indirect
 	github.com/tetafro/godot v1.5.0 // indirect
 	github.com/tidwall/btree v1.7.0 // indirect
+	github.com/tidwall/gjson v1.18.0 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.0 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/timakin/bodyclose v0.0.0-20241017074812-ed6a65f985e3 // indirect
 	github.com/timonwong/loggercheck v0.10.1 // indirect
 	github.com/tomarrell/wrapcheck/v2 v2.10.0 // indirect
 	github.com/tommy-muehle/go-mnd/v2 v2.5.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
+	github.com/tyler-smith/go-bip39 v1.1.0 // indirect
 	github.com/ugorji/go/codec v1.2.11 // indirect
 	github.com/ulikunitz/xz v0.5.11 // indirect
 	github.com/ultraware/funlen v0.2.0 // indirect

@@ -52,12 +52,13 @@ func (im *IBCModule) OnSendPacket(ctx sdk.Context, sourceChannel string, destina
 		return err
 	}
 
-	sender, err := sdk.AccAddressFromBech32(data.Sender)
+	addressCodec := im.keeper.GetAddressCodec()
+	sender, err := addressCodec.StringToBytes(data.Sender)
 	if err != nil {
 		return err
 	}
 
-	if !signer.Equals(sender) {
+	if !bytes.Equal(sender, signer) {
 		return errorsmod.Wrapf(ibcerrors.ErrUnauthorized, "sender %s is different from signer %s", sender, signer)
 	}
 
@@ -76,7 +77,7 @@ func (im *IBCModule) OnSendPacket(ctx sdk.Context, sourceChannel string, destina
 		return err
 	}
 
-	events.EmitTransferEvent(ctx, sender.String(), data.Receiver, data.Token, data.Memo)
+	events.EmitTransferEvent(ctx, data.Sender, data.Receiver, data.Token, data.Memo)
 
 	telemetry.ReportTransfer(payload.SourcePort, sourceChannel, payload.DestinationPort, destinationChannel, data.Token)
 
@@ -194,6 +195,6 @@ func (im *IBCModule) OnAcknowledgementPacket(ctx sdk.Context, sourceChannel stri
 
 // UnmarshalPacketData unmarshals the ICS20 packet data based on the version and encoding
 // it implements the PacketDataUnmarshaler interface
-func (*IBCModule) UnmarshalPacketData(payload channeltypesv2.Payload) (interface{}, error) {
+func (*IBCModule) UnmarshalPacketData(payload channeltypesv2.Payload) (any, error) {
 	return types.UnmarshalPacketData(payload.Value, payload.Version, payload.Encoding)
 }

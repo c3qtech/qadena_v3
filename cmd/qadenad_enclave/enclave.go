@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"crypto/tls"
 
@@ -39,7 +40,6 @@ import (
 	//  "github.com/evmos/ethermint/encoding"
 	//  "github.com/c3qtech/qadena/app"
 	cmdcfg "github.com/c3qtech/qadena_v3/cmd/config"
-	qadenakr "github.com/c3qtech/qadena_v3/crypto/keyring"
 	qadenatx "github.com/c3qtech/qadena_v3/x/qadena/client/tx"
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 	"github.com/c3qtech/qadena_v3/x/qadena/types"
@@ -82,14 +82,18 @@ import (
 
 	tmproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	amino "github.com/cosmos/cosmos-sdk/codec"
+
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
 	proto "github.com/cosmos/gogoproto/proto"
 
-	// if using EVMOS, uncomment this
-	//enccodec "github.com/evmos/evmos/v18/encoding/codec"
-	// otherwise, use this
 	enccodec "github.com/cosmos/cosmos-sdk/std"
+
+	evmcryptocodec "github.com/cosmos/evm/crypto/codec"
+	//	"github.com/cosmos/evm/crypto/ethsecp256k1"
+	//	"github.com/cosmos/evm/crypto/ethsecp256k1"
+	evmhd "github.com/cosmos/evm/crypto/hd"
+	evmeip712 "github.com/cosmos/evm/ethereum/eip712"
 
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -850,6 +854,7 @@ func (s *qadenaServer) preInitEnclave(ctx context.Context, isValidator bool, pio
 
 	if pioneerID != "" {
 		c.LoggerDebug(logger, "Importing pioneer key")
+		c.LoggerInfo(logger, "Importing pioneer key", pioneerID, pioneerArmorPrivK)
 		err = kb.ImportPrivKey(pioneerID, pioneerArmorPrivK, pioneerArmorPassPhrase)
 
 		if err != nil {
@@ -6023,6 +6028,22 @@ func panicRecoveryInterceptor(
 	return handler(ctx, req)
 }
 
+func overwriteFlagDefaults(c *cobra.Command, defaults map[string]string) {
+	set := func(s *pflag.FlagSet, key, val string) {
+		if f := s.Lookup(key); f != nil {
+			f.DefValue = val
+			_ = f.Value.Set(val)
+		}
+	}
+	for key, val := range defaults {
+		set(c.Flags(), key, val)
+		set(c.PersistentFlags(), key, val)
+	}
+	for _, c := range c.Commands() {
+		overwriteFlagDefaults(c, defaults)
+	}
+}
+
 func main() {
 	port := flag.Int("port", 50051, "The server port")
 	realEnclave := flag.Bool("realenclave", false, "Run in real enclave")
@@ -6097,11 +6118,25 @@ func main() {
 	interfaceRegistry := codectypes.NewInterfaceRegistry()
 	marshaler := amino.NewProtoCodec(interfaceRegistry)
 	txConfig := authtx.NewTxConfig(marshaler, authtx.DefaultSignModes)
-	enccodec.RegisterLegacyAminoCodec(legacyAmino)
 	enccodec.RegisterInterfaces(interfaceRegistry)
 
 	authtypes.RegisterInterfaces(interfaceRegistry)
+
 	types.RegisterInterfaces(interfaceRegistry)
+
+	if cmdcfg.QadenaUsesEthSecP256k1 {
+		c.LoggerInfo(logger, "Using EthSecP256k1")
+		evmcryptocodec.RegisterInterfaces(interfaceRegistry)
+		evmeip712.RegisterInterfaces(interfaceRegistry)
+
+		overwriteFlagDefaults(RootCmd, map[string]string{
+			flags.FlagKeyType: string(evmhd.EthSecp256k1.Name()),
+		})
+
+		evmcryptocodec.RegisterCrypto(legacyAmino)
+	} else {
+		enccodec.RegisterLegacyAminoCodec(legacyAmino)
+	}
 
 	clientCtx = client.Context{}.
 		WithCodec(marshaler).
@@ -6112,10 +6147,11 @@ func main() {
 		WithAccountRetriever(authtypes.AccountRetriever{}).
 		WithBroadcastMode(qadenaflags.BroadcastSync).
 		WithHomeDir("NO-DEFAULT-HOME").
-		WithKeyringOptions(qadenakr.Option()).
+		WithKeyringOptions(evmhd.EthSecp256k1Option()). // COSMOS EVM
+		WithLedgerHasProtobuf(true).                    // COSMOS EVM
 		WithViper(EnvPrefix)
 
-	kb := keyring.NewInMemory(clientCtx.Codec, qadenakr.Option())
+	kb := keyring.NewInMemory(clientCtx.Codec, evmhd.EthSecp256k1Option())
 
 	flags.AddTxFlagsToCmd(RootCmd)
 

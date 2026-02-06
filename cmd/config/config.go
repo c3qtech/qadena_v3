@@ -7,12 +7,14 @@ import (
 
 	"cosmossdk.io/math"
 	// evmos "github.com/evmos/evmos/v18/types"
+	"github.com/cosmos/evm/crypto/hd"
 )
 
 const (
-	QadenaUsesEthSecP256k1 = false
+	QadenaUsesEthSecP256k1 = true
 	//
 	//QadenaCoinType         = 744
+	// RAV switched to cointtype 60 for compatibility with COSMOS EVM
 	QadenaCoinType = 60
 
 	// Bech32Prefix defines the Bech32 prefix used for EthAccounts
@@ -50,9 +52,9 @@ func SetBech32Prefixes(config *sdk.Config) {
 func SetBip44CoinType(config *sdk.Config) {
 	config.SetPurpose(sdk.Purpose) // Shared
 	config.SetCoinType(QadenaCoinType)
-	//if QadenaUsesEthSecP256k1 {
-	//	config.SetFullFundraiserPath(evmos.BIP44HDPath) // nolint: staticcheck
-	//}
+	if QadenaUsesEthSecP256k1 {
+		config.SetFullFundraiserPath(hd.BIP44HDPath) // nolint: staticcheck
+	}
 }
 
 const (
