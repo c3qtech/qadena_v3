@@ -98,6 +98,7 @@ else
 		mkdir -p docs/static
         touch docs/static/openapi.yml
     fi
+    export CGO_ENABLED="1"
     go build -trimpath -ldflags "-X github.com/cosmos/cosmos-sdk/version.Version=$VERSION" -o $chain_path/qadenad -mod=vendor github.com/c3qtech/qadena_v3/cmd/qadenad
 fi
 

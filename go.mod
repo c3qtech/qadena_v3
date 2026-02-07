@@ -5,6 +5,9 @@ go 1.23.12
 // toolchain go1.23.12
 
 replace (
+	// use Cosmos geth fork
+	// branch: release/1.16
+	github.com/ethereum/go-ethereum => github.com/cosmos/go-ethereum v1.16.2-cosmos-1
 	// fix upstream GHSA-h395-qcrw-5vmq vulnerability.
 	github.com/gin-gonic/gin => github.com/gin-gonic/gin v1.7.0
 	github.com/gogo/protobuf => github.com/regen-network/protobuf v1.3.3-alpha.regen.1
@@ -39,7 +42,6 @@ require (
 	github.com/ecies/go/v2 v2.0.9
 	github.com/edgelesssys/ego v1.5.3
 	github.com/ethereum/go-ethereum v1.15.11
-	//github.com/evmos/evmos/v18 v18.0.0-00010101000000-000000000000
 	github.com/gin-gonic/gin v1.8.1
 	github.com/golang/protobuf v1.5.4
 	github.com/gorilla/mux v1.8.1
