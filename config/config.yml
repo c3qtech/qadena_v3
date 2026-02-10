@@ -67,7 +67,7 @@ build:
   main: cmd/qadenad
 
 genesis:
-  chain_id: "qadena_1000-1"
+  chain_id: "qadena_4444-1"
   app_state:
     staking:
       params:
@@ -117,6 +117,24 @@ genesis:
           permission: "Everybody"
         instantiate_default_permission: "Everybody"
       sequences: []
+    evm:
+      accounts: []
+      params:
+        access_control:
+          call:
+            access_control_list: []
+            access_type: ACCESS_TYPE_PERMISSIONLESS
+          create:
+            access_control_list: []
+            access_type: ACCESS_TYPE_PERMISSIONLESS
+        active_static_precompiles: []
+        evm_channels: []
+        evm_denom: aqdn
+        extended_denom_options:
+          extended_denom: aqdn
+        extra_eips: []
+        history_serve_window: "8192"
+  preinstalls: []
     crisis:
       constant_fee:
         amount: "1000000"

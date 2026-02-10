@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 
 	_ "cosmossdk.io/api/cosmos/tx/config/v1" // import for side-effects
 	"cosmossdk.io/core/address"
@@ -150,6 +151,7 @@ import (
 
 	// Force-load the tracer engines to trigger registration due to Go-Ethereum v1.10.15 changes
 	evmcommon "github.com/ethereum/go-ethereum/common"
+	corevm "github.com/ethereum/go-ethereum/core/vm"
 	_ "github.com/ethereum/go-ethereum/eth/tracers/js"
 	_ "github.com/ethereum/go-ethereum/eth/tracers/native"
 )
@@ -559,6 +561,15 @@ func New(
 
 	app.App = appBuilder.Build(db, traceStore, baseAppOptions...)
 
+	// Replace bank keeper's blocked addresses with full set (module accounts + EVM precompiles)
+	blockedAddrs := app.BankKeeper.GetBlockedAddresses()
+	for k := range blockedAddrs {
+		delete(blockedAddrs, k)
+	}
+	for addr := range BlockedAddresses() {
+		blockedAddrs[addr] = true
+	}
+
 	// Register non-dependency-inject modules
 	if err := app.registerNonDependencyInjectModules(appOpts, wasmOpts); err != nil {
 		return nil, err
@@ -746,18 +757,35 @@ func GetMaccPerms() map[string][]string {
 }
 
 // BlockedAddresses returns all the app's blocked account addresses.
+//
+// Note, this includes:
+//   - module accounts
+//   - Ethereum's native precompiled smart contracts
+//   - Cosmos EVM's available static precompiled contracts
 func BlockedAddresses() map[string]bool {
-	result := make(map[string]bool)
-	if len(blockAccAddrs) > 0 {
-		for _, addr := range blockAccAddrs {
-			result[addr] = true
-		}
-	} else {
-		for addr := range GetMaccPerms() {
-			result[addr] = true
-		}
+	blockedAddrs := make(map[string]bool)
+
+	maccPerms := GetMaccPerms()
+	accs := make([]string, 0, len(maccPerms))
+	for acc := range maccPerms {
+		accs = append(accs, acc)
 	}
-	return result
+	sort.Strings(accs)
+
+	for _, acc := range accs {
+		blockedAddrs[authtypes.NewModuleAddress(acc).String()] = true
+	}
+
+	blockedPrecompilesHex := evmtypes.AvailableStaticPrecompiles
+	for _, addr := range corevm.PrecompiledAddressesPrague {
+		blockedPrecompilesHex = append(blockedPrecompilesHex, addr.Hex())
+	}
+
+	for _, precompile := range blockedPrecompilesHex {
+		blockedAddrs[evmutils.Bech32StringFromHexAddress(precompile)] = true
+	}
+
+	return blockedAddrs
 }
 
 func (app *App) evmSetAnteHandler(txConfig client.TxConfig, maxGasWanted uint64) {
