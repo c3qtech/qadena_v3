@@ -15,7 +15,10 @@ import (
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
+	//	"github.com/cosmos/cosmos-sdk/runtime"
 	"github.com/cosmos/cosmos-sdk/server"
+
+	//	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
 	"github.com/cosmos/cosmos-sdk/types/tx/signing"
 	"github.com/cosmos/cosmos-sdk/x/auth/tx"
@@ -26,13 +29,21 @@ import (
 
 	"github.com/c3qtech/qadena_v3/app"
 	cmdcfg "github.com/c3qtech/qadena_v3/cmd/config"
+
+	//	txsigning "cosmossdk.io/x/tx/signing"
+
 	//	qadenakr "github.com/c3qtech/qadena_v3/crypto/keyring"
 	evmcryptocodec "github.com/cosmos/evm/crypto/codec"
 	evmeip712 "github.com/cosmos/evm/ethereum/eip712"
 
 	evmhd "github.com/cosmos/evm/crypto/hd"
-
+	//	"github.com/cosmos/gogoproto/proto"
 	enccodec "github.com/cosmos/cosmos-sdk/std"
+	//
+	// evmaddress "github.com/cosmos/evm/encoding/address"
+	//
+	//	evmerc20types "github.com/cosmos/evm/x/erc20/types"
+	//	evmtypes "github.com/cosmos/evm/x/vm/types"
 )
 
 // NewRootCmd creates a new root command for qadenad. It is called once in the main function.
@@ -111,8 +122,8 @@ func NewRootCmd() *cobra.Command {
 	// Since the IBC modules don't support dependency injection, we need to
 	// manually register the modules on the client side.
 	// This needs to be removed after IBC supports App Wiring.
-	ibcModules := app.RegisterIBCAndWASM(clientCtx.InterfaceRegistry)
-	for name, mod := range ibcModules {
+	nonDependencyInjectModules := app.RegisterNonDependencyInjectRegistryInterfaces(clientCtx.InterfaceRegistry)
+	for name, mod := range nonDependencyInjectModules {
 		moduleBasicManager[name] = module.CoreAppModuleBasicAdaptor(name, mod)
 		autoCliOpts.Modules[name] = mod
 	}

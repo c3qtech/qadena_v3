@@ -2,15 +2,18 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 
 	_ "cosmossdk.io/api/cosmos/tx/config/v1" // import for side-effects
+	"cosmossdk.io/core/address"
 	"cosmossdk.io/depinject"
 	"cosmossdk.io/log"
-	"cosmossdk.io/math"
+
+	//	"cosmossdk.io/math"
 	storetypes "cosmossdk.io/store/types"
 	_ "cosmossdk.io/x/circuit" // import for side-effects
 	circuitkeeper "cosmossdk.io/x/circuit/keeper"
@@ -68,6 +71,7 @@ import (
 	slashingkeeper "github.com/cosmos/cosmos-sdk/x/slashing/keeper"
 	_ "github.com/cosmos/cosmos-sdk/x/staking" // import for side-effects
 	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
+	"github.com/spf13/cast"
 
 	//	_ "github.com/cosmos/ibc-go/modules/capability" // import for side-effects
 	//	capabilitykeeper "github.com/cosmos/ibc-go/modules/capability/keeper"
@@ -79,6 +83,11 @@ import (
 	//ibcfeekeeper "github.com/cosmos/ibc-go/v10/modules/apps/29-fee/keeper"
 	ibctransferkeeper "github.com/cosmos/ibc-go/v10/modules/apps/transfer/keeper"
 	ibckeeper "github.com/cosmos/ibc-go/v10/modules/core/keeper"
+
+	ibctransfer "github.com/cosmos/ibc-go/v10/modules/apps/transfer"
+	ibctransfertypes "github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
+
+	ibctesting "github.com/cosmos/ibc-go/v10/testing"
 
 	nameservicemodulekeeper "github.com/c3qtech/qadena_v3/x/nameservice/keeper"
 	qadenamodulekeeper "github.com/c3qtech/qadena_v3/x/qadena/keeper"
@@ -105,19 +114,44 @@ import (
 
 	"github.com/c3qtech/qadena_v3/docs"
 
-	sdkante "github.com/cosmos/cosmos-sdk/x/auth/ante"
+	//	sdkante "github.com/cosmos/cosmos-sdk/x/auth/ante"
 	// 	qadena
-	ante "github.com/c3qtech/qadena_v3/app/ante"
+	//	ante "github.com/c3qtech/qadena_v3/app/ante"
 	post "github.com/c3qtech/qadena_v3/app/post"
 
-	cmdcfg "github.com/c3qtech/qadena_v3/cmd/config"
+	//	cmdcfg "github.com/c3qtech/qadena_v3/cmd/config"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	tmproto "github.com/cometbft/cometbft/proto/tendermint/types"
 
+	txsigning "cosmossdk.io/x/tx/signing"
+
+	sdkmempool "github.com/cosmos/cosmos-sdk/types/mempool"
+
+	// EVM
+	evmante "github.com/cosmos/evm/ante"
+	evmantetypes "github.com/cosmos/evm/ante/types"
 	evmcryptocodec "github.com/cosmos/evm/crypto/codec"
+	evmaddress "github.com/cosmos/evm/encoding/address"
 	evmeip712 "github.com/cosmos/evm/ethereum/eip712"
+	evmmempool "github.com/cosmos/evm/mempool"
+	evmsrvflags "github.com/cosmos/evm/server/flags"
+	evmutils "github.com/cosmos/evm/utils"
+	evmerc20keeper "github.com/cosmos/evm/x/erc20/keeper"
+	evmerc20types "github.com/cosmos/evm/x/erc20/types"
+	evmfeemarketkeeper "github.com/cosmos/evm/x/feemarket/keeper"
+	evmibccallbackskeeper "github.com/cosmos/evm/x/ibc/callbacks/keeper"
+	evmibctransfer "github.com/cosmos/evm/x/ibc/transfer"
+	evmibctransferkeeper "github.com/cosmos/evm/x/ibc/transfer/keeper"
+	evmprecisebankkeeper "github.com/cosmos/evm/x/precisebank/keeper"
+	evmkeeper "github.com/cosmos/evm/x/vm/keeper"
+	evmtypes "github.com/cosmos/evm/x/vm/types"
+
+	// Force-load the tracer engines to trigger registration due to Go-Ethereum v1.10.15 changes
+	evmcommon "github.com/ethereum/go-ethereum/common"
+	_ "github.com/ethereum/go-ethereum/eth/tracers/js"
+	_ "github.com/ethereum/go-ethereum/eth/tracers/native"
 )
 
 const (
@@ -133,6 +167,7 @@ var (
 var (
 	_ runtime.AppI            = (*App)(nil)
 	_ servertypes.Application = (*App)(nil)
+	_ ibctesting.TestingApp   = (*App)(nil)
 )
 
 // App extends an ABCI application, but with most of its parameters exported.
@@ -145,6 +180,8 @@ type App struct {
 	txConfig          client.TxConfig
 	nodeConfig        wasmtypes.NodeConfig
 	interfaceRegistry codectypes.InterfaceRegistry
+
+	clientCtx client.Context
 
 	// keepers
 	AccountKeeper         authkeeper.AccountKeeper
@@ -192,14 +229,31 @@ type App struct {
 	ProtocolPoolKeeper protocolpoolkeeper.Keeper
 	EpochsKeeper       epochskeeper.Keeper
 
+	// evm
+	EVMPendingTxListeners []evmante.PendingTxListener
+	EVMTransferKeeper     evmibctransferkeeper.Keeper
+	EVMIBCCallbackKeeper  evmibccallbackskeeper.ContractKeeper
+
+	// Cosmos EVM keepers
+	FeeMarketKeeper   evmfeemarketkeeper.Keeper
+	EVMKeeper         *evmkeeper.Keeper
+	Erc20Keeper       evmerc20keeper.Keeper
+	PreciseBankKeeper evmprecisebankkeeper.Keeper
+	EVMMempool        *evmmempool.ExperimentalEVMMempool
+	EVMTransientKeys  map[string]*storetypes.TransientStoreKey
+	EVMKeys           map[string]*storetypes.KVStoreKey
+
 	// simulation manager
 	sm *module.SimulationManager
 }
 
 func init() {
 
-	// set power reduction
-	sdk.DefaultPowerReduction = math.NewIntFromUint64(1000000000000000000)
+	// set power reduction (replaced this with evmutils.AttoPowerReduction, which is the same anyway)
+	//sdk.DefaultPowerReduction = math.NewIntFromUint64(1000000000000000000)
+
+	// manually update the power reduction by replacing micro (u) -> atto (a) evmos
+	sdk.DefaultPowerReduction = evmutils.AttoPowerReduction
 
 	qadenaHome := os.Getenv("QADENAHOME")
 	if qadenaHome != "" {
@@ -213,6 +267,11 @@ func init() {
 	}
 
 	DefaultNodeHome = filepath.Join(userHomeDir, Name)
+}
+
+// GetTxConfig implements the TestingApp interface.
+func (app *App) GetTxConfig() client.TxConfig {
+	return app.txConfig
 }
 
 // getGovProposalHandlers return the chain proposal handlers.
@@ -237,14 +296,41 @@ func AppConfig() depinject.Config {
 		depinject.Supply(
 			// supply custom module basics
 			map[string]module.AppModuleBasic{
-				genutiltypes.ModuleName: genutil.NewAppModuleBasic(genutiltypes.DefaultMessageValidator),
-				govtypes.ModuleName:     gov.NewAppModuleBasic(getGovProposalHandlers()),
+				genutiltypes.ModuleName:     genutil.NewAppModuleBasic(genutiltypes.DefaultMessageValidator),
+				govtypes.ModuleName:         gov.NewAppModuleBasic(getGovProposalHandlers()),
+				ibctransfertypes.ModuleName: evmibctransfer.AppModuleBasic{AppModuleBasic: &ibctransfer.AppModuleBasic{}},
+
 				// this line is used by starport scaffolding # stargate/appConfig/moduleBasic
 			},
+
+			// Cosmos EVM: supply address codec factories so ProvideAddressCodec
+			// uses EVM-compatible codecs instead of the default bech32 ones.
+			func() address.Codec {
+				return evmaddress.NewEvmCodec(sdk.GetConfig().GetBech32AccountAddrPrefix())
+			},
+			func() runtime.ValidatorAddressCodec {
+				return runtime.ValidatorAddressCodec(evmaddress.NewEvmCodec(sdk.GetConfig().GetBech32ValidatorAddrPrefix()))
+			},
+			func() runtime.ConsensusAddressCodec {
+				return runtime.ConsensusAddressCodec(evmaddress.NewEvmCodec(sdk.GetConfig().GetBech32ConsensusAddrPrefix()))
+			},
+		),
+		depinject.Provide(
+			ProvideEVMCustomGetSigner,
+			//			ProvideERC20CustomGetSigner,
 		),
 	)
 }
 
+func ProvideEVMCustomGetSigner() txsigning.CustomGetSigner {
+	return evmtypes.MsgEthereumTxCustomGetSigner
+}
+
+func ProvideERC20CustomGetSigner() txsigning.CustomGetSigner {
+	return evmerc20types.MsgConvertERC20CustomGetSigner
+}
+
+/*
 func newAnteHandler(app *App) (sdk.AnteHandler, error) {
 	if app.BankKeeper == nil {
 		return nil, fmt.Errorf("both AccountKeeper and BankKeeper are required")
@@ -283,6 +369,7 @@ func newAnteHandler(app *App) (sdk.AnteHandler, error) {
 
 	return anteHandler, nil
 }
+*/
 
 const UpgradeName = "v050-to-v053"
 
@@ -318,7 +405,7 @@ func newPostHandler(app *App) (sdk.PostHandler, error) {
 		},
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create ante handler: %w", err)
+		return nil, fmt.Errorf("failed to create post handler: %w", err)
 	}
 
 	return postHandler, nil
@@ -435,7 +522,6 @@ func New(
 	evmcryptocodec.RegisterInterfaces(app.interfaceRegistry)
 	evmeip712.RegisterInterfaces(app.interfaceRegistry)
 
-	//enccodec.RegisterInterfaces(app.interfaceRegistry)
 	app.QadenaKeeper.LoadNodeParams(DefaultNodeHome)
 	//	app.App.BaseApp.SetQadenaKeeper(app.QadenaKeeper)
 
@@ -473,8 +559,8 @@ func New(
 
 	app.App = appBuilder.Build(db, traceStore, baseAppOptions...)
 
-	// Register legacy modules
-	if err := app.registerIBCAndWASMModules(appOpts, wasmOpts); err != nil {
+	// Register non-dependency-inject modules
+	if err := app.registerNonDependencyInjectModules(appOpts, wasmOpts); err != nil {
 		return nil, err
 	}
 
@@ -509,12 +595,23 @@ func New(
 
 	app.RegisterUpgradeHandlers()
 
-	// qadena
-	anteHandler, err := newAnteHandler(app)
-	if err != nil {
-		panic(err)
+	/*
+		// qadena
+		anteHandler, err := newAnteHandler(app)
+		if err != nil {
+			panic(err)
+		}
+		app.SetAnteHandler(anteHandler)
+	*/
+	maxGasWanted := cast.ToUint64(appOpts.Get(evmsrvflags.EVMMaxTxGasWanted))
+
+	app.evmSetAnteHandler(app.txConfig, maxGasWanted)
+
+	// set the EVM priority nonce mempool
+	// if you wish to use the noop mempool, remove this codeblock
+	if err := app.configureEVMMempool(appOpts, logger); err != nil {
+		panic(fmt.Sprintf("failed to configure EVM mempool: %s", err.Error()))
 	}
-	app.SetAnteHandler(anteHandler)
 
 	// must be before Loading version
 	// requires the snapshot store to be created and registered as a BaseAppOption
@@ -661,4 +758,69 @@ func BlockedAddresses() map[string]bool {
 		}
 	}
 	return result
+}
+
+func (app *App) evmSetAnteHandler(txConfig client.TxConfig, maxGasWanted uint64) {
+	options := evmante.HandlerOptions{
+		Cdc:                    app.appCodec,
+		AccountKeeper:          app.AccountKeeper,
+		BankKeeper:             app.BankKeeper,
+		ExtensionOptionChecker: evmantetypes.HasDynamicFeeExtensionOption,
+		EvmKeeper:              app.EVMKeeper,
+		FeegrantKeeper:         app.FeeGrantKeeper,
+		IBCKeeper:              app.IBCKeeper,
+		FeeMarketKeeper:        app.FeeMarketKeeper,
+		SignModeHandler:        txConfig.SignModeHandler(),
+		SigGasConsumer:         evmante.SigVerificationGasConsumer,
+		MaxTxGasWanted:         maxGasWanted,
+		DynamicFeeChecker:      true,
+		PendingTxListener:      app.onPendingTx,
+	}
+	if err := options.Validate(); err != nil {
+		panic(err)
+	}
+
+	app.SetAnteHandler(evmante.NewAnteHandler(options))
+}
+
+func (app *App) onPendingTx(hash evmcommon.Hash) {
+	for _, listener := range app.EVMPendingTxListeners {
+		listener(hash)
+	}
+}
+
+// RegisterPendingTxListener is used by json-rpc server to listen to pending transactions callback.
+func (app *App) RegisterPendingTxListener(listener func(evmcommon.Hash)) {
+	app.EVMPendingTxListeners = append(app.EVMPendingTxListeners, listener)
+}
+
+func (app *App) GetAnteHandler() sdk.AnteHandler {
+	return app.BaseApp.AnteHandler()
+}
+
+func (app *App) SetClientCtx(clientCtx client.Context) { // TODO:VLAD - Remove this if possible
+	app.clientCtx = clientCtx
+}
+
+// Close unsubscribes from the CometBFT event bus (if set) and closes the mempool and underlying BaseApp.
+func (app *App) Close() error {
+	var err error
+	if m, ok := app.GetMempool().(*evmmempool.ExperimentalEVMMempool); ok {
+		app.Logger().Info("Shutting down mempool")
+		err = m.Close()
+	}
+
+	msg := "Application gracefully shutdown"
+	err = errors.Join(err, app.BaseApp.Close())
+	if err == nil {
+		app.Logger().Info(msg)
+	} else {
+		app.Logger().Error(msg, "error", err)
+	}
+
+	return err
+}
+
+func (app *App) GetMempool() sdkmempool.ExtMempool {
+	return app.EVMMempool
 }

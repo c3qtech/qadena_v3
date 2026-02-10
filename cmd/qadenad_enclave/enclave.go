@@ -854,7 +854,8 @@ func (s *qadenaServer) preInitEnclave(ctx context.Context, isValidator bool, pio
 
 	if pioneerID != "" {
 		c.LoggerDebug(logger, "Importing pioneer key")
-		c.LoggerInfo(logger, "Importing pioneer key", pioneerID, pioneerArmorPrivK)
+		//
+		// 		c.LoggerInfo(logger, "Importing pioneer key", pioneerID, pioneerArmorPrivK)
 		err = kb.ImportPrivKey(pioneerID, pioneerArmorPrivK, pioneerArmorPassPhrase)
 
 		if err != nil {

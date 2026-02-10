@@ -46,6 +46,7 @@ import (
 	paramstypes "github.com/cosmos/cosmos-sdk/x/params/types"
 	slashingtypes "github.com/cosmos/cosmos-sdk/x/slashing/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
+
 	//	capabilitytypes "github.com/cosmos/ibc-go/modules/capability/types"
 	icatypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/types"
 	// ibcfeetypes "github.com/cosmos/ibc-go/v10/modules/apps/29-fee/types"
@@ -76,6 +77,11 @@ import (
 	epochsmodulev1 "cosmossdk.io/api/cosmos/epochs/module/v1"
 	_ "github.com/cosmos/cosmos-sdk/x/epochs" // import for side-effects
 	epochstypes "github.com/cosmos/cosmos-sdk/x/epochs/types"
+
+	evmerc20types "github.com/cosmos/evm/x/erc20/types"
+	evmfeemarkettypes "github.com/cosmos/evm/x/feemarket/types"
+	evmprecisebanktypes "github.com/cosmos/evm/x/precisebank/types"
+	evmtypes "github.com/cosmos/evm/x/vm/types"
 	// this line is used by starport scaffolding # stargate/app/moduleImport
 )
 
@@ -99,11 +105,22 @@ var (
 		minttypes.ModuleName,
 		crisistypes.ModuleName,
 		ibcexported.ModuleName,
+
+		// Cosmos EVM modules
+		//
+		// NOTE: feemarket module needs to be initialized before genutil module:
+		// gentx transactions use MinGasPriceDecorator.AnteHandle
+		evmtypes.ModuleName,
+		evmfeemarkettypes.ModuleName,
+		evmerc20types.ModuleName,
+		evmprecisebanktypes.ModuleName,
+
 		genutiltypes.ModuleName,
 		evidencetypes.ModuleName,
 		authz.ModuleName,
 		ibctransfertypes.ModuleName,
 		icatypes.ModuleName,
+
 		//		ibcfeetypes.ModuleName,
 		feegrant.ModuleName,
 		paramstypes.ModuleName,
@@ -137,6 +154,16 @@ var (
 		minttypes.ModuleName,
 		crisistypes.ModuleName,
 		ibcexported.ModuleName,
+
+		// Cosmos EVM modules
+		//
+		// NOTE: feemarket module needs to be initialized before genutil module:
+		// gentx transactions use MinGasPriceDecorator.AnteHandle
+		evmtypes.ModuleName,
+		evmfeemarkettypes.ModuleName,
+		evmerc20types.ModuleName,
+		evmprecisebanktypes.ModuleName,
+
 		genutiltypes.ModuleName,
 		evidencetypes.ModuleName,
 		authz.ModuleName,
@@ -179,8 +206,15 @@ var (
 		// ibc modules
 		//		capabilitytypes.ModuleName,
 		ibcexported.ModuleName,
+
 		ibctransfertypes.ModuleName,
 		icatypes.ModuleName,
+
+		// Cosmos EVM BeginBlockers
+		evmerc20types.ModuleName, evmfeemarkettypes.ModuleName,
+		evmtypes.ModuleName, // NOTE: EVM BeginBlocker must come after FeeMarket BeginBlocker
+		evmprecisebanktypes.ModuleName,
+
 		//		ibcfeetypes.ModuleName,
 		// chain modules
 		qadenamoduletypes.ModuleName,
@@ -205,6 +239,13 @@ var (
 		ibctransfertypes.ModuleName,
 		//		capabilitytypes.ModuleName,
 		icatypes.ModuleName,
+
+		// Cosmos EVM EndBlockers
+		evmtypes.ModuleName, // NOTE: EVM BeginBlocker must come after FeeMarket BeginBlocker
+		evmerc20types.ModuleName,
+		evmfeemarkettypes.ModuleName,
+		evmprecisebanktypes.ModuleName,
+
 		//		ibcfeetypes.ModuleName,
 		// chain modules
 		qadenamoduletypes.ModuleName,
@@ -219,6 +260,8 @@ var (
 	preBlockers = []string{
 		upgradetypes.ModuleName,
 		authtypes.ModuleName,
+		evmtypes.ModuleName,
+
 		// this line is used by starport scaffolding # stargate/app/preBlockers
 	}
 
@@ -242,6 +285,12 @@ var (
 		// sdk 53.5
 		{Account: protocolpooltypes.ModuleName},
 		{Account: protocolpooltypes.ProtocolPoolEscrowAccount},
+
+		// Cosmos EVM modules
+		{Account: evmtypes.ModuleName, Permissions: []string{authtypes.Minter, authtypes.Burner}},
+		{Account: evmfeemarkettypes.ModuleName, Permissions: nil},
+		{Account: evmerc20types.ModuleName, Permissions: []string{authtypes.Minter, authtypes.Burner}},
+		{Account: evmprecisebanktypes.ModuleName, Permissions: []string{authtypes.Minter, authtypes.Burner}},
 
 		// this line is used by starport scaffolding # stargate/app/maccPerms
 	}

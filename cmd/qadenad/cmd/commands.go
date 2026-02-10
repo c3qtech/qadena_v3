@@ -8,6 +8,7 @@ import (
 	confixcmd "cosmossdk.io/tools/confix/cmd"
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/cosmos-sdk/client"
+	//	"github.com/cosmos/cosmos-sdk/version"
 
 	//	"github.com/cosmos/cosmos-sdk/client/debug"
 	"github.com/cosmos/cosmos-sdk/client/flags"
@@ -31,25 +32,80 @@ import (
 	evmcosmoscmd "github.com/cosmos/evm/client"
 	evmdebug "github.com/cosmos/evm/client/debug"
 
-	evmcosmosserverconfig "github.com/cosmos/evm/server/config"
-	evmsrvflags "github.com/cosmos/evm/server/flags"
+	evmserver "github.com/cosmos/evm/server"
+	//	evmcosmosserverconfig "github.com/cosmos/evm/server/config"
+	//	evmsrvflags "github.com/cosmos/evm/server/flags"
+	// cmtcmd "github.com/cometbft/cometbft/cmd/cometbft/commands"
+	// sdkserver "github.com/cosmos/cosmos-sdk/server"
+	// "github.com/cosmos/cosmos-sdk/server/types"
 )
+
+/*
+// CLONE ALERT:  this was copied from sdkserver.AddCommands, but then modified to use evmserver.StartCmd
+func evmAddCommands(rootCmd *cobra.Command, defaultNodeHome string, appCreator evmserver.AppCreator, appExport types.AppExporter, addStartFlags types.ModuleInitFlags) {
+	cometCmd := &cobra.Command{
+		Use:     "comet",
+		Aliases: []string{"cometbft", "tendermint"},
+		Short:   "CometBFT subcommands",
+	}
+
+	cometCmd.AddCommand(
+		sdkserver.ShowNodeIDCmd(),
+		sdkserver.ShowValidatorCmd(),
+		sdkserver.ShowAddressCmd(),
+		sdkserver.VersionCmd(),
+		cmtcmd.ResetAllCmd,
+		cmtcmd.ResetStateCmd,
+		sdkserver.BootstrapStateCmd(appCreator),
+	)
+
+	// this is where the EVM-specific stuff is done
+	startCmd := evmserver.StartCmd(evmserver.NewDefaultStartOptions(newApp, defaultNodeHome))
+	addStartFlags(startCmd)
+
+	rootCmd.AddCommand(
+		startCmd,
+		cometCmd,
+		sdkserver.ExportCmd(appExport, defaultNodeHome),
+		version.NewVersionCommand(),
+		sdkserver.NewRollbackCmd(appCreator, defaultNodeHome),
+		sdkserver.ModuleHashByHeightQuery(appCreator),
+	)
+}
+*/
 
 func initRootCmd(
 	rootCmd *cobra.Command,
 	txConfig client.TxConfig,
 	basicManager module.BasicManager,
 ) {
+	sdkAppCreator := func(l log.Logger, d dbm.DB, w io.Writer, ao servertypes.AppOptions) servertypes.Application {
+		return newApp(l, d, w, ao)
+	}
+
 	rootCmd.AddCommand(
 		genutilcli.InitCmd(basicManager, app.DefaultNodeHome),
 		evmdebug.Cmd(), // EVM
 		//		debug.Cmd(), -- replaced by above
 		confixcmd.ConfigCommand(),
-		pruning.Cmd(newApp, app.DefaultNodeHome),
-		snapshot.Cmd(newApp),
+		pruning.Cmd(sdkAppCreator, app.DefaultNodeHome),
+		snapshot.Cmd(sdkAppCreator),
 	)
 
-	server.AddCommands(rootCmd, app.DefaultNodeHome, newApp, appExport, addModuleInitFlags)
+	//	evmAddCommands(rootCmd, app.DefaultNodeHome, newApp, appExport, addModuleInitFlags)
+
+	// add Cosmos EVM' flavored TM commands to start server, etc.
+	evmserver.AddCommands(
+		rootCmd,
+		evmserver.NewDefaultStartOptions(newApp, app.DefaultNodeHome),
+		appExport,
+		addModuleInitFlags,
+	)
+
+	// add Cosmos EVM key commands
+	rootCmd.AddCommand(
+		evmcosmoscmd.KeyCommands(app.DefaultNodeHome, true),
+	)
 
 	// add keybase, auxiliary RPC, query, genesis, and tx child commands
 	rootCmd.AddCommand(
@@ -75,9 +131,9 @@ func addModuleInitFlags(startCmd *cobra.Command) {
 	startCmd.Flags().StringVar(&c.EnclaveSignerID, "enclave-signer-id", "", "signer-id of enclave")
 	startCmd.Flags().StringVar(&c.EnclaveUniqueID, "enclave-unique-id", "", "unique-id of enclave")
 
-	addEVMModuleInitFlags(startCmd)
 }
 
+/*
 func addEVMModuleInitFlags(startCmd *cobra.Command) {
 	startCmd.Flags().Bool(evmsrvflags.JSONRPCEnable, evmcosmosserverconfig.DefaultJSONRPCEnable, "Define if the JSON-RPC server should be enabled")
 	startCmd.Flags().StringSlice(evmsrvflags.JSONRPCAPI, evmcosmosserverconfig.GetDefaultAPINamespaces(), "Defines a list of JSON-RPC namespaces that should be enabled")
@@ -119,6 +175,7 @@ func addEVMModuleInitFlags(startCmd *cobra.Command) {
 	startCmd.Flags().String(evmsrvflags.TLSCertPath, "", "the cert.pem file path for the server TLS configuration")
 	startCmd.Flags().String(evmsrvflags.TLSKeyPath, "", "the key.pem file path for the server TLS configuration")
 }
+*/
 
 // genesisCommand builds genesis-related `qadenad genesis` command. Users may provide application specific commands as a parameter
 func genesisCommand(txConfig client.TxConfig, basicManager module.BasicManager, cmds ...*cobra.Command) *cobra.Command {
@@ -186,7 +243,7 @@ func newApp(
 	db dbm.DB,
 	traceStore io.Writer,
 	appOpts servertypes.AppOptions,
-) servertypes.Application {
+) evmserver.Application {
 	baseappOptions := server.DefaultBaseappOptions(appOpts)
 
 	app, err := app.New(
