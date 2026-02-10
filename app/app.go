@@ -570,6 +570,14 @@ func New(
 		blockedAddrs[addr] = true
 	}
 
+	/*
+		newBlockedAddrs := app.BankKeeper.GetBlockedAddresses()
+		for addr := range newBlockedAddrs {
+			// log it
+			app.Logger().Info("blocked address", "address", addr)
+		}
+	*/
+
 	// Register non-dependency-inject modules
 	if err := app.registerNonDependencyInjectModules(appOpts, wasmOpts); err != nil {
 		return nil, err

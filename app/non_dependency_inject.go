@@ -222,7 +222,12 @@ func (app *App) registerNonDependencyInjectModules(appOpts servertypes.AppOption
 		if len(chainIDParts) != 2 {
 			return errors.New("invalid chain-id format")
 		}
-		evmChainID = cast.ToUint64(chainIDParts[1])
+		// need to split the "4444-1" into "4444" and "1"
+		chainIDParts = strings.Split(chainIDParts[1], "-")
+		if len(chainIDParts) != 2 {
+			return errors.New("invalid chain-id format")
+		}
+		evmChainID = cast.ToUint64(chainIDParts[0])
 	}
 	// log it
 	app.Logger().Info("using evm chain-id", "chain-id", evmChainID)
