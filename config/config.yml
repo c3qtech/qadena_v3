@@ -62,7 +62,7 @@ validators:
     priv_validator_laddr: "tcp://0.0.0.0:26659"
       
   client:
-    chain-id: "qadena_1000-1"
+    chain-id: "qadena_4444-1"
 build:
   main: cmd/qadenad
 
@@ -134,7 +134,7 @@ genesis:
           extended_denom: aqdn
         extra_eips: []
         history_serve_window: "8192"
-  preinstalls: []
+      preinstalls: []
     crisis:
       constant_fee:
         amount: "1000000"
