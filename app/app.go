@@ -836,14 +836,16 @@ func (app *App) GetAnteHandler() sdk.AnteHandler {
 
 func (app *App) SetClientCtx(clientCtx client.Context) { // TODO:VLAD - Remove this if possible
 	app.clientCtx = clientCtx
+
 }
 
 // Close unsubscribes from the CometBFT event bus (if set) and closes the mempool and underlying BaseApp.
 func (app *App) Close() error {
 	var err error
-	if m, ok := app.GetMempool().(*evmmempool.ExperimentalEVMMempool); ok {
+
+	if app.EVMMempool != nil {
 		app.Logger().Info("Shutting down mempool")
-		err = m.Close()
+		err = app.EVMMempool.Close()
 	}
 
 	msg := "Application gracefully shutdown"

@@ -58,8 +58,9 @@ import (
 
 	ibcapi "github.com/cosmos/ibc-go/v10/modules/core/api"
 
-	evmencoding "github.com/cosmos/evm/encoding"
+	//	evmencoding "github.com/cosmos/evm/encoding"
 	evmaddress "github.com/cosmos/evm/encoding/address"
+	"github.com/cosmos/evm/ethereum/eip712"
 	evmprecompiletypes "github.com/cosmos/evm/precompiles/types"
 	evmsrvflags "github.com/cosmos/evm/server/flags"
 	evmerc20 "github.com/cosmos/evm/x/erc20"
@@ -231,19 +232,8 @@ func (app *App) registerNonDependencyInjectModules(appOpts servertypes.AppOption
 	}
 	// log it
 	app.Logger().Info("using evm chain-id", "chain-id", evmChainID)
-	encodingConfig := evmencoding.MakeConfig(evmChainID)
-
-	appCodec := encodingConfig.Codec
-	legacyAmino := encodingConfig.Amino
-	interfaceRegistry := encodingConfig.InterfaceRegistry
-	txConfig := encodingConfig.TxConfig
-
-	app.BaseApp.SetTxDecoder(txConfig.TxDecoder())
-	app.BaseApp.SetTxEncoder(txConfig.TxEncoder())
-
-	_ = appCodec
-	_ = legacyAmino
-	_ = interfaceRegistry
+	//	_ := evmencoding.MakeConfig(evmChainID)
+	eip712.SetEncodingConfig(app.legacyAmino, app.interfaceRegistry, evmChainID)
 
 	// EVM TODO, check what was added by evmencoding and check to make sure it's included in the "app." versions
 	// EVM TODO, check what the effect of these are and do them for Qadena
@@ -304,13 +294,13 @@ func (app *App) registerNonDependencyInjectModules(appOpts servertypes.AppOption
 			app.IBCKeeper.ChannelKeeper,
 			*app.GovKeeper,
 			app.SlashingKeeper,
-			appCodec,
+			app.appCodec,
 		),
 	)
 
 	app.Erc20Keeper = evmerc20keeper.NewKeeper(
 		app.EVMKeys[evmerc20types.StoreKey],
-		appCodec,
+		app.appCodec,
 		authtypes.NewModuleAddress(govtypes.ModuleName),
 		app.AccountKeeper,
 		app.PreciseBankKeeper,
@@ -325,8 +315,8 @@ func (app *App) registerNonDependencyInjectModules(appOpts servertypes.AppOption
 	authAddr := authtypes.NewModuleAddress(govtypes.ModuleName).String()
 
 	app.EVMTransferKeeper = evmibctransferkeeper.NewKeeper(
-		appCodec,
-		runtime.NewKVStoreService(app.EVMKeys[ibctransfertypes.StoreKey]),
+		app.appCodec,
+		runtime.NewKVStoreService(app.GetKey(ibctransfertypes.StoreKey)),
 		app.IBCKeeper.ChannelKeeper,
 		app.IBCKeeper.ChannelKeeper,
 		app.MsgServiceRouter(),
