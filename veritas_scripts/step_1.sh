@@ -135,7 +135,7 @@ echo "-------------------------"
 echo "Setting up $treasuryname"
 echo "-------------------------"
 $qadenaproviderscripts/setup_treasury.sh --treasury-name $treasuryname --treasury-mnemonic $treasurymnemonic
-c
+
 echo "Send this information to QFI"
 echo "$treasuryname Qadena address:  $(qadenad_alias keys show $treasuryname --address)"
 
