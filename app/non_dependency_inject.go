@@ -284,7 +284,12 @@ func (app *App) registerNonDependencyInjectModules(appOpts servertypes.AppOption
 		&app.Erc20Keeper,
 		evmChainID,
 		tracer,
-	).WithStaticPrecompiles(
+	).WithDefaultEvmCoinInfo(evmtypes.EvmCoinInfo{
+		Denom:         "aqdn",
+		ExtendedDenom: "aqdn",
+		DisplayDenom:  "qdn",
+		Decimals:      evmtypes.EighteenDecimals.Uint32(),
+	}).WithStaticPrecompiles(
 		evmprecompiletypes.DefaultStaticPrecompiles(
 			*app.StakingKeeper,
 			app.DistrKeeper,

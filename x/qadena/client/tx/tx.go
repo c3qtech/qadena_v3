@@ -37,6 +37,9 @@ import (
 	"github.com/cosmos/cosmos-sdk/client/flags"
 
 	sdkcryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
+
+	sdkmath "cosmossdk.io/math"
+	feemarketypes "github.com/cosmos/evm/x/feemarket/types"
 )
 
 // QueryTxByHashGRPC queries for a single transaction by hash using gRPC instead of CometBFT RPC.
@@ -198,6 +201,33 @@ func waitForSequenceChange(clientCtx client.Context, flagSet *pflag.FlagSet, old
 	return true
 }
 
+// queryMinGasPrice queries the feemarket module for the current MinGasPrice.
+// Returns the price as a string with denom (e.g. "600000000aqdn"), or fallback on error.
+func queryMinGasPrice(clientCtx client.Context, fallback string) string {
+	fmClient := feemarketypes.NewQueryClient(clientCtx)
+	res, err := fmClient.Params(context.Background(), &feemarketypes.QueryParamsRequest{})
+	if err != nil {
+		return fallback
+	}
+
+	minGasPrice := res.Params.MinGasPrice
+	if minGasPrice.IsNil() || minGasPrice.IsZero() {
+		return fallback
+	}
+
+	// Also query base fee and use the higher of the two
+	baseFeeRes, err := fmClient.BaseFee(context.Background(), &feemarketypes.QueryBaseFeeRequest{})
+	if err == nil && baseFeeRes.BaseFee != nil && !baseFeeRes.BaseFee.IsNil() {
+		if baseFeeRes.BaseFee.GT(minGasPrice) {
+			minGasPrice = *baseFeeRes.BaseFee
+		}
+	}
+
+	// Add 10% buffer to avoid race with rising base fee
+	buffered := minGasPrice.Mul(sdkmath.LegacyNewDecWithPrec(11, 1)) // 1.1x
+	return buffered.TruncateInt().String() + "aqdn"
+}
+
 func GenerateOrBroadcastTxCLISync(clientCtx client.Context, flagSet *pflag.FlagSet, op string, msgs ...sdk.Msg) (error, *sdk.TxResponse) {
 	// array of timeouts, exponentially increasing
 	normalTimeouts := []time.Duration{
@@ -237,7 +267,11 @@ func GenerateOrBroadcastTxCLISync(clientCtx client.Context, flagSet *pflag.FlagS
 		fmt.Printf("%v | flags.FlagGasPrices %s\n", time.Now().Format("2006-01-02 15:04:05"), gasPrice)
 	}
 	if gasPrice == "" {
-		flagSet.Set(flags.FlagGasPrices, "500000000aqdn")
+		queried := queryMinGasPrice(clientCtx, "600000000aqdn")
+		if c.Debug && c.DebugFull {
+			fmt.Printf("%v | queried gas price: %s\n", time.Now().Format("2006-01-02 15:04:05"), queried)
+		}
+		flagSet.Set(flags.FlagGasPrices, queried)
 	}
 
 	flagSet.Set(flags.FlagGas, "auto")

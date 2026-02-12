@@ -3659,7 +3659,7 @@ func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*
 
 	s.setPublicKeyNoNotify(*in)
 	p, _ := s.getPublicKey(in.PubKID, in.PubKType)
-	c.LoggerDebug(logger, "get public key"+p)
+	c.LoggerDebug(logger, "get public key "+p)
 
 	owners := make([]string, 0)
 	var myShare string

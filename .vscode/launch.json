@@ -89,7 +89,7 @@
             "request": "launch",
             "mode": "debug",
             "program": "${workspaceFolder}/cmd/qadenad",
-            "args": ["tx", "qadena", "create-wallet", "testwallet2", "pioneer1", "sec-create-wallet-sponsor", "--account-mnemonic", "sort aspect economy pluck decrease turn slam nasty pull void deliver grit maximum tornado stove track fault loyal imitate plunge quantum boil want depend", "--yes"]
+            "args": ["tx", "qadena", "create-wallet", "testwallet2", "pioneer1", "create-wallet-sponsor", "--account-mnemonic", "sort aspect economy pluck decrease turn slam nasty pull void deliver grit maximum tornado stove track fault loyal imitate plunge quantum boil want depend", "--yes"]
         },
         {
             "name": "create_wallet2",

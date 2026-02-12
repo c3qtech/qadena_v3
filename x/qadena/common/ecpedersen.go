@@ -15,6 +15,9 @@ import (
 	"fmt"
 
 	ecies "github.com/ecies/go/v2"
+
+	cmdcfg "github.com/c3qtech/qadena_v3/cmd/config"
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
 
 //// Elliptic Curve needed for Pedersen commitments
@@ -189,14 +192,21 @@ func (p *ECPoint) B64Address() string {
 }
 
 func (p *ECPoint) Bech32Address() string {
-	// First get the compressed public key bytes
-	pubKey := elliptic.MarshalCompressed(ECPedersen.Curve, p.X, p.Y)
+	var addressBytes []byte
 
-	// Hash the public key using RIPEMD160(SHA256(pubKey))
-	sha := sha256.Sum256(pubKey)
-	hasher := ripemd160.New()
-	hasher.Write(sha[:])
-	addressBytes := hasher.Sum(nil)
+	if cmdcfg.QadenaUsesEthSecP256k1 {
+		// Ethereum-style: Keccak256 of uncompressed pubkey (without 0x04 prefix), last 20 bytes
+		uncompressed := elliptic.Marshal(ECPedersen.Curve, p.X, p.Y)
+		hash := ethcrypto.Keccak256(uncompressed[1:]) // skip 0x04 prefix
+		addressBytes = hash[len(hash)-20:]
+	} else {
+		// Cosmos-style: RIPEMD160(SHA256(compressedPubKey))
+		pubKey := elliptic.MarshalCompressed(ECPedersen.Curve, p.X, p.Y)
+		sha := sha256.Sum256(pubKey)
+		hasher := ripemd160.New()
+		hasher.Write(sha[:])
+		addressBytes = hasher.Sum(nil)
+	}
 
 	// Convert to bech32 string using cosmos-sdk
 	bech32Addr, err := sdk.Bech32ifyAddressBytes(sdk.GetConfig().GetBech32AccountAddrPrefix(), addressBytes)
