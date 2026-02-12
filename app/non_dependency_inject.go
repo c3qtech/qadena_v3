@@ -1,9 +1,6 @@
 package app
 
 import (
-	"errors"
-	"strings"
-
 	"cosmossdk.io/core/appmodule"
 	storetypes "cosmossdk.io/store/types"
 	cdctypes "github.com/cosmos/cosmos-sdk/codec/types"
@@ -215,21 +212,6 @@ func (app *App) registerNonDependencyInjectModules(appOpts servertypes.AppOption
 	// Cosmos EVM keepers & modules
 
 	evmChainID := cast.ToUint64(appOpts.Get(evmsrvflags.EVMChainID))
-	if evmChainID == evmtypes.DefaultEVMChainID {
-		// parse the chain-id from the genesis
-		currentChainID := app.App.BaseApp.ChainID()
-		// assume chain id looks like "qadena_4444-1", but parse it
-		chainIDParts := strings.Split(currentChainID, "_")
-		if len(chainIDParts) != 2 {
-			return errors.New("invalid chain-id format")
-		}
-		// need to split the "4444-1" into "4444" and "1"
-		chainIDParts = strings.Split(chainIDParts[1], "-")
-		if len(chainIDParts) != 2 {
-			return errors.New("invalid chain-id format")
-		}
-		evmChainID = cast.ToUint64(chainIDParts[0])
-	}
 	// log it
 	app.Logger().Info("using evm chain-id", "chain-id", evmChainID)
 	//	_ := evmencoding.MakeConfig(evmChainID)

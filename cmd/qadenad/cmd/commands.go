@@ -3,11 +3,14 @@ package cmd
 import (
 	"errors"
 	"io"
+	"path/filepath"
+	"strings"
 
 	"cosmossdk.io/log"
 	confixcmd "cosmossdk.io/tools/confix/cmd"
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/cosmos-sdk/client"
+
 	//	"github.com/cosmos/cosmos-sdk/version"
 
 	//	"github.com/cosmos/cosmos-sdk/client/debug"
@@ -33,8 +36,11 @@ import (
 	evmdebug "github.com/cosmos/evm/client/debug"
 
 	evmserver "github.com/cosmos/evm/server"
-	//	evmcosmosserverconfig "github.com/cosmos/evm/server/config"
-	//	evmsrvflags "github.com/cosmos/evm/server/flags"
+	evmsrvflags "github.com/cosmos/evm/server/flags"
+	evmtypes "github.com/cosmos/evm/x/vm/types"
+
+	genutiltypes "github.com/cosmos/cosmos-sdk/x/genutil/types"
+	"github.com/spf13/cast"
 	// cmtcmd "github.com/cometbft/cometbft/cmd/cometbft/commands"
 	// sdkserver "github.com/cosmos/cosmos-sdk/server"
 	// "github.com/cosmos/cosmos-sdk/server/types"
@@ -159,6 +165,49 @@ func txCommand() *cobra.Command {
 	return cmd
 }
 
+// setEVMChainIDFromGenesis reads the Cosmos chain-id from genesis.json and
+// derives the EVM chain ID, setting it in Viper so that all consumers
+// (including the JSON-RPC backend) use the correct value.
+func setEVMChainIDFromGenesis(appOpts servertypes.AppOptions) {
+	evmChainID := cast.ToUint64(appOpts.Get(evmsrvflags.EVMChainID))
+	if evmChainID != 0 && evmChainID != evmtypes.DefaultEVMChainID {
+		return // already explicitly configured
+	}
+
+	v, ok := appOpts.(*viper.Viper)
+	if !ok {
+		return
+	}
+
+	// Read chain-id from genesis.json
+	homePath := cast.ToString(appOpts.Get(flags.FlagHome))
+	if homePath == "" {
+		homePath = app.DefaultNodeHome
+	}
+	genFile := filepath.Join(homePath, "config", "genesis.json")
+	appGenesis, err := genutiltypes.AppGenesisFromFile(genFile)
+	if err != nil {
+		return // genesis may not exist yet (e.g. during init)
+	}
+
+	// Parse numeric part from chain-id like "qadena_4444-1"
+	cosmosChainID := appGenesis.ChainID
+	parts := strings.Split(cosmosChainID, "_")
+	if len(parts) != 2 {
+		return
+	}
+	numParts := strings.Split(parts[1], "-")
+	if len(numParts) != 2 {
+		return
+	}
+	parsed := cast.ToUint64(numParts[0])
+	if parsed == 0 {
+		return
+	}
+
+	v.Set(evmsrvflags.EVMChainID, parsed)
+}
+
 // newApp creates the application
 func newApp(
 	logger log.Logger,
@@ -166,6 +215,8 @@ func newApp(
 	traceStore io.Writer,
 	appOpts servertypes.AppOptions,
 ) evmserver.Application {
+	setEVMChainIDFromGenesis(appOpts)
+
 	baseappOptions := server.DefaultBaseappOptions(appOpts)
 
 	app, err := app.New(
