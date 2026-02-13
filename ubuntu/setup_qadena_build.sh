@@ -174,7 +174,9 @@ fi
 
 # if Linux, check if docker installed
 if [ "$(uname -s)" = "Linux" ]; then
+    echo "Checking if docker is installed"
     if ! command -v docker > /dev/null 2>&1; then
+        echo "Docker is not installed, installing"
         apt-get update
         apt-get install -y ca-certificates curl
         install -m 0755 -d /etc/apt/keyrings
