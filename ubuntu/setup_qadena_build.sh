@@ -41,13 +41,15 @@ if [ "$(go version)" != "go$GO_VERSION" ]; then
     # put it in installers
     if [ "$(uname -m)" = "aarch64" ]; then
         wget https://go.dev/dl/go$GO_VERSION.linux-arm64.tar.gz -O installers/go$GO_VERSION.linux-arm64.tar.gz
+        rm -rf /usr/local/go && tar -C /usr/local -xzf installers/go$GO_VERSION.linux-arm64.tar.gz
     elif [ "$(uname -m)" = "arm64" ]; then
         wget https://go.dev/dl/go$GO_VERSION.darwin-arm64.tar.gz -O installers/go$GO_VERSION.darwin-arm64.tar.gz
+        rm -rf /usr/local/go && tar -C /usr/local -xzf installers/go$GO_VERSION.darwin-arm64.tar.gz
     else
         wget https://go.dev/dl/go$GO_VERSION.linux-amd64.tar.gz -O installers/go$GO_VERSION.linux-amd64.tar.gz
+        rm -rf /usr/local/go && tar -C /usr/local -xzf installers/go$GO_VERSION.linux-amd64.tar.gz
     fi
 
-    rm -rf /usr/local/go && tar -C /usr/local -xzf installers/go$GO_VERSION.linux-amd64.tar.gz
     export PATH=$PATH:/usr/local/go/bin
 
     USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
