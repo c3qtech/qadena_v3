@@ -244,6 +244,7 @@ else
 	new_external_address="${ADVERTISE_IP_ADDRESS}:26656"
 	new_rpc_laddr_url="tcp://0.0.0.0:26657"
 	new_priv_validator_laddr_url="tcp://0.0.0.0:26659"
+	dasel put -v "$PIONEER" '.moniker' -f $QADENAHOME/config/config.toml
 	dasel put -v "$new_external_address" '.p2p.external_address' -f $QADENAHOME/config/config.toml
 	dasel put -v "$new_rpc_laddr_url" '.rpc.laddr' -f $QADENAHOME/config/config.toml
 	dasel put -v "$new_priv_validator_laddr_url" '.priv_validator_laddr' -f $QADENAHOME/config/config.toml
