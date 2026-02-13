@@ -40,11 +40,11 @@ if [ "$(go version)" != "go$GO_VERSION" ]; then
 
     # put it in installers
     if [ "$(uname -m)" = "aarch64" ]; then
-        (cd installers; wget https://go.dev/dl/go$GO_VERSION.linux-arm64.tar.gz; rm -rf /usr/local/go && tar -C /usr/local -xzf go$GO_VERSION.linux-arm64.tar.gz)
+        (cd installers; wget https://go.dev/dl/go${GO_VERSION}.linux-arm64.tar.gz; rm -rf /usr/local/go && tar -C /usr/local -xzf go${GO_VERSION}.linux-arm64.tar.gz)
     elif [ "$(uname -m)" = "arm64" ]; then
-        (cd installers; wget https://go.dev/dl/go$GO_VERSION.darwin-arm64.tar.gz; rm -rf /usr/local/go && tar -C /usr/local -xzf go$GO_VERSION.darwin-arm64.tar.gz)
+        (cd installers; wget https://go.dev/dl/go${GO_VERSION}.darwin-arm64.tar.gz; rm -rf /usr/local/go && tar -C /usr/local -xzf go${GO_VERSION}.darwin-arm64.tar.gz)
     else
-        (cd installers; wget https://go.dev/dl/go$GO_VERSION.linux-amd64.tar.gz; rm -rf /usr/local/go && tar -C /usr/local -xzf go$GO_VERSION.linux-amd64.tar.gz)
+        (cd installers; wget https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz; rm -rf /usr/local/go && tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz)
     fi
 
     export PATH=$PATH:/usr/local/go/bin
@@ -199,18 +199,19 @@ fi
 # go install github.com/tomwright/dasel/v2/cmd/dasel@master
 # cp ~/go/bin/dasel /usr/local/bin
 
-#(cd installers; gunzip dasel.gz; cp -f dasel /usr/local/bin)
-
-
 # check if dasel version is correct (relaxed: accept any 2.8.x)
-INSTALLED_DASEL=""
-if command -v dasel &> /dev/null; then
-    INSTALLED_DASEL=$(dasel -v 2>&1)
-fi
+INSTALLED_DASEL="$(dasel --version 2>/dev/null || true)"
 
-if ! command -v dasel &> /dev/null || ! echo "$INSTALLED_DASEL" | grep -Eq "(^|[^0-9])2\\.8\\.[0-9]+([^0-9]|$)"; then
-    go install github.com/tomwright/dasel/v2/cmd/dasel@master
-    cp ~/go/bin/dasel /usr/local/bin
+if ! command -v dasel >/dev/null 2>&1 \
+  || ! printf '%s\n' "$INSTALLED_DASEL" | grep -Eq "(^|[^0-9])${DASEL_VERSION//./\\.}([^0-9]|$)"; then
+
+  # Ensure go is available
+  command -v go >/dev/null 2>&1 || { echo "go not found in PATH"; exit 1; }
+
+  go install "github.com/tomwright/dasel/v2/cmd/dasel@v${DASEL_VERSION}"
+
+  # Put it somewhere global
+  install -m 0755 "$HOME/go/bin/dasel" /usr/local/bin/dasel
 fi
 
 echo "Now you need to:"
