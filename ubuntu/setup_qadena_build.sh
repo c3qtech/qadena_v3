@@ -4,6 +4,9 @@ DASEL_VERSION=2.8.1
 GO_VERSION=$(grep "go " go.mod | cut -d" " -f2)
 IGNITE_VERSION=29.8.0
 
+echo "GO_VERSION: $GO_VERSION"
+echo "IGNITE_VERSION: $IGNITE_VERSION"
+
 # need to "sudo" this file
 if [ "$(id -u)" -ne 0 ]; then
   echo "This script must be run as root (use sudo)"
