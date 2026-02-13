@@ -31,10 +31,9 @@ if ! command -v git &> /dev/null; then
     apt-get install -y git
 fi
 
-# if not exists mkdir installers
-if [ ! -d "installers" ]; then
-    mkdir installers
-fi
+# remove installers if exists
+rm -rf installers
+mkdir installers
  
 # go-lang
 # wget https://go.dev/dl/go1.23.12.linux-arm64.tar.gz
