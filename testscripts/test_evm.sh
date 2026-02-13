@@ -64,11 +64,13 @@ if ! command -v docker > /dev/null 2>&1; then
     exit 1
 fi
 
+# Compile using solcjs (multi-arch) via node container
 docker run --rm \
   -v "$qadenatestdata:/sources" \
   -w /sources \
-  ethereum/solc:0.8.29 \
-  --optimize --combined-json abi,bin Store.sol > "$qadenatestdata/Store.json"
+  node:20-alpine \
+  sh -lc "npm -g -s i solc@0.8.29 >/dev/null && solcjs --optimize --combined-json abi,bin Store.sol" \
+  > "$qadenatestdata/Store.json"
 
 ABI=$(cat $qadenatestdata/Store.json | jq -r '.contracts["test_data/Store.sol:Store"].abi')
 echo "ABI: $ABI"
