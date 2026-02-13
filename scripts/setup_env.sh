@@ -115,6 +115,11 @@ set_min_gas_price() {
 
   if [ "$fallback" = true ]; then
     #echo "Using fallback minimum gas prices from config.yml"
+    if [[ ! -f $QADENAHOME/config/config.yml ]]; then
+        minimum_gas_prices="500000000aqdn"
+        export minimum_gas_prices
+        return
+    fi
     minimum_gas_prices="$(dasel -f $QADENAHOME/config/config.yml 'validators.first().app.minimum-gas-prices')aqdn"
 
     export minimum_gas_prices
@@ -154,6 +159,7 @@ set_min_gas_price() {
   minimum_gas_prices="${minimum_gas_prices}aqdn"
 
   export minimum_gas_prices
+  return
 }
 
 set_min_gas_price
