@@ -211,20 +211,35 @@ func queryMinGasPrice(clientCtx client.Context, fallback string) string {
 	}
 
 	minGasPrice := res.Params.MinGasPrice
-	if minGasPrice.IsNil() || minGasPrice.IsZero() {
+	baseFee := res.Params.BaseFee
+
+	if minGasPrice.IsNil() {
+		// set to 0
+		minGasPrice = sdkmath.LegacyZeroDec()
+	}
+
+	if baseFee.IsNil() {
+		// set to 0
+		baseFee = sdkmath.LegacyZeroDec()
+	}
+
+	if minGasPrice.IsZero() && baseFee.IsZero() {
 		return fallback
 	}
 
-	// Also query base fee and use the higher of the two
-	baseFeeRes, err := fmClient.BaseFee(context.Background(), &feemarketypes.QueryBaseFeeRequest{})
-	if err == nil && baseFeeRes.BaseFee != nil && !baseFeeRes.BaseFee.IsNil() {
-		if baseFeeRes.BaseFee.GT(minGasPrice) {
-			minGasPrice = *baseFeeRes.BaseFee
-		}
+	if baseFee.GT(minGasPrice) {
+		minGasPrice = baseFee
 	}
 
 	// Add 10% buffer to avoid race with rising base fee
 	buffered := minGasPrice.Mul(sdkmath.LegacyNewDecWithPrec(11, 1)) // 1.1x
+
+	// set minimum gas price to 1 aqdn
+	if buffered.IsZero() {
+		buffered = sdkmath.LegacyNewDec(1)
+	}
+
+	// convert to aqdn
 	return buffered.TruncateInt().String() + "aqdn"
 }
 

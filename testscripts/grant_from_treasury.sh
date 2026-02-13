@@ -52,6 +52,9 @@ else
     fi
 fi
 echo "Qadena address: $qadena_address"
+echo "Using $minimum_gas_prices for gas prices"
+echo "Using $gas_auto for gas"
+echo "Using $gas_adjustment for gas adjustment"
 result=$(qadenad_alias tx bank send treasury $qadena_address  $amount --from treasury --yes --output json --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"
 # get tx hash

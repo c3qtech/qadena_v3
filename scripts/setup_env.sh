@@ -54,77 +54,109 @@ echo "Qadena home: $QADENAHOME" >&2
 echo "Qadena bin: $qadenabin" >&2
 echo "Qadena scripts: $qadenascripts" >&2
 
+is_zero() {
+  val="$1"
+
+  # normalize empty/null
+  if [ -z "$val" ] || [ "$val" = "null" ]; then
+    echo 1
+    return
+  fi
+
+  # numeric compare
+  if echo "$val == 0" | bc -l | grep -q 1; then
+    echo 1
+  else
+    echo 0
+  fi
+}
+
+is_greater_than() {
+  a="$1"
+  b="$2"
+
+  if [ -z "$a" ] || [ "$a" = "null" ]; then
+    a=0
+  fi
+  if [ -z "$b" ] || [ "$b" = "null" ]; then
+    b=0
+  fi
+
+  if echo "$a > $b" | bc -l | grep -q 1; then
+    echo 1
+  else
+    echo 0
+  fi
+}
+
 # extract minimum-gas-prices from config.yml
 # check if config.yml exists
-query_min_gas_price() {
+set_min_gas_price() {
+
+  fallback=false
 
   # if qadenad_alias is not executable, then return fallback
   if ! command -v qadenad_alias > /dev/null 2>&1; then
-    # get from config.yml
-    minimum_gas_prices=$(dasel -f $QADENAHOME/config/config.yml 'validators.first().app.minimum-gas-prices')
-    echo "$minimum_gas_prices"
-    return 0
+    #echo "qadenad_alias not found, will try to get minimum gas prices from config.yml"
+    fallback=true
   fi
-
-  local fallback="$1"
-  local denom="${2:-aqdn}"
 
   if ! command -v jq > /dev/null 2>&1; then
-    echo "${fallback}"
-    return 0
-  fi
-
-  if ! command -v python3 > /dev/null 2>&1; then
-    echo "${fallback}"
-    return 0
+    #echo "jq not found, will try to get minimum gas prices from config.yml"
+    fallback=true
   fi
 
   local params_json
   params_json=$(qadenad_alias query feemarket params --output json 2>/dev/null)
   if [[ "$params_json" == "" ]] ; then
-    echo "${fallback}"
-    return 0
+    #echo "feemarket params not found, will try to get minimum gas prices from config.yml"
+    fallback=true
+  fi
+
+  if [ "$fallback" = true ]; then
+    #echo "Using fallback minimum gas prices from config.yml"
+    minimum_gas_prices="$(dasel -f $QADENAHOME/config/config.yml 'validators.first().app.minimum-gas-prices')aqdn"
+
+    export minimum_gas_prices
+    #echo "Found minimum gas prices: $minimum_gas_prices"
+    return
   fi
 
   local min_gas_price
   local base_fee
-  min_gas_price=$(echo "$params_json" | jq -r '.params.min_gas_price // empty')
-  base_fee=$(echo "$params_json" | jq -r '.params.base_fee // empty')
+  min_gas_price=$(echo "$params_json" | jq -r '.params.min_gas_price // 0')
+  base_fee=$(echo "$params_json" | jq -r '.params.base_fee // 0')
 
-  if [[ "$min_gas_price" == "" || "$min_gas_price" == "null" || "$min_gas_price" == "0" || "$min_gas_price" == "0.0" ]] ; then
-    echo "${fallback}"
-    return 0
+  #echo "min_gas_price: $min_gas_price"
+  #echo "base_fee: $base_fee"
+
+  if is_zero "$min_gas_price" && is_zero "$base_fee"; then
+    #echo "feemarket params are effectively zero, will try to get minimum gas prices from config.yml"
+    fallback=true
   fi
 
-  local buffered_int
-  buffered_int=$(MIN_GAS_PRICE="$min_gas_price" BASE_FEE="$base_fee" python3 - <<'PY'
-import os
-from decimal import Decimal, getcontext
-
-getcontext().prec = 80
-def to_dec(s: str) -> Decimal:
-    if not s or s == 'null':
-        return Decimal(0)
-    return Decimal(s)
-
-mgp = to_dec(os.environ.get('MIN_GAS_PRICE', ''))
-bf = to_dec(os.environ.get('BASE_FEE', ''))
-chosen = max(mgp, bf)
-buffered = chosen * Decimal('1.1')
-print(int(buffered))
-PY
-  )
-
-  if [[ "$buffered_int" == "" ]] ; then
-    echo "${fallback}"
-    return 0
+  # take the max of min_gas_price and base_fee using bc
+  if is_greater_than "$min_gas_price" "$base_fee"; then
+    minimum_gas_prices="$min_gas_price"
+  else
+    minimum_gas_prices="$base_fee"
   fi
 
-  echo "${buffered_int}${denom}"
+  # add 10% buffer
+  minimum_gas_prices=$(echo "$minimum_gas_prices * 1.1" | bc)
+
+  # take the max of minimum_gas_prices and "1"
+  if is_greater_than "1" "$minimum_gas_prices"; then
+    minimum_gas_prices="1"
+  fi
+
+  #echo "Using minimum gas prices: $minimum_gas_prices"
+  minimum_gas_prices="${minimum_gas_prices}aqdn"
+
+  export minimum_gas_prices
 }
 
-minimum_gas_prices=$(query_min_gas_price)
-export minimum_gas_prices
+set_min_gas_price
 gas_adjustment=1.5
 gas_auto=auto
 

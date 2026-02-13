@@ -205,6 +205,11 @@ else
 	echo "Stopping any running qadenad and qadenad_enclave processes..."
 	$qadenascripts/stop_qadena.sh --all > /dev/null
 
+	# save the config/*.toml files
+	rm -rf /tmp/qadena_config_backup
+	mkdir /tmp/qadena_config_backup
+	cp $QADENAHOME/config/*.toml /tmp/qadena_config_backup/
+
 	echo "Removing configuration directories from:  $QADENAHOME (config, data, keyring-test, enclave_config, enclave_data)"
 	rm -f $QADENAHOME/config/public.pem
 	rm -f $QADENAHOME/config/*.toml
@@ -224,6 +229,9 @@ else
 		echo "Failed to qadenad init"
 		exit 1
 	fi
+
+	# restore the config/*.toml files
+	cp /tmp/qadena_config_backup/*.toml $QADENAHOME/config/
 
 	echo "Fixing up app.toml"
 	# get it from config.yml
