@@ -234,8 +234,8 @@ func queryMinGasPrice(clientCtx client.Context, fallback string) string {
 	// Add 10% buffer to avoid race with rising base fee
 	buffered := minGasPrice.Mul(sdkmath.LegacyNewDecWithPrec(11, 1)) // 1.1x
 
-	// set minimum gas price to 1 aqdn
-	if buffered.IsZero() {
+	// if less than 1, set minimum gas price to 1 aqdn
+	if buffered.LT(sdkmath.LegacyNewDec(1)) {
 		buffered = sdkmath.LegacyNewDec(1)
 	}
 
@@ -282,7 +282,7 @@ func GenerateOrBroadcastTxCLISync(clientCtx client.Context, flagSet *pflag.FlagS
 		fmt.Printf("%v | flags.FlagGasPrices %s\n", time.Now().Format("2006-01-02 15:04:05"), gasPrice)
 	}
 	if gasPrice == "" {
-		queried := queryMinGasPrice(clientCtx, "600000000aqdn")
+		queried := queryMinGasPrice(clientCtx, "500000000aqdn")
 		if c.Debug && c.DebugFull {
 			fmt.Printf("%v | queried gas price: %s\n", time.Now().Format("2006-01-02 15:04:05"), queried)
 		}

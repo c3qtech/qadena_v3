@@ -2602,7 +2602,7 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 	*/
 
 	queryClientCtx = queryClientCtx.WithFrom(pwalletID).WithFromAddress(pwalletAddr).WithFromName(s.getPrivateEnclaveParamsPioneerID())
-	err, _ = qadenatx.GenerateOrBroadcastTxCLISync(queryClientCtx, flagSet, "various update msgs in SyncEnclave", msgs...)
+	err, _ = qadenatx.GenerateOrBroadcastTxCLISync(queryClientCtx, flagSet, "broadcast various update msgs in SyncEnclave", msgs...)
 
 	if err != nil {
 		c.LoggerError(logger, "failed to broadcast "+err.Error())
