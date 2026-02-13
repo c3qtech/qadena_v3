@@ -255,6 +255,8 @@ else
     echo "dasel is already installed"
 fi
 
+rm -rf installers
+
 echo "Now you need to:"
 echo "  exit"
 echo "...then log back in..."
