@@ -23,7 +23,20 @@ git clone https://github.com/c3qtech/qadena_installers.git installers
 # go
 # wget https://go.dev/dl/go1.23.12.linux-arm64.tar.gz
 # wget https://go.dev/dl/go1.23.12.linux-amd64.tar.gz
-rm -rf /usr/local/go && tar -C /usr/local -xzf installers/go1.23.12.linux-amd64.tar.gz
+
+# figure out based on the cpu and download the correct go version, get this from go.mod
+GO_VERSION=$(grep "go " go.mod | cut -d" " -f2)
+
+# put it in installers
+if [ "$(uname -m)" = "aarch64" ]; then
+    wget https://go.dev/dl/go$GO_VERSION.linux-arm64.tar.gz -O installers/go$GO_VERSION.linux-arm64.tar.gz
+elif [ "$(uname -m)" = "arm64" ]; then
+    wget https://go.dev/dl/go$GO_VERSION.darwin-arm64.tar.gz -O installers/go$GO_VERSION.darwin-arm64.tar.gz
+else
+    wget https://go.dev/dl/go$GO_VERSION.linux-amd64.tar.gz -O installers/go$GO_VERSION.linux-amd64.tar.gz
+fi
+
+rm -rf /usr/local/go && tar -C /usr/local -xzf installers/go$GO_VERSION.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 
 USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
