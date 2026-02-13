@@ -23,12 +23,18 @@ export DEBIAN_FRONTEND=noninteractive
 # zsh
 # check if zsh is installed
 if ! command -v zsh &> /dev/null; then
+    echo "Installing zsh"
     apt-get install -y zsh
+else
+    echo "zsh already installed"
 fi
 
 # check if git is installed
 if ! command -v git &> /dev/null; then
+    echo "Installing git"
     apt-get install -y git
+else
+    echo "git already installed"
 fi
 
 # remove installers if exists
