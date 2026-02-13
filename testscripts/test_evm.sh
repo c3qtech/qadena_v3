@@ -16,6 +16,41 @@ else
 fi
 
 
+# check if "foundry" is installed
+
+# check home directory
+
+if [ -d "$HOME/.foundry" ]; then
+    echo "foundry is already installed"
+    # make sure PATH includes it
+    # check if path includes foundry
+    if [[ ! $PATH == *"$HOME/.foundry/bin"* ]]; then
+        echo "foundry is not in PATH, will try to add it."
+        export PATH="$HOME/.foundry/bin:$PATH"
+    fi
+
+else
+    echo "foundry is not installed, will try to install it."
+    curl -L https://foundry.paradigm.xyz | bash
+    # add to path
+    export PATH="$HOME/.foundry/bin:$PATH"
+    foundryup
+fi
+
+# check if solc is installed
+if ! command -v solc &> /dev/null; then
+    echo "solc could not be found, will try to install it."
+    # if linux, use apt
+    if [ "$(uname)" = "Linux" ]; then
+        sudo snap install solc
+    fi
+    # if mac, use brew
+    if [ "$(uname)" = "Darwin" ]; then
+        brew install solc
+    fi
+fi
+
+
 # extract the private key
 PRIVATE_KEY=$(qadenad_alias keys unsafe-export-eth-key al)
 
