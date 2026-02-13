@@ -222,6 +222,8 @@ if [ "$(uname -s)" = "Linux" ]; then
 
         groupadd docker
         usermod -aG docker $SUDO_USER
+    else
+        echo "Docker is already installed"
     fi
 fi
 
@@ -230,21 +232,23 @@ fi
 # cp ~/go/bin/dasel /usr/local/bin
 
 # check if dasel version is correct (relaxed: accept any 2.8.x)
-INSTALLED_DASEL="$(dasel --version 2>/dev/null || true)"
+INSTALLED_DASEL="$(dasel --version 2>/dev/null)"
 
-if ! command -v dasel > /dev/null 2>&1 \
+if ! command -v dasel > /dev/null 2>&1
   || ! printf '%s\n' "$INSTALLED_DASEL" | grep -Eq "(^|[^0-9])${DASEL_VERSION//./\\.}([^0-9]|$)"; then
+    echo "dasel is not installed, installing"
+    # Ensure go is available
+    if ! command -v go > /dev/null 2>&1; then
+        echo "go not found in PATH"
+        exit 1
+    fi
 
-  # Ensure go is available
-  if ! command -v go > /dev/null 2>&1; then
-    echo "go not found in PATH"
-    exit 1
-  fi
+    go install "github.com/tomwright/dasel/v2/cmd/dasel@v${DASEL_VERSION}"
 
-  go install "github.com/tomwright/dasel/v2/cmd/dasel@v${DASEL_VERSION}"
-
-  # Put it somewhere global
-  install -m 0755 "$HOME/go/bin/dasel" /usr/local/bin/dasel
+    # Put it somewhere global
+    install -m 0755 "$HOME/go/bin/dasel" /usr/local/bin/dasel
+else
+    echo "dasel is already installed"
 fi
 
 echo "Now you need to:"
