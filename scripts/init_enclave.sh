@@ -57,9 +57,10 @@ fi
 qadenad_alias enclave init-enclave --enclave-signer-id $SIGNER_ID --enclave-unique-id $UNIQUE_ID $PIONEER $EXT_ADDR $JARID $REGULATORID 
 RET=$?
 if [[ $RET != 0 ]] ; then
-    echo "init_enclave.sh: qadenad enclave init-enclave failed"
+    echo "init_enclave.sh: qadenad enclave init-enclave failed, need to kill qadenad, qadenad_enclave and signer_enclave"
     pkill -INT -f "qadenad"
     pkill -INT -f "qadenad_enclave"
+    pkill -INT -f "signer_enclave"
     exit 1
 fi
 
