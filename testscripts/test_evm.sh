@@ -77,6 +77,8 @@ docker run --rm \
 ABI_JSON=$(cat "$qadenatestdata/solc_out/Store_sol_Store.abi")
 BIN_RAW=$(cat "$qadenatestdata/solc_out/Store_sol_Store.bin")
 
+rm -rf "$qadenatestdata/solc_out"
+
 jq -n --argjson abi "$ABI_JSON" --arg bin "$BIN_RAW" \
   '{contracts: {"test_data/Store.sol:Store": {abi: $abi, bin: $bin}}}' > "$qadenatestdata/Store.json"
 
@@ -111,3 +113,5 @@ echo "New Value: $VAL"
 BALANCE=$(cast balance $ETH_ADDR --rpc-url $RPC_URL)
 
 echo "Balance of $ETH_ADDR: $BALANCE"
+
+

@@ -25,7 +25,7 @@ if [[ ${#pos_args[@]} -gt 1 ]]; then
 fi
 
 # Debug info
-echo "account: $account"
+echo "account or address: $account"
 echo "amount: $amount"
 # Don't print the mnemonic for security reasons
 
@@ -39,7 +39,18 @@ echo "-------------------------"
 echo "Grant from treasury"
 echo "-------------------------"
 echo "Sending $amount to $account from treasury"
-qadena_address=$(qadenad_alias keys show $account -a)
+
+# check if account is already an address (starts with qadena1) 
+
+if [[ "$account" == qadena1* ]]; then
+    qadena_address="$account"
+else
+    qadena_address=$(qadenad_alias keys show "$account" -a 2>/dev/null)
+    if [ -z "$qadena_address" ]; then
+        echo "Error: could not resolve key name '$account' to an address"
+        exit 1
+    fi
+fi
 echo "Qadena address: $qadena_address"
 result=$(qadenad_alias tx bank send treasury $qadena_address  $amount --from treasury --yes --output json --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"

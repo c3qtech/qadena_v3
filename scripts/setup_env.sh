@@ -56,16 +56,81 @@ echo "Qadena scripts: $qadenascripts" >&2
 
 # extract minimum-gas-prices from config.yml
 # check if config.yml exists
-if [[ -f "$QADENAHOME/config/config.yml" ]]; then
-    minimum_gas_prices=$(dasel -f $QADENAHOME/config/config.yml 'validators.first().app.minimum-gas-prices')
-    export minimum_gas_prices
-fi
-gas_adjustment=1.5
 
+minimum_gas_prices=$(query_min_gas_price)
+export minimum_gas_prices
+gas_adjustment=1.5
 gas_auto=auto
 
 # export
 export gas_adjustment
+
+query_min_gas_price() {
+
+  # if qadenad_alias is not executable, then return fallback
+  if ! command -v qadenad_alias > /dev/null 2>&1; then
+    # get from config.yml
+    minimum_gas_prices=$(dasel -f $QADENAHOME/config/config.yml 'validators.first().app.minimum-gas-prices')
+    echo "$minimum_gas_prices"
+    return 0
+  fi
+
+  local fallback="$1"
+  local denom="${2:-aqdn}"
+
+  if ! command -v jq > /dev/null 2>&1; then
+    echo "${fallback}"
+    return 0
+  fi
+
+  if ! command -v python3 > /dev/null 2>&1; then
+    echo "${fallback}"
+    return 0
+  fi
+
+  local params_json
+  params_json=$(qadenad_alias query feemarket params --output json 2>/dev/null)
+  if [[ "$params_json" == "" ]] ; then
+    echo "${fallback}"
+    return 0
+  fi
+
+  local min_gas_price
+  local base_fee
+  min_gas_price=$(echo "$params_json" | jq -r '.params.min_gas_price // empty')
+  base_fee=$(echo "$params_json" | jq -r '.params.base_fee // empty')
+
+  if [[ "$min_gas_price" == "" || "$min_gas_price" == "null" || "$min_gas_price" == "0" || "$min_gas_price" == "0.0" ]] ; then
+    echo "${fallback}"
+    return 0
+  fi
+
+  local buffered_int
+  buffered_int=$(MIN_GAS_PRICE="$min_gas_price" BASE_FEE="$base_fee" python3 - <<'PY'
+import os
+from decimal import Decimal, getcontext
+
+getcontext().prec = 80
+def to_dec(s: str) -> Decimal:
+    if not s or s == 'null':
+        return Decimal(0)
+    return Decimal(s)
+
+mgp = to_dec(os.environ.get('MIN_GAS_PRICE', ''))
+bf = to_dec(os.environ.get('BASE_FEE', ''))
+chosen = max(mgp, bf)
+buffered = chosen * Decimal('1.1')
+print(int(buffered))
+PY
+  )
+
+  if [[ "$buffered_int" == "" ]] ; then
+    echo "${fallback}"
+    return 0
+  fi
+
+  echo "${buffered_int}${denom}"
+}
 
 # COMMON FUNCTIONS
 # Function to increment the number in a string
