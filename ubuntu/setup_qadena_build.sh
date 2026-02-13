@@ -40,11 +40,11 @@ if [ "$(go version)" != "go$GO_VERSION" ]; then
 
     # put it in installers
     if [ "$(uname -m)" = "aarch64" ]; then
-        (cd installers; wget https://go.dev/dl/go${GO_VERSION}.linux-arm64.tar.gz; rm -rf /usr/local/go && tar -C /usr/local -xzf go${GO_VERSION}.linux-arm64.tar.gz)
+        (cd installers; wget https://dl.google.com/go/go${GO_VERSION}.linux-arm64.tar.gz; rm -rf /usr/local/go && tar -C /usr/local -xzf go${GO_VERSION}.linux-arm64.tar.gz)
     elif [ "$(uname -m)" = "arm64" ]; then
-        (cd installers; wget https://go.dev/dl/go${GO_VERSION}.darwin-arm64.tar.gz; rm -rf /usr/local/go && tar -C /usr/local -xzf go${GO_VERSION}.darwin-arm64.tar.gz)
+        (cd installers; wget https://dl.google.com/go/go${GO_VERSION}.darwin-arm64.tar.gz; rm -rf /usr/local/go && tar -C /usr/local -xzf go${GO_VERSION}.darwin-arm64.tar.gz)
     else
-        (cd installers; wget https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz; rm -rf /usr/local/go && tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz)
+        (cd installers; wget https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz; rm -rf /usr/local/go && tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz)
     fi
 
     export PATH=$PATH:/usr/local/go/bin
