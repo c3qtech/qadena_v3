@@ -64,6 +64,12 @@ if ! command -v docker > /dev/null 2>&1; then
     exit 1
 fi
 
+if ! docker info > /dev/null 2>&1; then
+    echo "docker is installed but the daemon is not reachable (is it running?)"
+    echo "try: start Docker Desktop (macOS) or start the docker service (Linux)"
+    exit 1
+fi
+
 # Compile using solcjs (multi-arch) via node container
 rm -rf "$qadenatestdata/solc_out"
 mkdir -p "$qadenatestdata/solc_out"

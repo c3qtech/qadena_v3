@@ -56,15 +56,6 @@ echo "Qadena scripts: $qadenascripts" >&2
 
 # extract minimum-gas-prices from config.yml
 # check if config.yml exists
-
-minimum_gas_prices=$(query_min_gas_price)
-export minimum_gas_prices
-gas_adjustment=1.5
-gas_auto=auto
-
-# export
-export gas_adjustment
-
 query_min_gas_price() {
 
   # if qadenad_alias is not executable, then return fallback
@@ -131,6 +122,14 @@ PY
 
   echo "${buffered_int}${denom}"
 }
+
+minimum_gas_prices=$(query_min_gas_price)
+export minimum_gas_prices
+gas_adjustment=1.5
+gas_auto=auto
+
+# export
+export gas_adjustment
 
 # COMMON FUNCTIONS
 # Function to increment the number in a string

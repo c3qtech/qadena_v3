@@ -809,7 +809,7 @@ func (k Keeper) EnclaveQuerySecretShare(sdkctx sdk.Context, msg *types.QueryEncl
 
 	r, err := EnclaveGRPCClient.QueryEnclaveSecretShare(ctx, msg)
 	if err != nil {
-		c.ContextError(sdkctx, "error returned by QuerySecretShare on enclave "+err.Error())
+		c.ContextError(sdkctx, "error returned by EnclaveQuerySecretShare on enclave "+err.Error())
 		return err, nil
 	}
 
