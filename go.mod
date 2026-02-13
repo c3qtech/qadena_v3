@@ -1,8 +1,6 @@
 module github.com/c3qtech/qadena_v3
 
-go 1.23.12
-
-// toolchain go1.23.12
+go 1.25.7
 
 replace (
 	// use Cosmos geth fork
