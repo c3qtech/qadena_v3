@@ -234,8 +234,12 @@ fi
 # check if dasel version is correct (relaxed: accept any 2.8.x)
 INSTALLED_DASEL="$(dasel --version 2>/dev/null)"
 
+# Extract major.minor (e.g. 2.8) in a POSIX-compatible way
+DASEL_MM=$(printf '%s' "$DASEL_VERSION" | cut -d. -f1-2)
+DASEL_MM_ESC=$(printf '%s' "$DASEL_MM" | sed 's/[.]/\\./g')
+
 if ! command -v dasel > /dev/null 2>&1 || \
-  ! printf '%s\n' "$INSTALLED_DASEL" | grep -Eq "(^|[^0-9])${DASEL_VERSION//./\\.}([^0-9]|$)"; then
+  ! printf '%s\n' "$INSTALLED_DASEL" | grep -Eq "(^|[^0-9])${DASEL_MM_ESC}\\.[0-9]+([^0-9]|$)"; then
     echo "dasel is not installed, installing"
     # Ensure go is available
     if ! command -v go > /dev/null 2>&1; then
