@@ -234,8 +234,8 @@ fi
 # check if dasel version is correct (relaxed: accept any 2.8.x)
 INSTALLED_DASEL="$(dasel --version 2>/dev/null)"
 
-if ! command -v dasel > /dev/null 2>&1
-  || ! printf '%s\n' "$INSTALLED_DASEL" | grep -Eq "(^|[^0-9])${DASEL_VERSION//./\\.}([^0-9]|$)"; then
+if ! command -v dasel > /dev/null 2>&1 || \
+  ! printf '%s\n' "$INSTALLED_DASEL" | grep -Eq "(^|[^0-9])${DASEL_VERSION//./\\.}([^0-9]|$)"; then
     echo "dasel is not installed, installing"
     # Ensure go is available
     if ! command -v go > /dev/null 2>&1; then
