@@ -65,12 +65,20 @@ if ! command -v docker > /dev/null 2>&1; then
 fi
 
 # Compile using solcjs (multi-arch) via node container
+rm -rf "$qadenatestdata/solc_out"
+mkdir -p "$qadenatestdata/solc_out"
+
 docker run --rm \
   -v "$qadenatestdata:/sources" \
   -w /sources \
   node:20-alpine \
-  sh -lc "npm -g -s i solc@0.8.29 >/dev/null && solcjs --optimize --combined-json abi,bin Store.sol" \
-  > "$qadenatestdata/Store.json"
+  sh -lc "npm -g -s i solc@0.8.29 >/dev/null && solcjs --optimize --abi --bin -o solc_out Store.sol"
+
+ABI_JSON=$(cat "$qadenatestdata/solc_out/Store_sol_Store.abi")
+BIN_RAW=$(cat "$qadenatestdata/solc_out/Store_sol_Store.bin")
+
+jq -n --argjson abi "$ABI_JSON" --arg bin "$BIN_RAW" \
+  '{contracts: {"test_data/Store.sol:Store": {abi: $abi, bin: $bin}}}' > "$qadenatestdata/Store.json"
 
 ABI=$(cat $qadenatestdata/Store.json | jq -r '.contracts["test_data/Store.sol:Store"].abi')
 echo "ABI: $ABI"
