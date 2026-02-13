@@ -462,7 +462,7 @@ echo "(PRODUCTION) Full Node:  Please purchase and send at least ${FULL}qdn to $
 echo "(PRODUCTION) Validator Node:  Please purchase and send at least ${VALIDATOR}qdn to $PIONEERADDRESS"
 REPLY=""
 while [[ $REPLY != "y" && $REPLY != "n" ]]; do
-	read REPLY\?"Are you done sending funds to $PIONEERADDRESS? (y/n) "
+	read REPLY\?"Are you done sending funds to $PIONEERADDRESS ? (y/n) "
 	if [[ $REPLY == "y" ]] ; then
 
 		echo "I will attempt to detect when $PIONEERADDRESS has at least ${FULL}qdn."
