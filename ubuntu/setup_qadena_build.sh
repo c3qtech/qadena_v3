@@ -1,11 +1,15 @@
 #!/bin/sh
 
 DASEL_VERSION=2.8.1
-GO_VERSION=$(grep "go " go.mod | cut -d" " -f2)
+# Get the first 'go x.y.z' directive from go.mod
+GO_VERSION=$(awk '$1 == "go" { print $2; exit }' go.mod)
 IGNITE_VERSION=29.8.0
 
-echo "GO_VERSION: $GO_VERSION"
-echo "IGNITE_VERSION: $IGNITE_VERSION"
+echo "Required GO_VERSION: $GO_VERSION"
+echo "Required IGNITE_VERSION: $IGNITE_VERSION"
+echo "Required DASEL_VERSION: $DASEL_VERSION"
+
+PATH=$PATH:/usr/local/go/bin
 
 # need to "sudo" this file
 if [ "$(id -u)" -ne 0 ]; then
