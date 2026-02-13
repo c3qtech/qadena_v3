@@ -83,12 +83,12 @@ if [ -z "$INSTALLED_GO_VERSION" ] || [ "$INSTALLED_GO_VERSION" != "$GO_VERSION" 
 fi
 
 # check if curl exists
-if ! command -v curl &> /dev/null; then
+if ! command -v curl > /dev/null 2>&1; then
     apt-get install -y curl
 fi
 
 # check if rotatelogs exists
-if ! command -v rotatelogs &> /dev/null; then
+if ! command -v rotatelogs > /dev/null 2>&1; then
     apt install -y apache2-utils
 fi
 
@@ -149,24 +149,30 @@ else
 fi
 
 # check if jq installed
-if ! command -v jq &> /dev/null; then
+if ! command -v jq > /dev/null 2>&1; then
     apt-get install -y jq
+else
+    echo "jq already installed"
 fi
 
 # check if ifconfig installed
-if ! command -v ifconfig &> /dev/null; then
+if ! command -v ifconfig > /dev/null 2>&1; then
     apt-get install -y net-tools
+else
+    echo "ifconfig already installed"
 fi
 
 # check if rotatelogs installed
-if ! command -v rotatelogs &> /dev/null; then
+if ! command -v rotatelogs > /dev/null 2>&1; then
 
     apt-get install -y apache2-utils
+else
+    echo "rotatelogs already installed"
 fi
 
 # if Linux, check if docker installed
 if [ "$(uname -s)" = "Linux" ]; then
-    if ! command -v docker &> /dev/null; then
+    if ! command -v docker > /dev/null 2>&1; then
         apt-get update
         apt-get install -y ca-certificates curl
         install -m 0755 -d /etc/apt/keyrings
@@ -222,11 +228,14 @@ fi
 # check if dasel version is correct (relaxed: accept any 2.8.x)
 INSTALLED_DASEL="$(dasel --version 2>/dev/null || true)"
 
-if ! command -v dasel >/dev/null 2>&1 \
+if ! command -v dasel > /dev/null 2>&1 \
   || ! printf '%s\n' "$INSTALLED_DASEL" | grep -Eq "(^|[^0-9])${DASEL_VERSION//./\\.}([^0-9]|$)"; then
 
   # Ensure go is available
-  command -v go >/dev/null 2>&1 || { echo "go not found in PATH"; exit 1; }
+  if ! command -v go > /dev/null 2>&1; then
+    echo "go not found in PATH"
+    exit 1
+  fi
 
   go install "github.com/tomwright/dasel/v2/cmd/dasel@v${DASEL_VERSION}"
 
