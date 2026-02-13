@@ -24,12 +24,12 @@ if ! command -v git &> /dev/null; then
     apt-get install -y git
 fi
 
-# get the installers from git
-
-git clone https://github.com/c3qtech/qadena_installers.git installers
-
-
-# go
+# if not exists mkdir installers
+if [ ! -d "installers" ]; then
+    mkdir installers
+fi
+ 
+# go-lang
 # wget https://go.dev/dl/go1.23.12.linux-arm64.tar.gz
 # wget https://go.dev/dl/go1.23.12.linux-amd64.tar.gz
 
