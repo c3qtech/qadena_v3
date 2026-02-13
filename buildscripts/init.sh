@@ -91,10 +91,57 @@ rm -rf $QADENAHOME
 
 cd $qadenabuild
 
+# check if config.yml exists and is valid but checking if it contains the qadena: section
+
+function config_yml_has_qadena_params() {
+    local f="$1"
+    if [[ ! -f "$f" ]] ; then
+        return 1
+    fi
+
+    awk '
+        BEGIN { in_qadena=0; qindent=-1; in_params=0; pindent=-1 }
+        {
+            match($0, /^[ \t]*/)
+            indent = RLENGTH
+
+            if ($0 ~ /^[ \t]*qadena:[ \t]*$/) {
+                in_qadena=1
+                qindent=indent
+                in_params=0
+                pindent=-1
+                next
+            }
+
+            if (in_qadena && indent <= qindent && $0 !~ /^[ \t]*$/) {
+                in_qadena=0
+                in_params=0
+            }
+
+            if (in_qadena && $0 ~ /^[ \t]*params:[ \t]*$/) {
+                in_params=1
+                pindent=indent
+                next
+            }
+
+            if (in_params && indent <= pindent && $0 !~ /^[ \t]*$/) {
+                in_params=0
+            }
+
+            if (in_params && $0 ~ /^[ \t]*create_wallet_incentive:[ \t]*$/) {
+                found=1
+                exit
+            }
+        }
+        END { exit(found ? 0 : 1) }
+    ' "$f" > /dev/null 2>&1
+}
+
+
 # if not exists config.yml
-if [ ! -f $qadenabuild/config.yml ]; then
+if ! config_yml_has_qadena_params "$qadenabuild/config.yml" ; then
     echo "-----------------------------------------------------"
-    echo "WARNING:  No config.yml yet, NEED to BOOTSTRAP first."
+    echo "WARNING:  Missing or invalid config.yml (need qadena: params:), NEED to BOOTSTRAP first."
     echo "-----------------------------------------------------"
     
     #

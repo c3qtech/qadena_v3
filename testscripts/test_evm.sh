@@ -38,15 +38,37 @@ else
 fi
 
 # check if solc is installed
-if ! command -v solc &> /dev/null; then
-    echo "solc could not be found, will try to install it."
-    # if linux, use apt
-    if [ "$(uname)" = "Linux" ]; then
-        sudo snap install solc
+MIN_SOLC_VERSION="0.8.29"
+
+SOLC_VERSION_OK=0
+if command -v solc > /dev/null 2>&1; then
+    SOLC_VERSION=$(solc --version 2>/dev/null | grep "^Version:" | awk '{print $2}' | cut -d+ -f1)
+    if printf '%s\n%s\n' "$MIN_SOLC_VERSION" "$SOLC_VERSION" | sort -V -C; then
+        SOLC_VERSION_OK=1
     fi
-    # if mac, use brew
+fi
+
+if [ "$SOLC_VERSION_OK" != "1" ]; then
+    echo "solc could not be found or is too old (need >= $MIN_SOLC_VERSION). Will try to install/upgrade."
+    if [ "$(uname)" = "Linux" ]; then
+        sudo apt install python3-pip -y
+        pip3 install solc-select
+        export PATH="$HOME/.local/bin:$PATH"
+        solc-select install $MIN_SOLC_VERSION
+        solc-select use $MIN_SOLC_VERSION
+    fi
     if [ "$(uname)" = "Darwin" ]; then
         brew install solc
+    fi
+
+    SOLC_VERSION=$(solc --version 2>/dev/null | grep "^Version:" | awk '{print $2}' | cut -d+ -f1)
+    if [ -z "$SOLC_VERSION" ]; then
+        echo "solc still not found after install"
+        exit 1
+    fi
+    if ! printf '%s\n%s\n' "$MIN_SOLC_VERSION" "$SOLC_VERSION" | sort -V -C; then
+        echo "solc version is still too old: $SOLC_VERSION (need >= $MIN_SOLC_VERSION)"
+        exit 1
     fi
 fi
 
