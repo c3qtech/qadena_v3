@@ -22,7 +22,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 # zsh
 # check if zsh is installed
-if ! command -v zsh &> /dev/null; then
+if ! command -v zsh > /dev/null 2>&1; then
     echo "Installing zsh"
     apt-get install -y zsh
 else
@@ -30,7 +30,7 @@ else
 fi
 
 # check if git is installed
-if ! command -v git &> /dev/null; then
+if ! command -v git > /dev/null 2>&1; then
     echo "Installing git"
     apt-get install -y git
 else
@@ -120,7 +120,7 @@ fi
 
 # check installed version by parsing "Ignite CLI version:" line
 INSTALLED_IGNITE=""
-if command -v ignite &> /dev/null; then
+if command -v ignite > /dev/null 2>&1; then
     INSTALLED_IGNITE=$(ignite version 2>&1 | grep "Ignite CLI version:" | awk '{print $NF}')
     echo "Installed Ignite CLI version: $INSTALLED_IGNITE"
 fi
