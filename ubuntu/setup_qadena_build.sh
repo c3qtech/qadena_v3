@@ -42,7 +42,13 @@ mkdir installers
 # figure out based on the cpu and download the correct go version, get this from go.mod
 
 # check installed go version
-if [ "$(go version)" != "go$GO_VERSION" ]; then
+INSTALLED_GO_VERSION=""
+if command -v go > /dev/null 2>&1; then
+    # "go version" prints like: "go version go1.23.7 linux/amd64"
+    INSTALLED_GO_VERSION=$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')
+fi
+
+if [ -z "$INSTALLED_GO_VERSION" ] || [ "$INSTALLED_GO_VERSION" != "$GO_VERSION" ]; then
 
     # put it in installers
     if [ "$(uname -m)" = "aarch64" ]; then
@@ -110,6 +116,7 @@ fi
 INSTALLED_IGNITE=""
 if command -v ignite &> /dev/null; then
     INSTALLED_IGNITE=$(ignite version 2>&1 | grep "Ignite CLI version:" | awk '{print $NF}')
+    echo "Installed Ignite CLI version: $INSTALLED_IGNITE"
 fi
 
 if [ "$INSTALLED_IGNITE" != "v${IGNITE_VERSION}" ] && [ "$INSTALLED_IGNITE" != "v${IGNITE_VERSION}-dev" ]; then
