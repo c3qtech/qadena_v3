@@ -164,48 +164,49 @@ if [ "$(uname -s)" = "Linux" ]; then
         apt-get update
         apt-get install -y ca-certificates curl
         install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-    chmod a+r /etc/apt/keyrings/docker.asc
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
 
-    # Add the repository to Apt sources:
-    echo \
-    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
-    $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
-    tee /etc/apt/sources.list.d/docker.list > /dev/null
-    apt-get update
+        # Add the repository to Apt sources:
+        echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+        $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+        tee /etc/apt/sources.list.d/docker.list > /dev/null
+        apt-get update
 
-    # check if ubuntu 22 or 24
-    if command -v lsb_release >/dev/null 2>&1; then
-        DISTRO=$(lsb_release -is)
-        VERSION=$(lsb_release -rs)
-        
-        if [ "$DISTRO" = "Ubuntu" ]; then
-            if [ "$VERSION" = "22.04" ]; then
-                echo "Ubuntu 22.04 detected"
-                VERSION_STRING=5:28.0.4-1~ubuntu.22.04~jammy
-            elif [ "$VERSION" = "24.04" ]; then
-                echo "Ubuntu 24.04 detected"
-                VERSION_STRING=5:28.0.4-1~ubuntu.24.04~noble
+        # check if ubuntu 22 or 24
+        if command -v lsb_release >/dev/null 2>&1; then
+            DISTRO=$(lsb_release -is)
+            VERSION=$(lsb_release -rs)
+            
+            if [ "$DISTRO" = "Ubuntu" ]; then
+                if [ "$VERSION" = "22.04" ]; then
+                    echo "Ubuntu 22.04 detected"
+                    VERSION_STRING=5:28.0.4-1~ubuntu.22.04~jammy
+                elif [ "$VERSION" = "24.04" ]; then
+                    echo "Ubuntu 24.04 detected"
+                    VERSION_STRING=5:28.0.4-1~ubuntu.24.04~noble
+                else
+                    echo "Ubuntu detected, but not version 22.04 or 24.04"
+                fi
             else
-                echo "Ubuntu detected, but not version 22.04 or 24.04"
+                echo "Not Ubuntu"
             fi
         else
-            echo "Not Ubuntu"
+            echo "lsb_release not installed, cannot determine distribution"
         fi
-    else
-        echo "lsb_release not installed, cannot determine distribution"
+
+
+        apt-get install -y docker-ce=$VERSION_STRING docker-ce-cli=$VERSION_STRING containerd.io docker-buildx-plugin docker-compose-plugin
+        # check if the above failed
+        if [ $? -ne 0 ]; then
+            echo "Failed to install docker"
+            exit 1
+        fi
+
+        groupadd docker
+        usermod -aG docker $SUDO_USER
     fi
-
-
-    apt-get install -y docker-ce=$VERSION_STRING docker-ce-cli=$VERSION_STRING containerd.io docker-buildx-plugin docker-compose-plugin
-    # check if the above failed
-    if [ $? -ne 0 ]; then
-        echo "Failed to install docker"
-        exit 1
-    fi
-
-    groupadd docker
-    usermod -aG docker $SUDO_USER
 fi
 
 # dasel
