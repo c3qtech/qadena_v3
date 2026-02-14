@@ -52,7 +52,6 @@ validators:
     wasm:
       query_gas_limit: "300000"
       memory_cache_size: "300"
-
     evm:
       tracer: ""
       max-tx-gas-wanted: "0"
@@ -91,7 +90,10 @@ validators:
       metrics-address: "127.0.0.1:6065"
       batch-request-limit: "1000"
       batch-response-max-size: "25000000"
-      enable-profiling: false        
+      enable-profiling: false
+    state-sync:
+      snapshot-interval: "2000"
+      snapshot-keep-recent: "3"
   config:
     log_level: "debug"
     moniker: "pioneer1"

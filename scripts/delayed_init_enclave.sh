@@ -65,6 +65,28 @@ while true ; do
     sleep 1
 done
 
+if [[ $SYNC_WITH_PIONEER = "" ]] ; then
+    # detect if we're in catching up mode
+    CATCHING_UP=$(qadenad_alias status | jq -r '.sync_info.catching_up')
+    if [[ $CATCHING_UP == "true" ]] ; then
+        echo "[delayed_init_enclave - I] qadenad is still catching up, but SYNC_WITH_PIONEER is not set"
+        # get it from config.toml
+        SYNC_WITH_PIONEER=$(dasel -f $QADENAHOME/config/config.toml '.p2p.persistent_peers' | tr -d "'" | tr -d ' ')
+        if [[ $SYNC_WITH_PIONEER != "" ]] ; then
+            SYNC_WITH_PIONEER=${SYNC_WITH_PIONEER%%,*}
+            if [[ $SYNC_WITH_PIONEER == *"@"* ]] ; then
+                SYNC_WITH_PIONEER=${SYNC_WITH_PIONEER##*@}
+            fi
+            SYNC_WITH_PIONEER=${SYNC_WITH_PIONEER#tcp://}
+            SYNC_WITH_PIONEER=${SYNC_WITH_PIONEER%%:*}
+        else
+            echo "[delayed_init_enclave - E] SYNC_WITH_PIONEER is not set and config.toml p2p.persistent_peers is empty"
+            $qadenascripts/stop_qadena.sh --all > /dev/null 2>&1
+            exit 1
+        fi
+    fi
+fi
+
 LATEST_BLOCK_HEIGHT=0
 if [[ $SYNC_WITH_PIONEER != "" ]] ; then
     LATEST_BLOCK_HEIGHT=$(get_latest_block_height "$SYNC_WITH_PIONEER")

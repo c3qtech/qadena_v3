@@ -59,16 +59,14 @@ is_zero() {
 
   # normalize empty/null
   if [ -z "$val" ] || [ "$val" = "null" ]; then
-    echo 1
-    return
+    return 0
   fi
 
-  # numeric compare
-  if echo "$val == 0" | bc -l | grep -q 1; then
-    echo 1
-  else
-    echo 0
+  eps="0.000000000000001"
+  if echo "v=($val); if (v<0) v=-v; v < $eps" | bc -l | grep -q 1; then
+    return 0
   fi
+  return 1
 }
 
 is_greater_than() {
@@ -83,10 +81,9 @@ is_greater_than() {
   fi
 
   if echo "$a > $b" | bc -l | grep -q 1; then
-    echo 1
-  else
-    echo 0
+    return 0
   fi
+  return 1
 }
 
 # extract minimum-gas-prices from config.yml
