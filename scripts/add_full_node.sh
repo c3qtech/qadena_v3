@@ -125,7 +125,7 @@ CONTINUE_AFTER_FUNDING=0
 
 if [ -d "$QADENAHOME/enclave_config" ] && [ -f "$QADENAHOME/config/genesis.json" ]; then
 	# use dasel to extract the moniker from config.yml
-	MONIKER=`dasel -f $QADENAHOME/config/config.toml '.moniker' | tr -d "'"`
+	MONIKER=`dasel -f $QADENAHOME/config/config.toml '.moniker' | tr -d '"' | tr -d "'"`
 
 	# if the moniker matches the default "pioneer1", then most likely it was a test node
 	if [[ $MONIKER == "pioneer1" ]] ; then

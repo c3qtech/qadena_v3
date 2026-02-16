@@ -21,7 +21,7 @@ CHAINID=$(jq -r '.chain_id' "$QADENAHOME/config/genesis.json")
 ulimit -c unlimited
 
 # read the config and check log level
-log_level=$(grep "log_level" $QADENAHOME/config/config.toml | awk '{print $3}' | tr -d '"')
+log_level=$(grep "log_level" $QADENAHOME/config/config.toml | awk '{print $3}' | tr -d '"' | tr -d "'")
 if [[ $log_level == "debug" ]] ; then
     log_level="debug"
 else

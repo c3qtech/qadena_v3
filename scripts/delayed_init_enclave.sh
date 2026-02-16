@@ -73,7 +73,7 @@ if [[ $SYNC_WITH_PIONEER = "" ]] ; then
     if [[ $CATCHING_UP == "true" ]] ; then
         echo "[delayed_init_enclave - I] qadenad is still catching up, but SYNC_WITH_PIONEER is not set"
         # get it from config.toml
-        SYNC_WITH_PIONEER=$(dasel -f $QADENAHOME/config/config.toml '.p2p.persistent_peers' | tr -d "'" | tr -d ' ')
+        SYNC_WITH_PIONEER=$(dasel -f $QADENAHOME/config/config.toml '.p2p.persistent_peers' | tr -d '"' | tr -d "'" | tr -d ' ')
         if [[ $SYNC_WITH_PIONEER != "" ]] ; then
             SYNC_WITH_PIONEER=${SYNC_WITH_PIONEER%%,*}
             if [[ $SYNC_WITH_PIONEER == *"@"* ]] ; then
@@ -82,7 +82,7 @@ if [[ $SYNC_WITH_PIONEER = "" ]] ; then
             SYNC_WITH_PIONEER=${SYNC_WITH_PIONEER#tcp://}
             SYNC_WITH_PIONEER=${SYNC_WITH_PIONEER%%:*}
 
-            STATE_SYNC_ENABLED=$(dasel -f $QADENAHOME/config/config.toml '.statesync.enable' | tr -d "'")
+            STATE_SYNC_ENABLED=$(dasel -f $QADENAHOME/config/config.toml '.statesync.enable' | tr -d '"' | tr -d "'")
             if [[ $STATE_SYNC_ENABLED = "true" ]] ; then
                 echo "[delayed_init_enclave - I] State sync is enabled"
                 STATE_SYNC_ENABLED=true

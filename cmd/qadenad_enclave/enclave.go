@@ -4029,6 +4029,11 @@ func (s *qadenaServer) getRecoverOriginalWalletIDByNewWalletID(newWalletID strin
 // check if the credential exists by PCXY
 
 func (s *qadenaServer) credentialByPCXYExists(credential *types.Credential) bool {
+	// make sure credentialPCXY is not empty
+	if credential.FindCredentialPedersenCommit != nil && credential.FindCredentialPedersenCommit.C != nil && credential.FindCredentialPedersenCommit.C.Compressed == nil {
+		return false
+	}
+
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveCredentialPCXYKeyPrefix))
 
 	credentialPCXY := credential.FindCredentialPedersenCommit.C.Compressed
@@ -4043,6 +4048,10 @@ func (s *qadenaServer) credentialByPCXYExists(credential *types.Credential) bool
 }
 
 func (s *qadenaServer) setCredentialByPCXY(credential *types.Credential) {
+	// make sure credentialPCXY is not empty
+	if credential.FindCredentialPedersenCommit != nil && credential.FindCredentialPedersenCommit.C != nil && credential.FindCredentialPedersenCommit.C.Compressed == nil {
+		return
+	}
 	credentialIDString := types.EnclaveStoreString{S: credential.CredentialID}
 	//findCredentialPedersenCommit := c.UnprotoizeBPedersenCommit(*credential.FindCredentialPedersenCommit)
 	//credentialPCXY := findCredentialPedersenCommit.C.X.String() + "." + findCredentialPedersenCommit.C.Y.String() + "." + credential.CredentialType
@@ -4054,6 +4063,11 @@ func (s *qadenaServer) setCredentialByPCXY(credential *types.Credential) {
 }
 
 func (s *qadenaServer) removeCredentialByPCXY(credential *types.Credential) {
+	// make sure credentialPCXY is not empty
+	if credential.FindCredentialPedersenCommit != nil && credential.FindCredentialPedersenCommit.C != nil && credential.FindCredentialPedersenCommit.C.Compressed == nil {
+		return
+	}
+
 	credentialPCXY := credential.FindCredentialPedersenCommit.C.Compressed
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveCredentialPCXYKeyPrefix))
 	store.Delete(EnclaveKeyBKeyCredentialType(credentialPCXY, credential.CredentialType))
