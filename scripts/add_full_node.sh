@@ -324,7 +324,7 @@ else
 			if [[ $TRUSTHEIGHT == $TRUSTHEIGHT2 && $TRUSTHASH == $TRUSTHASH2 ]] ; then
 				echo "Great, same same, we can trust height/hash, modifying config.toml"
 
-				dasel put -v true '.enable' -f $QADENAHOME/config/config.toml
+				dasel put -v true '.statesync.enable' -f $QADENAHOME/config/config.toml
 
 				new_rpc_servers="$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657,$GENESIS_PIONEER_SECOND_IP_ADDRESS:26657"
 				dasel put -v "$new_rpc_servers" '.statesync.rpc_servers' -f $QADENAHOME/config/config.toml
