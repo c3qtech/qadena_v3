@@ -128,11 +128,11 @@ if [[ $install_provider_scripts -eq 1 ]]; then
     if [[ ! -d "$QADENAHOME/provider_scripts" ]] ; then
         mkdir -p "$QADENAHOME/provider_scripts"
     fi
-    cp $qadenaproviderscripts/* "$QADENAHOME/provider_scripts/"
+    cp -r $qadenaproviderscripts/* "$QADENAHOME/provider_scripts/"
     if [[ ! -d "$QADENAHOME/veritas_scripts" ]] ; then
         mkdir -p "$QADENAHOME/veritas_scripts"
     fi
-    cp -r $veritasscripts/* "$QADENAHOME/veritas_scripts/"
+    cp $veritasscripts/* "$QADENAHOME/veritas_scripts/"
 fi
 
     
