@@ -65,6 +65,8 @@ while true ; do
     sleep 1
 done
 
+STATE_SYNC_ENABLED=false
+
 if [[ $SYNC_WITH_PIONEER = "" ]] ; then
     # detect if we're in catching up mode
     CATCHING_UP=$(qadenad_alias status | jq -r '.sync_info.catching_up')
@@ -79,6 +81,13 @@ if [[ $SYNC_WITH_PIONEER = "" ]] ; then
             fi
             SYNC_WITH_PIONEER=${SYNC_WITH_PIONEER#tcp://}
             SYNC_WITH_PIONEER=${SYNC_WITH_PIONEER%%:*}
+
+            STATE_SYNC_ENABLED=$(dasel -f $QADENAHOME/config/config.toml '.statesync.enable' | tr -d "'")
+            if [[ $STATE_SYNC_ENABLED = "true" ]] ; then
+                echo "[delayed_init_enclave - I] State sync is enabled"
+                STATE_SYNC_ENABLED=true
+            fi
+
         else
             echo "[delayed_init_enclave - E] SYNC_WITH_PIONEER is not set and config.toml p2p.persistent_peers is empty"
             $qadenascripts/stop_qadena.sh --all > /dev/null 2>&1
@@ -127,21 +136,25 @@ while true ; do
             CURRENT_BLOCK_HEIGHT=$(jq -r '.sync_info.latest_block_height' "$TMP_FILE_NAME")
             echo "[delayed_init_enclave - I] qadenad is not yet caught up, waiting...$CURRENT_BLOCK_HEIGHT / $LATEST_BLOCK_HEIGHT"
             
-            # Check progress every 10 seconds
-            if [[ $((COUNTER % 10)) -eq 0 ]]; then
-                if [[ $COUNTER -gt 10 && $CURRENT_BLOCK_HEIGHT -le $LAST_BLOCK_HEIGHT ]]; then
-                    echo "[delayed_init_enclave - E] No progress in block height after 10 seconds"
-                    echo "[delayed_init_enclave - E] Previous height: $LAST_BLOCK_HEIGHT, Current height: $CURRENT_BLOCK_HEIGHT"
-                    echo "[delayed_init_enclave - E] Stopping qadenad due to sync stall"
-                    $qadenascripts/stop_qadena.sh --chain --enclave
-                    exit 1
+            if [[ $((COUNTER % 30)) -eq 0 ]]; then
+                # if !STATE_SYNC_ENABLED, Check progress every 30 seconds
+                if [[ $STATE_SYNC_ENABLED != true ]] ; then
+                    if [[ $COUNTER -gt 30 && $CURRENT_BLOCK_HEIGHT -le $LAST_BLOCK_HEIGHT ]]; then
+                        echo "[delayed_init_enclave - E] No progress in block height after 30 seconds"
+                        echo "[delayed_init_enclave - E] Previous height: $LAST_BLOCK_HEIGHT, Current height: $CURRENT_BLOCK_HEIGHT"
+                        echo "[delayed_init_enclave - E] Stopping qadenad due to block sync stall"
+                        $qadenascripts/stop_qadena.sh --chain --enclave
+                        exit 1
+                    else
+                        echo "[delayed_init_enclave - I] qadenad is still catching up, making progress..."
+                    fi
                 else
-                    echo "[delayed_init_enclave - I] qadenad is still catching up, making progress..."
+                    echo "[delayed_init_enclave - I] qadenad is still catching up (state sync enabled)"
                 fi
                 LAST_BLOCK_HEIGHT=$CURRENT_BLOCK_HEIGHT
             fi
             
-            # Update latest block height from pioneer every 100 iterations
+            # Update latest block height from the SYNC_WITH_PIONEER every 100 iterations
             if [[ $((COUNTER % 100)) -eq 0 ]]; then
                 LATEST_BLOCK_HEIGHT=$(get_latest_block_height "$SYNC_WITH_PIONEER")
                 if [[ $? != 0 ]] ; then
