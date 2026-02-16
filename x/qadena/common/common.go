@@ -154,7 +154,7 @@ func StoreHashByKVStoreService(ctx sdktypes.Context, storeService store.KVStoreS
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(p))
 
 	ret, count := StoreHashByPrefixStore(ctx, store)
-	ContextDebug(ctx, "StoreHashByKVStoreService", p, count, ret)
+	ContextDebug(ctx, "StoreHashByKVStoreService prefix="+p+",count="+strconv.Itoa(count)+",ret="+ret)
 	return ret
 }
 
@@ -162,7 +162,7 @@ func StoreHashByStoreKey(ctx sdktypes.Context, storeKey storetypes.StoreKey, p s
 	store := prefix.NewStore(ctx.KVStore(storeKey), types.KeyPrefix(p))
 
 	ret, count := StoreHashByPrefixStore(ctx, store)
-	ContextDebug(ctx, "StoreHashByStoreKey", p, count, ret)
+	ContextDebug(ctx, "StoreHashByStoreKey prefix="+p+",count="+strconv.Itoa(count)+",ret="+ret)
 	return ret
 }
 

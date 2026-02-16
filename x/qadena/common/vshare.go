@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"hash"
+	"time"
 
 	"encoding/hex"
 
@@ -34,6 +35,7 @@ var testVShareEncryption = false
 type VShareSignatory struct {
 	EncSignatoryVShare []byte
 	VShareBind         *VShareBindData
+	Time               time.Time
 }
 
 type VSharePubKInfo struct {

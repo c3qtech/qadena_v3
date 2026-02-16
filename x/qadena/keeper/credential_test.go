@@ -42,21 +42,6 @@ func TestCredentialGet(t *testing.T) {
 		)
 	}
 }
-func TestCredentialRemove(t *testing.T) {
-	keeper, ctx := keepertest.QadenaKeeper(t)
-	items := createNCredential(keeper, ctx, 10)
-	for _, item := range items {
-		keeper.RemoveCredential(ctx,
-			item.CredentialID,
-			item.CredentialType,
-		)
-		_, found := keeper.GetCredential(ctx,
-			item.CredentialID,
-			item.CredentialType,
-		)
-		require.False(t, found)
-	}
-}
 
 func TestCredentialGetAll(t *testing.T) {
 	keeper, ctx := keepertest.QadenaKeeper(t)

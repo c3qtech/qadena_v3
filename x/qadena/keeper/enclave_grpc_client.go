@@ -118,6 +118,10 @@ func SetValidatorAddress(address string) {
 var SupportsUnixDomainSockets = true
 var DefaultPort = 50051
 
+func (k Keeper) GetEnclaveRPCClient() types.QadenaEnclaveClient {
+	return EnclaveGRPCClient
+}
+
 func (k Keeper) InitEnclave() bool {
 	addr := c.EnclaveAddr
 
@@ -1006,8 +1010,7 @@ func (k Keeper) displayStoresSync(sdkctx sdk.Context) error {
 
 // sync DB between chain and enclave
 func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
-	c.ContextDebug(sdkctx, "qadena module BeginBlock -- Chain initialized and ready for business")
-	c.ContextDebug(sdkctx, "synchronizing enclave")
+	c.ContextDebug(sdkctx, "Qadena module BeginBlock -- Chain initialized and ready for business, synchronizing enclave...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
 	defer cancel()
@@ -1025,9 +1028,9 @@ func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
 	for _, sh := range storeHashes.GetHashes() {
 		h := c.StoreHashByKVStoreService(sdkctx, k.storeService, sh.Key)
 		if sh.Hash != h {
-			c.ContextError(sdkctx, "OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 			switch sh.Key {
 			case types.WalletKeyPrefix:
+				c.ContextError(sdkctx, "OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				wallets := k.GetAllWallet(sdkctx)
 				//    fmt.Println("wallets", list)
 				for _, wallet := range wallets {
@@ -1035,12 +1038,14 @@ func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
 					checkSync = true
 				}
 			case types.CredentialKeyPrefix:
+				c.ContextError(sdkctx, "OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				credentials := k.GetAllCredential(sdkctx)
 				for _, credential := range credentials {
 					k.EnclaveClientSetCredential(sdkctx, credential)
 					checkSync = true
 				}
 			case types.PublicKeyKeyPrefix:
+				c.ContextError(sdkctx, "OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				publicKeys := k.GetAllPublicKey(sdkctx)
 				c.ContextDebug(sdkctx, "synchronizing PublicKeys", publicKeys)
 				for _, publicKey := range publicKeys {
@@ -1048,30 +1053,44 @@ func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
 					checkSync = true
 				}
 			case types.JarRegulatorKeyPrefix:
+				c.ContextError(sdkctx, "OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				jarRegulators := k.GetAllJarRegulator(sdkctx)
 				for _, jarRegulator := range jarRegulators {
 					k.EnclaveClientSetJarRegulator(sdkctx, jarRegulator)
 					checkSync = true
 				}
 			case types.IntervalPublicKeyIDKeyPrefix:
+				c.ContextError(sdkctx, "OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				intervalPublicKeyIDs := k.GetAllIntervalPublicKeyID(sdkctx)
 				for _, intervalPublicKeyID := range intervalPublicKeyIDs {
 					k.EnclaveClientSetIntervalPublicKeyId(sdkctx, intervalPublicKeyID)
 					checkSync = true
 				}
 			case types.ProtectKeyKeyPrefix:
+				c.ContextError(sdkctx, "OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				protectKeys := k.GetAllProtectKey(sdkctx)
 				for _, protectKey := range protectKeys {
 					k.EnclaveClientSetProtectKey(sdkctx, protectKey)
 					checkSync = true
 				}
 			case types.RecoverKeyKeyPrefix:
+				c.ContextError(sdkctx, "OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				recoverKeys := k.GetAllRecoverKey(sdkctx)
 				for _, recoverKey := range recoverKeys {
 					k.EnclaveClientSetRecoverKey(sdkctx, recoverKey)
 					checkSync = true
 				}
+			case types.EnclaveIdentityKeyPrefix:
+				c.ContextError(sdkctx, "OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
+				enclaveIdentities := k.GetAllEnclaveIdentity(sdkctx)
+				for _, enclaveIdentity := range enclaveIdentities {
+					k.EnclaveClientSetEnclaveIdentity(sdkctx, enclaveIdentity)
+					checkSync = true
+				}
+			default:
+				c.ContextDebug(sdkctx, "Ignoring key="+sh.Key+" in Qadena module")
 			}
+
 		} else {
 			c.ContextDebug(sdkctx, "in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
 		}

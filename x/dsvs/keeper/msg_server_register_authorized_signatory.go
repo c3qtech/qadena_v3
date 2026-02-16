@@ -45,28 +45,31 @@ func (k msgServer) RegisterAuthorizedSignatory(goCtx context.Context, msg *types
 
 	unprotoized := c.DSVSUnprotoizeVShareBindData(msg.VShareAuthorizedSignatory.AuthorizedSignatoryVShareBind)
 
-	vss := c.VShareSignatory{
+	currentVSS := c.VShareSignatory{
 		EncSignatoryVShare: msg.VShareAuthorizedSignatory.EncAuthorizedSignatoryVShare,
 		VShareBind:         unprotoized,
+		Time:               ctx.BlockTime(),
 	}
 
 	// get authorized signatory
 	signatory, found := k.GetAuthorizedSignatory(ctx, msg.Creator)
 
-	array_vss := make([]*c.VShareSignatory, 0)
+	array_old_vss := make([]*c.VShareSignatory, 0)
 	for _, v := range signatory.Signatory {
 		tvss := c.VShareSignatory{
 			EncSignatoryVShare: v.EncAuthorizedSignatoryVShare,
 			VShareBind:         c.DSVSUnprotoizeVShareBindData(v.AuthorizedSignatoryVShareBind),
+			Time:               v.Time,
 		}
-		array_vss = append(array_vss, &tvss)
+		array_old_vss = append(array_old_vss, &tvss)
 	}
 
-	success, err := k.qadenaKeeper.EnclaveValidateAuthorizedSignatory(ctx, msg.Creator, c.ProtoizeVShareSignatory(&vss), c.ProtoizeArrayOfVShareSignatory(array_vss))
+	success, err := k.qadenaKeeper.EnclaveValidateAuthorizedSignatory(ctx, msg.Creator, c.ProtoizeVShareSignatory(&currentVSS), c.ProtoizeArrayOfVShareSignatory(array_old_vss))
 
 	if success {
 		//signatory, found = k.GetAuthorizedSignatory(ctx, msg.Creator)
 
+		msg.VShareAuthorizedSignatory.Time = ctx.BlockTime() // this sets the time that this new signatory was added
 		if !found {
 			//k.SetAuthorizedSignatory(ctx, signatory)
 			signatory = types.AuthorizedSignatory{
@@ -78,7 +81,6 @@ func (k msgServer) RegisterAuthorizedSignatory(goCtx context.Context, msg *types
 		} else {
 			signatory.Signatory = append(signatory.Signatory, msg.VShareAuthorizedSignatory)
 		}
-		msg.VShareAuthorizedSignatory.Time = ctx.BlockTime()
 		k.SetAuthorizedSignatory(ctx, signatory)
 		return &types.MsgRegisterAuthorizedSignatoryResponse{}, nil
 	} else {

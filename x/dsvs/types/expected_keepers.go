@@ -19,6 +19,7 @@ type QadenaKeeper interface {
 	GetPioneerJar(ctx context.Context, pioneerID string) (qadenatypes.PioneerJar, bool)
 	GetPublicKey(ctx context.Context, pubKID string, pubKType string) (qadenatypes.PublicKey, bool)
 	GetWallet(ctx context.Context, walletID string) (val qadenatypes.Wallet, found bool)
+	GetEnclaveRPCClient() qadenatypes.QadenaEnclaveClient
 }
 
 // AccountKeeper defines the expected interface for the Account module.
