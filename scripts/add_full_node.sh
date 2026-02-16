@@ -310,16 +310,16 @@ else
 		echo "Getting trust height and trust hash for quicker 'statesync'..."
 		if curl --fail -k "http://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657/block" --output $QADENAHOME/config/block.1 > /dev/null 2> /dev/null ; then
 		echo "...it's good."
-		TRUSTHEIGHT=`jq '.result.block.header.height' $QADENAHOME/config/block.1`
-		TRUSTHASH=`jq '.result.block_id.hash' $QADENAHOME/config/block.1`
+		TRUSTHEIGHT=`jq -r '.result.block.header.height' $QADENAHOME/config/block.1`
+		TRUSTHASH=`jq -r '.result.block_id.hash' $QADENAHOME/config/block.1`
 		
 		echo "TRUSTHEIGHT $TRUSTHEIGHT, TRUSTHASH $TRUSTHASH"
 
 		if [[ $TRUSTHEIGHT -gt 1500 ]] ; then
 		
 			if curl --fail -k "http://$GENESIS_PIONEER_SECOND_IP_ADDRESS:26657/block?height=$TRUSTHEIGHT" --output $QADENAHOME/config/block.2 > /dev/null 2> /dev/null ; then
-			TRUSTHEIGHT2=`jq '.result.block.header.height' $QADENAHOME/config/block.2`
-			TRUSTHASH2=`jq '.result.block_id.hash' $QADENAHOME/config/block.2`
+			TRUSTHEIGHT2=`jq -r '.result.block.header.height' $QADENAHOME/config/block.2`
+			TRUSTHASH2=`jq -r '.result.block_id.hash' $QADENAHOME/config/block.2`
 			
 			if [[ $TRUSTHEIGHT == $TRUSTHEIGHT2 && $TRUSTHASH == $TRUSTHASH2 ]] ; then
 				echo "Great, same same, we can trust height/hash, modifying config.toml"
