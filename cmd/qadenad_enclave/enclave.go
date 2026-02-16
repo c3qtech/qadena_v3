@@ -4030,7 +4030,7 @@ func (s *qadenaServer) getRecoverOriginalWalletIDByNewWalletID(newWalletID strin
 
 func (s *qadenaServer) credentialByPCXYExists(credential *types.Credential) bool {
 	// make sure credentialPCXY is not empty
-	if credential.FindCredentialPedersenCommit != nil && credential.FindCredentialPedersenCommit.C != nil && credential.FindCredentialPedersenCommit.C.Compressed == nil {
+	if credential.FindCredentialPedersenCommit == nil || credential.FindCredentialPedersenCommit.C == nil || credential.FindCredentialPedersenCommit.C.Compressed == nil {
 		return false
 	}
 
@@ -4049,7 +4049,7 @@ func (s *qadenaServer) credentialByPCXYExists(credential *types.Credential) bool
 
 func (s *qadenaServer) setCredentialByPCXY(credential *types.Credential) {
 	// make sure credentialPCXY is not empty
-	if credential.FindCredentialPedersenCommit != nil && credential.FindCredentialPedersenCommit.C != nil && credential.FindCredentialPedersenCommit.C.Compressed == nil {
+	if credential.FindCredentialPedersenCommit == nil || credential.FindCredentialPedersenCommit.C == nil || credential.FindCredentialPedersenCommit.C.Compressed == nil {
 		return
 	}
 	credentialIDString := types.EnclaveStoreString{S: credential.CredentialID}
@@ -4064,7 +4064,7 @@ func (s *qadenaServer) setCredentialByPCXY(credential *types.Credential) {
 
 func (s *qadenaServer) removeCredentialByPCXY(credential *types.Credential) {
 	// make sure credentialPCXY is not empty
-	if credential.FindCredentialPedersenCommit != nil && credential.FindCredentialPedersenCommit.C != nil && credential.FindCredentialPedersenCommit.C.Compressed == nil {
+	if credential.FindCredentialPedersenCommit == nil || credential.FindCredentialPedersenCommit.C == nil || credential.FindCredentialPedersenCommit.C.Compressed == nil {
 		return
 	}
 
