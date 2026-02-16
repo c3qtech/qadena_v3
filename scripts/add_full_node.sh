@@ -326,13 +326,13 @@ else
 
 				dasel put -v true '.enable' -f $QADENAHOME/config/config.toml
 
-				new_rpc_servers = "$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657,$GENESIS_PIONEER_SECOND_IP_ADDRESS:26657"
+				new_rpc_servers="$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657,$GENESIS_PIONEER_SECOND_IP_ADDRESS:26657"
 				dasel put -v "$new_rpc_servers" '.statesync.rpc_servers' -f $QADENAHOME/config/config.toml
 
-				new_trust_height = "$TRUSTHEIGHT"
+				new_trust_height="$TRUSTHEIGHT"
 				dasel put -v "$new_trust_height" '.statesync.trust_height' -f $QADENAHOME/config/config.toml
 				
-				new_trust_hash = "$TRUSTHASH"
+				new_trust_hash="$TRUSTHASH"
 				dasel put -v "$new_trust_hash" '.statesync.trust_hash' -f $QADENAHOME/config/config.toml
 			else
 				echo "Trust height and trust hash do not match"
