@@ -525,10 +525,10 @@ REPLY=""
 while [[ $REPLY != "y" && $REPLY != "n" ]]; do
 	read REPLY\?"Do you want to start the new qadena 'full-node' now? (y/n) "
 	if [[ $REPLY == "y" ]] ; then
-		$qadenascripts/run.sh --sync-with-pioneer $GENESIS_PIONEER_FIRST_IP_ADDRESS
+		$qadenascripts/start_qadena.sh
 	elif [[ $REPLY == "n" ]] ; then
 		echo "Ok, will not start it now.  You can do so later by typing in:"
-		echo "  $qadenascripts/run.sh --sync-with-pioneer $GENESIS_PIONEER_FIRST_IP_ADDRESS"
+		echo "  $qadenascripts/start_qadena.sh"
 	else
 		echo "Invalid option $REPLY.  Please try again."
 	fi
