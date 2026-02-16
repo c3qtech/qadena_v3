@@ -315,9 +315,9 @@ else
 		
 		echo "TRUSTHEIGHT $TRUSTHEIGHT, TRUSTHASH $TRUSTHASH"
 
-		if [[ $TH -gt 1500 ]] ; then
+		if [[ $TRUSTHEIGHT -gt 1500 ]] ; then
 		
-			if curl --fail -k "http://$GENESIS_PIONEER_SECOND_IP_ADDRESS:26657/block?height=$TH" --output $QADENAHOME/config/block.2 > /dev/null 2> /dev/null ; then
+			if curl --fail -k "http://$GENESIS_PIONEER_SECOND_IP_ADDRESS:26657/block?height=$TRUSTHEIGHT" --output $QADENAHOME/config/block.2 > /dev/null 2> /dev/null ; then
 			TRUSTHEIGHT2=`jq '.result.block.header.height' $QADENAHOME/config/block.2`
 			TRUSTHASH2=`jq '.result.block_id.hash' $QADENAHOME/config/block.2`
 			
@@ -329,7 +329,7 @@ else
 				new_rpc_servers = "$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657,$GENESIS_PIONEER_SECOND_IP_ADDRESS:26657"
 				dasel put -v "$new_rpc_servers" '.statesync.rpc_servers' -f $QADENAHOME/config/config.toml
 
-				new_trust_height = "$TH"
+				new_trust_height = "$TRUSTHEIGHT"
 				dasel put -v "$new_trust_height" '.statesync.trust_height' -f $QADENAHOME/config/config.toml
 				
 				new_trust_hash = "$TRUSTHASH"
