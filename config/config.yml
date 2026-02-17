@@ -46,9 +46,9 @@ validators:
   bonded: 100000qdn
   app:
     minimum-gas-prices: "500000000aqdn"
-    pruning: "custom"
-    pruning-keep-recent: "100"
-    pruning-interval: "10"
+    pruning: "default"
+    pruning-keep-recent: "0"
+    pruning-interval: "0"
     wasm:
       query_gas_limit: "300000"
       memory_cache_size: "300"
@@ -98,11 +98,17 @@ validators:
     log_level: "debug"
     moniker: "pioneer1"
     consensus:
-      timeout_propose: "4s"
-      create_empty_blocks_interval: "3s"      
+      timeout_propose: "3s"
+      create_empty_blocks: true
+      create_empty_blocks_interval: "0s"
+      timeout_commit: "1.5s"
     p2p:
       addr_book_strict: false
+      max_num_inbound_peers: "80"
+      max_num_outbound_peers: "60"
     priv_validator_laddr: "tcp://0.0.0.0:26659"
+    mempool:
+      size: "10000"
       
   client:
     chain-id: "qadena_4444-1"
