@@ -8,6 +8,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	"cosmossdk.io/core/header"
 	"github.com/c3qtech/qadena_v3/x/dsvs/types"
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 	qadenatypes "github.com/c3qtech/qadena_v3/x/qadena/types"
@@ -23,6 +24,8 @@ type (
 		// should be the x/gov module account.
 		authority string
 
+		headerService header.Service
+
 		bankKeeper   types.BankKeeper
 		qadenaKeeper types.QadenaKeeper
 	}
@@ -36,6 +39,8 @@ func NewKeeper(
 
 	bankKeeper types.BankKeeper,
 	qadenaKeeper types.QadenaKeeper,
+	headerService header.Service,
+
 ) Keeper {
 	if _, err := sdk.AccAddressFromBech32(authority); err != nil {
 		panic(fmt.Sprintf("invalid authority address: %s", authority))
@@ -47,8 +52,9 @@ func NewKeeper(
 		authority:    authority,
 		logger:       logger,
 
-		bankKeeper:   bankKeeper,
-		qadenaKeeper: qadenaKeeper,
+		bankKeeper:    bankKeeper,
+		qadenaKeeper:  qadenaKeeper,
+		headerService: headerService,
 	}
 }
 

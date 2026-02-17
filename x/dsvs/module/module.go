@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"cosmossdk.io/core/appmodule"
+	"cosmossdk.io/core/header"
 	"cosmossdk.io/core/store"
 	"cosmossdk.io/depinject"
 	"cosmossdk.io/log"
@@ -162,12 +163,7 @@ var initialized = false
 func (am AppModule) BeginBlock(goCtx context.Context) error {
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
-	if !initialized {
-		err := am.keeper.EnclaveSynchronizeStores(ctx)
-		if err == nil {
-			initialized = true
-		}
-	}
+	am.keeper.EnclaveBeginBlock(ctx)
 
 	return nil
 }
@@ -206,6 +202,7 @@ type ModuleInputs struct {
 	AccountKeeper types.AccountKeeper
 	BankKeeper    types.BankKeeper
 	QadenaKeeper  types.QadenaKeeper
+	HeaderService header.Service
 }
 
 type ModuleOutputs struct {
@@ -228,6 +225,7 @@ func ProvideModule(in ModuleInputs) ModuleOutputs {
 		authority.String(),
 		in.BankKeeper,
 		in.QadenaKeeper,
+		in.HeaderService,
 	)
 	m := NewAppModule(
 		in.Cdc,

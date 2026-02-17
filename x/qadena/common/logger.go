@@ -25,7 +25,7 @@ func NewTMLogger(p string) log.Logger {
 
 var loggerPrefix = "[qadena - "
 
-var LogLevelDebugEnabled = true
+var LogLevelDebugEnabled = false
 
 // SetLogLevel enables or disables debug logging based on a simple level string.
 // If level is "debug" (case-insensitive), debug logs are emitted; otherwise they are suppressed.

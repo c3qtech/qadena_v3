@@ -117,3 +117,24 @@ func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
 
 	return nil
 }
+
+var synchronizedWithEnclave = false
+
+func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
+
+	if !synchronizedWithEnclave {
+		err := k.EnclaveSynchronizeStores(sdkCtx)
+		if err != nil {
+			c.ContextError(sdkCtx, "DSVS: enclaveSynchronizeStores failed: "+err.Error())
+		} else {
+			synchronizedWithEnclave = true
+		}
+	} else {
+		if c.LogLevelDebugEnabled {
+			header := k.headerService.GetHeaderInfo(sdkCtx)
+			if header.Height%25 == 0 {
+				k.displayStoresSync(sdkCtx)
+			}
+		}
+	}
+}

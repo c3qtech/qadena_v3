@@ -15,6 +15,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
+
 	//	"github.com/cosmos/cosmos-sdk/runtime"
 	"github.com/cosmos/cosmos-sdk/server"
 
@@ -29,6 +30,7 @@ import (
 
 	"github.com/c3qtech/qadena_v3/app"
 	cmdcfg "github.com/c3qtech/qadena_v3/cmd/config"
+	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 
 	//	txsigning "cosmossdk.io/x/tx/signing"
 
@@ -95,6 +97,10 @@ func NewRootCmd() *cobra.Command {
 				return err
 			}
 
+			if level, err := cmd.Flags().GetString("log-level"); err == nil && level != "" {
+				c.SetLogLevel(level)
+			}
+
 			// This needs to go after ReadFromClientConfig, as that function
 			// sets the RPC client needed for SIGN_MODE_TEXTUAL.
 			txConfigOpts.EnabledSignModes = append(txConfigOpts.EnabledSignModes, signing.SignMode_SIGN_MODE_TEXTUAL)
@@ -118,6 +124,8 @@ func NewRootCmd() *cobra.Command {
 			return server.InterceptConfigsPreRunHandler(cmd, customAppTemplate, customAppConfig, customCMTConfig)
 		},
 	}
+
+	rootCmd.PersistentFlags().String("log-level", "", "Log level override for qadenad (e.g. debug, info, error)")
 
 	// Since the IBC modules don't support dependency injection, we need to
 	// manually register the modules on the client side.

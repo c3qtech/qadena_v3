@@ -143,12 +143,21 @@ echo "run.sh: START QADENA"
 echo "run.sh: ------------"
 echo "run.sh: ------------"
 
+# read the config and check log level
+log_level=$(grep "log_level" $QADENAHOME/config/config.toml | awk '{print $3}' | tr -d '"' | tr -d "'")
+if [[ $log_level == "debug" ]] ; then
+    log_level="debug"
+else
+    log_level="info"
+fi
+
+
 if [[ $REAL_ENCLAVE == 1 ]] ; then
-    qadenad_alias start --json-rpc.api eth,txpool,personal,net,debug,web3 --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --enclave-addr localhost:50051 --enclave-signer-id `ego signerid $QADENAHOME/config/public.pem` --enclave-unique-id `ego uniqueid $qadenabin/qadenad_enclave` --home=$QADENAHOME &
+    qadenad_alias start --json-rpc.api eth,txpool,personal,net,debug,web3 --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --enclave-addr localhost:50051 --enclave-signer-id `ego signerid $QADENAHOME/config/public.pem` --enclave-unique-id `ego uniqueid $qadenabin/qadenad_enclave` --home=$QADENAHOME --log-level $log_level &
     PIDS+=$!
     PROC_NAMES[$!]="qadenad (real enclave)"
 else
-    qadenad_alias start --json-rpc.api eth,txpool,personal,net,debug,web3 --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --enclave-addr localhost:50051 --home=$QADENAHOME &
+    qadenad_alias start --json-rpc.api eth,txpool,personal,net,debug,web3 --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --enclave-addr localhost:50051 --home=$QADENAHOME --log-level $log_level &
     PIDS+=$!
     PROC_NAMES[$!]="qadenad"
 fi

@@ -589,7 +589,26 @@ func (k Keeper) EnclaveClientBroadcastSecretSharePrivateKey(sdkctx sdk.Context, 
 	return nil
 }
 
+var synchronizedWithEnclave = false
+
 func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
+
+	if !synchronizedWithEnclave {
+		err := k.enclaveSynchronizeStores(sdkCtx)
+		if err != nil {
+			c.ContextError(sdkCtx, "Qadena: enclaveSynchronizeStores failed: "+err.Error())
+		} else {
+			synchronizedWithEnclave = true
+		}
+	} else {
+		if c.LogLevelDebugEnabled {
+			header := k.headerService.GetHeaderInfo(sdkCtx)
+			if header.Height%25 == 0 {
+				k.displayStoresSync(sdkCtx)
+			}
+		}
+	}
+
 	header := k.headerService.GetHeaderInfo(sdkCtx)
 	blockInfo := k.cometService.GetCometBlockInfo(sdkCtx)
 
@@ -1028,8 +1047,8 @@ func (k Keeper) displayStoresSync(sdkctx sdk.Context) error {
 }
 
 // sync DB between chain and enclave
-func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
-	c.ContextDebug(sdkctx, "Qadena: EnclaveSynchronizeStores -- Chain initialized and ready for business, synchronizing enclave...")
+func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
+	c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores -- Chain initialized and ready for business, synchronizing enclave...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
 	defer cancel()
@@ -1038,7 +1057,7 @@ func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
 
 	storeHashes, err := EnclaveGRPCClient.GetStoreHash(ctx, gsh)
 	if err != nil {
-		c.ContextDebug(sdkctx, "Qadena: EnclaveSynchronizeStores error returned by GetStoreHash on enclave "+err.Error())
+		c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores error returned by GetStoreHash on enclave "+err.Error())
 		return err
 	}
 
@@ -1049,7 +1068,7 @@ func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
 		switch sh.Key {
 		case types.WalletKeyPrefix:
 			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: EnclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
+				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				wallets := k.GetAllWallet(sdkctx)
 				//    fmt.Println("wallets", list)
 				for _, wallet := range wallets {
@@ -1057,95 +1076,95 @@ func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
 					checkSync = true
 				}
 			} else {
-				c.ContextDebug(sdkctx, "Qadena: EnclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
+				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
 			}
 
 		case types.CredentialKeyPrefix:
 			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: EnclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
+				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				credentials := k.GetAllCredential(sdkctx)
 				for _, credential := range credentials {
 					k.EnclaveClientSetCredential(sdkctx, credential)
 					checkSync = true
 				}
 			} else {
-				c.ContextDebug(sdkctx, "Qadena: EnclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
+				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
 			}
 		case types.PublicKeyKeyPrefix:
 			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: EnclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
+				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				publicKeys := k.GetAllPublicKey(sdkctx)
-				c.ContextDebug(sdkctx, "Qadena: EnclaveSynchronizeStores synchronizing PublicKeys", publicKeys)
+				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores synchronizing PublicKeys", publicKeys)
 				for _, publicKey := range publicKeys {
 					k.EnclaveClientSetPublicKey(sdkctx, publicKey)
 					checkSync = true
 				}
 			} else {
-				c.ContextDebug(sdkctx, "Qadena: EnclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
+				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
 			}
 		case types.JarRegulatorKeyPrefix:
 			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: EnclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
+				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				jarRegulators := k.GetAllJarRegulator(sdkctx)
 				for _, jarRegulator := range jarRegulators {
 					k.EnclaveClientSetJarRegulator(sdkctx, jarRegulator)
 					checkSync = true
 				}
 			} else {
-				c.ContextDebug(sdkctx, "Qadena: EnclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
+				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
 			}
 		case types.IntervalPublicKeyIDKeyPrefix:
 			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: EnclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
+				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				intervalPublicKeyIDs := k.GetAllIntervalPublicKeyID(sdkctx)
 				for _, intervalPublicKeyID := range intervalPublicKeyIDs {
 					k.EnclaveClientSetIntervalPublicKeyId(sdkctx, intervalPublicKeyID)
 					checkSync = true
 				}
 			} else {
-				c.ContextDebug(sdkctx, "Qadena: EnclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
+				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
 			}
 		case types.ProtectKeyKeyPrefix:
 			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: EnclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
+				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				protectKeys := k.GetAllProtectKey(sdkctx)
 				for _, protectKey := range protectKeys {
 					k.EnclaveClientSetProtectKey(sdkctx, protectKey)
 					checkSync = true
 				}
 			} else {
-				c.ContextDebug(sdkctx, "Qadena: EnclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
+				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
 			}
 		case types.RecoverKeyKeyPrefix:
 			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: EnclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
+				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				recoverKeys := k.GetAllRecoverKey(sdkctx)
 				for _, recoverKey := range recoverKeys {
 					k.EnclaveClientSetRecoverKey(sdkctx, recoverKey)
 					checkSync = true
 				}
 			} else {
-				c.ContextDebug(sdkctx, "Qadena: EnclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
+				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
 			}
 		case types.EnclaveIdentityKeyPrefix:
 			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: EnclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
+				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				enclaveIdentities := k.GetAllEnclaveIdentity(sdkctx)
 				for _, enclaveIdentity := range enclaveIdentities {
 					k.EnclaveClientSetEnclaveIdentity(sdkctx, enclaveIdentity)
 					checkSync = true
 				}
 			} else {
-				c.ContextDebug(sdkctx, "Qadena: EnclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
+				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
 			}
 		default:
-			c.ContextDebug(sdkctx, "Qadena: EnclaveSynchronizeStores Ignoring key="+sh.Key+" in Qadena module")
+			c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores Ignoring key="+sh.Key+" in Qadena module")
 		}
 
 	}
 
 	if checkSync {
-		c.ContextDebug(sdkctx, "Qadena: EnclaveSynchronizeStores Checking Sync after chain->enclave synchronization")
+		c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores Checking Sync after chain->enclave synchronization")
 		k.displayStoresSync(sdkctx)
 	}
 
