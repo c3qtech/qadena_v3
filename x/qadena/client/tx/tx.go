@@ -213,6 +213,8 @@ func queryMinGasPrice(clientCtx client.Context, fallback string) string {
 	minGasPrice := res.Params.MinGasPrice
 	baseFee := res.Params.BaseFee
 
+	fmt.Printf("queryMinGasPrice: minGasPrice=%s baseFee=%s\n", minGasPrice.String(), baseFee.String())
+
 	if minGasPrice.IsNil() {
 		// set to 0
 		minGasPrice = sdkmath.LegacyZeroDec()
@@ -242,7 +244,10 @@ func queryMinGasPrice(clientCtx client.Context, fallback string) string {
 	// convert to aqdn
 	ret := buffered.TruncateInt()
 	// increment by 1
-	ret.Add(sdkmath.OneInt())
+	ret = ret.Add(sdkmath.OneInt())
+
+	fmt.Printf("queryMinGasPrice: ret=%s\n", ret.String())
+
 	return ret.String() + "aqdn"
 }
 
