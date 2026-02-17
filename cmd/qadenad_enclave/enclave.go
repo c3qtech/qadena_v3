@@ -1004,7 +1004,7 @@ func (s *qadenaServer) ExportPrivateState(ctx context.Context, in *types.MsgExpo
 		EnclaveSSOwnersMap                      types.EncryptableEnclaveSSOwnerMap
 		EnclavePrivKCacheMap                    EnclavePrivKCacheMap
 		EnclavePubKCacheMap                     EnclavePubKCacheMap
-		AuthorizedSignatoryMap                  []types.ValidateAuthorizedSignatoryRequest
+		AuthorizedSignatories                   []dsvstypes.AuthorizedSignatory
 		EnclaveIdentityMap                      []types.EnclaveIdentity
 	}
 
@@ -1050,7 +1050,7 @@ func (s *qadenaServer) ExportPrivateState(ctx context.Context, in *types.MsgExpo
 
 	state.ProtectSubWalletIDByOriginalWalletIDMap = s.exportSealedTable(EnclaveProtectSubWalletIDByOriginalWalletIDKeyPrefix)
 
-	state.AuthorizedSignatoryMap = s.getAllAuthorizedSignatories()
+	state.AuthorizedSignatories = s.getAllDSVSAuthorizedSignatories()
 
 	state.EnclaveIdentityMap = s.getAllEnclaveIdentities()
 
@@ -3173,7 +3173,7 @@ func (s *qadenaServer) containsWalletID(d []string, creator string) bool {
 func (s *qadenaServer) decryptSignatory(in *types.VShareSignatory, trusted bool) *types.EncryptableSignatory {
 	c.LoggerDebug(logger, "decryptSignatory "+c.PrettyPrint(in)+" "+strconv.FormatBool(trusted))
 
-	bindData := c.UnprotoizeVShareBindData(in.VShareBind)
+	bindData := c.UnprotoizeVShareBindData(in.SignatoryVShareBind)
 
 	var b64Address string
 	var ssIntervalPubKID string
@@ -3217,7 +3217,7 @@ func (s *qadenaServer) decryptSignatory(in *types.VShareSignatory, trusted bool)
 func (s *qadenaServer) decryptAuthorizedSignatory(in *types.VShareSignatory, trusted bool) *types.EncryptableAuthorizedSignatory {
 	c.LoggerDebug(logger, "decryptAuthorizedSignatory "+c.PrettyPrint(in)+" "+strconv.FormatBool(trusted))
 
-	bindData := c.UnprotoizeVShareBindData(in.VShareBind)
+	bindData := c.UnprotoizeVShareBindData(in.SignatoryVShareBind)
 
 	var b64Address string
 	var ssIntervalPubKID string
@@ -3348,15 +3348,15 @@ func (s *qadenaServer) ValidateAuthorizedSignatory(ctx context.Context, in *type
 
 	if in.Signatory != nil {
 		var bindPtr *dsvstypes.VShareBindData
-		if in.Signatory.VShareBind != nil {
-			unprotoVShareBindData := c.UnprotoizeVShareBindData(in.Signatory.VShareBind)
+		if in.Signatory.SignatoryVShareBind != nil {
+			unprotoVShareBindData := c.UnprotoizeVShareBindData(in.Signatory.SignatoryVShareBind)
 			dsvsProtoVShareBindData := c.DSVSProtoizeVShareBindData(unprotoVShareBindData)
 			bindPtr = dsvsProtoVShareBindData
 		}
 		dsvsAuthorizedSignatory.Signatory = append(dsvsAuthorizedSignatory.Signatory, &dsvstypes.VShareAuthorizedSignatory{
 			EncAuthorizedSignatoryVShare:  in.Signatory.EncSignatoryVShare,
 			AuthorizedSignatoryVShareBind: bindPtr,
-			Time:                          time.Now(),
+			Time:                          in.Signatory.Time,
 		})
 	}
 
@@ -3366,14 +3366,15 @@ func (s *qadenaServer) ValidateAuthorizedSignatory(ctx context.Context, in *type
 				continue
 			}
 			var bindPtr *dsvstypes.VShareBindData
-			if currentSignatory.VShareBind != nil {
-				unprotoVShareBindData := c.UnprotoizeVShareBindData(in.Signatory.VShareBind)
+			if currentSignatory.SignatoryVShareBind != nil {
+				unprotoVShareBindData := c.UnprotoizeVShareBindData(currentSignatory.SignatoryVShareBind)
 				dsvsProtoVShareBindData := c.DSVSProtoizeVShareBindData(unprotoVShareBindData)
 				bindPtr = dsvsProtoVShareBindData
 			}
 			dsvsAuthorizedSignatory.Signatory = append(dsvsAuthorizedSignatory.Signatory, &dsvstypes.VShareAuthorizedSignatory{
 				EncAuthorizedSignatoryVShare:  currentSignatory.EncSignatoryVShare,
 				AuthorizedSignatoryVShareBind: bindPtr,
+				Time:                          currentSignatory.Time,
 			})
 		}
 	}
@@ -3417,8 +3418,10 @@ func (s *qadenaServer) GetAuthorizedSignatory(ctx context.Context, creator strin
 		bindPtr = protoVShareBindData
 	}
 	ret := types.VShareSignatory{
-		EncSignatoryVShare: top.EncAuthorizedSignatoryVShare,
-		VShareBind:         bindPtr,
+		EncSignatoryVShare:  top.EncAuthorizedSignatoryVShare,
+		SignatoryVShareBind: bindPtr,
+		Time:                top.Time,
+		WalletID:            in.WalletID,
 	}
 
 	return &ret, true
@@ -4684,12 +4687,12 @@ func (s *qadenaServer) getAllProtectKeys() (arr []types.ProtectKey) {
 	return
 }
 
-func (s *qadenaServer) getAllAuthorizedSignatories() (arr []types.ValidateAuthorizedSignatoryRequest) {
-	arr = make([]types.ValidateAuthorizedSignatoryRequest, 0)
+func (s *qadenaServer) getAllDSVSAuthorizedSignatories() (arr []dsvstypes.AuthorizedSignatory) {
+	arr = make([]dsvstypes.AuthorizedSignatory, 0)
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(dsvstypes.AuthorizedSignatoryKeyPrefix))
 	itr := store.Iterator(nil, nil)
 	for itr.Valid() {
-		var val types.ValidateAuthorizedSignatoryRequest
+		var val dsvstypes.AuthorizedSignatory
 		s.Cdc.MustUnmarshal(itr.Value(), &val)
 		arr = append(arr, val)
 		itr.Next()

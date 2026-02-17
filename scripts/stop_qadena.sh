@@ -5,6 +5,11 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+if ! is_qadena_running; then
+    echo "stop_qadena.sh: Qadena is not running"
+    exit 0
+fi
+
 # if REAL_ENCLAVE, check if running as root
 if [[ $REAL_ENCLAVE -eq 1 ]]; then
     if [[ $(id -u) -ne 0 ]]; then
@@ -65,7 +70,7 @@ fi
 
 
 echo "stop_qadena.sh: -----------"
-echo "stop_qadena.sh: STOP CHAIN"
+echo "stop_qadena.sh: STOP QADENA"
 echo "stop_qadena.sh: -----------"
 
 if [[ $stop_qadena -eq 1 ]] ; then
@@ -110,4 +115,10 @@ pgrep -f "rotatelogs.*qadena" > /dev/null
 if [[ $? -eq 0 ]]; then
     echo "stop_qadena.sh: Stopping rotatelogs"
     pkill -f "rotatelogs.*qadena"
+fi
+
+sleep 5
+if is_qadena_running; then
+    echo "stop_qadena.sh: Error: Qadena is still running"
+    exit 1
 fi

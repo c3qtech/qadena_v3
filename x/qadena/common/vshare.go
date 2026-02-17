@@ -36,6 +36,7 @@ type VShareSignatory struct {
 	EncSignatoryVShare []byte
 	VShareBind         *VShareBindData
 	Time               time.Time
+	WalletID           string
 }
 
 type VSharePubKInfo struct {

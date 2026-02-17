@@ -33,23 +33,23 @@ done
 # if REAL_ENCLAVE, check if running as root
 if [[ $REAL_ENCLAVE -eq 1 ]]; then
     if [[ $(id -u) -ne 0 ]]; then
-        echo "run.sh:  Error: qadenad_enclave must be run as root"
+        echo "restart_qadena.sh:  Error: qadenad_enclave must be run as root"
         exit 1
     fi
 fi
 
-if [[ $skip_stop -eq 1 ]]; then
-    echo "Killing old qadenad and qadenad_enclave if they're running"
-    $qadenascripts/stop_qadena.sh --all
+if [[ $skip_stop -eq 0 ]]; then
+    if is_qadena_running; then
+      echo "restart_qadena.sh: Stopping Qadena"
+      $qadenascripts/stop_qadena.sh --all
+    fi
 fi
 
-echo "Waiting 5 secs for the chain to die"
-sleep 5
 
 if [[ $syslog_logger -eq 1 ]]; then
-    echo "Running in background with syslog (check /var/log/syslog)"
+    echo "restart_qadena.sh: Running in background with syslog (check /var/log/syslog)"
     nohup bash -c "$qadenascripts/run.sh 2>&1 | logger -t qadena" &
 else
-    echo "Running in background with local logger (check $QADENAHOME/logs)"
+    echo "restart_qadena.sh: Running in background with local logger (check $QADENAHOME/logs)"
     nohup bash -c "$qadenascripts/run.sh 2>&1 | rotatelogs -l -D -L $QADENAHOME/logs/qadena.log $QADENAHOME/logs/qadena-%Y-%m-%d.log 86400" &
 fi

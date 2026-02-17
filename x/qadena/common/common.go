@@ -1572,7 +1572,9 @@ func ProtoizeVShareSignatory(vss *VShareSignatory) *types.VShareSignatory {
 	ret := new(types.VShareSignatory)
 
 	ret.EncSignatoryVShare = vss.EncSignatoryVShare
-	ret.VShareBind = ProtoizeVShareBindData(vss.VShareBind)
+	ret.SignatoryVShareBind = ProtoizeVShareBindData(vss.VShareBind)
+	ret.Time = vss.Time
+	ret.WalletID = vss.WalletID
 
 	return ret
 }
@@ -1591,7 +1593,9 @@ func UnprotoizeVShareSignatory(vss *types.VShareSignatory) *VShareSignatory {
 	ret := new(VShareSignatory)
 
 	ret.EncSignatoryVShare = vss.EncSignatoryVShare
-	ret.VShareBind = UnprotoizeVShareBindData(vss.VShareBind)
+	ret.VShareBind = UnprotoizeVShareBindData(vss.SignatoryVShareBind)
+	ret.Time = vss.Time
+	ret.WalletID = vss.WalletID
 
 	return ret
 }
@@ -1601,6 +1605,8 @@ func DSVSProtoizeVShareSignatory(vss *VShareSignatory) *dsvstypes.VShareSignator
 
 	ret.EncSignatoryVShare = vss.EncSignatoryVShare
 	ret.SignatoryVShareBind = DSVSProtoizeVShareBindData(vss.VShareBind)
+	ret.Time = vss.Time
+	ret.WalletID = vss.WalletID
 
 	return ret
 }
@@ -1610,6 +1616,8 @@ func DSVSUnprotoizeVShareSignatory(vss *dsvstypes.VShareSignatory) *VShareSignat
 
 	ret.EncSignatoryVShare = vss.EncSignatoryVShare
 	ret.VShareBind = DSVSUnprotoizeVShareBindData(vss.SignatoryVShareBind)
+	ret.Time = vss.Time
+	ret.WalletID = vss.WalletID
 
 	return ret
 }

@@ -220,7 +220,12 @@ message MsgInitEnclave {
 
 message VShareSignatory {
   bytes encSignatoryVShare = 1; 
-  VShareBindData vShareBind = 2;   
+  VShareBindData signatoryVShareBind = 2; 
+  google.protobuf.Timestamp time = 3 [
+    (gogoproto.stdtime) = true,
+    (gogoproto.nullable) = false
+  ];    
+	string WalletID = 4;
 }
 
 message ValidateAuthorizedSignerRequest {

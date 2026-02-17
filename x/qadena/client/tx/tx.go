@@ -240,7 +240,10 @@ func queryMinGasPrice(clientCtx client.Context, fallback string) string {
 	}
 
 	// convert to aqdn
-	return buffered.TruncateInt().String() + "aqdn"
+	ret := buffered.TruncateInt()
+	// increment by 1
+	ret.Add(sdkmath.OneInt())
+	return ret.String() + "aqdn"
 }
 
 func GenerateOrBroadcastTxCLISync(clientCtx client.Context, flagSet *pflag.FlagSet, op string, msgs ...sdk.Msg) (error, *sdk.TxResponse) {

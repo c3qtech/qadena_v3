@@ -147,10 +147,8 @@ set_min_gas_price() {
   # add 10% buffer
   minimum_gas_prices=$(echo "$minimum_gas_prices * 1.1" | bc)
 
-  # take the max of minimum_gas_prices and "1"
-  if is_greater_than "1" "$minimum_gas_prices"; then
-    minimum_gas_prices="1"
-  fi
+  # add 1
+  minimum_gas_prices=$(echo "$minimum_gas_prices + 1" | bc)
 
   #echo "Using minimum gas prices: $minimum_gas_prices"
   minimum_gas_prices="${minimum_gas_prices}aqdn"
@@ -208,3 +206,16 @@ increment_version() {
   echo "$NEW_VERSION"
 }
 
+# function to detect if all of the qadena processes are running
+
+is_qadena_running() {
+  if pgrep -x qadenad >/dev/null ||
+     pgrep -x qadenad_enclave >/dev/null ||
+     pgrep -x signer_enclave >/dev/null; then
+    echo "Qadena is running"
+    return 0
+  else
+    echo "Qadena is not running"
+    return 1
+  fi
+}
