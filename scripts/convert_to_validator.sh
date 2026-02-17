@@ -113,7 +113,7 @@ if [ $IS_UP -eq 0 ] ; then
 fi
 
 # create validator json
-validator_pubkey=`qadenad_alias tendermint show-validator`
+validator_pubkey=`qadenad_alias cometbft show-validator`
 validator_amount="${VALIDATOR_STAKE}qdn"
 validator_moniker="$PIONEER"
 validator_commission_rate="0.10"
