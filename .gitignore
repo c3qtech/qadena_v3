@@ -8,6 +8,7 @@ release/
 *.ign
 *.gen.json
 mnemonics.json
+nohup.out
 variables.json
 *-updated.yaml
 *.proposal_id
@@ -30,3 +31,4 @@ cmd/qadenad_enclave/qadenad_enclave.unsigned
 cmd/qadenad_enclave/enclave_params.json
 cmd/qadenad/qadenad
 *~
+testkey
