@@ -125,6 +125,9 @@ RUN apt-get install -y --no-install-recommends \
   zlib1g=1:1.2.11.dfsg-2ubuntu9.2 \
   zsh=5.8.1-1
 
+RUN apt-mark showmanual \
+ | xargs dpkg-query -W -f='  ${Package}=${Version} \\\n' \
+ | sort > /locked-packages.txt
 
 # Download and install further requirements (if any)
 #
@@ -158,7 +161,7 @@ RUN zsh buildscripts/build_signer_enclave.sh --build-reproducible
 
 # Use the export target if you just want to use Docker to build your app and then export it
 FROM scratch AS export
-COPY --from=build /build/cmd/qadenad_enclave /
 COPY --from=build /build/cmd/signer_enclave /
+COPY --from=build /locked-packages.txt /locked-packages.txt
 
 
