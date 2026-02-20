@@ -156,8 +156,6 @@ WORKDIR /build
 
 RUN zsh buildscripts/build_enclave.sh --build-reproducible
 
-RUN zsh buildscripts/build_signer_enclave.sh --build-reproducible
-
 # Use the export target if you just want to use Docker to build your app and then export it
 FROM scratch AS export
 COPY --from=build /build/cmd/qadenad_enclave /
