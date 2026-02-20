@@ -145,7 +145,7 @@ RUN apt-get install -y --no-install-recommends \
 
 
 RUN apt-mark showmanual \
- | xargs dpkg-query -W -f='  ${Package}=${Version}\\\n' \
+ | xargs dpkg-query -W -f='  ${Package}=${Version} \\\n' \
  | sort > /locked-packages.txt
 
 
