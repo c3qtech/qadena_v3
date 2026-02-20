@@ -95,6 +95,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"os/signal"
+
+	_ "github.com/c3qtech/qadena_v3/internal/qsortrshim"
 )
 
 // pingServer is used to implement helloworld.GreeterServer.
