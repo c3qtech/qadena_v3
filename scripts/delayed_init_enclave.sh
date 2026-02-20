@@ -90,8 +90,20 @@ if [[ $SYNC_WITH_PIONEER = "" ]] ; then
 
         else
             echo "[delayed_init_enclave - E] SYNC_WITH_PIONEER is not set and config.toml p2p.persistent_peers is empty"
-            $qadenascripts/stop_qadena.sh --all > /dev/null 2>&1
-            exit 1
+            if [[ ! -f $QADENAHOME/config/addrbook.json ]] ; then
+                echo "[delayed_init_enclave - E] addrbook.json does not exist, stopping Qadena"
+                $qadenascripts/stop_qadena.sh --all
+                exit 1
+            fi
+
+            SYNC_WITH_PIONEER=$(jq -r '.addrs[0].addr.ip // empty' $QADENAHOME/config/addrbook.json | tr -d ' ')
+            if [[ $SYNC_WITH_PIONEER == "" ]] ; then
+                echo "[delayed_init_enclave - E] addrbook.json does not contain any ip address, stopping Qadena"
+                $qadenascripts/stop_qadena.sh --all
+                exit 1
+            fi
+
+            echo "[delayed_init_enclave - I] Using SYNC_WITH_PIONEER from addrbook.json: $SYNC_WITH_PIONEER"
         fi
     fi
 fi

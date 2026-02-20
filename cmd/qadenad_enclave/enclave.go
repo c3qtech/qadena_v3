@@ -37,8 +37,6 @@ import (
 	"github.com/edgelesssys/ego/ecrypto"
 	"github.com/edgelesssys/ego/enclave"
 
-	//  "github.com/evmos/ethermint/encoding"
-	//  "github.com/c3qtech/qadena/app"
 	cmdcfg "github.com/c3qtech/qadena_v3/cmd/config"
 	dsvstypes "github.com/c3qtech/qadena_v3/x/dsvs/types"
 	qadenatx "github.com/c3qtech/qadena_v3/x/qadena/client/tx"
@@ -91,8 +89,6 @@ import (
 	enccodec "github.com/cosmos/cosmos-sdk/std"
 
 	evmcryptocodec "github.com/cosmos/evm/crypto/codec"
-	//	"github.com/cosmos/evm/crypto/ethsecp256k1"
-	//	"github.com/cosmos/evm/crypto/ethsecp256k1"
 	evmhd "github.com/cosmos/evm/crypto/hd"
 	evmeip712 "github.com/cosmos/evm/ethereum/eip712"
 

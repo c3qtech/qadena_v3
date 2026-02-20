@@ -332,47 +332,6 @@ func ProvideERC20CustomGetSigner() txsigning.CustomGetSigner {
 	return evmerc20types.MsgConvertERC20CustomGetSigner
 }
 
-/*
-func newAnteHandler(app *App) (sdk.AnteHandler, error) {
-	if app.BankKeeper == nil {
-		return nil, fmt.Errorf("both AccountKeeper and BankKeeper are required")
-	}
-
-	var sigGasConsumer = sdkante.DefaultSigVerificationGasConsumer
-	if cmdcfg.QadenaUsesEthSecP256k1 {
-		sigGasConsumer = ante.EthSigVerificationGasConsumer
-	}
-
-	txCounterStoreKey := app.GetKey(wasmtypes.StoreKey)
-
-	anteHandler, err := ante.NewAnteHandler(
-		ante.HandlerOptions{
-			AccountKeeper:         app.AccountKeeper,
-			BankKeeper:            app.BankKeeper,
-			SignModeHandler:       app.txConfig.SignModeHandler(),
-			FeegrantKeeper:        app.FeeGrantKeeper,
-			SigGasConsumer:        sigGasConsumer,
-			QadenaKeeper:          &app.QadenaKeeper,
-			WasmKeeper:            &app.WasmKeeper,
-			TXCounterStoreService: runtime.NewKVStoreService(txCounterStoreKey),
-			NodeConfig:            &app.nodeConfig,
-			SigVerifyOptions: []sdkante.SigVerificationDecoratorOption{
-				// change below as needed.
-				sdkante.WithUnorderedTxGasCost(sdkante.DefaultUnorderedTxGasCost),
-				sdkante.WithMaxUnorderedTxTimeoutDuration(sdkante.DefaultMaxTimeoutDuration),
-			},
-			ExtensionOptionChecker: nil,
-			TxFeeChecker:           nil,
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create ante handler: %w", err)
-	}
-
-	return anteHandler, nil
-}
-*/
-
 const UpgradeName = "v050-to-v053"
 
 func (app *App) RegisterUpgradeHandlers() {
@@ -614,14 +573,6 @@ func New(
 
 	app.RegisterUpgradeHandlers()
 
-	/*
-		// qadena
-		anteHandler, err := newAnteHandler(app)
-		if err != nil {
-			panic(err)
-		}
-		app.SetAnteHandler(anteHandler)
-	*/
 	maxGasWanted := cast.ToUint64(appOpts.Get(evmsrvflags.EVMMaxTxGasWanted))
 
 	app.evmSetAnteHandler(app.txConfig, maxGasWanted)

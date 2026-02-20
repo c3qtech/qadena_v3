@@ -201,10 +201,10 @@ while [ $KILLED -eq 0 ] ; do
   sleep 2
 done
 
-echo "run.sh: -----------"
-echo "run.sh: STOP CHAIN"
-echo "run.sh: -----------"
-echo "run.sh: -----------"
+echo "run.sh: ------------"
+echo "run.sh: QADENA ENDED "
+echo "run.sh: ------------"
+echo "run.sh: ------------"
 
 trap SIGINT
 
