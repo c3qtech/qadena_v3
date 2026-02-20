@@ -90,12 +90,12 @@ RUN apt-get install -y --no-install-recommends \
 #  curl \
 #  zsh \
 
-# Install Go 1.23.7 manually
-RUN curl -LO https://go.dev/dl/go1.23.7.linux-amd64.tar.gz && \
-    tar -C /usr/local -xzf go1.23.7.linux-amd64.tar.gz && \
-    rm go1.23.7.linux-amd64.tar.gz
+# Install Go 1.25.7 manually
+RUN curl -LO https://go.dev/dl/go1.25.7.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go1.25.7.linux-amd64.tar.gz && \
+    rm go1.25.7.linux-amd64.tar.gz
 
-# Set Go 1.23.7 as active version
+# Set Go 1.25.7 as active version
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Optional: confirm Go version

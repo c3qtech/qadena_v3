@@ -120,7 +120,7 @@ if [ "$(uname -m)" = "x86_64" ]; then
     fi
 
     # ego
-    (cd installers; apt install -y ./ego_1.7.0_amd64_ubuntu-22.04.deb)
+    (cd installers; wget https://github.com/edgelesssys/ego/releases/download/v1.8.1/ego_1.8.1_amd64_ubuntu-22.04.deb; apt install -y ./ego_1.8.1_amd64_ubuntu-22.04.deb)
     apt install -y build-essential libssl-dev
 fi
 

@@ -102,8 +102,8 @@ RUN apt-get install -y --no-install-recommends \
 #  && wget https://github.com/edgelesssys/ego/releases/download/v${egover}/${egodeb} \
 #  && dpkg -i --force-depends ${egodeb}
 
-RUN wget https://github.com/edgelesssys/ego/releases/download/v1.7.0/ego_1.7.0_amd64_ubuntu-22.04.deb \
-  && dpkg -i --force-depends ego_1.7.0_amd64_ubuntu-22.04.deb
+RUN wget https://github.com/edgelesssys/ego/releases/download/v1.8.1/ego_1.8.1_amd64_ubuntu-22.04.deb \
+  && dpkg -i --force-depends ego_1.8.1_amd64_ubuntu-22.04.deb
 
 FROM base AS build
 
