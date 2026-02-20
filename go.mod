@@ -2,6 +2,9 @@ module github.com/c3qtech/qadena_v3
 
 go 1.25
 
+// The "VERSION" below is used by setup_qadena_build.sh to get the right "go" version
+// VERSION: 1.25.7
+
 replace (
 	// use Cosmos geth fork
 	// branch: release/1.16

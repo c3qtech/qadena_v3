@@ -2,7 +2,17 @@
 
 DASEL_VERSION=2.8.1
 # Get the first 'go x.y.z' directive from go.mod
-GO_VERSION=$(awk '$1 == "go" { print $2; exit }' go.mod)
+
+if [ ! -f go.mod ]; then
+    echo "Error: go.mod not found in current directory."
+    echo "This script must be run from the main Qadena directory (repo root) where go.mod is located."
+    exit 1
+fi
+
+GO_VERSION=$(awk -F: '/^[[:space:]]*\/\/[[:space:]]*VERSION[[:space:]]*:/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' go.mod)
+if [ -z "$GO_VERSION" ]; then
+    GO_VERSION=$(awk '$1 == "go" { print $2; exit }' go.mod)
+fi
 IGNITE_VERSION=29.8.0
 
 echo "Required GO_VERSION: $GO_VERSION"
