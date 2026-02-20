@@ -60,13 +60,13 @@ RUN go version
 # and serves as a stable base.
 
 # Download and install EGo
-# Use --force-depends to ignore SGX dependencies, which aren't required for building
-#RUN egodeb=ego_${egover}_amd64_ubuntu-$(grep -oP 'VERSION_ID="\K[^"]+' /etc/os-release).deb \
-#  && wget https://github.com/edgelesssys/ego/releases/download/v${egover}/${egodeb} \
-#  && dpkg -i --force-depends ${egodeb}
 
-RUN wget https://github.com/edgelesssys/ego/releases/download/v1.7.0/ego_1.7.0_amd64_ubuntu-22.04.deb \
-  && dpkg -i --force-depends ego_1.7.0_amd64_ubuntu-22.04.deb
+#RUN wget https://github.com/edgelesssys/ego/releases/download/v1.7.0/ego_1.7.0_amd64_ubuntu-22.04.deb \
+  #&& dpkg -i --force-depends ego_1.7.0_amd64_ubuntu-22.04.deb
+
+RUN wget https://github.com/edgelesssys/ego/releases/download/v1.8.1/ego_1.8.1_amd64_ubuntu-22.04.deb \
+  && dpkg -i --force-depends ego_1.8.1_amd64_ubuntu-22.04.deb
+
 
 FROM base AS build
 
