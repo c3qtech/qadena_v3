@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1.4
 
+# Use this to build an executable for Ubuntu 22.04
+
 # go to https://github.com/orgs/edgelesssys/packages/container/package/ego%2Fbuild-base and
 # find out the correct version (e.g. 1.8.1) and click on the "..." beside the Digest
 

@@ -1,10 +1,13 @@
 # syntax=docker/dockerfile:1.4
 
-#ARG egover=1.7.0
+# go to https://github.com/orgs/edgelesssys/packages/container/package/ego%2Fbuild-base and
+# find out the correct version (e.g. 1.8.1) and click on the "..." beside the Digest
 
-# Use this to build an executable for Ubuntu 22.04
-#FROM ghcr.io/edgelesssys/ego/build-base:v${egover} AS build
-FROM ghcr.io/edgelesssys/ego/build-base@sha256:f699547818bcbcef9bfbc60d1ef7b811a76f8133c1c8505d8c6681bd1623bf79 AS base
+# 1.7.0
+#FROM ghcr.io/edgelesssys/ego/build-base@sha256:f699547818bcbcef9bfbc60d1ef7b811a76f8133c1c8505d8c6681bd1623bf79 AS base
+
+# 1.8.1
+FROM ghcr.io/edgelesssys/ego/build-base@sha256:ce58c2c60d94f766a9aa95c11d69ca149eb13e39e72e63ca122e7368c6bba651 AS base
 
 ARG egover
 
