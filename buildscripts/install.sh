@@ -135,4 +135,4 @@ if [[ $install_provider_scripts -eq 1 ]]; then
     cp $veritasscripts/* "$QADENAHOME/veritas_scripts/"
 fi
 
-    
+echo "Install done."    

@@ -313,7 +313,7 @@ $qadenascripts/setPioneerID.sh pioneer1 $nodeparamsfile
 #fi
 
 echo "Calling build.sh"
-$qadenabuildscripts/build.sh --title "FINAL" $build_reproducible_flag
+$qadenabuildscripts/build.sh --title "FINAL BUILD" $build_reproducible_flag
 
 $qadenabuildscripts/install.sh --scripts
 
