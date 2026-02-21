@@ -5,6 +5,12 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# make sure not running as root
+if [[ $(id -u) -eq 0 ]]; then
+    echo "init.sh:  Error: init.sh must not be run as root"
+    exit 1
+fi
+
 if which jq > /dev/null ; then
 else
   echo "jq needs to be installed (e.g. sudo apt-get install jq, brew install jq, ...)"
@@ -87,7 +93,18 @@ PIONEER1=pioneer1
 echo "Running Ignite chain init..."
 echo "Removing $QADENAHOME"
 
-rm -rf $QADENAHOME
+if [[ -d "$QADENAHOME" ]]; then
+    rm -rf $QADENAHOME
+    # if fails, check if there are files owned by root
+    if [[ $? != 0 ]]; then
+        echo "Failed to remove $QADENAHOME"
+        # check if there are files owned by root in $QADENAHOME, and if so, do a "sudo rm -rf"
+        if find $QADENAHOME -user root | grep -q .; then
+            echo "Found files owned by root in $QADENAHOME, using sudo to remove"
+            sudo rm -rf $QADENAHOME
+        fi
+    fi
+fi
 
 cd $qadenabuild
 
