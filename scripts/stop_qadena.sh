@@ -5,17 +5,18 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
-if ! is_qadena_running; then
-    echo "stop_qadena.sh: Qadena is not running"
-    exit 0
-fi
 
 # if REAL_ENCLAVE, check if running as root
 if [[ $REAL_ENCLAVE -eq 1 ]]; then
     if [[ $(id -u) -ne 0 ]]; then
-        echo "stop_qadena.sh:  Error: qadenad_enclave must be run as root"
+        echo "stop_qadena.sh:  Error: Qadena must be run as root (real SGX detected).  Try running with 'sudo'."
         exit 1
     fi
+fi
+
+if ! is_qadena_running; then
+    echo "stop_qadena.sh: Qadena is not running"
+    exit 0
 fi
 
 # get argument "--enclave-only"

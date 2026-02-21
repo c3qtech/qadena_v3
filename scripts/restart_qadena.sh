@@ -33,7 +33,7 @@ done
 # if REAL_ENCLAVE, check if running as root
 if [[ $REAL_ENCLAVE -eq 1 ]]; then
     if [[ $(id -u) -ne 0 ]]; then
-        echo "restart_qadena.sh:  Error: qadenad_enclave must be run as root"
+        echo "restart_qadena.sh:  Error: Qadena must be run as root (real SGX detected).  Try running with 'sudo'."
         exit 1
     fi
 fi
