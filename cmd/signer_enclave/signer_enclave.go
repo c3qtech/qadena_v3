@@ -207,7 +207,7 @@ func loadKey(homePath string) (ed25519.PrivKey, tmcrypto.PubKey, error) {
 	// Try to load unencrypted version
 	unencryptedData, err := ioutil.ReadFile(unencryptedPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to read key file from both %s and %s: %w", encryptedPath, unencryptedPath, err)
+		return nil, nil, fmt.Errorf("failed to read key file from both encryptedPath=%s and unencryptedPath=%s: %w", encryptedPath, unencryptedPath, err)
 	}
 
 	if debug {

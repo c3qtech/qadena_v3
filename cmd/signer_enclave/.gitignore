@@ -1,2 +1,6 @@
 signer_enclave
 enclave_params.json
+priv_validator_key.json
+priv_validator.key
+secret_connection.key
+signer_state.json

@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 # if REAL_ENCLAVE, check if running as root
 if [[ $REAL_ENCLAVE -eq 1 ]]; then
     if [[ $(id -u) -ne 0 ]]; then
-        echo "run.sh:  Error: qadenad_enclave must be run as root"
+        echo "run.sh:  Error: Qadena must be run as root (real SGX detected).  Try running with 'sudo'."
         exit 1
     fi
 fi
