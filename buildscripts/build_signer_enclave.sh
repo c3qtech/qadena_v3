@@ -110,9 +110,9 @@ else
   echo "Extracted unique id from cmd/signer_enclave/test_unique_id.txt: $unique_id"
   VERSION=`cat cmd/signer_enclave/version.txt`
 
-  echo "-------------------"
-  echo "$TITLE BUILD DEBUG SIGNER ENCLAVE $VERSION"
-  echo "-------------------"
+  echo "---------------------------------------------"
+  echo "$TITLE BUILDING DEBUG SIGNER_ENCLAVE $VERSION"
+  echo "---------------------------------------------"
   cd $qadenabuild
   go build -trimpath -o $signer_enclave_path/signer_enclave -mod=vendor github.com/c3qtech/qadena_v3/cmd/signer_enclave || exit 1
 

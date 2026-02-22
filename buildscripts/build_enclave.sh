@@ -110,9 +110,9 @@ else
   echo "Extracted unique id from cmd/qadenad_enclave/test_unique_id.txt: $unique_id"
   VERSION=`cat cmd/qadenad_enclave/version.txt`
 
-  echo "-------------------"
-  echo "$TITLE BUILD DEBUG ENCLAVE $VERSION"
-  echo "-------------------"
+  echo "----------------------------------------------"
+  echo "$TITLE BUILDING DEBUG QADENAD_ENCLAVE $VERSION"
+  echo "----------------------------------------------"
   cd $qadenabuild
   go build -trimpath -o $enclave_path/qadenad_enclave -mod=vendor github.com/c3qtech/qadena_v3/cmd/qadenad_enclave || exit 1
 

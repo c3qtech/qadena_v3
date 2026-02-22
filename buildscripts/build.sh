@@ -98,7 +98,10 @@ if [[ $build_reproducible_flag == "--build-reproducible" ]]; then
 	  (cd $qadenabuild/docker_build_chain; ./build.sh)
   fi
 else
-    echo "Building for testing purposes"
+    echo "-----------------------------------------"
+    echo "$TITLE BUILDING DEBUG QADENAD $VERSION"
+    echo "-----------------------------------------"
+
     # if docs/static/openapi.yml doesn't exist, create it
     if [ ! -f docs/static/openapi.yml ]; then
         echo "Creating empty docs/static/openapi.yml"
