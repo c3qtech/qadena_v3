@@ -717,7 +717,7 @@ func (s *qadenaServer) verifyRemoteReport(remoteReportBytes []byte, certifyData 
 		}
 
 		hash := sha256.Sum256([]byte(certifyData))
-		if bytes.Compare(remoteReport.Data[:len(hash)], hash[:]) != 0 {
+		if !bytes.Equal(remoteReport.Data[:len(hash)], hash[:]) {
 			c.LoggerDebug(logger, "mismatch hash")
 			c.LoggerDebug(logger, "remoteReportData hash "+hex.EncodeToString(remoteReport.Data[:len(hash)]))
 			c.LoggerDebug(logger, "certifyData hash "+hex.EncodeToString(hash[:]))
@@ -734,12 +734,13 @@ func (s *qadenaServer) verifyRemoteReport(remoteReportBytes []byte, certifyData 
 			return false
 		}
 	}
-	c.LoggerDebug(logger, "remoteReport uniqueID: "+uniqueID)
+	c.LoggerDebug(logger, "Succeeded verifying remote report, uniqueID: "+uniqueID)
 	found := s.getEnclaveIdentity(uniqueID, signerID, false) // only get active ones
 	if !found {
-		c.LoggerError(logger, "couldn't find enclave identity")
+		c.LoggerError(logger, "But couldn't find an active enclave identity for uniqueID: "+uniqueID)
 		return false
 	}
+	c.LoggerDebug(logger, "Succeeded finding an active enclave identity for uniqueID: "+uniqueID)
 	return true
 }
 
@@ -6168,6 +6169,8 @@ func main() {
 	queryVersion := flag.Bool("version", false, "Query version")
 	logLevel := flag.String("log-level", "info", "Log level (debug or info)")
 
+	testRemoteReportLocally := flag.Bool("test-remote-report-locally", false, "Test SGX remote report, but locally.")
+
 	enclaveUpgradeModeArg := flag.Bool("upgrade-mode", false, "Enclave upgrade mode")
 	upgradeFromEnclave := flag.String("upgrade-from-enclave-unique-id", "", "Unique ID of old enclave running on this node")
 
@@ -6292,7 +6295,7 @@ func main() {
 	if _, err := os.Stat(*homePath + "/enclave_config"); os.IsNotExist(err) {
 		err = os.Mkdir(*homePath+"/enclave_config", 0755)
 		if err != nil {
-			c.LoggerDebug(logger, "Error creating enclave_config directory")
+			c.LoggerError(logger, "Error creating enclave_config directory")
 			return
 		}
 	}
@@ -6304,13 +6307,13 @@ func main() {
 		opts.ReadOnly = true
 		db, err = tmdb.NewGoLevelDBWithOpts("enclave", *homePath+"/enclave_data", &opts)
 		if err != nil {
-			c.LoggerDebug(logger, "Error creating read-only GoLevelDB", err)
+			c.LoggerError(logger, "Error creating read-only GoLevelDB", err)
 			return
 		}
 	} else {
 		db, err = tmdb.NewGoLevelDB("enclave", *homePath+"/enclave_data", nil)
 		if err != nil {
-			c.LoggerDebug(logger, "Error creating GoLevelDB")
+			c.LoggerError(logger, "Error creating GoLevelDB")
 			return
 		}
 	}
@@ -6336,6 +6339,26 @@ func main() {
 		Cdc:           cdc,
 		HomePath:      *homePath,
 		RealEnclave:   *realEnclave,
+	}
+
+	if *testRemoteReportLocally {
+		// Test SGX remote report, but locally
+		report, err := cs.getRemoteReport("test")
+		if err != nil {
+			c.LoggerError(logger, "couldn't get remote report "+err.Error())
+			return
+		}
+		fmt.Println("Hex encoded report:  " + hex.EncodeToString(report))
+
+		// Test SGX remote report verification, but locally
+		success := cs.verifyRemoteReport(report, "test")
+		if !success {
+			c.LoggerError(logger, "couldn't verify remote report")
+			return
+		}
+		fmt.Println("Remote report verified successfully")
+
+		os.Exit(0)
 	}
 
 	// here's where we can connect to the old server if configured
