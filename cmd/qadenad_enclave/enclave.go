@@ -6343,6 +6343,7 @@ func main() {
 
 	if *testRemoteReportLocally {
 		// Test SGX remote report, but locally
+		fmt.Println("Getting remote report")
 		report, err := cs.getRemoteReport("test")
 		if err != nil {
 			c.LoggerError(logger, "couldn't get remote report "+err.Error())
