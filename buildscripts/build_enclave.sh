@@ -52,9 +52,9 @@ cd $qadenabuild
 
 if [[ $build_reproducible == 1 ]] ; then
   if [[ "$DOCKER_BUILD" = "1" ]]; then
-    echo "---------------------------------------"
-    echo "$TITLE BUILD REAL ENCLAVE (ego-go/ego toolset) (REPRODUCIBLE BUILD)"
-    echo "---------------------------------------"
+    echo "--------------------------------------------------------------------------"
+    echo "$TITLE BUILDING QADENAD_ENCLAVE WITHIN DOCKER FOR SGX (REPRODUCIBLE BUILD)"
+    echo "--------------------------------------------------------------------------"
     enclave_path="cmd/qadenad_enclave"
     echo "Enclave path: $enclave_path"
     export CFLAGS="-Wdate-time -D__DATE__=\"fixed\" -D__TIME__=\"fixed\""
@@ -76,6 +76,9 @@ if [[ $build_reproducible == 1 ]] ; then
     echo $signer_id > reproducible_build_signer_id.txt
     echo $unique_id > reproducible_build_unique_id.txt
   else
+    echo "-------------------------------------------------------------"
+    echo "$TITLE STARTING REPRODUCIBLE DOCKER BUILD FOR QADENAD_ENCLAVE"
+    echo "-------------------------------------------------------------"
     # remove any git changes
     if [ -n "$(git status --porcelain)" ]; then
       echo "----------------------------------------------------------------"

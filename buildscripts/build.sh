@@ -78,16 +78,16 @@ cd $qadenabuild
 # if build_reproducible is set, build for real enclave
 if [[ $build_reproducible_flag == "--build-reproducible" ]]; then
   if [[ "$DOCKER_BUILD" = "1" ]]; then
-    echo "--------------------"
-    echo "$TITLE BUILDING CHAIN WITHIN DOCKER FOR A REAL ENCLAVE (REPRODUCIBLE BUILD)"
-    echo "--------------------"
+    echo "------------------------------------------------------------------"
+    echo "$TITLE BUILDING QADENAD WITHIN DOCKER FOR SGX (REPRODUCIBLE BUILD)"
+    echo "------------------------------------------------------------------"
     export CGO_CFLAGS="-I/opt/ego/include"
     export CGO_LDFLAGS="-L/opt/ego/lib -L/usr/lib/x86_64-linux-gnu"
     go build -trimpath -ldflags "-X github.com/cosmos/cosmos-sdk/version.Version=$VERSION -extldflags '-Wl,-rpath,\$ORIGIN'" -tags realenclave -o $chain_path/qadenad -mod=vendor github.com/c3qtech/qadena_v3/cmd/qadenad
   else
-    echo "--------------------"
-    echo "$TITLE STARTING REPRODUCIBLE DOCKER BUILD FOR REAL ENCLAVE"
-    echo "--------------------"
+    echo "-----------------------------------------------------"
+    echo "$TITLE STARTING REPRODUCIBLE DOCKER BUILD FOR QADENAD"
+    echo "-----------------------------------------------------"
     # remove any git changes
     if [ -n "$(git status --porcelain)" ]; then
       echo "----------------------------------------------------------------"
