@@ -689,9 +689,13 @@ func (s *qadenaServer) getRemoteReport(certifyData string) (report []byte, err e
 	return
 }
 
-// returns true if valid
 func (s *qadenaServer) verifyRemoteReport(remoteReportBytes []byte, certifyData string) bool {
-	var uniqueID string
+	return s.verifyRemoteReportInternal(remoteReportBytes, certifyData, false)
+}
+
+// returns true if valid
+func (s *qadenaServer) verifyRemoteReportInternal(remoteReportBytes []byte, certifyData string, checkEnclaveUniqueIDOnly bool) bool {
+	var localUniqueID string
 	var signerID string
 	var success bool
 
@@ -725,22 +729,33 @@ func (s *qadenaServer) verifyRemoteReport(remoteReportBytes []byte, certifyData 
 		}
 		c.LoggerDebug(logger, "hash match")
 
-		uniqueID = hex.EncodeToString(remoteReport.UniqueID)
+		localUniqueID = hex.EncodeToString(remoteReport.UniqueID)
 		signerID = hex.EncodeToString(remoteReport.SignerID)
 	} else {
-		success, uniqueID, signerID = c.DebugVerifyRemoteReport(logger, remoteReportBytes, certifyData)
+		success, localUniqueID, signerID = c.DebugVerifyRemoteReport(logger, remoteReportBytes, certifyData)
 		if !success {
 			c.LoggerError(logger, "couldn't verify remote report")
 			return false
 		}
 	}
-	c.LoggerDebug(logger, "Succeeded verifying remote report, uniqueID: "+uniqueID)
-	found := s.getEnclaveIdentity(uniqueID, signerID, false) // only get active ones
-	if !found {
-		c.LoggerError(logger, "But couldn't find an active enclave identity for uniqueID: "+uniqueID)
+	c.LoggerDebug(logger, "Succeeded verifying remote report, uniqueID: "+localUniqueID)
+
+	if checkEnclaveUniqueIDOnly {
+
+		if localUniqueID == uniqueID {
+			c.LoggerDebug(logger, "Succeeded verifying remote report uniqueID: "+localUniqueID+" == enclave uniqueID: "+uniqueID)
+			return true
+		}
+		c.LoggerDebug(logger, "Failed verifying remote report uniqueID: "+localUniqueID+" != enclave uniqueID: "+uniqueID)
 		return false
 	}
-	c.LoggerDebug(logger, "Succeeded finding an active enclave identity for uniqueID: "+uniqueID)
+
+	found := s.getEnclaveIdentity(localUniqueID, signerID, false) // only get active ones
+	if !found {
+		c.LoggerError(logger, "But couldn't find an active enclave identity for uniqueID: "+localUniqueID)
+		return false
+	}
+	c.LoggerDebug(logger, "Succeeded finding an active enclave identity for uniqueID: "+localUniqueID)
 	return true
 }
 
@@ -6353,7 +6368,7 @@ func main() {
 		fmt.Println("Hex encoded report:  " + hex.EncodeToString(report))
 
 		// Test SGX remote report verification, but locally
-		success := cs.verifyRemoteReport(report, "test")
+		success := cs.verifyRemoteReportInternal(report, "test", true)
 		if !success {
 			c.LoggerError(logger, "couldn't verify remote report")
 			return
@@ -6373,7 +6388,7 @@ func main() {
 		}
 
 		// Test SGX remote report verification, but locally
-		success := cs.verifyRemoteReport(report, "test")
+		success := cs.verifyRemoteReportInternal(report, "test", true)
 		if !success {
 			c.LoggerError(logger, "Couldn't verify remote report hex")
 			return

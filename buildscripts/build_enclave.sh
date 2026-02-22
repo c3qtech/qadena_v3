@@ -76,6 +76,13 @@ if [[ $build_reproducible == 1 ]] ; then
     echo $signer_id > reproducible_build_signer_id.txt
     echo $unique_id > reproducible_build_unique_id.txt
   else
+    # remove any git changes
+    if git status --porcelain | grep -q '^??'; then
+      echo "----------------------------------------------------"
+      echo "WARNING!!!  Untracked files detected, removing them."
+      echo "----------------------------------------------------"
+      git checkout -f && git clean -fd
+    fi    
     (cd $qadenabuild/docker_build_enclave; ./build.sh) || exit 1
     signer_id=`cat $enclave_path/reproducible_build_signer_id.txt`
     unique_id=`cat $enclave_path/reproducible_build_unique_id.txt`
