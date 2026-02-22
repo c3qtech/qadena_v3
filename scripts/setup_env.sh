@@ -211,6 +211,8 @@ increment_version() {
 is_qadena_running() {
   if pgrep -x qadenad >/dev/null ||
      pgrep -x qadenad_enclave >/dev/null ||
+     pgrep -af 'ego-host.*qadenad_enclave' ||
+     pgrep -af 'ego-host.*signer_enclave' ||
      pgrep -x signer_enclave >/dev/null; then
     echo "Qadena is running"
     return 0

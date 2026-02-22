@@ -15,7 +15,7 @@ if [[ $REAL_ENCLAVE -eq 1 ]]; then
 fi
 
 if ! is_qadena_running; then
-    echo "stop_qadena.sh: Qadena is not running"
+    echo "stop_qadena.sh: Good!  Qadena is no longer running."
     exit 0
 fi
 
