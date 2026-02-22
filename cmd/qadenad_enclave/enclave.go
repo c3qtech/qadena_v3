@@ -6170,6 +6170,7 @@ func main() {
 	logLevel := flag.String("log-level", "info", "Log level (debug or info)")
 
 	testRemoteReportLocally := flag.Bool("test-remote-report-locally", false, "Test SGX remote report, but locally.")
+	testRemoteReportHex := flag.String("test-remote-report-hex", "", "Test SGX remote report hex.")
 
 	enclaveUpgradeModeArg := flag.Bool("upgrade-mode", false, "Enclave upgrade mode")
 	upgradeFromEnclave := flag.String("upgrade-from-enclave-unique-id", "", "Unique ID of old enclave running on this node")
@@ -6358,6 +6359,26 @@ func main() {
 			return
 		}
 		fmt.Println("Remote report verified successfully")
+
+		os.Exit(0)
+	}
+
+	if *testRemoteReportHex != "" {
+		// Test SGX remote report, but locally
+		fmt.Println("Remote report hex " + *testRemoteReportHex)
+		report, err := hex.DecodeString(*testRemoteReportHex)
+		if err != nil {
+			c.LoggerError(logger, "Couldn't decode remote report hex "+err.Error())
+			return
+		}
+
+		// Test SGX remote report verification, but locally
+		success := cs.verifyRemoteReport(report, "test")
+		if !success {
+			c.LoggerError(logger, "Couldn't verify remote report hex")
+			return
+		}
+		fmt.Println("Remote report hex verified successfully")
 
 		os.Exit(0)
 	}
