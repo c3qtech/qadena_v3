@@ -91,8 +91,9 @@ fi
 if [[ $stop_enclave -eq 1 ]] ; then
     echo "stop_qadena.sh: Stopping Qadena Enclave"
     if [[ $REAL_ENCLAVE -eq 1 ]] ; then
-      pkill -INT -f "/opt/ego/bin/ego-host"
+      pkill -INT -f "ego-host.*qadenad_enclave"
     else  
+      pkill -KILL -f "run_enclave.sh"
       pkill -INT -f "qadenad_enclave"
     fi
 fi
@@ -104,8 +105,12 @@ fi
 
 if [[ $stop_signer_enclave -eq 1 ]] ; then
     echo "stop_qadena.sh: Stopping Qadena Signer Enclave"
-    pkill -KILL -f "run_signerenclave.sh"
-    pkill -INT -f "signer_enclave"
+    if [[ $REAL_ENCLAVE -eq 1 ]] ; then
+      pkill -KILL -f "ego-host.*signer_enclave"
+    else
+      pkill -KILL -f "run_signerenclave.sh"
+      pkill -INT -f "signer_enclave"
+    fi
 fi
 
 # stop rotatelogs
