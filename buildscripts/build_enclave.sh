@@ -77,10 +77,10 @@ if [[ $build_reproducible == 1 ]] ; then
     echo $unique_id > reproducible_build_unique_id.txt
   else
     # remove any git changes
-    if git status --porcelain | grep -q '^??'; then
-      echo "----------------------------------------------------"
-      echo "WARNING!!!  Untracked files detected, removing them."
-      echo "----------------------------------------------------"
+    if [ -n "$(git status --porcelain)" ]; then
+      echo "----------------------------------------------------------------"
+      echo "WARNING!!!  Untracked or modified files detected, removing them."
+      echo "----------------------------------------------------------------"
       git checkout -f && git clean -fd
     fi    
     (cd $qadenabuild/docker_build_enclave; ./build.sh) || exit 1
