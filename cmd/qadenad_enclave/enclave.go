@@ -723,9 +723,7 @@ func (s *qadenaServer) verifyRemoteReportInternal(remoteReportBytes []byte, cert
 				return false
 			} else {
 				c.LoggerError(logger, "not revoked or completely out-of-date")
-				return false
 			}
-
 		}
 
 		hash := sha256.Sum256([]byte(certifyData))
