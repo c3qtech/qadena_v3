@@ -123,10 +123,13 @@ if [ "$(uname -m)" = "x86_64" ]; then
     rm -f /etc/sgx_default_qcnl.conf
     apt install -y libsgx-dcap-default-qpl
 
+    installed_sgx_default_qcnl_conf=false
+
     # check if running in Azure using "curl -H Metadata:true "http://169.254.169.254/metadata/instance?api-version=2021-02-01""
     if curl -m 4 -H Metadata:true "http://169.254.169.254/metadata/instance?api-version=2021-02-01" > /dev/null 2>&1 ; then
         echo "Running in Azure, installing a default sgx_default_qcnl.conf that points to Azure PCCS"
         cp ubuntu/azure_sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf
+        installed_sgx_default_qcnl_conf=true
     else
         echo "Not running in Azure, not installing a default sgx_default_qcnl.conf"
     fi
@@ -146,10 +149,15 @@ PCCS_URL=${PCCS_URL}
 # To accept insecure HTTPS cert, set this option to FALSE
 USE_SECURE_CERT=TRUE
 EOF
-
+        installed_sgx_default_qcnl_conf=true
 
     else
         echo "Not running in Alibaba, not installing a default sgx_default_qcnl.conf"
+    fi
+
+    if [ "$installed_sgx_default_qcnl_conf" = false ]; then
+        echo "No default sgx_default_qcnl.conf installed yet, will install a default sgx_default_qcnl.conf"
+        cp ubuntu/sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf
     fi
 
     # ego
