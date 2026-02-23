@@ -717,9 +717,15 @@ func (s *qadenaServer) verifyRemoteReportInternal(remoteReportBytes []byte, cert
 	if s.RealEnclave {
 		remoteReport, err := enclave.VerifyRemoteReport(remoteReportBytes)
 		if err != nil {
-			c.LoggerError(logger, "error verifying remote report "+tcbstatus.Explain(remoteReport.TCBStatus))
-			c.LoggerError(logger, "error verifying remote report "+err.Error())
-			return false
+			c.LoggerError(logger, "error verifying remote report tcbstatus "+tcbstatus.Explain(remoteReport.TCBStatus))
+			if remoteReport.TCBStatus == tcbstatus.Revoked || remoteReport.TCBStatus == tcbstatus.OutOfDate {
+				c.LoggerError(logger, "error verifying remote report "+err.Error())
+				return false
+			} else {
+				c.LoggerError(logger, "not revoked or completely out-of-date")
+				return false
+			}
+
 		}
 
 		hash := sha256.Sum256([]byte(certifyData))
