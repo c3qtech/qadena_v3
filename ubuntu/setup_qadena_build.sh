@@ -21,6 +21,8 @@ echo "Required DASEL_VERSION: $DASEL_VERSION"
 
 PATH=$PATH:/usr/local/go/bin
 
+apt-get update
+
 # need to "sudo" this file
 if [ "$(id -u)" -ne 0 ]; then
   echo "This script must be run as root (use sudo)"
