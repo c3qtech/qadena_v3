@@ -515,7 +515,11 @@ func (s *qadenaServer) getSSPrivK(pubKID string) string {
 					PubKID:       pubKID,
 				}
 
-				c.LoggerDebug(logger, "params "+c.PrettyPrint(params))
+				if s.RealEnclave {
+					c.LoggerDebug(logger, "params (redacted)")
+				} else {
+					c.LoggerDebug(logger, "params "+c.PrettyPrint(params))
+				}
 
 				res, err := queryClient.EnclaveSecretShare(context.Background(), params)
 				if err != nil {
@@ -600,7 +604,7 @@ func (s *qadenaServer) saveEnclaveParams() bool {
 		SharedEnclaveParams:  s.sharedEnclaveParams,
 	}
 
-	c.LoggerDebug(logger, "saveEnclaveParams "+c.PrettyPrint(ep))
+	c.LoggerDebug(logger, "saveEnclaveParams")
 
 	b, err := json.Marshal(ep)
 
@@ -717,12 +721,12 @@ func (s *qadenaServer) verifyRemoteReportInternal(remoteReportBytes []byte, cert
 	if s.RealEnclave {
 		remoteReport, err := enclave.VerifyRemoteReport(remoteReportBytes)
 		if err != nil {
-			c.LoggerError(logger, "error verifying remote report tcbstatus "+tcbstatus.Explain(remoteReport.TCBStatus))
+			c.LoggerDebug(logger, "remote report tcbstatus "+tcbstatus.Explain(remoteReport.TCBStatus))
 			if remoteReport.TCBStatus == tcbstatus.Revoked || remoteReport.TCBStatus == tcbstatus.OutOfDate {
 				c.LoggerError(logger, "error verifying remote report "+err.Error())
 				return false
 			} else {
-				c.LoggerError(logger, "not revoked or completely out-of-date")
+				c.LoggerError(logger, "neither revoked nor completely out-of-date")
 			}
 		}
 
@@ -793,7 +797,11 @@ func (s *qadenaServer) loadEnclaveParams() bool {
 		return false
 	}
 
-	c.LoggerDebug(logger, "storedEnclaveParams "+c.PrettyPrint(ep))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "storedEnclaveParams (redacted)")
+	} else {
+		c.LoggerDebug(logger, "storedEnclaveParams "+c.PrettyPrint(ep))
+	}
 
 	s.setPrivateEnclaveParamsPioneerInfo(
 		ep.PrivateEnclaveParams.PioneerID,
@@ -1275,9 +1283,14 @@ func (s *qadenaServer) GenerateSecretShare(nodeID string, nodeType string) (msgP
 }
 
 func (s *qadenaServer) InitEnclave(ctx context.Context, in *types.MsgInitEnclave) (*types.InitEnclaveReply, error) {
-	c.LoggerDebug(logger, "InitEnclave "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "InitEnclave")
+	} else {
+		c.LoggerDebug(logger, "InitEnclave "+c.PrettyPrint(in))
+	}
 
 	kb := clientCtx.Keyring
+	_ = kb
 
 	if s.getPrivateEnclaveParamsPioneerID() != "" {
 		c.LoggerDebug(logger, "already initialized, no need to do this again!")
@@ -1355,7 +1368,11 @@ func (s *qadenaServer) InitEnclave(ctx context.Context, in *types.MsgInitEnclave
 
 	s.setSharedEnclaveParamsRegulatorInfo(in.RegulatorID, regulatorPubK, regulatorPrivK, regulatorArmorPrivK)
 
-	c.LoggerDebug(logger, "keyring "+c.PrettyPrint(kb))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "keyring (redacted)")
+	} else {
+		c.LoggerDebug(logger, "keyring "+c.PrettyPrint(clientCtx.Keyring))
+	}
 
 	msgs := make([]sdk.Msg, 0)
 
@@ -1646,7 +1663,11 @@ func (s *qadenaServer) updateSSIntervalKey() bool {
 
 	c.LoggerDebug(logger, "Going to create a new SS share")
 	// create a new interval key if we are the leader
-	c.LoggerDebug(logger, "enclaveParams"+c.PrettyPrint(s.privateEnclaveParams))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "enclaveParams (redacted)")
+	} else {
+		c.LoggerDebug(logger, "enclaveParams"+c.PrettyPrint(s.privateEnclaveParams))
+	}
 
 	ssNewMsgPioneerAddPublicKey, ssNewMsgPioneerUpdateIntervalPublicKeyId, ssNewMsgPioneerBroadcastSecretSharePrivateKey, err := s.GenerateSecretShare(types.SSNodeID, types.SSNodeType)
 	msgs := make([]sdk.Msg, 0)
@@ -1662,7 +1683,11 @@ func (s *qadenaServer) updateSSIntervalKey() bool {
 		flagSet.Set(flags.FlagGasPrices, "100000aqdn")
 	*/
 
-	c.LoggerDebug(logger, "msgs "+c.PrettyPrint(msgs))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "msgs (redacted)")
+	} else {
+		c.LoggerDebug(logger, "msgs "+c.PrettyPrint(msgs))
+	}
 
 	var pwalletAddr sdk.AccAddress
 	pwalletAddr, err = sdk.AccAddressFromBech32(s.getPrivateEnclaveParamsPioneerWalletID())
@@ -1725,7 +1750,11 @@ func (s *qadenaServer) updateIsValidator() bool {
 		flagSet.Set(flags.FlagGasPrices, "100000aqdn")
 	*/
 
-	c.LoggerDebug(logger, "msgs "+c.PrettyPrint(msgs))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "msgs (redacted)")
+	} else {
+		c.LoggerDebug(logger, "msgs "+c.PrettyPrint(msgs))
+	}
 
 	clientCtx = clientCtx.WithFrom(pwalletID).WithFromAddress(pwalletAddr).WithFromName(s.getPrivateEnclaveParamsPioneerID())
 	err, _ = qadenatx.GenerateOrBroadcastTxCLISync(clientCtx, flagSet, "external IP address of this pioneer", msgs...)
@@ -1905,7 +1934,11 @@ func (s *qadenaServer) AddAsValidator(ctx context.Context, in *types.MsgAddAsVal
 // these enclave-to-enclave queries come in through the blockchain's query interface
 
 func (s *qadenaServer) QueryEnclaveSyncEnclave(goCtx context.Context, in *types.QueryEnclaveSyncEnclaveRequest) (*types.QueryEnclaveSyncEnclaveResponse, error) {
-	c.LoggerDebug(logger, "QueryEnclaveSyncEnclave "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "QueryEnclaveSyncEnclave")
+	} else {
+		c.LoggerDebug(logger, "QueryEnclaveSyncEnclave "+c.PrettyPrint(in))
+	}
 
 	// need to validate the incoming request's remote report before we response back
 	if !s.verifyRemoteReport(
@@ -1954,7 +1987,11 @@ func (s *qadenaServer) QueryEnclaveSyncEnclave(goCtx context.Context, in *types.
 }
 
 func (s *qadenaServer) QueryEnclaveValidateEnclaveIdentity(goCtx context.Context, in *types.QueryEnclaveValidateEnclaveIdentityRequest) (*types.QueryEnclaveValidateEnclaveIdentityResponse, error) {
-	c.LoggerDebug(logger, "QueryEnclaveValidateEnclaveIdentity "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "QueryEnclaveValidateEnclaveIdentity")
+	} else {
+		c.LoggerDebug(logger, "QueryEnclaveValidateEnclaveIdentity "+c.PrettyPrint(in))
+	}
 
 	// need to validate the incoming request's remote report before we response back
 	if !s.verifyRemoteReport(
@@ -1987,7 +2024,11 @@ func (s *qadenaServer) QueryEnclaveValidateEnclaveIdentity(goCtx context.Context
 }
 
 func (s *qadenaServer) QueryEnclaveSecretShare(goCtx context.Context, in *types.QueryEnclaveSecretShareRequest) (*types.QueryEnclaveSecretShareResponse, error) {
-	c.LoggerDebug(logger, "QueryEnclaveSecretShare "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "QueryEnclaveSecretShare")
+	} else {
+		c.LoggerDebug(logger, "QueryEnclaveSecretShare "+c.PrettyPrint(in))
+	}
 
 	// need to validate the incoming request's remote report before we response back
 	if !s.verifyRemoteReport(
@@ -2021,7 +2062,11 @@ func (s *qadenaServer) QueryEnclaveSecretShare(goCtx context.Context, in *types.
 }
 
 func (s *qadenaServer) QueryEnclaveRecoverKeyShare(goCtx context.Context, in *types.QueryEnclaveRecoverKeyShareRequest) (*types.QueryEnclaveRecoverKeyShareResponse, error) {
-	c.LoggerDebug(logger, "QueryEnclaveRecoverKeyShare "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "QueryEnclaveRecoverKeyShare")
+	} else {
+		c.LoggerDebug(logger, "QueryEnclaveRecoverKeyShare "+c.PrettyPrint(in))
+	}
 
 	// need to validate the incoming request's remote report before we response back
 	if !s.verifyRemoteReport(
@@ -2075,7 +2120,11 @@ func (s *qadenaServer) QueryEnclaveRecoverKeyShare(goCtx context.Context, in *ty
 	rShares = append(rShares, protectKey.RecoverShare...)
 
 	for _, rShare := range rShares {
-		c.LoggerDebug(logger, "processing rShare "+c.PrettyPrint(rShare))
+		if s.RealEnclave {
+			c.LoggerDebug(logger, "processing rShare (redacted)")
+		} else {
+			c.LoggerDebug(logger, "processing rShare "+c.PrettyPrint(rShare))
+		}
 		var err error
 
 		if rShare.WalletID == shareWalletID && bytes.Equal(rShare.EncWalletPubKShare, encShareWalletPubK) {
@@ -2122,7 +2171,11 @@ func (s *qadenaServer) QueryEnclaveRecoverKeyShare(goCtx context.Context, in *ty
 }
 
 func (s *qadenaServer) QueryGetRecoverKey(goCtx context.Context, in *types.QueryGetRecoverKeyRequest) (*types.QueryGetRecoverKeyResponse, error) {
-	c.LoggerDebug(logger, "QueryGetRecoverKey "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "QueryGetRecoverKey")
+	} else {
+		c.LoggerDebug(logger, "QueryGetRecoverKey "+c.PrettyPrint(in))
+	}
 
 	newWalletID := in.WalletID
 
@@ -2165,7 +2218,11 @@ func (s *qadenaServer) QueryGetRecoverKey(goCtx context.Context, in *types.Query
 	var encWalletPubKShare []byte
 
 	for _, rShare := range rShares {
-		c.LoggerDebug(logger, "processing rShare "+c.PrettyPrint(rShare))
+		if s.RealEnclave {
+			c.LoggerDebug(logger, "processing rShare (redacted)")
+		} else {
+			c.LoggerDebug(logger, "processing rShare "+c.PrettyPrint(rShare))
+		}
 		var err error
 		if rShare.WalletID == s.getPrivateEnclaveParamsPioneerID() {
 			c.LoggerDebug(logger, "decrypting locally")
@@ -2230,7 +2287,11 @@ func (s *qadenaServer) QueryGetRecoverKey(goCtx context.Context, in *types.Query
 				EncShareWalletPubK: encShareWalletPubK,
 			}
 
-			c.LoggerDebug(logger, "params "+c.PrettyPrint(params))
+			if s.RealEnclave {
+				c.LoggerDebug(logger, "params (redacted)")
+			} else {
+				c.LoggerDebug(logger, "params "+c.PrettyPrint(params))
+			}
 
 			res, err := queryClient.EnclaveRecoverKeyShare(context.Background(), params)
 			if err != nil {
@@ -2283,7 +2344,11 @@ func (s *qadenaServer) QueryGetRecoverKey(goCtx context.Context, in *types.Query
 }
 
 func (s *qadenaServer) QueryFindCredential(goCtx context.Context, in *types.QueryFindCredentialRequest) (*types.QueryFindCredentialResponse, error) {
-	c.LoggerDebug(logger, "QueryFindCredential "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "QueryFindCredential")
+	} else {
+		c.LoggerDebug(logger, "QueryFindCredential "+c.PrettyPrint(in))
+	}
 
 	credential, found := s.getCredentialByPCXY(in.CredentialPC, in.CredentialType)
 	if !found {
@@ -2314,7 +2379,11 @@ func (s *qadenaServer) QueryFindCredential(goCtx context.Context, in *types.Quer
 
 	c.LoggerDebug(logger, "userCredentialPubK "+userCredentialPubK)
 
-	c.LoggerDebug(logger, "credential "+c.PrettyPrint(credential))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "credential (redacted)")
+	} else {
+		c.LoggerDebug(logger, "credential "+c.PrettyPrint(credential))
+	}
 
 	var bproofPC types.BPedersenCommit
 
@@ -2340,9 +2409,13 @@ func (s *qadenaServer) QueryFindCredential(goCtx context.Context, in *types.Quer
 
 	credentialPC := c.UnprotoizeBPedersenCommit(credential.FindCredentialPedersenCommit)
 
-	c.LoggerDebug(logger, "credentialPC "+c.PrettyPrint(credentialPC))
-	c.LoggerDebug(logger, "proofPC "+c.PrettyPrint(proofPC))
-	c.LoggerDebug(logger, "checkPC "+c.PrettyPrint(checkPC))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "credentialPC/proofPC/checkPC (redacted)")
+	} else {
+		c.LoggerDebug(logger, "credentialPC "+c.PrettyPrint(credentialPC))
+		c.LoggerDebug(logger, "proofPC "+c.PrettyPrint(proofPC))
+		c.LoggerDebug(logger, "checkPC "+c.PrettyPrint(checkPC))
+	}
 
 	if checkPC.A.Cmp(c.BigIntZero) != 0 {
 		if c.Debug {
@@ -2396,7 +2469,11 @@ func (s *qadenaServer) QueryFindCredential(goCtx context.Context, in *types.Quer
 
 // this is called by init_enclave when adding a new pioneer (but not necessarily a validator yet)
 func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave) (*types.SyncEnclaveReply, error) {
-	c.LoggerDebug(logger, "SyncEnclave "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "SyncEnclave")
+	} else {
+		c.LoggerDebug(logger, "SyncEnclave "+c.PrettyPrint(in))
+	}
 
 	if s.getPrivateEnclaveParamsPioneerID() != "" {
 		c.LoggerDebug(logger, "already synchronized")
@@ -2436,7 +2513,11 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 		EnclavePubK:  s.getPrivateEnclaveParamsEnclavePubK(),
 	}
 
-	c.LoggerDebug(logger, "params "+c.PrettyPrint(params))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "params (redacted)")
+	} else {
+		c.LoggerDebug(logger, "params "+c.PrettyPrint(params))
+	}
 
 	res, err := queryClient.EnclaveSyncEnclave(context.Background(), params)
 	if err != nil {
@@ -2445,9 +2526,13 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 	}
 
 	// still need to validate the returned remote report
-	c.LoggerDebug(logger, "SyncEnclave returned", c.PrettyPrint(res))
-
-	c.LoggerDebug(logger, "private enclave params", c.PrettyPrint(s.privateEnclaveParams))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "SyncEnclave returned (redacted)")
+		c.LoggerDebug(logger, "private enclave params (redacted)")
+	} else {
+		c.LoggerDebug(logger, "SyncEnclave returned", c.PrettyPrint(res))
+		c.LoggerDebug(logger, "private enclave params", c.PrettyPrint(s.privateEnclaveParams))
+	}
 
 	var fromRemoteEnclaveParams types.EncryptableSharedEnclaveParams
 	_, err = c.BDecryptAndProtoUnmarshal(s.getPrivateEnclaveParamsEnclavePrivK(), res.GetEncEnclaveParamsEnclavePubK(), &fromRemoteEnclaveParams)
@@ -2456,7 +2541,11 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 		return nil, err
 	}
 
-	c.LoggerDebug(logger, "fromRemoteEnclaveParams", c.PrettyPrint(fromRemoteEnclaveParams))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "fromRemoteEnclaveParams (redacted)")
+	} else {
+		c.LoggerDebug(logger, "fromRemoteEnclaveParams", c.PrettyPrint(fromRemoteEnclaveParams))
+	}
 
 	// copy from fromRemoteEnclaveParams to enclaveParams
 
@@ -2630,7 +2719,11 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 
 	if err != nil {
 		c.LoggerError(logger, "failed to broadcast "+err.Error())
-		c.LoggerError(logger, "msgs "+c.PrettyPrint(msgs))
+		if s.RealEnclave {
+			c.LoggerError(logger, "msgs (redacted)")
+		} else {
+			c.LoggerError(logger, "msgs "+c.PrettyPrint(msgs))
+		}
 		return nil, err
 	}
 
@@ -2664,7 +2757,11 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 
 // this is called by init_enclave when adding a new pioneer (but not necessarily a validator yet)
 func (s *qadenaServer) UpgradeEnclave(ctx context.Context, in *types.MsgUpgradeEnclave) (*types.UpgradeEnclaveReply, error) {
-	c.LoggerDebug(logger, "UpgradeEnclave "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "UpgradeEnclave")
+	} else {
+		c.LoggerDebug(logger, "UpgradeEnclave "+c.PrettyPrint(in))
+	}
 
 	if !enclaveUpgradeMode {
 		return nil, types.ErrUpgradeModeNotEnabled
@@ -2708,7 +2805,11 @@ func (s *qadenaServer) UpgradeEnclave(ctx context.Context, in *types.MsgUpgradeE
 }
 
 func (s *qadenaServer) UpdateEnclaveIdentity(ctx context.Context, in *types.PioneerUpdateEnclaveIdentity) (*types.UpdateEnclaveIdentityReply, error) {
-	c.LoggerDebug(logger, "UpdateEnclaveIdentity "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "UpdateEnclaveIdentity")
+	} else {
+		c.LoggerDebug(logger, "UpdateEnclaveIdentity "+c.PrettyPrint(in))
+	}
 
 	if !s.verifyRemoteReport(
 		in.RemoteReport,
@@ -2727,7 +2828,11 @@ func (s *qadenaServer) UpdateEnclaveIdentity(ctx context.Context, in *types.Pion
 }
 
 func (s *qadenaServer) SetEnclaveIdentity(ctx context.Context, in *types.EnclaveIdentity) (*types.SetEnclaveIdentityReply, error) {
-	c.LoggerDebug(logger, "SetEnclaveIdentity "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "SetEnclaveIdentity")
+	} else {
+		c.LoggerDebug(logger, "SetEnclaveIdentity "+c.PrettyPrint(in))
+	}
 
 	if in.UniqueID == uniqueID && in.SignerID == signerID {
 		c.LoggerDebug(logger, "SetEnclaveIdentity matches our enclave identity")
@@ -2744,13 +2849,21 @@ func (s *qadenaServer) SetEnclaveIdentity(ctx context.Context, in *types.Enclave
 }
 
 func (s *qadenaServer) SetWallet(ctx context.Context, in *types.Wallet) (*types.SetWalletReply, error) {
-	c.LoggerDebug(logger, "SetWallet "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "SetWallet")
+	} else {
+		c.LoggerDebug(logger, "SetWallet "+c.PrettyPrint(in))
+	}
 	s.setWalletNoNotify(*in)
 	return &types.SetWalletReply{Status: true}, nil
 }
 
 func (s *qadenaServer) SetRecoverKey(ctx context.Context, in *types.RecoverKey) (*types.SetRecoverKeyReply, error) {
-	c.LoggerDebug(logger, "SetRecoverKey "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "SetRecoverKey")
+	} else {
+		c.LoggerDebug(logger, "SetRecoverKey "+c.PrettyPrint(in))
+	}
 	unprotoNewWalletIDVShareBind := c.UnprotoizeVShareBindData(in.NewWalletIDVShareBind)
 	privK := s.getSSPrivK(unprotoNewWalletIDVShareBind.GetSSIntervalPubKID())
 	if privK == "" {
@@ -2770,7 +2883,11 @@ func (s *qadenaServer) SetRecoverKey(ctx context.Context, in *types.RecoverKey) 
 }
 
 func (s *qadenaServer) SetProtectKey(ctx context.Context, in *types.ProtectKey) (*types.SetProtectKeyReply, error) {
-	c.LoggerDebug(logger, "SetProtectKey "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "SetProtectKey")
+	} else {
+		c.LoggerDebug(logger, "SetProtectKey "+c.PrettyPrint(in))
+	}
 
 	subWallet, found := s.getWallet(in.WalletID)
 
@@ -2797,7 +2914,11 @@ func (s *qadenaServer) SetProtectKey(ctx context.Context, in *types.ProtectKey) 
 	// find the real wallet
 	mainEWalletID := vShareWallet.DstEWalletID
 
-	c.LoggerDebug(logger, "mainEWalletID "+c.PrettyPrint(mainEWalletID))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "mainEWalletID (redacted)")
+	} else {
+		c.LoggerDebug(logger, "mainEWalletID "+c.PrettyPrint(mainEWalletID))
+	}
 
 	s.setProtectKeyNoNotify(in)
 	s.setProtectSubWalletIDByOriginalWalletID(mainEWalletID.WalletID, in.WalletID)
@@ -2805,7 +2926,11 @@ func (s *qadenaServer) SetProtectKey(ctx context.Context, in *types.ProtectKey) 
 }
 
 func (s *qadenaServer) ClaimCredential(ctx context.Context, in *types.MsgClaimCredential) (*types.MsgClaimCredentialResponse, error) {
-	c.LoggerDebug(logger, "ClaimCredential "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "ClaimCredential")
+	} else {
+		c.LoggerDebug(logger, "ClaimCredential "+c.PrettyPrint(in))
+	}
 
 	unprotoClaimCredentialExtraParmsVShareBind := c.UnprotoizeVShareBindData(in.ClaimCredentialExtraParmsVShareBind)
 
@@ -2817,7 +2942,11 @@ func (s *qadenaServer) ClaimCredential(ctx context.Context, in *types.MsgClaimCr
 		return nil, err
 	}
 
-	c.LoggerDebug(logger, "claimCredentialExtraParms "+c.PrettyPrint(encryptableClaimCredentialExtraParms))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "claimCredentialExtraParms (redacted)")
+	} else {
+		c.LoggerDebug(logger, "claimCredentialExtraParms "+c.PrettyPrint(encryptableClaimCredentialExtraParms))
+	}
 
 	// validate vshare here for the double-encrypted claimCredentialExtraParms
 	wallet, found := s.getWallet(encryptableClaimCredentialExtraParms.WalletID)
@@ -2845,9 +2974,14 @@ func (s *qadenaServer) ClaimCredential(ctx context.Context, in *types.MsgClaimCr
 
 	var sdkctx sdk.Context = sdk.Context{}.WithLogger(logger)
 
-	c.LoggerDebug(logger, "credentialCCPubK "+c.PrettyPrint(credentialCCPubK))
-	c.LoggerDebug(logger, "encryptableClaimCredentialExtraParms.GetCredentialInfoVShareBind() "+c.PrettyPrint(encryptableClaimCredentialExtraParms.CredentialInfoVShareBind))
-	c.LoggerDebug(logger, "encryptableClaimCredentialExtraParms.EncCredentialInfoVShare "+c.PrettyPrint(encryptableClaimCredentialExtraParms.CredentialInfoVShareBind))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "credentialCCPubK (redacted)")
+		c.LoggerDebug(logger, "credentialInfoVShare (redacted)")
+	} else {
+		c.LoggerDebug(logger, "credentialCCPubK "+c.PrettyPrint(credentialCCPubK))
+		c.LoggerDebug(logger, "encryptableClaimCredentialExtraParms.GetCredentialInfoVShareBind() "+c.PrettyPrint(encryptableClaimCredentialExtraParms.CredentialInfoVShareBind))
+		c.LoggerDebug(logger, "encryptableClaimCredentialExtraParms.EncCredentialInfoVShare "+c.PrettyPrint(encryptableClaimCredentialExtraParms.CredentialInfoVShareBind))
+	}
 
 	if !c.ValidateVShare(sdkctx, encryptableClaimCredentialExtraParms.GetCredentialInfoVShareBind(), encryptableClaimCredentialExtraParms.EncCredentialInfoVShare, credentialCCPubK) {
 		c.LoggerError(logger, "invalid credential info vshare")
@@ -2886,7 +3020,11 @@ func (s *qadenaServer) ClaimCredential(ctx context.Context, in *types.MsgClaimCr
 		return nil, types.ErrGenericEncryption
 	}
 
-	c.LoggerDebug(logger, "ipCredential "+c.PrettyPrint(ipCredential))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "ipCredential (redacted)")
+	} else {
+		c.LoggerDebug(logger, "ipCredential "+c.PrettyPrint(ipCredential))
+	}
 
 	// do validations
 
@@ -2972,8 +3110,12 @@ func (s *qadenaServer) ClaimCredential(ctx context.Context, in *types.MsgClaimCr
 
 	newCredentialPC := c.UnprotoizeBPedersenCommit(encryptableClaimCredentialExtraParms.NewCredentialPC)
 
-	c.LoggerDebug(logger, "checkPC "+c.PrettyPrint(checkPC))
-	c.LoggerDebug(logger, "newCredentialPC "+c.PrettyPrint(newCredentialPC))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "checkPC/newCredentialPC (redacted)")
+	} else {
+		c.LoggerDebug(logger, "checkPC "+c.PrettyPrint(checkPC))
+		c.LoggerDebug(logger, "newCredentialPC "+c.PrettyPrint(newCredentialPC))
+	}
 
 	if !c.ComparePedersenCommit(checkPC, newCredentialPC) {
 		c.LoggerError(logger, "checkPC != NewCredentialPC")
@@ -3062,7 +3204,11 @@ func (s *qadenaServer) ClaimCredential(ctx context.Context, in *types.MsgClaimCr
 }
 
 func (s *qadenaServer) ValidateAuthorizedSigner(ctx context.Context, in *types.ValidateAuthorizedSignerRequest) (*types.ValidateAuthorizedSignerReply, error) {
-	c.LoggerDebug(logger, "ValidateAuthorizedSigner "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "ValidateAuthorizedSigner")
+	} else {
+		c.LoggerDebug(logger, "ValidateAuthorizedSigner "+c.PrettyPrint(in))
+	}
 
 	// basic algorithm:
 	//   1. get the eph wallet
@@ -3092,7 +3238,11 @@ func (s *qadenaServer) ValidateAuthorizedSigner(ctx context.Context, in *types.V
 		return nil, err
 	}
 
-	c.LoggerDebug(logger, "vShareCreateWallet "+c.PrettyPrint(vShareCreateWallet))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "vShareCreateWallet (redacted)")
+	} else {
+		c.LoggerDebug(logger, "vShareCreateWallet "+c.PrettyPrint(vShareCreateWallet))
+	}
 
 	// 2.
 	realWalletID := vShareCreateWallet.DstEWalletID.WalletID
@@ -3146,7 +3296,11 @@ func (s *qadenaServer) ValidateAuthorizedSigner(ctx context.Context, in *types.V
 		return nil, err
 	}
 
-	c.LoggerDebug(logger, "emailSCI "+c.PrettyPrint(emailSCI))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "emailSCI (redacted)")
+	} else {
+		c.LoggerDebug(logger, "emailSCI "+c.PrettyPrint(emailSCI))
+	}
 
 	if emailSCI.Details.Contact != completedSignatory.Email {
 		return nil, types.ErrUnauthorizedSigner
@@ -3191,7 +3345,11 @@ func (s *qadenaServer) containsWalletID(d []string, creator string) bool {
 }
 
 func (s *qadenaServer) decryptSignatory(in *types.VShareSignatory, trusted bool) *types.EncryptableSignatory {
-	c.LoggerDebug(logger, "decryptSignatory "+c.PrettyPrint(in)+" "+strconv.FormatBool(trusted))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "decryptSignatory")
+	} else {
+		c.LoggerDebug(logger, "decryptSignatory "+c.PrettyPrint(in))
+	}
 
 	bindData := c.UnprotoizeVShareBindData(in.SignatoryVShareBind)
 
@@ -3229,13 +3387,21 @@ func (s *qadenaServer) decryptSignatory(in *types.VShareSignatory, trusted bool)
 		return nil
 	}
 
-	c.LoggerDebug(logger, "es "+c.PrettyPrint(es))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "es (redacted)")
+	} else {
+		c.LoggerDebug(logger, "es "+c.PrettyPrint(es))
+	}
 
 	return &es
 }
 
 func (s *qadenaServer) decryptAuthorizedSignatory(in *types.VShareSignatory, trusted bool) *types.EncryptableAuthorizedSignatory {
-	c.LoggerDebug(logger, "decryptAuthorizedSignatory "+c.PrettyPrint(in)+" "+strconv.FormatBool(trusted))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "decryptAuthorizedSignatory")
+	} else {
+		c.LoggerDebug(logger, "decryptAuthorizedSignatory "+c.PrettyPrint(in)+" "+strconv.FormatBool(trusted))
+	}
 
 	bindData := c.UnprotoizeVShareBindData(in.SignatoryVShareBind)
 
@@ -3273,13 +3439,21 @@ func (s *qadenaServer) decryptAuthorizedSignatory(in *types.VShareSignatory, tru
 		return nil
 	}
 
-	c.LoggerDebug(logger, "eas "+c.PrettyPrint(eas))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "eas (redacted)")
+	} else {
+		c.LoggerDebug(logger, "eas "+c.PrettyPrint(eas))
+	}
 
 	return &eas
 }
 
 func (s *qadenaServer) ValidateAuthorizedSignatory(ctx context.Context, in *types.ValidateAuthorizedSignatoryRequest) (*types.ValidateAuthorizedSignatoryReply, error) {
-	c.LoggerDebug(logger, "ValidateAuthorizedSignatory "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "ValidateAuthorizedSignatory")
+	} else {
+		c.LoggerDebug(logger, "ValidateAuthorizedSignatory "+c.PrettyPrint(in))
+	}
 
 	// get the creator wallet
 	creatorWallet, found := s.getWallet(in.Creator)
@@ -3324,7 +3498,11 @@ func (s *qadenaServer) ValidateAuthorizedSignatory(ctx context.Context, in *type
 			return nil, err
 		}
 
-		c.LoggerDebug(logger, "vShareCreateWallet "+c.PrettyPrint(vShareCreateWallet))
+		if s.RealEnclave {
+			c.LoggerDebug(logger, "vShareCreateWallet (redacted)")
+		} else {
+			c.LoggerDebug(logger, "vShareCreateWallet "+c.PrettyPrint(vShareCreateWallet))
+		}
 
 		if vShareCreateWallet.DstEWalletID.WalletID != in.Creator {
 			c.LoggerError(logger, "vShareCreateWallet.DstEWalletID.WalletID != Creator")
@@ -3406,7 +3584,11 @@ func (s *qadenaServer) ValidateAuthorizedSignatory(ctx context.Context, in *type
 
 // we'll store the request in DSVS "format"
 func (s *qadenaServer) SetDSVSAuthorizedSignatory(ctx context.Context, in *dsvstypes.AuthorizedSignatory) {
-	c.LoggerDebug(logger, "SetDSVSAuthorizedSignatory "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "SetDSVSAuthorizedSignatory")
+	} else {
+		c.LoggerDebug(logger, "SetDSVSAuthorizedSignatory "+c.PrettyPrint(in))
+	}
 
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(dsvstypes.AuthorizedSignatoryKeyPrefix))
 
@@ -3478,7 +3660,11 @@ func (s *qadenaServer) GetAuthorizedSignatory(ctx context.Context, creator strin
 */
 
 func (s *qadenaServer) SetCredential(ctx context.Context, in *types.Credential) (*types.SetCredentialReply, error) {
-	c.LoggerDebug(logger, "SetCredential "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "SetCredential")
+	} else {
+		c.LoggerDebug(logger, "SetCredential "+c.PrettyPrint(in))
+	}
 	//	credentialMap[CredentialKey{in.CredentialID, in.CredentialType}] = *in
 	if s.credentialByPCXYExists(in) {
 		c.LoggerError(logger, "credential already exists")
@@ -3496,7 +3682,12 @@ func (s *qadenaServer) SetCredential(ctx context.Context, in *types.Credential) 
 }
 
 func (s *qadenaServer) RemoveCredential(ctx context.Context, in *types.Credential) (*types.RemoveCredentialReply, error) {
-	c.LoggerDebug(logger, "RemoveCredential "+c.PrettyPrint(in))
+
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "RemoveCredential")
+	} else {
+		c.LoggerDebug(logger, "RemoveCredential "+c.PrettyPrint(in))
+	}
 
 	// get the credential
 	credential, found := s.getCredential(in.CredentialID, in.CredentialType)
@@ -3517,7 +3708,11 @@ func (s *qadenaServer) RemoveCredential(ctx context.Context, in *types.Credentia
 }
 
 func (s *qadenaServer) SignRecoverKey(ctx context.Context, in *types.MsgSignRecoverPrivateKey) (*types.SignRecoverKeyReply, error) {
-	c.LoggerDebug(logger, "SignRecoverKey "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "SignRecoverKey")
+	} else {
+		c.LoggerDebug(logger, "SignRecoverKey "+c.PrettyPrint(in))
+	}
 
 	unprotoDestinationEWalletIDVShareBind := c.UnprotoizeVShareBindData(in.DestinationEWalletIDVShareBind)
 	privK := s.getSSPrivK(unprotoDestinationEWalletIDVShareBind.GetSSIntervalPubKID())
@@ -3528,7 +3723,11 @@ func (s *qadenaServer) SignRecoverKey(ctx context.Context, in *types.MsgSignReco
 			return nil, err
 		}
 
-		c.LoggerDebug(logger, "SignRecoverKey: dstEWalletID "+c.PrettyPrint(dstEWalletID))
+		if s.RealEnclave {
+			c.LoggerDebug(logger, "SignRecoverKey: dstEWalletID (redacted)")
+		} else {
+			c.LoggerDebug(logger, "SignRecoverKey: dstEWalletID "+c.PrettyPrint(dstEWalletID))
+		}
 
 		recoverKey, found := s.getRecoverKeyByOriginalWalletID(dstEWalletID.WalletID)
 
@@ -3537,7 +3736,11 @@ func (s *qadenaServer) SignRecoverKey(ctx context.Context, in *types.MsgSignReco
 			return nil, types.ErrInvalidSignRecoverKey
 		}
 
-		c.LoggerDebug(logger, "SignRecoverKey: recoverKey "+c.PrettyPrint(recoverKey))
+		if s.RealEnclave {
+			c.LoggerDebug(logger, "SignRecoverKey: recoverKey (redacted)")
+		} else {
+			c.LoggerDebug(logger, "SignRecoverKey: recoverKey "+c.PrettyPrint(recoverKey))
+		}
 
 		protectKey, found := s.getProtectKey(dstEWalletID.WalletID)
 
@@ -3546,7 +3749,11 @@ func (s *qadenaServer) SignRecoverKey(ctx context.Context, in *types.MsgSignReco
 			return nil, types.ErrInvalidSignRecoverKey
 		}
 
-		c.LoggerDebug(logger, "SignRecoverKey: protectKey "+c.PrettyPrint(protectKey))
+		if s.RealEnclave {
+			c.LoggerDebug(logger, "SignRecoverKey: protectKey (redacted)")
+		} else {
+			c.LoggerDebug(logger, "SignRecoverKey: protectKey "+c.PrettyPrint(protectKey))
+		}
 
 		// find the canonical name of the signer
 		var signerName string
@@ -3605,25 +3812,48 @@ func (s *qadenaServer) SignRecoverKey(ctx context.Context, in *types.MsgSignReco
 }
 
 func (s *qadenaServer) recoverKeyByCredential(ctx context.Context, in *types.Credential, encWalletIDVShare []byte, walletIDVShareBind *types.VShareBindData) (*types.RecoverKeyReply, error) {
-	c.LoggerDebug(logger, "RecoverKey "+c.PrettyPrint(in))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "RecoverKey")
+	} else {
+		c.LoggerDebug(logger, "RecoverKey "+c.PrettyPrint(in))
+	}
 
 	if in.CredentialType == types.PersonalInfoCredentialType && in.WalletID != "" {
-		c.LoggerDebug(logger, "recovering key wallet ID "+in.WalletID)
-		c.LoggerDebug(logger, "recovering key credential ID "+in.CredentialID)
+		if s.RealEnclave {
+			c.LoggerDebug(logger, "recovering key wallet ID (redacted)")
+			c.LoggerDebug(logger, "recovering key credential ID (redacted)")
+		} else {
+			c.LoggerDebug(logger, "recovering key wallet ID "+in.WalletID)
+			c.LoggerDebug(logger, "recovering key credential ID "+in.CredentialID)
+		}
 		unprotoCredentialHashVShareBind := c.UnprotoizeVShareBindData(in.CredentialHashVShareBind)
 		credentialHashPrivK := s.getSSPrivK(unprotoCredentialHashVShareBind.GetSSIntervalPubKID())
 		if credentialHashPrivK != "" {
 			var credentialHash types.EncryptableString
 			err := c.VShareBDecryptAndProtoUnmarshal(credentialHashPrivK, s.getPubK(unprotoCredentialHashVShareBind.GetSSIntervalPubKID()), unprotoCredentialHashVShareBind, in.EncCredentialHashVShare, &credentialHash)
 			if err == nil {
-				c.LoggerDebug(logger, "credentialHash "+credentialHash.Value)
+				if s.RealEnclave {
+					c.LoggerDebug(logger, "credentialHash (redacted)")
+				} else {
+					c.LoggerDebug(logger, "credentialHash "+credentialHash.Value)
+				}
 				credential, exists := s.getCredentialByHash(credentialHash.Value)
 				if exists {
-					c.LoggerError(logger, "credential hash exists "+credentialHash.Value)
-					c.LoggerDebug(logger, "credential ID "+credential.CredentialID)
-					c.LoggerDebug(logger, "credential's wallet ID "+credential.WalletID)
+					if s.RealEnclave {
+						c.LoggerError(logger, "credential hash exists (redacted)")
+						c.LoggerDebug(logger, "credential ID (redacted)")
+						c.LoggerDebug(logger, "credential's wallet ID (redacted)")
+					} else {
+						c.LoggerError(logger, "credential hash exists "+credentialHash.Value)
+						c.LoggerDebug(logger, "credential ID "+credential.CredentialID)
+						c.LoggerDebug(logger, "credential's wallet ID "+credential.WalletID)
+					}
 					subWalletID, found := s.getProtectSubWalletIDByOriginalWalletID(credential.WalletID)
-					c.LoggerDebug(logger, "sub wallet ID "+subWalletID)
+					if s.RealEnclave {
+						c.LoggerDebug(logger, "sub wallet ID (redacted)")
+					} else {
+						c.LoggerDebug(logger, "sub wallet ID "+subWalletID)
+					}
 					if !found {
 						c.LoggerError(logger, "there is no prior protect key for this credential")
 						return nil, types.ErrInvalidRecoverKey
@@ -3685,7 +3915,11 @@ func (s *qadenaServer) getOwners(pubKID string) (owners types.EncryptablePioneer
 	} else {
 		s.Cdc.MustUnmarshal(b, &ownersArray)
 
-		c.LoggerDebug(logger, "ownersArray "+c.PrettyPrint(ownersArray))
+		if s.RealEnclave {
+			c.LoggerDebug(logger, "ownersArray (redacted)")
+		} else {
+			c.LoggerDebug(logger, "ownersArray "+c.PrettyPrint(ownersArray))
+		}
 		found = true
 		owners = ownersArray
 	}
@@ -3730,7 +3964,11 @@ func (s *qadenaServer) getShare(pubKID string) (share string, found bool) {
 	} else {
 		s.Cdc.MustUnmarshal(s.MustUnseal(b), &shareString)
 
-		c.LoggerDebug(logger, "shareString "+c.PrettyPrint(shareString))
+		if s.RealEnclave {
+			c.LoggerDebug(logger, "shareString (redacted)")
+		} else {
+			c.LoggerDebug(logger, "shareString "+c.PrettyPrint(shareString))
+		}
 		found = true
 		share = shareString.GetS()
 	}
@@ -3748,7 +3986,7 @@ func (s *qadenaServer) setAllOwners(ownersMap *types.EncryptableEnclaveSSOwnerMa
 }
 
 func (s *qadenaServer) setOwnersAndShare(pubKID string, owners []string, share string) {
-	c.LoggerDebug(logger, "setOwnersAndShare", pubKID, c.PrettyPrint(owners))
+	c.LoggerDebug(logger, "setOwnersAndShare", pubKID)
 	ownerArray := types.EnclaveStoreStringArray{A: owners}
 	shareString := types.EnclaveStoreString{S: share}
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveSSIntervalOwnersKeyPrefix))
@@ -3760,7 +3998,7 @@ func (s *qadenaServer) setOwnersAndShare(pubKID string, owners []string, share s
 }
 
 func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*types.SetPublicKeyReply, error) {
-	c.LoggerDebug(logger, "SetPublicKey "+c.PrettyPrint(in))
+	c.LoggerDebug(logger, "SetPublicKey")
 
 	s.setPublicKeyNoNotify(*in)
 	p, _ := s.getPublicKey(in.PubKID, in.PubKType)
@@ -3771,7 +4009,11 @@ func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*
 	for _, share := range in.Shares {
 		owners = append(owners, share.PioneerID)
 		if share.PioneerID == s.getPrivateEnclaveParamsPioneerID() {
-			c.LoggerDebug(logger, "received a share "+c.PrettyPrint(share))
+			if s.RealEnclave {
+				c.LoggerDebug(logger, "received a share (redacted)")
+			} else {
+				c.LoggerDebug(logger, "received a share "+c.PrettyPrint(share))
+			}
 			_, err := c.BDecryptAndUnmarshal(s.getPrivateEnclaveParamsEnclavePrivK(), share.EncEnclaveShare, &myShare)
 			if err != nil {
 				c.LoggerError(logger, "couldn't decrypt")
@@ -3823,7 +4065,11 @@ func (s *qadenaServer) getPublicKey(pubKID string, pubKType string) (publicKey s
 	} else {
 		s.Cdc.MustUnmarshal(b, &pk)
 
-		c.LoggerDebug(logger, "publicKey "+c.PrettyPrint(pk))
+		if s.RealEnclave {
+			c.LoggerDebug(logger, "publicKey (redacted)")
+		} else {
+			c.LoggerDebug(logger, "publicKey "+c.PrettyPrint(pk))
+		}
 		found = true
 		publicKey = pk.PubK
 	}
@@ -3953,7 +4199,7 @@ func (s *qadenaServer) getAllPioneers() (pioneers []string) {
 }
 
 func (s *qadenaServer) SetSecretSharePrivateKey(ctx context.Context, in *types.SecretSharePrivK) (*types.SetSecretSharePrivateKeyReply, error) {
-	c.LoggerDebug(logger, "SetSecretSharePrivateKey "+c.PrettyPrint(in))
+	c.LoggerDebug(logger, "SetSecretSharePrivateKey")
 	var ssIDAndPrivK types.EncryptableSSIDAndPrivK
 
 	_, err := c.BDecryptAndProtoUnmarshal(s.getPrivateEnclaveParamsEnclavePrivK(), in.EncEnclaveSSIDAndPrivK, &ssIDAndPrivK)
@@ -3962,7 +4208,11 @@ func (s *qadenaServer) SetSecretSharePrivateKey(ctx context.Context, in *types.S
 		return nil, err
 	}
 
-	c.LoggerDebug(logger, "SetSecretSharePrivateKey ssIDAndPrivK "+c.PrettyPrint(ssIDAndPrivK))
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "SetSecretSharePrivateKey ssIDAndPrivK (redacted)")
+	} else {
+		c.LoggerDebug(logger, "SetSecretSharePrivateKey ssIDAndPrivK "+c.PrettyPrint(ssIDAndPrivK))
+	}
 
 	s.setPrivKCache(ssIDAndPrivK.PubKID, ssIDAndPrivK.PrivK)
 	s.setPubKCache(ssIDAndPrivK.PubKID, ssIDAndPrivK.PubK)
@@ -4004,7 +4254,11 @@ func (s *qadenaServer) getPrivKCache(pubKID string) (privK string, found bool) {
 	} else {
 		s.Cdc.MustUnmarshal(s.MustUnseal(b), &privKString)
 
-		c.LoggerDebug(logger, "privKString "+c.PrettyPrint(privKString))
+		if s.RealEnclave {
+			c.LoggerDebug(logger, "privKString (redacted)")
+		} else {
+			c.LoggerDebug(logger, "privKString "+c.PrettyPrint(privKString))
+		}
 		found = true
 		privK = privKString.GetS()
 	}
@@ -4032,7 +4286,11 @@ func (s *qadenaServer) getPubKCache(pubKID string) (pubK string, found bool) {
 	} else {
 		s.Cdc.MustUnmarshal(b, &pubKString)
 
-		c.LoggerDebug(logger, "pubKString "+c.PrettyPrint(pubKString))
+		if s.RealEnclave {
+			c.LoggerDebug(logger, "pubKString (redacted)")
+		} else {
+			c.LoggerDebug(logger, "pubKString "+c.PrettyPrint(pubKString))
+		}
 		found = true
 		pubK = pubKString.GetS()
 	}

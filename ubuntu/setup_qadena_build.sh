@@ -75,10 +75,12 @@ if [ -z "$INSTALLED_GO_VERSION" ] || [ "$INSTALLED_GO_VERSION" != "$GO_VERSION" 
         (cd installers; wget https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz; rm -rf /usr/local/go && tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz)
     fi
 
-    export PATH=$PATH:/usr/local/go/bin
 
     USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
     echo "Original user's home: $USER_HOME"
+
+    export PATH=$PATH:/usr/local/go/bin:$USER_HOME/go/bin
+
 
     LINE="export PATH=\$PATH:$USER_HOME/go/bin:/usr/local/go/bin"
     FILE="$USER_HOME/.profile"
@@ -90,7 +92,12 @@ if [ -z "$INSTALLED_GO_VERSION" ] || [ "$INSTALLED_GO_VERSION" != "$GO_VERSION" 
     echo "ℹ️ Already in .profile"
     fi
 
+else
+    echo "Go $INSTALLED_GO_VERSION already installed"
+    export PATH=$PATH:$USER_HOME/go/bin:/usr/local/go/bin
 fi
+
+
 
 # check if curl exists
 if ! command -v curl > /dev/null 2>&1; then
@@ -117,6 +124,25 @@ if [ "$(uname -m)" = "x86_64" ]; then
         cp azure_sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf
     else
         echo "Not running in Azure, not installing a default sgx_default_qcnl.conf"
+    fi
+
+    # check if running in Alibaba
+    if curl --max-time 3 -s "http://100.100.100.200/latest/meta-data/instance/instance-type" > /dev/nulll 2>&1 ; then
+        echo "Running in Alibaba, installing a default sgx_default_qcnl.conf that points to Alibaba PCCS"
+        # View the region of the instance.
+        token=$(curl -s -X PUT -H "X-aliyun-ecs-metadata-token-ttl-seconds: 5" "http://100.100.100.200/latest/api/token")
+        region_id=$(curl -s -H "X-aliyun-ecs-metadata-token: $token" http://100.100.100.200/latest/meta-data/region-id)
+
+        # Specify the URL of Alibaba Cloud Provisioning Certificate Caching Service (PCCS) for the region in which the instance is deployed.
+        PCCS_URL=https://sgx-dcap-server-vpc.${region_id}.aliyuncs.com/sgx/certification/v4/
+        cat > '/etc/sgx_default_qcnl.conf' << EOF
+# PCCS server address
+PCCS_URL=${PCCS_URL}
+# To accept insecure HTTPS cert, set this option to FALSE
+USE_SECURE_CERT=TRUE
+EOF
+    else
+        echo "Not running in Alibaba, not installing a default sgx_default_qcnl.conf"
     fi
 
     # ego
