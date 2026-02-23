@@ -34,6 +34,7 @@ import (
 	"net"
 
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	"github.com/edgelesssys/ego/attestation/tcbstatus"
 	"github.com/edgelesssys/ego/ecrypto"
 	"github.com/edgelesssys/ego/enclave"
 
@@ -716,6 +717,7 @@ func (s *qadenaServer) verifyRemoteReportInternal(remoteReportBytes []byte, cert
 	if s.RealEnclave {
 		remoteReport, err := enclave.VerifyRemoteReport(remoteReportBytes)
 		if err != nil {
+			c.LoggerError(logger, "error verifying remote report "+tcbstatus.Explain(remoteReport.TCBStatus))
 			c.LoggerError(logger, "error verifying remote report "+err.Error())
 			return false
 		}
