@@ -120,6 +120,7 @@ if [ "$(uname -m)" = "x86_64" ]; then
     mkdir -p /etc/apt/keyrings
     wget -qO- https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | tee /etc/apt/keyrings/intel-sgx-keyring.asc > /dev/null
     echo "deb [signed-by=/etc/apt/keyrings/intel-sgx-keyring.asc arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/intel-sgx.list
+    apt update
     rm -f /etc/sgx_default_qcnl.conf
     apt install -y libsgx-dcap-default-qpl
 
