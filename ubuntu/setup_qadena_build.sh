@@ -15,9 +15,12 @@ if [ -z "$GO_VERSION" ]; then
 fi
 IGNITE_VERSION=29.8.0
 
+EGO_GO_VERSION=go1.25.6
+
 echo "Required GO_VERSION: $GO_VERSION"
 echo "Required IGNITE_VERSION: $IGNITE_VERSION"
 echo "Required DASEL_VERSION: $DASEL_VERSION"
+echo "Required EGO_GO_VERSION: $EGO_GO_VERSION"
 
 PATH=$PATH:/usr/local/go/bin
 
@@ -128,7 +131,7 @@ if [ "$(uname -m)" = "x86_64" ]; then
         echo "Not running in Azure, not installing a default sgx_default_qcnl.conf"
     fi
 
-    # check if running in Alibaba
+    # check if running in Alicloued
     if curl --max-time 3 -s "http://100.100.100.200/latest/meta-data/instance/instance-type" > /dev/nulll 2>&1 ; then
         echo "Running in Alibaba, installing a default sgx_default_qcnl.conf that points to Alibaba PCCS"
         # View the region of the instance.
@@ -143,12 +146,31 @@ PCCS_URL=${PCCS_URL}
 # To accept insecure HTTPS cert, set this option to FALSE
 USE_SECURE_CERT=TRUE
 EOF
+
+
+        if ! command -v protoc-gen-grpc-gateway > /dev/null 2>&1; then
+            echo "Need to install protoc-gen-grpc-gateway version 1.16.0"
+            go install github.com/grpc-ecosystem/grpc-gateway/protoc-gen-grpc-gateway@v1.16.0
+        fi
+
+        if ! command -v protoc-gen-openapiv2 > /dev/null 2>&1; then
+            echo "Need to install protoc-gen-openapiv2 version latest"
+            go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@latest
+        fi
     else
         echo "Not running in Alibaba, not installing a default sgx_default_qcnl.conf"
     fi
 
     # ego
-    (cd installers; wget https://github.com/edgelesssys/ego/releases/download/v1.8.1/ego_1.8.1_amd64_ubuntu-22.04.deb; apt install -y ./ego_1.8.1_amd64_ubuntu-22.04.deb)
+    # check if ego-go version is installed
+    INSTALLED_EGO_GO_VERSION=""
+    if command -v ego-go > /dev/null 2>&1; then
+        INSTALLED_EGO_GO_VERSION=$(ego-go version 2>&1 | awk '{print $3}')
+    fi
+
+    if [ -z "$INSTALLED_EGO_GO_VERSION" ] || [ "$INSTALLED_EGO_GO_VERSION" != "$EGO_GO_VERSION" ]; then
+        (cd installers; wget https://github.com/edgelesssys/ego/releases/download/v1.8.1/ego_1.8.1_amd64_ubuntu-22.04.deb; apt install -y ./ego_1.8.1_amd64_ubuntu-22.04.deb)
+    fi
     apt install -y build-essential libssl-dev
 fi
 
