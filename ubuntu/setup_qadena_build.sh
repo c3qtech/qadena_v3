@@ -156,7 +156,7 @@ EOF
     fi
 
     if [ "$installed_sgx_default_qcnl_conf" = false ]; then
-        echo "No default sgx_default_qcnl.conf installed yet, will install a default sgx_default_qcnl.conf"
+        echo "No cloud-specific sgx_default_qcnl.conf installed yet, will install a default sgx_default_qcnl.conf"
         cp ubuntu/sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf
     fi
 
