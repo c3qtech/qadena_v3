@@ -176,21 +176,24 @@ EOF
     apt install -y build-essential libssl-dev
 fi
 
-if ! command -v protoc-gen-grpc-gateway > /dev/null 2>&1; then
+# check if /usr/local/bin/protoc-gen-grpc-gateway exists
+if [ ! -f /usr/local/bin/protoc-gen-grpc-gateway ]; then
     echo "Need to install protoc-gen-grpc-gateway version 1.16.0"
     go install github.com/grpc-ecosystem/grpc-gateway/protoc-gen-grpc-gateway@v1.16.0
     # Put it somewhere global
     install -m 0755 "$HOME/go/bin/protoc-gen-grpc-gateway" /usr/local/bin/protoc-gen-grpc-gateway
 fi
 
-if ! command -v protoc-gen-openapiv2 > /dev/null 2>&1; then
+# check if /usr/local/bin/protoc-gen-openapiv2 exists
+if [ ! -f /usr/local/bin/protoc-gen-openapiv2 ]; then
     echo "Need to install protoc-gen-openapiv2 version 2.28.0"
     go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@v2.28.0
     # Put it somewhere global
     install -m 0755 "$HOME/go/bin/protoc-gen-openapiv2" /usr/local/bin/protoc-gen-openapiv2
 fi
 
-if ! command -v protoc-gen-gocosmos > /dev/null 2>&1; then
+# check if /usr/local/bin/protoc-gen-gocosmos exists
+if [ ! -f /usr/local/bin/protoc-gen-gocosmos ]; then
     echo "Need to install protoc-gen-gocosmos"
     go install github.com/cosmos/gogoproto/protoc-gen-gocosmos@latest
     # Put it somewhere global
