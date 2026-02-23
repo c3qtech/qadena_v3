@@ -148,15 +148,6 @@ USE_SECURE_CERT=TRUE
 EOF
 
 
-        if ! command -v protoc-gen-grpc-gateway > /dev/null 2>&1; then
-            echo "Need to install protoc-gen-grpc-gateway version 1.16.0"
-            go install github.com/grpc-ecosystem/grpc-gateway/protoc-gen-grpc-gateway@v1.16.0
-        fi
-
-        if ! command -v protoc-gen-openapiv2 > /dev/null 2>&1; then
-            echo "Need to install protoc-gen-openapiv2 version latest"
-            go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@latest
-        fi
     else
         echo "Not running in Alibaba, not installing a default sgx_default_qcnl.conf"
     fi
@@ -170,9 +161,22 @@ EOF
 
     if [ -z "$INSTALLED_EGO_GO_VERSION" ] || [ "$INSTALLED_EGO_GO_VERSION" != "$EGO_GO_VERSION" ]; then
         (cd installers; wget https://github.com/edgelesssys/ego/releases/download/v1.8.1/ego_1.8.1_amd64_ubuntu-22.04.deb; apt install -y ./ego_1.8.1_amd64_ubuntu-22.04.deb)
+    else
+        echo "ego-go $INSTALLED_EGO_GO_VERSION already installed"
     fi
     apt install -y build-essential libssl-dev
 fi
+
+if ! command -v protoc-gen-grpc-gateway > /dev/null 2>&1; then
+    echo "Need to install protoc-gen-grpc-gateway version 1.16.0"
+    go install github.com/grpc-ecosystem/grpc-gateway/protoc-gen-grpc-gateway@v1.16.0
+fi
+
+if ! command -v protoc-gen-openapiv2 > /dev/null 2>&1; then
+    echo "Need to install protoc-gen-openapiv2 version 2.28.0"
+    go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@v2.28.0
+fi
+
 
 
 # ignite
