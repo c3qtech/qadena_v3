@@ -209,7 +209,7 @@ INSTALLED_IGNITE=""
 echo "Checking if ignite is installed"
 if command -v ignite > /dev/null 2>&1; then
     echo "Ignite is installed, getting version"
-    INSTALLED_IGNITE=$(ignite version 2>&1 | grep "Ignite CLI version:" | awk '{print $NF}')
+    INSTALLED_IGNITE=$(sudo -u "$SUDO_USER" env PATH="/usr/local/bin:/usr/local/go/bin:$PATH" ignite version 2>&1 | grep "Ignite CLI version:" | awk '{print $NF}')
     echo "Installed Ignite CLI version: $INSTALLED_IGNITE"
 fi
 
