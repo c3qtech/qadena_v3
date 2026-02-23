@@ -126,7 +126,7 @@ if [ "$(uname -m)" = "x86_64" ]; then
     # check if running in Azure using "curl -H Metadata:true "http://169.254.169.254/metadata/instance?api-version=2021-02-01""
     if curl -m 4 -H Metadata:true "http://169.254.169.254/metadata/instance?api-version=2021-02-01" > /dev/null 2>&1 ; then
         echo "Running in Azure, installing a default sgx_default_qcnl.conf that points to Azure PCCS"
-        cp azure_sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf
+        cp ubuntu/azure_sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf
     else
         echo "Not running in Azure, not installing a default sgx_default_qcnl.conf"
     fi
