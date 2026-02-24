@@ -54,6 +54,16 @@ echo "Qadena home: $QADENAHOME" >&2
 echo "Qadena bin: $qadenabin" >&2
 echo "Qadena scripts: $qadenascripts" >&2
 
+needs_root_if_real_enclave(name) {
+  # if REAL_ENCLAVE, check if running as root
+  if [[ $REAL_ENCLAVE -eq 1 ]]; then
+      if [[ $(id -u) -ne 0 ]]; then
+          echo "$name:  Error: Qadena must be run as root (real SGX detected).  Try running with 'sudo'."
+          exit 1
+      fi
+  fi
+}
+
 is_zero() {
   val="$1"
 
