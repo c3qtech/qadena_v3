@@ -193,12 +193,12 @@ func (k Keeper) ClientVerifyRemoteReport(sdkctx sdk.Context, remoteReportBytes [
 	var buf bytes.Buffer
 	reader, err := gzip.NewReader(bytes.NewReader(remoteReportBytes))
 	if err != nil {
-		c.LoggerError(sdkctx.Logger(), "error gunzipping remote report "+err.Error())
+		c.LoggerError(sdkctx.Logger(), "ClientVerifyRemoteReport: error gunzipping remote report "+err.Error())
 		return false
 	}
 	_, err = buf.ReadFrom(reader)
 	if err != nil {
-		c.LoggerError(sdkctx.Logger(), "error gunzipping remote report "+err.Error())
+		c.LoggerError(sdkctx.Logger(), "ClientVerifyRemoteReport: error gunzipping remote report "+err.Error())
 		return false
 	}
 	remoteReportBytes = buf.Bytes()
@@ -217,14 +217,14 @@ func (k Keeper) ClientVerifyRemoteReport(sdkctx sdk.Context, remoteReportBytes [
 		}
 	}
 
-	c.ContextDebug(sdkctx, "ClientVerifyRemoteReport uniqueID: "+uniqueID+" signerID: "+signerID)
+	c.ContextDebug(sdkctx, "ClientVerifyRemoteReport: uniqueID: "+uniqueID+" signerID: "+signerID)
 	enclaveIdentity, found := k.GetEnclaveIdentity(sdkctx, uniqueID)
 	if !found {
-		c.ContextError(sdkctx, "couldn't find enclave identity")
+		c.ContextError(sdkctx, "ClientVerifyRemoteReport: couldn't find enclave identity")
 		return false
 	}
 
-	c.ContextDebug(sdkctx, "enclaveIdentity signerID: "+enclaveIdentity.SignerID+" status: "+enclaveIdentity.Status)
+	c.ContextDebug(sdkctx, "ClientVerifyRemoteReport: enclaveIdentity signerID: "+enclaveIdentity.SignerID+" status: "+enclaveIdentity.Status)
 	return enclaveIdentity.SignerID == signerID && enclaveIdentity.Status == types.ActiveStatus
 
 }

@@ -15,6 +15,7 @@ import (
 	//	"fmt"
 
 	"github.com/edgelesssys/ego/attestation"
+	"github.com/edgelesssys/ego/attestation/tcbstatus"
 	"github.com/edgelesssys/ego/eclient"
 
 	"google.golang.org/grpc"
@@ -75,22 +76,31 @@ func dialRealEnclave(logger log.Logger, addr string, signerID string, uniqueID s
 	return conn, err
 }
 
-// returns nil if valid
+// returns true if valid
 func clientVerifyRemoteReportRealEnclave(sdkctx sdk.Context, remoteReportBytes []byte, certifyData string) (success bool, signerID string, uniqueID string) {
 	remoteReport, err := eclient.VerifyRemoteReport(remoteReportBytes)
 	if err != nil {
-		c.ContextError(sdkctx, "error verifying remote report", err)
-		return false, "", ""
+		if err != nil {
+			c.ContextDebug(sdkctx, "clientVerifyRemoteReportRealEnclave: remote report tcbstatus "+tcbstatus.Explain(remoteReport.TCBStatus))
+			if remoteReport.TCBStatus == tcbstatus.Revoked || remoteReport.TCBStatus == tcbstatus.OutOfDate {
+				c.ContextError(sdkctx, "clientVerifyRemoteReportRealEnclave: error verifying remote report ", err)
+				return false, "", ""
+			} else {
+				c.ContextError(sdkctx, "clientVerifyRemoteReportRealEnclave: neither revoked nor completely out-of-date")
+			}
+		}
 	}
 
 	hash := sha256.Sum256([]byte(certifyData))
 	if bytes.Compare(remoteReport.Data[:len(hash)], hash[:]) != 0 {
-		c.ContextError(sdkctx, "mismatch hash")
-		c.ContextError(sdkctx, "remoteReportData hash", hex.EncodeToString(remoteReport.Data[:len(hash)]))
-		c.ContextError(sdkctx, "certifyData hash", hex.EncodeToString(hash[:]))
+		c.ContextError(sdkctx, "clientVerifyRemoteReportRealEnclave: mismatch hash")
+		c.ContextError(sdkctx, "clientVerifyRemoteReportRealEnclave: remoteReportData hash", hex.EncodeToString(remoteReport.Data[:len(hash)]))
+		c.ContextError(sdkctx, "clientVerifyRemoteReportRealEnclave: certifyData hash", hex.EncodeToString(hash[:]))
 		return false, "", ""
 	}
-	c.ContextDebug(sdkctx, "hash match")
+	c.ContextDebug(sdkctx, "clientVerifyRemoteReportRealEnclave: hash match")
+
+	// NOTE:  THIS DOES NOT HAVE TO CHECK IF THE UNIQUEID IS OK, SINCE THAT'S ALREADY DONE IN EnclaveClientVerifyRemoteReport
 
 	return true, hex.EncodeToString(remoteReport.SignerID), hex.EncodeToString(remoteReport.UniqueID)
 }

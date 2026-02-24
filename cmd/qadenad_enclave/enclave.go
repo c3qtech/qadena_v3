@@ -751,7 +751,6 @@ func (s *qadenaServer) verifyRemoteReportInternal(remoteReportBytes []byte, cert
 	c.LoggerDebug(logger, "Succeeded verifying remote report, uniqueID: "+localUniqueID)
 
 	if checkEnclaveUniqueIDOnly {
-
 		if localUniqueID == uniqueID {
 			c.LoggerDebug(logger, "Succeeded verifying remote report uniqueID: "+localUniqueID+" == enclave uniqueID: "+uniqueID)
 			return true
