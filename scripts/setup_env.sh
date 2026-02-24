@@ -23,7 +23,12 @@ fi
 
 # check SCRIPT_DIR/../cmd and SCRIPT_DIR/../x  -- if they exist, then we are in a build environment
 if [[ -d "$SCRIPT_DIR/../cmd" && -d "$SCRIPT_DIR/../x" ]]; then
-    export QADENAHOME="$(cd ~ && pwd)/qadena"
+    # if SUDO_USER
+    if [[ -n "$SUDO_USER" ]]; then
+        export QADENAHOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)/qadena"
+    else
+        export QADENAHOME="$(cd ~ && pwd)/qadena"
+    fi
     export qadenabuild="$(cd "$SCRIPT_DIR/.." && pwd)"
     export qadenabuildscripts="$qadenabuild/buildscripts"
     export qadenascripts="$qadenabuild/scripts"
