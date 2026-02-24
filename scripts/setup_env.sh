@@ -54,7 +54,8 @@ echo "Qadena home: $QADENAHOME" >&2
 echo "Qadena bin: $qadenabin" >&2
 echo "Qadena scripts: $qadenascripts" >&2
 
-needs_root_if_real_enclave(name) {
+needs_root_if_real_enclave() {
+  name="$1"
   # if REAL_ENCLAVE, check if running as root
   if [[ $REAL_ENCLAVE -eq 1 ]]; then
       if [[ $(id -u) -ne 0 ]]; then
