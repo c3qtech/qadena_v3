@@ -134,7 +134,8 @@ jq -n --arg pioneer "$pioneer" --arg count "$count" --arg email "$email" --arg a
 echo "-------------------------"
 echo "Setting up $treasuryname"
 echo "-------------------------"
-$qadenaproviderscripts/setup_treasury.sh --treasury-name $treasuryname --treasury-mnemonic $treasurymnemonic
+$qadenaproviderscripts/setup_treasury.sh --treasury-name $treasuryname --treasury-mnemonic $treasurymnemoni
+c
 echo "Send this information to QFI"
 echo "$treasuryname Qadena address:  $(qadenad_alias keys show $treasuryname --address)"
 
