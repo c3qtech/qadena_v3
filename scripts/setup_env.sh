@@ -237,3 +237,81 @@ is_qadena_running() {
     return 1
   fi
 }
+
+banner() {
+  local msg="$*"
+  local content=" $msg "
+  local border
+  border="$(printf '%*s' $(( ${#content} + 2 )) '' | tr ' ' '-')"
+  echo "$border"
+  echo "|$content|"
+  echo "$border"
+}
+
+run_cmd() {
+  local cmd="$*"
+  local wrap_width=80
+  local wrapped
+  local maxlen=0
+  local line
+  local border
+  local i=0
+
+  wrapped="$(echo "$cmd" | fold -s -w "$wrap_width")"
+
+  while IFS= read -r line; do
+    if (( ${#line} > maxlen )); then
+      maxlen=${#line}
+    fi
+  done <<< "$wrapped"
+
+  border="$(printf '%*s' $(( maxlen + 6 )) '' | tr ' ' '*')"
+  echo "$border"
+
+  while IFS= read -r line; do
+    i=$(( i + 1 ))
+    if (( i == 1 )); then
+      printf '* > %-*s *\n' "$maxlen" "$line"
+    else
+      printf '*   %-*s *\n' "$maxlen" "$line"
+    fi
+  done <<< "$wrapped"
+
+  echo "$border"
+  echo "Results:"
+  eval "$cmd"
+}
+
+run_cmd_capture() {
+  local cmd="$*"
+  local wrap_width=80
+  local wrapped
+  local maxlen=0
+  local line
+  local border
+  local i=0
+
+  wrapped="$(echo "$cmd" | fold -s -w "$wrap_width")"
+
+  while IFS= read -r line; do
+    if (( ${#line} > maxlen )); then
+      maxlen=${#line}
+    fi
+  done <<< "$wrapped"
+
+  border="$(printf '%*s' $(( maxlen + 6 )) '' | tr ' ' '*')"
+  echo "$border" >&2
+
+  while IFS= read -r line; do
+    i=$(( i + 1 ))
+    if (( i == 1 )); then
+      printf '* > %-*s *\n' "$maxlen" "$line" >&2
+    else
+      printf '*   %-*s *\n' "$maxlen" "$line" >&2
+    fi
+  done <<< "$wrapped"
+
+  echo "$border" >&2
+  echo "Results:" >&2
+  eval "$cmd"
+}

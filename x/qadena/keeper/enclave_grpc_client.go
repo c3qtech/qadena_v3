@@ -71,27 +71,28 @@ func (k Keeper) ValidateTransferDoublePrime(sdkctx sdk.Context, msg *types.MsgRe
 
 // this is called during "transfer" funds
 func (k Keeper) ScanTransaction(sdkctx sdk.Context, msg *types.MsgTransferFunds) (bool, error) {
-	//marketPrefix := "cn"
+	marketPrefix := "cn"
 	token := msg.TokenDenom
 	if token == types.AQadenaTokenDenom {
 		token = types.QadenaTokenDenom
 	} else if strings.HasPrefix(token, "erc20/") {
-		//marketPrefix = "cw"
+		marketPrefix = "cw"
 		meta, _ := k.bankKeeper.GetDenomMetaData(sdkctx, msg.TokenDenom)
 		token = meta.Symbol
 	}
 
-	//marketID := marketPrefix + ":" + strings.ToLower(token) + ":usd"
-	//	cp, err := k.pricefeedKeeper.GetCurrentPrice(sdkctx, marketID)
+	marketID := marketPrefix + ":" + strings.ToLower(token) + ":usd"
+	cp, err := k.pricefeedKeeper.GetCurrentPrice(sdkctx, marketID)
+
 	var basePrice math.LegacyDec = math.LegacyNewDecFromBigInt(c.BigIntZero)
 
-	/*
-		if err != nil {
-			basePrice = sdk.NewDecFromBigInt(c.BigIntZero)
-		} else {
-			basePrice = cp.Price
-		}
-	*/
+	c.LoggerDebug(k.logger, "ScanTransaction: marketID: "+marketID+" cp: "+cp.String())
+
+	if err != nil {
+		basePrice = math.LegacyNewDecFromBigInt(c.BigIntZero)
+	} else {
+		basePrice = cp.Price
+	}
 
 	return k.EnclaveScanTransaction(sdkctx, msg, basePrice)
 }

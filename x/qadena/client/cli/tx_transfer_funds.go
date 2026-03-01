@@ -667,13 +667,18 @@ func CmdTransferFunds() *cobra.Command {
 			err, res := qadenatx.GenerateOrBroadcastTxCLISync(ctx, cmd.Flags(), "transfer funds", msg)
 
 			if err != nil {
-				err2 := err.(*sdkerrors.Error)
-				fmt.Println("err2", c.PrettyPrint(err2))
-				fmt.Println("response", c.PrettyPrint(res))
-				if err2.ABCICode() == types.ErrMismatchCredential.ABCICode() {
-					fmt.Println("Transfer rejected because credentials didn't match")
-					os.Exit(5)
-					err = nil
+				var err2 *sdkerrors.Error
+				if errors.As(err, &err2) {
+					fmt.Println("err2", c.PrettyPrint(err2))
+					fmt.Println("response", c.PrettyPrint(res))
+					if err2.ABCICode() == types.ErrMismatchCredential.ABCICode() {
+						fmt.Println("Transfer rejected because credentials didn't match")
+						os.Exit(5)
+						err = nil
+					}
+				} else {
+					fmt.Println("err", err.Error())
+					fmt.Println("response", c.PrettyPrint(res))
 				}
 			}
 			return err

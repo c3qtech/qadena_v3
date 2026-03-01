@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 specific_user=""
 prefix=""
 no_execute="false"
+no_log="false"
 
 # Define additional parameters
 pioneer="pioneer1"
@@ -32,6 +33,10 @@ while [[ $# -gt 0 ]]; do
             no_execute="true"
             shift 1
             ;;
+        --no-log)
+            no_log="true"
+            shift 1
+            ;;
         --reset)
             reset="true"
             shift 1
@@ -49,7 +54,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --help)
-            echo "Usage: $0 [--specific-user <user>] [--prefix <prefix>] [--reset] [--pioneer <pioneer>] [--identityprovider <identityprovider>] [--serviceprovider <serviceprovider>]"
+            echo "Usage: $0 [--specific-user <user>] [--prefix <prefix>] [--reset] [--pioneer <pioneer>] [--identityprovider <identityprovider>] [--serviceprovider <serviceprovider>] [--no-log]"
             echo "--specific-user <user>: Process only the specified user"
             echo "--prefix <prefix>: Add a prefix to the test users"
             echo "--pioneer <pioneer>: Specify the pioneer node"
@@ -57,6 +62,7 @@ while [[ $# -gt 0 ]]; do
             echo "--serviceprovider <serviceprovider>: Specify the service provider"
             echo "--reset: removes all log files and the prefix-generated test users (preserves test_data/users.json)"
             echo "--no-execute: Do not execute the setup"
+            echo "--no-log: Do not redirect output to the logs directory; print output directly"
             exit 0
             ;;
         *)
@@ -69,10 +75,12 @@ done
 
 cd $qadenatestscripts/..
 
-# if logs directory doesn't exist, create it
-if [ ! -d "logs" ]; then
-    echo "Creating logs directory..."
-    mkdir logs
+# if logs directory doesn't exist, create it (unless no-log)
+if [ "$no_log" != "true" ]; then
+    if [ ! -d "logs" ]; then
+        echo "Creating logs directory..."
+        mkdir logs
+    fi
 fi
 
 if [ -n "$reset" ]; then
@@ -208,10 +216,16 @@ jq -c '.[]' "$usersjson" | while read -r user; do
 
     # Call setup_user.sh in parallel and store the process ID
     if [[ -n "$specific_user" && "$name" != "$specific_user" ]]; then
-        echo "Looking for $specific_user, skipping user: $name"
+        if [ "$no_log" = "false" ]; then
+            echo "Looking for $specific_user, skipping user: $name"
+        fi
     else
     echo "Processing user: $name"
-        $qadenaproviderscripts/create_user.sh "$name" "$mnemonic" "$pioneer" "$serviceprovider" "$firstname" "$middlename" "$lastname" "$birthdate" "$citizenship" "$residency" "$gender" "$email" "$phone" "$a" "$bf" "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" "$eph_count" "$createwalletsponsor" > logs/"$name".log 2>&1 &
+        if [ "$no_log" = "true" ]; then
+            $qadenaproviderscripts/create_user.sh "$name" "$mnemonic" "$pioneer" "$serviceprovider" "$firstname" "$middlename" "$lastname" "$birthdate" "$citizenship" "$residency" "$gender" "$email" "$phone" "$a" "$bf" "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" "$eph_count" "$createwalletsponsor" &
+        else
+            $qadenaproviderscripts/create_user.sh "$name" "$mnemonic" "$pioneer" "$serviceprovider" "$firstname" "$middlename" "$lastname" "$birthdate" "$citizenship" "$residency" "$gender" "$email" "$phone" "$a" "$bf" "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" "$eph_count" "$createwalletsponsor" > logs/"$name".log 2>&1 &
+        fi
 
         pid_list+=($!)  # Store process ID
 
@@ -233,8 +247,10 @@ for pid in $pid_list; do
         errors=$((errors + 1))  # Capture failure count
         echo "❌ Error: ${pids[$pid]}"  # Correct array syntax for Zsh
 
-        # Rename the log file correctly
-        mv logs/"${pids[$pid]}".log logs/"${pids[$pid]}_error.log"
+        if [ "$no_log" != "true" ]; then
+            # Rename the log file correctly
+            mv logs/"${pids[$pid]}".log logs/"${pids[$pid]}_error.log"
+        fi
     else 
         echo "✅ ${pids[$pid]} finished successfully."
     fi
@@ -268,7 +284,11 @@ else
             echo "No recovery settings for user: $name"
         else
             echo "Setting up user recovery: $name"
-            $qadenatestscripts/setup_user_recovery.sh "$name" "$mnemonic" "$required" "$partners" >> logs/"$name".log 2>&1 &
+            if [ "$no_log" = "true" ]; then
+                $qadenatestscripts/setup_user_recovery.sh "$name" "$mnemonic" "$required" "$partners" &
+            else
+                $qadenatestscripts/setup_user_recovery.sh "$name" "$mnemonic" "$required" "$partners" >> logs/"$name".log 2>&1 &
+            fi
 
             pid_list+=($!)  # Store process ID
         fi

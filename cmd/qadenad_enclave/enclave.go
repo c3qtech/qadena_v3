@@ -6081,24 +6081,24 @@ func (s *qadenaServer) createSuspiciousTransaction(ctx context.Context, reason s
 
 	srcWallet, found := s.getWallet(tf.SourceWalletID)
 	if !found {
-		c.LoggerError(logger, "BAD!  Couldn't find source wallet", tf.SourceWalletID)
+		c.LoggerError(logger, "BAD!  Couldn't find source wallet"+tf.SourceWalletID)
 		return
 	}
 	dstWallet, found := s.getWallet(tf.DestinationWalletID)
 	if !found {
-		c.LoggerError(logger, "BAD!  Couldn't find destination wallet", tf.DestinationWalletID)
+		c.LoggerError(logger, "BAD!  Couldn't find destination wallet"+tf.DestinationWalletID)
 		return
 	}
 
 	srcCredential, found := s.getCredential(srcWallet.CredentialID, types.PersonalInfoCredentialType)
 	if !found {
-		c.LoggerError(logger, "BAD!  Couldn't find source credential", srcWallet.CredentialID)
+		c.LoggerError(logger, "BAD!  Couldn't find source credential"+srcWallet.CredentialID)
 		return
 	}
 
 	dstCredential, found := s.getCredential(dstWallet.CredentialID, types.PersonalInfoCredentialType)
 	if !found {
-		c.LoggerError(logger, "BAD!  Couldn't find destination credential", dstWallet.CredentialID)
+		c.LoggerError(logger, "BAD!  Couldn't find destination credential"+dstWallet.CredentialID)
 		return
 	}
 
@@ -6207,7 +6207,7 @@ func (s *qadenaServer) ScanTransaction(ctx context.Context, st *types.MsgScanTra
 		return nil, err
 	}
 
-	c.LoggerDebug(logger, "EncWalletVShare: ")
+	c.LoggerDebug(logger, "Destination EncWalletVShare: ")
 
 	unprotoDstWalletCreateWalletVShareBind := c.UnprotoizeVShareBindData(dstEWallet.CreateWalletVShareBind)
 	// decrypt the destination wallet id
@@ -6236,7 +6236,27 @@ func (s *qadenaServer) ScanTransaction(ctx context.Context, st *types.MsgScanTra
 	sum.Add(transferPC.A, bankTransparentAmount)
 	coinAmount := sdk.NewCoin(msg.TokenDenom, math.NewIntFromBigInt(&sum))
 
-	tf := c.TransferFunds{Time: st.Timestamp, SourceWalletID: msg.Creator, DestinationWalletID: dstWalletID.WalletID, USDCoinAmount: usdCoinAmount, CoinAmount: coinAmount}
+	// get the source wallet
+	srcWallet, found := s.getWallet(msg.Creator)
+	if !found {
+		c.LoggerError(logger, "Couldn't get the actual wallet")
+		return nil, err
+	}
+
+	c.LoggerDebug(logger, "Source EncWalletVShare: ")
+
+	unprotoSrcWalletCreateWalletVShareBind := c.UnprotoizeVShareBindData(srcWallet.CreateWalletVShareBind)
+	// decrypt the destination wallet id
+	var srcVShareCreateWallet types.EncryptableCreateWallet
+
+	err = c.VShareBDecryptAndProtoUnmarshal(s.getSharedEnclaveParamsJarPrivK(), s.getSharedEnclaveParamsJarPubK(), unprotoSrcWalletCreateWalletVShareBind, srcWallet.EncCreateWalletVShare, &srcVShareCreateWallet)
+	if err != nil {
+		return nil, err
+	}
+
+	srcWalletID := srcVShareCreateWallet.DstEWalletID.WalletID
+
+	tf := c.TransferFunds{Time: st.Timestamp, SourceWalletID: srcWalletID, DestinationWalletID: dstWalletID.WalletID, USDCoinAmount: usdCoinAmount, CoinAmount: coinAmount}
 
 	c.LoggerDebug(logger, "time "+tf.Time.String()+" src "+tf.SourceWalletID+" dst "+tf.DestinationWalletID+" amount "+tf.CoinAmount.String())
 
@@ -6264,7 +6284,7 @@ func (s *qadenaServer) ScanTransaction(ctx context.Context, st *types.MsgScanTra
 	s.transactionMap[tf.SourceWalletID] = append(s.transactionMap[tf.SourceWalletID], &tf)
 
 	// 2b.  Check accumulated exit for "too large"
-	srcWalletID := tf.SourceWalletID
+	//	srcWalletID := tf.SourceWalletID
 
 	c.LoggerDebug(logger, "src wallet "+srcWalletID+" "+strconv.Itoa(len(s.transactionMap[srcWalletID])))
 	c.LoggerDebug(logger, "srcWalletID transactions "+c.PrettyPrint(s.transactionMap[srcWalletID]))
