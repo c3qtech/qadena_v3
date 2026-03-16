@@ -18,9 +18,15 @@ import (
 
 func CmdListSuspiciousTransaction() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "list-suspicious-transaction",
+		Use:   "list-suspicious-transaction [regulator-privkey-hex]",
 		Short: "list all SuspiciousTransaction",
-		Args:  cobra.MinimumNArgs(0),
+		Long: "List suspicious transactions.\n\n" +
+			"If you provide the optional argument regulator-privkey-hex (hex-encoded private key for the regulator), " +
+			"the command will attempt to decrypt and display the source/destination personal info and amounts for each suspicious transaction.\n\n" +
+			"If you omit the argument, it prints the raw protobuf response.",
+		Example: "  qadenad query qadena list-suspicious-transaction\n" +
+			"  qadenad query qadena list-suspicious-transaction <hex-encoded-regulator-private-key>",
+		Args: cobra.RangeArgs(0, 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			clientCtx := client.GetClientContextFromCmd(cmd)
 
@@ -126,9 +132,15 @@ func CmdListSuspiciousTransaction() *cobra.Command {
 
 func CmdShowSuspiciousTransaction() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "show-suspicious-transaction [id]",
+		Use:   "show-suspicious-transaction [id] [regulator-privkey-hex]",
 		Short: "shows a SuspiciousTransaction",
-		Args:  cobra.ExactArgs(1),
+		Long: "Show a suspicious transaction by id.\n\n" +
+			"If you provide the optional argument regulator-privkey-hex (hex-encoded private key for the regulator), " +
+			"the command will attempt to decrypt and display the source/destination personal info and amounts for this suspicious transaction.\n\n" +
+			"If you omit the argument, it prints the raw protobuf response.",
+		Example: "  qadenad query qadena show-suspicious-transaction 1\n" +
+			"  qadenad query qadena show-suspicious-transaction 1 <hex-encoded-regulator-private-key>",
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			clientCtx := client.GetClientContextFromCmd(cmd)
 
@@ -146,6 +158,63 @@ func CmdShowSuspiciousTransaction() *cobra.Command {
 			res, err := queryClient.SuspiciousTransaction(context.Background(), params)
 			if err != nil {
 				return err
+			}
+
+			if len(args) == 2 {
+				privKey := args[1]
+				st := res.GetSuspiciousTransaction()
+				fmt.Println("-------------- Suspicious Transaction --------------------")
+				var srcPI types.EncryptablePersonalInfo
+				_, err := c.BDecryptAndProtoUnmarshal(privKey, st.EncSourcePersonalInfoRegulatorPubK, &srcPI)
+				if err != nil {
+					fmt.Println("couldn't decrypt source credential")
+					return err
+				}
+
+				var dstPI types.EncryptablePersonalInfo
+				_, err = c.BDecryptAndProtoUnmarshal(privKey, st.EncDestinationPersonalInfoRegulatorPubK, &dstPI)
+				if err != nil {
+					fmt.Println("couldn't decrypt destination credential")
+					return err
+				}
+
+				var eAmount types.EncryptableESuspiciousAmount
+				_, err = c.BDecryptAndProtoUnmarshal(privKey, st.EncEAmountRegulatorPubK, &eAmount)
+				if err != nil {
+					fmt.Println("couldn't decrypt amount")
+					return err
+				}
+
+				if eAmount.CoinAmount.Denom != "" {
+					decCoin := sdk.NewDecCoinFromCoin(*eAmount.CoinAmount)
+					qadenaCoin, err := sdk.ConvertDecCoin(decCoin, types.QadenaTokenDenom)
+					attoUsdDecCoin := sdk.NewDecCoinFromCoin(*eAmount.USDCoinAmount)
+					usdCoin := sdk.NewDecCoinFromDec(types.USDFiatDenom, attoUsdDecCoin.Amount.Quo(math.LegacyNewDecFromBigInt(c.GetDenomAtomicFactor(18))))
+					if err == nil {
+						fmt.Println("Time", c.RedText(st.Time.String()))
+						fmt.Println("Reason", c.RedText(st.Reason))
+						fmt.Println("USDAmount", c.RedText(usdCoin.String()))
+						fmt.Println("Amount", c.RedText(qadenaCoin.String()))
+						fmt.Println("Source Personal Info")
+						fmt.Println("  First Name", c.RedText(srcPI.Details.FirstName))
+						fmt.Println("  Middle Name", c.RedText(srcPI.Details.MiddleName))
+						fmt.Println("  Last Name", c.RedText(srcPI.Details.LastName))
+						fmt.Println("  Birthdate", c.RedText(srcPI.Details.Birthdate))
+						fmt.Println("  Citizenship", c.RedText(srcPI.Details.Citizenship))
+						fmt.Println("  Residency", c.RedText(srcPI.Details.Residency))
+						fmt.Println("  Gender", c.RedText(srcPI.Details.Gender))
+						fmt.Println("Destination Personal Info")
+						fmt.Println("  First Name", c.RedText(dstPI.Details.FirstName))
+						fmt.Println("  Middle Name", c.RedText(dstPI.Details.MiddleName))
+						fmt.Println("  Last Name", c.RedText(dstPI.Details.LastName))
+						fmt.Println("  Birthdate", c.RedText(dstPI.Details.Birthdate))
+						fmt.Println("  Citizenship", c.RedText(dstPI.Details.Citizenship))
+						fmt.Println("  Residency", c.RedText(dstPI.Details.Residency))
+						fmt.Println("  Gender", c.RedText(dstPI.Details.Gender))
+					}
+				}
+				fmt.Println()
+				return nil
 			}
 
 			return clientCtx.PrintProto(res)
