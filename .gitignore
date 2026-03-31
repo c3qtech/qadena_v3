@@ -7,6 +7,8 @@ release/
 *.log
 *.ign
 *.gen.json
+*-names.base64
+*-keys.base64
 mnemonics.json
 nohup.out
 variables.json

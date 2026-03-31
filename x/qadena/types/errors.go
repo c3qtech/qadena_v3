@@ -91,4 +91,6 @@ var (
 	ErrAlreadySignedSignRecoverKey = sdkerrors.Register(ModuleName, 1150, "Already signed recover key")
 
 	ErrNotEnoughSignatoriesQueryGetRecoverKey = sdkerrors.Register(ModuleName, 1151, "Not enough signatories")
+
+	ErrInvalidCreateWallet = sdkerrors.Register(ModuleName, 1152, "Invalid create wallet")
 )

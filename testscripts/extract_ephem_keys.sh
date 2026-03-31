@@ -125,3 +125,10 @@ if [ "$json" = true ]; then
 else
     echo "$keys_base64"
 fi
+
+# remove the "#" from the provider name
+provider_no_hash=${provider//\#/}
+echo "Provider name without hash: $provider_no_hash" >&2
+echo "$names_base64" > "${provider_no_hash}-names.base64"
+echo "$keys_base64" > "${provider_no_hash}-keys.base64"
+

@@ -5330,7 +5330,12 @@ func (s *qadenaServer) ValidateDestinationWallet(ctx context.Context, msg *types
 			if _, ok := dstWallet.WalletAmount[types.QadenaTokenDenom]; ok {
 				cwExtraParms := dstEWalletID.ExtraParms
 
-				c.LoggerDebug(logger, "extra parms "+c.PrettyPrint(cwExtraParms))
+				if cwExtraParms == nil {
+					c.LoggerDebug(logger, "create wallet extra parms is nil")
+					return &types.ValidateDestinationWalletReply{Status: types.WalletTypeUnknown}, types.ErrInvalidCreateWallet
+				}
+
+				c.LoggerDebug(logger, "create wallet extra parms "+c.PrettyPrint(cwExtraParms))
 				unProtoPC := c.UnprotoizeBPedersenCommit(dstWallet.WalletAmount[types.QadenaTokenDenom].WalletAmountPedersenCommit)
 				hashPC := c.NewPedersenCommit(big.NewInt(0).SetBytes(tmhash.Sum([]byte(walletID))), big.NewInt(0))
 				if !c.ValidateAddPedersenCommit(hashPC, unProtoPC, c.UnprotoizeBPedersenCommit(cwExtraParms.ProofPC)) {
@@ -5607,7 +5612,12 @@ func (s *qadenaServer) ValidateTransferPrime(ctx context.Context, msg *types.Msg
 
 	tfExtraParms := dstEWalletID.ExtraParms
 
-	c.LoggerDebug(logger, "extra parms "+c.PrettyPrint(tfExtraParms))
+	if tfExtraParms == nil {
+		c.LoggerDebug(logger, "transfer funds extra parms is nil")
+		return &types.ValidateTransferPrimeReply{UpdateSourceWallet: false}, types.ErrInvalidTransfer
+	}
+
+	c.LoggerDebug(logger, "transfer funds extra parms "+c.PrettyPrint(tfExtraParms))
 
 	requiredSenderCheckPCs := []*types.BPedersenCommit{}
 

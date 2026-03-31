@@ -108,3 +108,28 @@ $qadenaproviderscripts/query_service_provider_proposal.sh $ekycphidentityproposa
 $qadenaproviderscripts/query_service_provider_proposal.sh $ekycphdsvsproposal_id --wait
 
 $veritasscripts/step_3.sh
+
+echo "These go into env-ekycph-dev"
+
+# echo the contents of each of the names and keys
+echo "SEC_DSVS_EPH_USERNAME='`cat $dsvsname-names.base64`'"
+echo "SEC_DSVS_EPH_PRIVATE_KEY='`cat $dsvsname-keys.base64`'"
+
+echo "SEC_DSVS_EPH_CREDENTIAL_USERNAME='`cat $dsvsname-credential-names.base64`'"
+echo "SEC_DSVS_EPH_CREDENTIAL_PRIVATE_KEY='`cat $dsvsname-credential-keys.base64`'"
+
+# SEC_DSVS_SRV_PRV_USERNAME
+echo "SEC_DSVS_SRV_PRV_USERNAME='`cat $dsvsprovidername-names.base64`'"
+# SEC_DSVS_SRV_PRV_PRIVATE_KEY
+echo "SEC_DSVS_SRV_PRV_PRIVATE_KEY='`cat $dsvsprovidername-keys.base64`'"
+
+# SEC_IDENTITY_SRV_PRV_USERNAME
+echo "SEC_IDENTITY_SRV_PRV_USERNAME='`cat $identityprovidername-names.base64`'"
+# SEC_IDENTITY_SRV_PRV_PRIVATE_KEY
+echo "SEC_IDENTITY_SRV_PRV_PRIVATE_KEY='`cat $identityprovidername-keys.base64`'"
+
+#SEC_CREATE_WALLET_SPONSOR_USERNAME
+echo "SEC_CREATE_WALLET_SPONSOR_USERNAME='`cat $createwalletsponsorname-names.base64`'"
+# SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY
+echo "SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY='`cat $createwalletsponsorname-keys.base64`'"
+
