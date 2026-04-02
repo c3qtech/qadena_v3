@@ -239,30 +239,36 @@ func unsafeExportPrivKeyHex(ks unsafeExporter, uid string) (privkey string, err 
 	return hex.EncodeToString(priv.Bytes()), nil
 }
 
-func GetAddress(ctx client.Context, addr string) (string, []byte, string, string, error) {
+// for compatibility
+func GetAddress(ctx client.Context, friendlyNameOrBech32Addr string) (bech32Addr string, pubKBytes []byte, pubK string, privKHex string, err error) {
+	bech32Addr, pubKBytes, pubK, privKHex, _, err = GetAddressAndFriendlyName(ctx, friendlyNameOrBech32Addr)
+	return
+}
+
+func GetAddressAndFriendlyName(ctx client.Context, friendlyNameOrBech32Addr string) (bech32Addr string, pubKBytes []byte, pubK string, privKHex string, friendlyName string, err error) {
 	kb := ctx.Keyring
 	if Debug && DebugFull {
-		fmt.Println("GetAddress", addr)
+		fmt.Println("GetAddress", friendlyNameOrBech32Addr)
 	}
-	keyInfo, err := kb.Key(addr)
+	keyInfo, err := kb.Key(friendlyNameOrBech32Addr)
 
 	// get it by "friendly name" (from the keyring) first
 	if err != nil {
 		var address sdktypes.Address
 		// if not found by "friendly name", let's try to convert it from an eth address
-		if ethcommon.IsHexAddress(addr) {
-			address, err = sdktypes.AccAddressFromHexUnsafe(addr[2:])
+		if ethcommon.IsHexAddress(friendlyNameOrBech32Addr) {
+			address, err = sdktypes.AccAddressFromHexUnsafe(friendlyNameOrBech32Addr[2:])
 			if err != nil {
-				fmt.Println("Couldn't convert from hex format", addr)
-				return "", nil, "", "", err
+				fmt.Println("Couldn't convert from hex format", friendlyNameOrBech32Addr)
+				return "", nil, "", "", "", err
 			}
 		} else {
 			//    fmt.Println("Couldn't find using friendly name", addr)
 			// might be a bech32 (COSMOS) address
-			address, err = sdktypes.AccAddressFromBech32(addr)
+			address, err = sdktypes.AccAddressFromBech32(friendlyNameOrBech32Addr)
 			if err != nil {
-				fmt.Println("Couldn't convert from bech32 format", addr)
-				return "", nil, "", "", err
+				fmt.Println("Couldn't convert from bech32 format", friendlyNameOrBech32Addr)
+				return "", nil, "", "", "", err
 			}
 		}
 
@@ -271,29 +277,29 @@ func GetAddress(ctx client.Context, addr string) (string, []byte, string, string
 		if err != nil {
 			// it looks at least like a valid bech32 address, let's return
 			if Debug {
-				fmt.Println("Valid bech32 address, but no other info available", addr)
+				fmt.Println("Valid bech32 address, but no other info available", friendlyNameOrBech32Addr)
 			}
-			return addr, nil, "", "", nil
+			return friendlyNameOrBech32Addr, nil, "", "", "", nil
 		}
 	}
 
 	keyOut, err := keys.MkAccKeyOutput(keyInfo)
 
 	if err != nil {
-		return "", nil, "", "", err
+		return "", nil, "", "", "", err
 	}
 
 	privKeyHex, err := unsafeExportPrivKeyHex(kb.(unsafeExporter), keyInfo.Name)
 
 	if err != nil {
-		return "", nil, "", "", err
+		return "", nil, "", "", "", err
 	}
 
 	var pubKeyParsed PubKeyStruct
 	err = json.Unmarshal([]byte(keyOut.PubKey), &pubKeyParsed)
 
 	if err != nil {
-		return "", nil, "", "", err
+		return "", nil, "", "", "", err
 	}
 
 	if Debug && DebugFull {
@@ -304,14 +310,10 @@ func GetAddress(ctx client.Context, addr string) (string, []byte, string, string
 	pubkbytes, err := base64.StdEncoding.DecodeString(pubKey)
 
 	if err != nil {
-		return "", nil, "", "", err
+		return "", nil, "", "", "", err
 	}
 
-	//	pubkbytes := []byte(pubKeyParsed.Key)
-
-	//pubKey := base64.StdEncoding.EncodeToString(pubkbytes)
-
-	return keyOut.Address, pubkbytes, pubKey, privKeyHex, nil
+	return keyOut.Address, pubkbytes, pubKey, privKeyHex, keyInfo.Name, nil
 }
 
 func PrettyPrint(i interface{}) string {
