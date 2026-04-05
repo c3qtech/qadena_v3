@@ -3044,7 +3044,7 @@ func (s *qadenaServer) ClaimCredential(ctx context.Context, in *types.MsgClaimCr
 	unprotoCredentialPC := c.UnprotoizeBPedersenCommit(ipCredential.CredentialPedersenCommit)
 
 	if !c.ValidateSubPedersenCommit(unprotoCredentialPC, c.UnprotoizeBPedersenCommit(encryptableClaimCredentialExtraParms.NewCredentialPC), c.UnprotoizeEncryptablePedersenCommit(encryptableClaimCredentialExtraParms.ZeroPC)) {
-		c.LoggerError(logger, "failed to validate credentialPC - newCredentialPC - zeroPC = 0")
+		c.LoggerError(logger, in.CredentialType, "failed to validate credentialPC (", unprotoCredentialPC.C.B64Address(), ") - newCredentialPC (", c.UnprotoizeBPedersenCommit(encryptableClaimCredentialExtraParms.NewCredentialPC).C.B64Address(), ") - zeroPC (", c.UnprotoizeEncryptablePedersenCommit(encryptableClaimCredentialExtraParms.ZeroPC).C.B64Address(), ") = 0")
 		return nil, types.ErrGenericPedersen
 	}
 
