@@ -1,0 +1,14 @@
+[Unit]
+Description=Qadena Run Script
+After=network.target
+
+[Service]
+Type=simple
+User=<username>
+ExecStart=/bin/bash /home/<username>/qadena/scripts/run.sh
+WorkingDirectory=/home/<username>/qadena
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
