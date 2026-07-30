@@ -73,6 +73,15 @@ subcred_bf="5678"
 jill_recover_a="31234"
 jill_recover_bf="5678"
 
+# case 6b: jill's SECOND recovery, keyed on her current surname
+jill_recover2_a="32234"
+jill_recover2_bf="5678"
+recoverjill2mnemonic="ten slot supply correct long special favorite that bracket paper banner neutral risk scatter lion mansion jacket drink mean tennis original tail pave laundry"
+
+# the seed phrase both recoveries must return, read from the same file setup.sh seeded jill from
+# rather than duplicated here
+jillmnemonic=$(jq -r '.[] | select(.name=="jill") | .mnemonic' "$qadenatestdata/users.json")
+
 # al's seeded contact values, and the new phone/email the contact cases move him to
 al_old_phone="+63288888801"
 al_new_phone="+63288888899"
@@ -184,7 +193,45 @@ expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from v
 echo "-------------------------"
 echo "3 of 3 signatories: the seed phrase is released"
 echo "-------------------------"
-expect_ok qadenad_alias query qadena show-recover-key recover-jill
+# Assert the RECOVERED VALUE, not merely that the query succeeded.  The whole point of recovery is
+# getting the original seed back, and a query that returned the wrong phrase would still exit 0.
+recovered=$(qadenad_alias query qadena show-recover-key recover-jill 2>&1 | sed -n 's/^seed phrase: //p')
+[ -n "$recovered" ] || fail "no seed phrase released after 3 of 3 signatories"
+[ "$recovered" = "$jillmnemonic" ] || fail "recovered seed phrase does not match jill's mnemonic"
+echo "recovered seed phrase matches jill's original mnemonic"
+
+echo "========================="
+echo "6b. recovery with jill's CURRENT surname, and a SECOND recovery"
+echo "========================="
+# Two invariants at once.
+#
+# 1. The post-marriage identity has to resolve too.  6a went through the ALIAS recorded by the
+#    update; this goes through the PRIMARY hash.  Those are different lookup paths, so a bug that
+#    dropped the primary hash while writing the alias would pass 6a and fail here.
+# 2. Losing a key twice is normal, so recovery must work more than once.  This second claim
+#    replaces jill's RecoverKey and resets its signatory list, which is why all three partners
+#    have to sign again rather than the earlier signatures still counting.
+expect_ok qadenad_alias tx qadena create-wallet recover-jill2 pioneer1 --account-mnemonic="$recoverjill2mnemonic" create-wallet-sponsor --yes
+expect_ok qadenad_alias tx qadena create-credential $jill_recover2_a $jill_recover2_bf personal-info "Jill" "Lava" "Villarica" "1980-Jan-01" "PH" "PH" "F" --from $identityprovider --yes
+expect_ok qadenad_alias tx qadena claim-credential $jill_recover2_a $jill_recover2_bf personal-info --from recover-jill2 --recover-key --yes
+
+echo "-------------------------"
+echo "the earlier signatures must NOT carry over -- withheld until all three sign again"
+echo "-------------------------"
+expect_reject qadenad_alias query qadena show-recover-key recover-jill2
+
+expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from $identityprovider --is-service-provider --yes
+expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from pioneer1 --yes
+expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from victor-eph1 --is-user --yes
+
+echo "-------------------------"
+echo "the second recovery must return the SAME mnemonic as the first"
+echo "-------------------------"
+recovered2=$(qadenad_alias query qadena show-recover-key recover-jill2 2>&1 | sed -n 's/^seed phrase: //p')
+[ -n "$recovered2" ] || fail "no seed phrase released on the second recovery"
+[ "$recovered2" = "$jillmnemonic" ] || fail "second recovery returned a different seed phrase than jill's mnemonic"
+[ "$recovered2" = "$recovered" ] || fail "the two recoveries returned different seed phrases"
+echo "second recovery, via the current surname, returned the same mnemonic"
 
 echo "========================="
 echo "7. anti-squat: nobody may claim jill's abandoned maiden identity"
@@ -267,7 +314,23 @@ expect_ok qadenad_alias tx qadena remove-credential "$al_credential_id" email-co
 echo "-------------------------"
 echo "the removal must have propagated from the enclave to the chain"
 echo "-------------------------"
-expect_reject qadenad_alias q qadena show-credential "$al_credential_id" email-contact-info
+# Two reasons this is a polled output check rather than expect_reject:
+#
+#   1. `q qadena show-credential` exits 0 whether or not the credential exists -- it just prints
+#      "not found" -- so an exit-status assertion here can never pass.  (show-recover-key in case 6a
+#      DOES exit non-zero, which is why expect_reject is right there but not here.)
+#   2. removal reaches chain state asynchronously: the enclave applies it and EndBlock mirrors it
+#      via RemoveCredentialNoEnclave, so an immediate query still sees the credential.
+removed=false
+for _ in {1..20}; do
+	if qadenad_alias q qadena show-credential "$al_credential_id" email-contact-info 2>&1 | grep -q "not found"; then
+		removed=true
+		break
+	fi
+	sleep 2
+done
+[ "$removed" = "true" ] || fail "email-contact-info is still on chain after remove-credential"
+echo "removal propagated to chain state"
 
 echo "========================="
 echo "ALL UPDATE CREDENTIAL CASES PASSED"
