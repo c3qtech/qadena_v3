@@ -4108,6 +4108,10 @@ func main() {
 		// submit new KYC
 		v2.POST("/submit-new-kyc", ekycServer.submitNewKYCv2) // pass in sessionID from statusKYC to confirm that the user would like to submit the KYC
 
+		// correction flow, for a subject who is already KYC'd; begin-kyc / authenticate-kyc /
+		// authenticate-otp are reused unchanged to authenticate them first
+		v2.POST("/submit-correction-kyc", ekycServer.submitCorrectionKYC) // pass in sessionID, the corrected fields, the credentialID being corrected and a supporting document; publishes corrected ownerless credentials under a fresh claim code
+
 		// webhook for new KYC flow from Advai
 		v2.POST("/webhook-submit-kyc", ekycServer.webhookSubmitKYC) // pass in sessionID from authenticateKYC to confirm that the user would like to reuse the KYC
 

@@ -43,6 +43,52 @@ message EncryptableClaimCredentialExtraParms {
 	BPedersenCommit ClaimPC = 11;
 }
 
+// EncryptableUpdateSubCredential carries one name sub-credential's share of an update.  The
+// sub-updates travel inside the personal-info update rather than as separate messages: a
+// sub-credential on its own has no personal-info context, so the enclave could not run the
+// change policy on it, and a client could otherwise update a surname sub-credential without
+// updating the identity hash it is supposed to agree with.
+message EncryptableUpdateSubCredential {
+	string CredentialType = 1;
+	bytes EncCredentialInfoVShare = 2;
+	VShareBindData CredentialInfoVShareBind = 3;
+	BPedersenCommit FindCredentialPC = 4;
+	BPedersenCommit NewCredentialPC = 5;
+	EncryptablePedersenCommit ZeroPC = 6;
+	BPedersenCommit ClaimPC = 7;
+}
+
+// EncryptableUpdateCredentialExtraParms mirrors EncryptableClaimCredentialExtraParms with two
+// deliberate omissions: no EncWalletIDVShare/WalletIDVShareBind, which exist only to feed
+// recoverKeyByCredential and an update never recovers; and no old identity hash, because the
+// enclave recomputes it from the old row's own plaintext, which it must decrypt anyway.  A
+// client-supplied old hash would be trusting the client with the alias index.
+message EncryptableUpdateCredentialExtraParms {
+	bytes EncCredentialInfoVShare = 1;
+	VShareBindData CredentialInfoVShareBind = 2;
+	string WalletID = 3;
+	BPedersenCommit FindCredentialPC = 4;
+	BPedersenCommit NewCredentialPC = 5;
+	// 6 and 7 are EncWalletIDVShare/WalletIDVShareBind in the claim parms; the numbering is kept
+	// parallel so the two messages read side by side
+	reserved 6, 7;
+	bytes EncCredentialHashVShare = 8;
+	VShareBindData CredentialHashVShareBind = 9;
+	EncryptablePedersenCommit ZeroPC = 10;
+	BPedersenCommit ClaimPC = 11;
+	repeated EncryptableUpdateSubCredential SubUpdates = 12;
+}
+
+// EncryptableCredentialIdentityHistory is the enclave's per-credential record of every identity
+// hash that has ever resolved to it.  Its length doubles as the rate-limit counter: one entry for
+// the original identity plus one per hash-changing update.  Scalars and a repeated field only --
+// a proto map would not marshal deterministically.
+message EncryptableCredentialIdentityHistory {
+	repeated string Hashes = 1;
+	uint32 LifeEventCount = 2;
+	int64 LastUpdateHeight = 3;
+}
+
 message EncryptableAuthorizedSignatory {
 	string Nonce = 1;
 	repeated string WalletID = 2;

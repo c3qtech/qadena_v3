@@ -228,48 +228,156 @@ func (m *MsgBindCredentialResponse) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_MsgBindCredentialResponse proto.InternalMessageInfo
 
+// MsgUnbindCredential drops a name binding.
+//
+// A binding is keyed by the cleartext contact, so replacing a phone number or email address binds
+// the new value and leaves the old one still resolving to the wallet.  Unbinding the old value is
+// what stops a number the user no longer holds from continuing to name them.  No credential proof
+// is needed to remove a binding, only that the caller is the address it points at -- there is
+// nothing to prove about a contact you are giving up.
+type MsgUnbindCredential struct {
+	Creator        string `protobuf:"bytes,1,opt,name=creator,proto3" json:"creator,omitempty"`
+	CredentialType string `protobuf:"bytes,2,opt,name=credentialType,proto3" json:"credentialType,omitempty"`
+	CredentialInfo string `protobuf:"bytes,3,opt,name=credentialInfo,proto3" json:"credentialInfo,omitempty"`
+}
+
+func (m *MsgUnbindCredential) Reset()         { *m = MsgUnbindCredential{} }
+func (m *MsgUnbindCredential) String() string { return proto.CompactTextString(m) }
+func (*MsgUnbindCredential) ProtoMessage()    {}
+func (*MsgUnbindCredential) Descriptor() ([]byte, []int) {
+	return fileDescriptor_fb2bf4b0ed464ad0, []int{4}
+}
+func (m *MsgUnbindCredential) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *MsgUnbindCredential) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_MsgUnbindCredential.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *MsgUnbindCredential) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_MsgUnbindCredential.Merge(m, src)
+}
+func (m *MsgUnbindCredential) XXX_Size() int {
+	return m.Size()
+}
+func (m *MsgUnbindCredential) XXX_DiscardUnknown() {
+	xxx_messageInfo_MsgUnbindCredential.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_MsgUnbindCredential proto.InternalMessageInfo
+
+func (m *MsgUnbindCredential) GetCreator() string {
+	if m != nil {
+		return m.Creator
+	}
+	return ""
+}
+
+func (m *MsgUnbindCredential) GetCredentialType() string {
+	if m != nil {
+		return m.CredentialType
+	}
+	return ""
+}
+
+func (m *MsgUnbindCredential) GetCredentialInfo() string {
+	if m != nil {
+		return m.CredentialInfo
+	}
+	return ""
+}
+
+type MsgUnbindCredentialResponse struct {
+}
+
+func (m *MsgUnbindCredentialResponse) Reset()         { *m = MsgUnbindCredentialResponse{} }
+func (m *MsgUnbindCredentialResponse) String() string { return proto.CompactTextString(m) }
+func (*MsgUnbindCredentialResponse) ProtoMessage()    {}
+func (*MsgUnbindCredentialResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_fb2bf4b0ed464ad0, []int{5}
+}
+func (m *MsgUnbindCredentialResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *MsgUnbindCredentialResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_MsgUnbindCredentialResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *MsgUnbindCredentialResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_MsgUnbindCredentialResponse.Merge(m, src)
+}
+func (m *MsgUnbindCredentialResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *MsgUnbindCredentialResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_MsgUnbindCredentialResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_MsgUnbindCredentialResponse proto.InternalMessageInfo
+
 func init() {
 	proto.RegisterType((*MsgUpdateParams)(nil), "qadena.nameservice.MsgUpdateParams")
 	proto.RegisterType((*MsgUpdateParamsResponse)(nil), "qadena.nameservice.MsgUpdateParamsResponse")
 	proto.RegisterType((*MsgBindCredential)(nil), "qadena.nameservice.MsgBindCredential")
 	proto.RegisterType((*MsgBindCredentialResponse)(nil), "qadena.nameservice.MsgBindCredentialResponse")
+	proto.RegisterType((*MsgUnbindCredential)(nil), "qadena.nameservice.MsgUnbindCredential")
+	proto.RegisterType((*MsgUnbindCredentialResponse)(nil), "qadena.nameservice.MsgUnbindCredentialResponse")
 }
 
 func init() { proto.RegisterFile("qadena/nameservice/tx.proto", fileDescriptor_fb2bf4b0ed464ad0) }
 
 var fileDescriptor_fb2bf4b0ed464ad0 = []byte{
-	// 494 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x94, 0x93, 0x31, 0x6f, 0xd3, 0x40,
-	0x14, 0xc7, 0x73, 0x14, 0x8a, 0x72, 0x54, 0x45, 0x3d, 0x55, 0xaa, 0xe3, 0x4a, 0x6e, 0x15, 0x04,
-	0x8a, 0x82, 0x9a, 0x83, 0x46, 0x62, 0x88, 0xc4, 0x80, 0x3b, 0x81, 0x14, 0xa9, 0x32, 0xb0, 0xb0,
-	0x84, 0xab, 0xfd, 0xea, 0x58, 0xc2, 0x77, 0xee, 0xdd, 0x35, 0x6a, 0x36, 0xc4, 0xc8, 0xc4, 0xc7,
-	0x60, 0xcc, 0xc0, 0x87, 0xe8, 0x58, 0x31, 0x00, 0x13, 0x42, 0xc9, 0x90, 0x85, 0x0f, 0x81, 0xec,
-	0xb3, 0x09, 0x76, 0x53, 0xa9, 0x2c, 0xb6, 0xef, 0xff, 0x7e, 0xf7, 0xee, 0xbd, 0xff, 0x3d, 0xe3,
-	0xed, 0x13, 0x16, 0x00, 0x67, 0x94, 0xb3, 0x18, 0x14, 0xc8, 0x51, 0xe4, 0x03, 0xd5, 0x67, 0x9d,
-	0x44, 0x0a, 0x2d, 0x08, 0x31, 0xc1, 0xce, 0x3f, 0x41, 0x7b, 0x83, 0xc5, 0x11, 0x17, 0x34, 0x7b,
-	0x1a, 0xcc, 0xde, 0xf2, 0x85, 0x8a, 0x85, 0xa2, 0xb1, 0x0a, 0xe9, 0xe8, 0x71, 0xfa, 0xca, 0x03,
-	0x0d, 0x13, 0x18, 0x64, 0x2b, 0x6a, 0x16, 0x79, 0x68, 0x33, 0x14, 0xa1, 0x30, 0x7a, 0xfa, 0x95,
-	0xab, 0x3b, 0x4b, 0xaa, 0x49, 0x98, 0x64, 0x71, 0xb1, 0xad, 0xb5, 0x0c, 0x80, 0x00, 0xa4, 0x02,
-	0x3e, 0xf0, 0x45, 0x1c, 0x47, 0xda, 0x90, 0xcd, 0xef, 0x08, 0xdf, 0xed, 0xab, 0xf0, 0x75, 0x12,
-	0x30, 0x0d, 0x87, 0x59, 0x0e, 0xf2, 0x04, 0xd7, 0xd9, 0xa9, 0x1e, 0x0a, 0x19, 0xe9, 0xb1, 0x85,
-	0x76, 0x51, 0xab, 0xee, 0x5a, 0x5f, 0xbf, 0xec, 0x6d, 0xe6, 0x95, 0x3d, 0x0b, 0x02, 0x09, 0x4a,
-	0xbd, 0xd4, 0x32, 0xe2, 0xa1, 0xb7, 0x40, 0xc9, 0x53, 0xbc, 0x6a, 0xaa, 0xb0, 0x6e, 0xec, 0xa2,
-	0xd6, 0x9d, 0x7d, 0xbb, 0x73, 0xd9, 0x98, 0x8e, 0x39, 0xc3, 0xad, 0x9f, 0xff, 0xdc, 0xa9, 0x7d,
-	0x9e, 0x4f, 0xda, 0xc8, 0xcb, 0x37, 0xf5, 0xfa, 0x1f, 0xe6, 0x93, 0xf6, 0x22, 0xdd, 0xc7, 0xf9,
-	0xa4, 0xdd, 0x0b, 0x23, 0x3d, 0x3c, 0x3d, 0xea, 0xf8, 0x22, 0xa6, 0x7e, 0xf7, 0x44, 0x83, 0x3f,
-	0xa4, 0x26, 0xe7, 0x60, 0xd4, 0xa5, 0x67, 0xa5, 0xfe, 0x2a, 0x5d, 0x34, 0x1b, 0x78, 0xab, 0x22,
-	0x79, 0xa0, 0x12, 0xc1, 0x15, 0x34, 0x7f, 0x23, 0xbc, 0xd1, 0x57, 0xa1, 0x1b, 0xf1, 0xe0, 0x40,
-	0x42, 0x00, 0x5c, 0x47, 0xec, 0x1d, 0xb1, 0xf0, 0x6d, 0x5f, 0x02, 0xd3, 0x42, 0x9a, 0xa6, 0xbd,
-	0x62, 0x49, 0x1e, 0xe0, 0x75, 0xff, 0x2f, 0xf7, 0x6a, 0x9c, 0x40, 0xd6, 0x60, 0xdd, 0xab, 0xa8,
-	0x65, 0xee, 0x39, 0x3f, 0x16, 0xd6, 0x4a, 0x95, 0x4b, 0x55, 0x32, 0xc0, 0xd6, 0x42, 0x39, 0xcc,
-	0xef, 0xe5, 0x20, 0xbb, 0x16, 0xeb, 0x66, 0x66, 0xdd, 0xbd, 0x65, 0xd6, 0xb9, 0x65, 0xd4, 0xbb,
-	0x32, 0x49, 0x6f, 0x2d, 0xb5, 0xb2, 0x28, 0xbf, 0xb9, 0x8d, 0x1b, 0x97, 0xba, 0x2d, 0xbc, 0xd8,
-	0xff, 0x86, 0xf0, 0x4a, 0x5f, 0x85, 0xe4, 0x2d, 0x5e, 0x2b, 0x0d, 0xc1, 0xd2, 0x0a, 0x2a, 0x86,
-	0xda, 0x0f, 0xaf, 0x01, 0x15, 0x27, 0x91, 0x63, 0xbc, 0x5e, 0x71, 0xfc, 0xfe, 0x15, 0xdb, 0xcb,
-	0x98, 0xbd, 0x77, 0x2d, 0xac, 0x38, 0xc7, 0xbe, 0xf5, 0x3e, 0x1d, 0x2b, 0xf7, 0xc5, 0xf9, 0xd4,
-	0x41, 0x17, 0x53, 0x07, 0xfd, 0x9a, 0x3a, 0xe8, 0xd3, 0xcc, 0xa9, 0x5d, 0xcc, 0x9c, 0xda, 0x8f,
-	0x99, 0x53, 0x7b, 0xf3, 0xe8, 0x3f, 0xa6, 0x4a, 0x8f, 0x13, 0x50, 0x47, 0xab, 0xd9, 0xcf, 0xd2,
-	0xfd, 0x13, 0x00, 0x00, 0xff, 0xff, 0x3a, 0x93, 0x6c, 0x4d, 0x07, 0x04, 0x00, 0x00,
+	// 536 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xc4, 0x94, 0xb1, 0x6f, 0xd3, 0x4e,
+	0x14, 0xc7, 0x73, 0xed, 0xef, 0x57, 0x94, 0xa3, 0x2a, 0xd4, 0x54, 0xaa, 0xe3, 0x08, 0xb7, 0x0a,
+	0x02, 0xa2, 0xa0, 0xe6, 0xa0, 0x91, 0x18, 0x22, 0x31, 0xe0, 0x4e, 0x20, 0x45, 0xaa, 0x0c, 0x2c,
+	0x2c, 0xe1, 0x62, 0x5f, 0x1d, 0x4b, 0xf5, 0x9d, 0x7b, 0x77, 0x8d, 0x9a, 0x0d, 0x31, 0x22, 0x21,
+	0xf1, 0x67, 0x30, 0x66, 0xe0, 0x4f, 0x60, 0xe8, 0x58, 0xb1, 0xc0, 0x84, 0x50, 0x32, 0x64, 0xe1,
+	0x8f, 0x40, 0xf6, 0xd9, 0x09, 0x76, 0x1c, 0x29, 0x4c, 0x2c, 0x49, 0xee, 0xbd, 0xcf, 0xbd, 0xf7,
+	0x7d, 0xdf, 0xbb, 0x0b, 0xac, 0x9e, 0x61, 0x97, 0x50, 0x8c, 0x28, 0x0e, 0x88, 0x20, 0x7c, 0xe0,
+	0x3b, 0x04, 0xc9, 0x8b, 0x66, 0xc8, 0x99, 0x64, 0x9a, 0xa6, 0x92, 0xcd, 0x3f, 0x92, 0xc6, 0x36,
+	0x0e, 0x7c, 0xca, 0x50, 0xfc, 0xa9, 0x30, 0x63, 0xd7, 0x61, 0x22, 0x60, 0x02, 0x05, 0xc2, 0x43,
+	0x83, 0x47, 0xd1, 0x57, 0x92, 0xa8, 0xa8, 0x44, 0x37, 0x5e, 0x21, 0xb5, 0x48, 0x52, 0x3b, 0x1e,
+	0xf3, 0x98, 0x8a, 0x47, 0xbf, 0x92, 0xe8, 0x5e, 0x81, 0x9a, 0x10, 0x73, 0x1c, 0xa4, 0xdb, 0xea,
+	0x45, 0x00, 0x71, 0x09, 0x17, 0x84, 0x76, 0x1d, 0x16, 0x04, 0xbe, 0x54, 0x64, 0xed, 0x1b, 0x80,
+	0x37, 0x3a, 0xc2, 0x7b, 0x15, 0xba, 0x58, 0x92, 0xe3, 0xb8, 0x86, 0xf6, 0x18, 0x96, 0xf1, 0xb9,
+	0xec, 0x33, 0xee, 0xcb, 0xa1, 0x0e, 0xf6, 0x41, 0xbd, 0x6c, 0xe9, 0x5f, 0x3f, 0x1f, 0xec, 0x24,
+	0xca, 0x9e, 0xba, 0x2e, 0x27, 0x42, 0xbc, 0x90, 0xdc, 0xa7, 0x9e, 0x3d, 0x47, 0xb5, 0x27, 0x70,
+	0x43, 0xa9, 0xd0, 0xd7, 0xf6, 0x41, 0xfd, 0xfa, 0xa1, 0xd1, 0x5c, 0x34, 0xa6, 0xa9, 0x7a, 0x58,
+	0xe5, 0xcb, 0x1f, 0x7b, 0xa5, 0x4f, 0xd3, 0x51, 0x03, 0xd8, 0xc9, 0xa6, 0x76, 0xe7, 0xdd, 0x74,
+	0xd4, 0x98, 0x97, 0x7b, 0x3f, 0x1d, 0x35, 0xda, 0x9e, 0x2f, 0xfb, 0xe7, 0xbd, 0xa6, 0xc3, 0x02,
+	0xe4, 0xb4, 0xce, 0x24, 0x71, 0xfa, 0x48, 0xd5, 0xec, 0x0e, 0x5a, 0xe8, 0x22, 0x33, 0x5f, 0x6e,
+	0x8a, 0x5a, 0x05, 0xee, 0xe6, 0x42, 0x36, 0x11, 0x21, 0xa3, 0x82, 0xd4, 0x7e, 0x01, 0xb8, 0xdd,
+	0x11, 0x9e, 0xe5, 0x53, 0xf7, 0x88, 0x13, 0x97, 0x50, 0xe9, 0xe3, 0x53, 0x4d, 0x87, 0xd7, 0x1c,
+	0x4e, 0xb0, 0x64, 0x5c, 0x0d, 0x6d, 0xa7, 0x4b, 0xed, 0x1e, 0xdc, 0x72, 0x66, 0xdc, 0xcb, 0x61,
+	0x48, 0xe2, 0x01, 0xcb, 0x76, 0x2e, 0x9a, 0xe5, 0x9e, 0xd1, 0x13, 0xa6, 0xaf, 0xe7, 0xb9, 0x28,
+	0xaa, 0x75, 0xa1, 0x3e, 0x8f, 0x1c, 0x27, 0xe7, 0x72, 0x14, 0x1f, 0x8b, 0xfe, 0x5f, 0x6c, 0xdd,
+	0x9d, 0x22, 0xeb, 0xac, 0x2c, 0x6a, 0x2f, 0x2d, 0xd2, 0xde, 0x8c, 0xac, 0x4c, 0xe5, 0xd7, 0xaa,
+	0xb0, 0xb2, 0x30, 0xed, 0xcc, 0x8b, 0x0f, 0x00, 0xde, 0x8a, 0x7c, 0xa2, 0xbd, 0x7f, 0xe4, 0x46,
+	0x4e, 0xec, 0x6d, 0x58, 0x2d, 0x90, 0x93, 0xca, 0x3d, 0xfc, 0xb2, 0x06, 0xd7, 0x3b, 0xc2, 0xd3,
+	0xde, 0xc0, 0xcd, 0xcc, 0x9d, 0x2d, 0x34, 0x2c, 0x77, 0xfe, 0xc6, 0x83, 0x15, 0xa0, 0xb4, 0x93,
+	0x76, 0x02, 0xb7, 0x72, 0x17, 0xe4, 0xee, 0x92, 0xed, 0x59, 0xcc, 0x38, 0x58, 0x09, 0x9b, 0xf5,
+	0x39, 0x85, 0x37, 0x17, 0xcc, 0xbf, 0xbf, 0x4c, 0x68, 0x0e, 0x34, 0xd0, 0x8a, 0x60, 0xda, 0xcd,
+	0xf8, 0xff, 0x6d, 0xf4, 0xe6, 0xac, 0xe7, 0x97, 0x63, 0x13, 0x5c, 0x8d, 0x4d, 0xf0, 0x73, 0x6c,
+	0x82, 0x8f, 0x13, 0xb3, 0x74, 0x35, 0x31, 0x4b, 0xdf, 0x27, 0x66, 0xe9, 0xf5, 0xc3, 0xbf, 0x78,
+	0x72, 0x72, 0x18, 0x12, 0xd1, 0xdb, 0x88, 0xff, 0x49, 0x5a, 0xbf, 0x03, 0x00, 0x00, 0xff, 0xff,
+	0x53, 0x8b, 0xd6, 0x00, 0x24, 0x05, 0x00, 0x00,
 }
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -288,6 +396,8 @@ type MsgClient interface {
 	// parameters. The authority defaults to the x/gov module account.
 	UpdateParams(ctx context.Context, in *MsgUpdateParams, opts ...grpc.CallOption) (*MsgUpdateParamsResponse, error)
 	BindCredential(ctx context.Context, in *MsgBindCredential, opts ...grpc.CallOption) (*MsgBindCredentialResponse, error)
+	// AUTHORIZATION: the creator must be the address the binding currently points at
+	UnbindCredential(ctx context.Context, in *MsgUnbindCredential, opts ...grpc.CallOption) (*MsgUnbindCredentialResponse, error)
 }
 
 type msgClient struct {
@@ -316,12 +426,23 @@ func (c *msgClient) BindCredential(ctx context.Context, in *MsgBindCredential, o
 	return out, nil
 }
 
+func (c *msgClient) UnbindCredential(ctx context.Context, in *MsgUnbindCredential, opts ...grpc.CallOption) (*MsgUnbindCredentialResponse, error) {
+	out := new(MsgUnbindCredentialResponse)
+	err := c.cc.Invoke(ctx, "/qadena.nameservice.Msg/UnbindCredential", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MsgServer is the server API for Msg service.
 type MsgServer interface {
 	// UpdateParams defines a (governance) operation for updating the module
 	// parameters. The authority defaults to the x/gov module account.
 	UpdateParams(context.Context, *MsgUpdateParams) (*MsgUpdateParamsResponse, error)
 	BindCredential(context.Context, *MsgBindCredential) (*MsgBindCredentialResponse, error)
+	// AUTHORIZATION: the creator must be the address the binding currently points at
+	UnbindCredential(context.Context, *MsgUnbindCredential) (*MsgUnbindCredentialResponse, error)
 }
 
 // UnimplementedMsgServer can be embedded to have forward compatible implementations.
@@ -333,6 +454,9 @@ func (*UnimplementedMsgServer) UpdateParams(ctx context.Context, req *MsgUpdateP
 }
 func (*UnimplementedMsgServer) BindCredential(ctx context.Context, req *MsgBindCredential) (*MsgBindCredentialResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BindCredential not implemented")
+}
+func (*UnimplementedMsgServer) UnbindCredential(ctx context.Context, req *MsgUnbindCredential) (*MsgUnbindCredentialResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UnbindCredential not implemented")
 }
 
 func RegisterMsgServer(s grpc1.Server, srv MsgServer) {
@@ -375,6 +499,24 @@ func _Msg_BindCredential_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Msg_UnbindCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MsgUnbindCredential)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MsgServer).UnbindCredential(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/qadena.nameservice.Msg/UnbindCredential",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MsgServer).UnbindCredential(ctx, req.(*MsgUnbindCredential))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 var Msg_serviceDesc = _Msg_serviceDesc
 var _Msg_serviceDesc = grpc.ServiceDesc{
 	ServiceName: "qadena.nameservice.Msg",
@@ -387,6 +529,10 @@ var _Msg_serviceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BindCredential",
 			Handler:    _Msg_BindCredential_Handler,
+		},
+		{
+			MethodName: "UnbindCredential",
+			Handler:    _Msg_UnbindCredential_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -535,6 +681,73 @@ func (m *MsgBindCredentialResponse) MarshalToSizedBuffer(dAtA []byte) (int, erro
 	return len(dAtA) - i, nil
 }
 
+func (m *MsgUnbindCredential) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *MsgUnbindCredential) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *MsgUnbindCredential) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if len(m.CredentialInfo) > 0 {
+		i -= len(m.CredentialInfo)
+		copy(dAtA[i:], m.CredentialInfo)
+		i = encodeVarintTx(dAtA, i, uint64(len(m.CredentialInfo)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if len(m.CredentialType) > 0 {
+		i -= len(m.CredentialType)
+		copy(dAtA[i:], m.CredentialType)
+		i = encodeVarintTx(dAtA, i, uint64(len(m.CredentialType)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.Creator) > 0 {
+		i -= len(m.Creator)
+		copy(dAtA[i:], m.Creator)
+		i = encodeVarintTx(dAtA, i, uint64(len(m.Creator)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *MsgUnbindCredentialResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *MsgUnbindCredentialResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *MsgUnbindCredentialResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	return len(dAtA) - i, nil
+}
+
 func encodeVarintTx(dAtA []byte, offset int, v uint64) int {
 	offset -= sovTx(v)
 	base := offset
@@ -596,6 +809,36 @@ func (m *MsgBindCredential) Size() (n int) {
 }
 
 func (m *MsgBindCredentialResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	return n
+}
+
+func (m *MsgUnbindCredential) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.Creator)
+	if l > 0 {
+		n += 1 + l + sovTx(uint64(l))
+	}
+	l = len(m.CredentialType)
+	if l > 0 {
+		n += 1 + l + sovTx(uint64(l))
+	}
+	l = len(m.CredentialInfo)
+	if l > 0 {
+		n += 1 + l + sovTx(uint64(l))
+	}
+	return n
+}
+
+func (m *MsgUnbindCredentialResponse) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -984,6 +1227,202 @@ func (m *MsgBindCredentialResponse) Unmarshal(dAtA []byte) error {
 		}
 		if fieldNum <= 0 {
 			return fmt.Errorf("proto: MsgBindCredentialResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		default:
+			iNdEx = preIndex
+			skippy, err := skipTx(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthTx
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *MsgUnbindCredential) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowTx
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: MsgUnbindCredential: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: MsgUnbindCredential: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Creator", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTx
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthTx
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthTx
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Creator = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CredentialType", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTx
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthTx
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthTx
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.CredentialType = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CredentialInfo", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTx
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthTx
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthTx
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.CredentialInfo = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipTx(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthTx
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *MsgUnbindCredentialResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowTx
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: MsgUnbindCredentialResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: MsgUnbindCredentialResponse: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		default:

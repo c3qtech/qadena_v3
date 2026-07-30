@@ -43,6 +43,10 @@ service Msg {
   rpc ProtectPrivateKey                     (MsgProtectPrivateKey                    ) returns (MsgProtectPrivateKeyResponse                    );
   rpc SignRecoverPrivateKey                 (MsgSignRecoverPrivateKey                ) returns (MsgSignRecoverPrivateKeyResponse                );
   rpc ClaimCredential                       (MsgClaimCredential                      ) returns (MsgClaimCredentialResponse                      );
+  // AUTHORIZATION: the creator must already own the target credential
+  rpc UpdateCredential                      (MsgUpdateCredential                     ) returns (MsgUpdateCredentialResponse                     );
+  // AUTHORIZATION: the creator must be an ephemeral wallet of the real wallet holding the credentials
+  rpc ClaimUpdatedCredential                (MsgClaimUpdatedCredential               ) returns (MsgClaimUpdatedCredentialResponse               );
 
   // AUTHORIZATION: gov module
   rpc AddServiceProvider                    (MsgAddServiceProvider                   ) returns (MsgAddServiceProviderResponse                   );
@@ -396,6 +400,41 @@ message MsgClaimCredential {
 }
 
 message MsgClaimCredentialResponse {}
+
+// MsgUpdateCredential folds corrected personal info, re-issued by an identity provider as a
+// fresh ownerless credential, into a credential the creator already owns.  Unlike a claim it
+// never writes wallet.credentialID -- same credential, same wallet, same recovery.
+message MsgUpdateCredential {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator                                      = 1;
+  // the creator's EXISTING credentialID, i.e. the row being overwritten in place
+  string credentialID                                 = 2;
+  string credentialType                               = 3;
+  bytes  encUpdateCredentialExtraParmsVShare          = 4;
+  VShareBindData updateCredentialExtraParmsVShareBind = 5;
+}
+
+message MsgUpdateCredentialResponse {}
+
+// MsgClaimUpdatedCredential lets one of the user's ephemeral wallets pick up the credentials as
+// they stand after an UpdateCredential, by re-publishing that ephemeral wallet's accept-list.
+// One message per ephemeral wallet: only the client can enumerate them, since the sole reverse
+// index the enclave keeps is for protect keys.
+//
+// wallet.encAcceptValidatedCredentialsVShare freezes {credentialType, PIN, credentialPC} at the
+// time the ephemeral wallet was created, so an UpdateCredential that moves a name invalidates
+// every ephemeral wallet accepting that name sub-credential.  It fails closed rather than open --
+// the ephemeral wallet stops working instead of accepting stale data -- but the owner still needs
+// a way to re-point it.  The signer is the ephemeral wallet; the enclave proves the caller
+// controls the real wallet behind it.
+message MsgClaimUpdatedCredential {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator = 1;
+  bytes  encAcceptValidatedCredentialsVShare = 2;
+  VShareBindData acceptValidatedCredentialsVShareBind = 3;
+}
+
+message MsgClaimUpdatedCredentialResponse {}
 
 message MsgCreateBulkCredentials {
   option (cosmos.msg.v1.signer) = "creator";

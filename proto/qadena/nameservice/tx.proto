@@ -19,6 +19,8 @@ service Msg {
   // parameters. The authority defaults to the x/gov module account.
   rpc UpdateParams   (MsgUpdateParams  ) returns (MsgUpdateParamsResponse  );
   rpc BindCredential (MsgBindCredential) returns (MsgBindCredentialResponse);
+  // AUTHORIZATION: the creator must be the address the binding currently points at
+  rpc UnbindCredential (MsgUnbindCredential) returns (MsgUnbindCredentialResponse);
 }
 // MsgUpdateParams is the Msg/UpdateParams request type.
 message MsgUpdateParams {
@@ -47,4 +49,20 @@ message MsgBindCredential {
 }
 
 message MsgBindCredentialResponse {}
+
+// MsgUnbindCredential drops a name binding.
+//
+// A binding is keyed by the cleartext contact, so replacing a phone number or email address binds
+// the new value and leaves the old one still resolving to the wallet.  Unbinding the old value is
+// what stops a number the user no longer holds from continuing to name them.  No credential proof
+// is needed to remove a binding, only that the caller is the address it points at -- there is
+// nothing to prove about a contact you are giving up.
+message MsgUnbindCredential {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator        = 1;
+  string credentialType = 2;
+  string credentialInfo = 3;
+}
+
+message MsgUnbindCredentialResponse {}
 

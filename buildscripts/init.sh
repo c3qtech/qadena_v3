@@ -108,134 +108,40 @@ fi
 
 cd $qadenabuild
 
-# check if config.yml exists and is valid but checking if it contains the qadena: section
+# config.yml is now just a verbatim copy of config/config.yml.  Nothing is substituted into it any
+# more -- pioneer1 and treasury are both fixed up in genesis.json after the init -- so there is no
+# reason to detect or preserve an existing copy.
+#
+# Copying unconditionally also removes a real trap.  The old code kept a previously generated
+# config.yml if it looked complete, so an edit to config/config.yml silently had no effect until you
+# remembered to delete the generated one first.
+echo "Copying config/config.yml -> config.yml"
+cp $qadenabuild/config/config.yml $qadenabuild/config.yml
 
-function config_yml_has_qadena_params() {
-    local f="$1"
-    if [[ ! -f "$f" ]] ; then
-        return 1
+echo "Initializing chain"
+if ignite chain init --home $QADENAHOME ; then
+    echo "Built chain, copying"
+    if [[ ! -d "$qadenabin" ]] ; then
+        mkdir -p "$qadenabin"
     fi
-
-    awk '
-        BEGIN { in_qadena=0; qindent=-1; in_params=0; pindent=-1 }
-        {
-            match($0, /^[ \t]*/)
-            indent = RLENGTH
-
-            if ($0 ~ /^[ \t]*qadena:[ \t]*$/) {
-                in_qadena=1
-                qindent=indent
-                in_params=0
-                pindent=-1
-                next
-            }
-
-            if (in_qadena && indent <= qindent && $0 !~ /^[ \t]*$/) {
-                in_qadena=0
-                in_params=0
-            }
-
-            if (in_qadena && $0 ~ /^[ \t]*params:[ \t]*$/) {
-                in_params=1
-                pindent=indent
-                next
-            }
-
-            if (in_params && indent <= pindent && $0 !~ /^[ \t]*$/) {
-                in_params=0
-            }
-
-            if (in_params && $0 ~ /^[ \t]*create_wallet_incentive:[ \t]*$/) {
-                found=1
-                exit
-            }
-        }
-        END { exit(found ? 0 : 1) }
-    ' "$f" > /dev/null 2>&1
-}
-
-
-# if not exists config.yml
-if ! config_yml_has_qadena_params "$qadenabuild/config.yml" ; then
-    echo "-----------------------------------------------------"
-    echo "WARNING:  Missing or invalid config.yml (need qadena: params:), NEED to BOOTSTRAP first."
-    echo "-----------------------------------------------------"
-    
-    #
-    echo "Using a truncated config.yml"
-    sed '/qadena:/,$d' config/config.yml > config.yml
-    
-    if $qadenabuildscripts/build.sh --skip-enclave --title "BOOTSTRAP" ; then
-    	echo "Bootstrap build.sh SUCCESS"
-    else
-        echo "Bootstrap build.sh FAILED"
-        rm $qadenabuild/config.yml
-        exit 1
-    fi
-    echo "Init chain to create accounts, so we can extract them to put into real config.yml"
-
-    if ignite chain init --home $QADENAHOME ; then
-    	echo "Created accounts"
-        echo "Built chain, copying"
-        if [[ ! -d "$qadenabin" ]] ; then
-            mkdir -p "$qadenabin"
-        fi
-        cp `which qadena_v3d` $qadenabin/qadenad
-    else
-        echo "ignite chain init failed"
-	    rm $qadenabuild/config.yml
-        exit 1
-    fi
-
-    echo "Modify config.yml"
-    
-    cp $qadenabuild/config/config.yml $qadenabuild/config.yml
-    
-    if $qadenabuildscripts/setPubKAndPubKID.sh coingecko-oracle $qadenabuild/config.yml ; then
-    else
-        echo "failed to modify $qadenabuild/config.yml"
-        exit 1
-    fi
-    
-    if $qadenabuildscripts/setPubKAndPubKID.sh band-protocol-oracle $qadenabuild/config.yml ; then
-    else
-        echo "failed to modify $qadenabuild/config.yml"
-        exit 1
-    fi
-
-    if $qadenabuildscripts/setPubKAndPubKID.sh $PIONEER1 $qadenabuild/config.yml ; then
-    else
-        echo "failed to modify $qadenabuild/config.yml"
-        exit 1
-    fi
-    
-    echo "Initializing chain after bootstrap"
-    if ignite chain init --home $QADENAHOME ; then
-        echo "Built chain, copying"
-        if [[ ! -d "$qadenabin" ]] ; then
-            mkdir -p "$qadenabin"
-        fi
-        cp `which qadena_v3d` $qadenabin/qadenad
-    else
-	    rm $qadenabuild/config.yml
-        echo "Failed to build chain, removing config.yml"
-        exit 1
-    fi
+    cp `which qadena_v3d` $qadenabin/qadenad
 else
-    if ignite chain init --home $QADENAHOME  ; then
-        echo "Built chain, copying"
-        if [[ ! -d "$qadenabin" ]] ; then
-            mkdir -p "$qadenabin"
-        fi
-        cp `which qadena_v3d` $qadenabin/qadenad
-    else
-        echo ""
-        echo ""
-        echo "Scroll up...if you see this error:  'Error: failed to validate genesis state: decoding bech32 failed: string not all lowercase or all uppercase'"
-        echo "Remove $qadenabuild/config.yml, then try again"
-        exit 1
-    fi
-    
+    rm $qadenabuild/config.yml
+    echo "Failed to build chain, removing config.yml"
+    exit 1
+fi
+
+# pioneer1 substituted here rather than into config.yml before the init.
+#
+# This is what removes the need for the truncated-config bootstrap pass.  The placeholders only had
+# to be resolved before `ignite chain init` if ignite validated them -- and it plainly does not:
+# treasuryPubKID has always survived the init as a literal string and been rewritten in genesis.json
+# afterwards.  pioneer1 can take the same route, so the keys can be minted by a single init and the
+# substitution can happen against the resulting genesis.
+if $qadenabuildscripts/setPubKAndPubKID.sh $PIONEER1 $genesisfile ; then
+else
+    echo "failed to modify $genesisfile"
+    exit 1
 fi
 
 echo "Fixing up config.toml"
@@ -264,17 +170,9 @@ else
 fi
 
 
-if $qadenabuildscripts/setPubKAndPubKID.sh testdsvssrvprv $genesisfile ; then
-else
-    echo "failed to modify config.yml"
-    exit 1
-fi
-
-if $qadenabuildscripts/setPubKAndPubKID.sh testidentitysrvprv $genesisfile ; then
-else
-    echo "failed to modify config.yml"
-    exit 1
-fi
+# no setPubKAndPubKID for testdsvssrvprv / testidentitysrvprv: they are no longer genesis accounts,
+# so ignite never creates their keys and there is nothing to substitute.  They are onboarded after
+# the chain is up by testscripts/setup_prerequisites.sh.
 
 #if $qadenabuildscripts/setPubKAndPubKID.sh ekycphidentitysrvprv $genesisfile ; then
 #else
@@ -282,37 +180,9 @@ fi
 #    exit 1
 #fi
 
-if $qadenabuildscripts/setPubKAndPubKID.sh mayaidentitysrvprv $genesisfile ; then
-else
-    echo "failed to modify config.yml"
-    exit 1
-fi
-
-if $qadenabuildscripts/setPubKAndPubKID.sh coinsphidentitysrvprv $genesisfile ; then
-else
-    echo "failed to modify config.yml"
-    exit 1
-fi
-
-if $qadenabuildscripts/setPubKAndPubKID.sh coopnetidentitysrvprv $genesisfile ; then
-else
-    echo "failed to modify config.yml"
-    exit 1
-fi
-
-
-if $qadenabuildscripts/setPubKAndPubKID.sh unionbankidentitysrvprv $genesisfile ; then
-else
-    echo "failed to modify config.yml"
-    exit 1
-fi
-
-
-if $qadenabuildscripts/setPubKAndPubKID.sh testfinancesrvprv $genesisfile ; then
-else
-    echo "failed to modify config.yml"
-    exit 1
-fi
+# no setPubKAndPubKID for maya / coinsph / coopnet / unionbank identitysrvprv or testfinancesrvprv
+# either -- same reason: they are srv-prv providers, so they belong in a MsgAddServiceProvider
+# proposal, not genesis.  pioneer1 and treasury are the only substitutions left.
     
 echo "Copying node_params.json"
 cp config/node_params.json $qadenaconfig

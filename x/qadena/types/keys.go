@@ -97,6 +97,18 @@ const (
 	EmailContactCredentialType           = "email-contact-info"
 )
 
+// Sentinel values for Credential.walletID.  An empty walletID means the credential is still
+// unclaimed (owned by nobody); a bech32 walletID means it is owned by that wallet.  These
+// sentinels mark rows that have been consumed and can never be claimed or owned.
+const (
+	// the identity provider's credential was consumed by a ClaimCredential
+	ClaimedCredentialWalletID = "CLAIMED"
+	// the identity provider's credential was consumed by an UpdateCredential
+	UpdatedCredentialWalletID = "UPDATED"
+	// the credential was created solely to initiate key recovery
+	RecoverKeyCredentialWalletID = "RECOVERKEY"
+)
+
 const (
 	AcceptOption        = "accept-"
 	RequireSenderOption = "require-sender-"

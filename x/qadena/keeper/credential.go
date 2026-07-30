@@ -44,6 +44,18 @@ func (k Keeper) SetCredentialNoEnclave(ctx context.Context, credential types.Cre
 	), b)
 }
 
+// RemoveCredentialNoEnclave deletes a credential from chain state without telling the enclave.
+// It is the counterpart of SetCredentialNoEnclave and exists for the EndBlock sync, where the
+// removal has already happened inside the enclave and is only being mirrored here.
+func (k Keeper) RemoveCredentialNoEnclave(ctx context.Context, credentialID string, credentialType string) {
+	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
+	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.CredentialKeyPrefix))
+	store.Delete(types.CredentialKey(
+		credentialID,
+		credentialType,
+	))
+}
+
 // GetCredential returns a credential from its index
 func (k Keeper) GetCredential(
 	ctx context.Context,
@@ -67,17 +79,21 @@ func (k Keeper) GetCredential(
 }
 
 // RemoveCredential removes a credential from the store
+// KeeperRemoveCredential removes a credential from the enclave first and then from chain state.
+// requesterWalletID is empty when an identity provider is removing an ownerless credential, and
+// the owner's walletID when a user is removing one of their own.
 func (k Keeper) KeeperRemoveCredential(
 	ctx context.Context,
 	credentialID string,
 	credentialType string,
+	requesterWalletID string,
 ) error {
 	sdkctx := sdk.UnwrapSDKContext(ctx)
 	credential := types.Credential{
 		CredentialID:   credentialID,
 		CredentialType: credentialType,
 	}
-	err := k.EnclaveClientRemoveCredential(sdkctx, credential) // forward this to the enclave
+	err := k.EnclaveClientRemoveCredential(sdkctx, credential, requesterWalletID) // forward this to the enclave
 	if err != nil {
 		common.ContextError(sdkctx, "EnclaveClientRemoveCredential err "+err.Error())
 		return err

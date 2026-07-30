@@ -37,6 +37,9 @@ func printCredential(credential *types.Credential, decryptAsPrivKeyHex, decryptA
 	if credential.ReferenceCredentialID != "" {
 		fmt.Printf("Reference Credential:    %s\n", credential.ReferenceCredentialID)
 	}
+	if credential.UpdateGeneration != 0 {
+		fmt.Printf("Update Generation:       %d\n", credential.UpdateGeneration)
+	}
 
 	fmt.Println(strings.Repeat("-", 40))
 

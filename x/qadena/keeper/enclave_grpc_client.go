@@ -415,7 +415,10 @@ func (k Keeper) EnclaveClientSetCredential(sdkctx sdk.Context, credential types.
 	return nil
 }
 
-func (k Keeper) EnclaveClientRemoveCredential(sdkctx sdk.Context, credential types.Credential) error {
+// EnclaveClientRemoveCredential forwards a removal.  requesterWalletID is empty for the identity
+// provider path, which may only remove ownerless credentials, and set to the owner's walletID when
+// a user removes a credential of their own.
+func (k Keeper) EnclaveClientRemoveCredential(sdkctx sdk.Context, credential types.Credential, requesterWalletID string) error {
 	if sdkctx.IsCheckTx() {
 		c.ContextDebug(sdkctx, "RemoveCredential not called in checktx")
 		return nil
@@ -424,7 +427,10 @@ func (k Keeper) EnclaveClientRemoveCredential(sdkctx sdk.Context, credential typ
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
 	defer cancel()
 
-	r, err := EnclaveGRPCClient.RemoveCredential(ctx, &credential)
+	r, err := EnclaveGRPCClient.RemoveCredential(ctx, &types.EnclaveRemoveCredentialRequest{
+		Credential:        &credential,
+		RequesterWalletID: requesterWalletID,
+	})
 	if err != nil {
 		c.ContextError(sdkctx, "error returned by RemoveCredential on enclave "+err.Error())
 		return err
@@ -448,6 +454,49 @@ func (k Keeper) EnclaveClientClaimCredential(sdkctx sdk.Context, claimCredential
 		return nil, err
 	}
 	c.ContextDebug(sdkctx, "ClaimCredential returned ok")
+	return r, nil
+}
+
+// EnclaveClientUpdateCredential stamps the block height and the module params into the request
+// rather than letting the client supply them: the change policy is evaluated inside the enclave
+// and its verdict has to be identical on every validator.
+func (k Keeper) EnclaveClientUpdateCredential(sdkctx sdk.Context, updateCredential *types.MsgUpdateCredential, params types.Params) (*types.MsgUpdateCredentialResponse, error) {
+	if sdkctx.IsCheckTx() {
+		c.ContextDebug(sdkctx, "UpdateCredential not called in checktx")
+		return &types.MsgUpdateCredentialResponse{}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	defer cancel()
+
+	r, err := EnclaveGRPCClient.UpdateCredential(ctx, &types.EnclaveUpdateCredentialRequest{
+		Msg:         updateCredential,
+		BlockHeight: sdkctx.BlockHeight(),
+		Params:      params,
+	})
+	if err != nil {
+		c.ContextError(sdkctx, "error returned by UpdateCredential on enclave "+err.Error())
+		return nil, err
+	}
+	c.ContextDebug(sdkctx, "UpdateCredential returned ok")
+	return r, nil
+}
+
+func (k Keeper) EnclaveClientClaimUpdatedCredential(sdkctx sdk.Context, msg *types.MsgClaimUpdatedCredential) (*types.MsgClaimUpdatedCredentialResponse, error) {
+	if sdkctx.IsCheckTx() {
+		c.ContextDebug(sdkctx, "ClaimUpdatedCredential not called in checktx")
+		return &types.MsgClaimUpdatedCredentialResponse{}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	defer cancel()
+
+	r, err := EnclaveGRPCClient.ClaimUpdatedCredential(ctx, msg)
+	if err != nil {
+		c.ContextError(sdkctx, "error returned by ClaimUpdatedCredential on enclave "+err.Error())
+		return nil, err
+	}
+	c.ContextDebug(sdkctx, "ClaimUpdatedCredential returned ok")
 	return r, nil
 }
 
@@ -648,19 +697,25 @@ func (k Keeper) EnclaveSyncWallets(sdkctx sdk.Context) (error, []*types.Wallet) 
 	return nil, r.GetWallets()
 }
 
-func (k Keeper) EnclaveSyncCredentials(sdkctx sdk.Context) (error, []*types.Credential) {
+// EnclaveSyncCredentials drains the enclave's pending credential changes.  Removals come back
+// separately from writes: an enclave-originated deletion has no other way to reach the chain,
+// because SetCredentialNoEnclave can only write.
+func (k Keeper) EnclaveSyncCredentials(sdkctx sdk.Context) (error, []*types.Credential, []*types.CredentialRef) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SyncCredentials(ctx, &types.MsgSyncCredentials{Clear: true})
 	if err != nil {
 		c.ContextError(sdkctx, "error returned by SyncCredentials on enclave "+err.Error())
-		return err, nil
+		return err, nil, nil
 	}
 	if len(r.GetCredentials()) > 0 {
 		c.ContextDebug(sdkctx, "SyncCredentials returns", r.GetCredentials())
 	}
-	return nil, r.GetCredentials()
+	if len(r.GetRemovedCredentials()) > 0 {
+		c.ContextDebug(sdkctx, "SyncCredentials removed", r.GetRemovedCredentials())
+	}
+	return nil, r.GetCredentials(), r.GetRemovedCredentials()
 }
 
 func (k Keeper) EnclaveSyncRecoverKeys(sdkctx sdk.Context) (error, []*types.RecoverKey) {
@@ -1186,7 +1241,7 @@ func (k Keeper) EnclaveEndBlock(sdkctx sdk.Context) {
 		checkSync = true
 	}
 
-	err, changedCredentials := k.EnclaveSyncCredentials(sdkctx)
+	err, changedCredentials, removedCredentials := k.EnclaveSyncCredentials(sdkctx)
 
 	if err != nil {
 		c.ContextError(sdkctx, err.Error())
@@ -1194,6 +1249,11 @@ func (k Keeper) EnclaveEndBlock(sdkctx sdk.Context) {
 
 	for _, credential := range changedCredentials {
 		k.SetCredentialNoEnclave(sdkctx, *credential)
+		checkSync = true
+	}
+
+	for _, removed := range removedCredentials {
+		k.RemoveCredentialNoEnclave(sdkctx, removed.CredentialID, removed.CredentialType)
 		checkSync = true
 	}
 

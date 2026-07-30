@@ -28,4 +28,26 @@ message Params {
   string ekyc_submit_reuse_provider_royalty_percentage = 8;
   string ekyc_identity_owner_royalty_percentage = 9;
   string create_bulk_credentials_fee = 10;
+
+  // MsgUpdateCredential.  Every numeric here reads as zero on a chain that predates these
+  // params, so the policy loader substitutes the compiled-in defaults in
+  // x/qadena/common/credential_policy.go rather than rejecting every correction.  The
+  // one-identity-field-at-a-time rule and the birthdate month/day-swap exception are
+  // deliberately NOT params: they are the security core, and making them tunable invites
+  // setting the limit to 5.
+  string update_credential_fee = 11;
+  // bumped whenever the policy engine's behaviour changes, so a divergence between enclave
+  // builds is visible on chain instead of silent
+  uint32 update_credential_policy_version = 12;
+  // cap on entries in a credential's identity-hash alias list; the list length is the
+  // hash-changing-update counter, so this is the lifetime update limit plus one
+  uint32 update_credential_max_identity_aliases = 13;
+  uint32 update_credential_max_life_events = 14;
+  uint32 update_name_max_edit_distance = 15;
+  uint32 update_name_max_edit_distance_percent = 16;
+  uint32 update_birthdate_max_year_delta = 17;
+  int64 update_credential_min_blocks_between_updates = 18;
+  // gates so a jurisdiction can disable a transition by param rather than by fork
+  bool update_credential_allow_last_name_life_event = 19;
+  bool update_credential_allow_gender_change = 20;
 }

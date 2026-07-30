@@ -4,39 +4,36 @@ accounts:
 - name: pioneer1
   coins: ["1000000qdn"]
   mnemonic: "nest gown ability blouse ski tortoise wall female across know accuse guard shy drive grunt assault cricket solar pave arrange actress ring more country"
-- name: create-wallet-sponsor
-  coins: ["100000qdn"]
-  mnemonic: "guilt decline utility scale crash envelope snap table dress coach tray use detect success lemon fatigue surround project warfare victory mean midnight address before"
+# create-wallet-sponsor is NOT here either.  A sponsor is purely a client-side signer and fee payer
+# (tx_create_wallet.go loads it from the keyring; msg_server_create_wallet.go has no concept of one),
+# so it needs no genesis identity -- just a funded account.  testscripts/setup_prerequisites.sh
+# creates and funds it from the treasury, the same way veritas_scripts/step_3.sh stands up
+# sec-create-wallet-sponsor.
+#
+# What remains below is only the chain's own bootstrap identity: the validator/pioneer and the
+# treasury that funds everything else.  Neither can move to runtime -- block production, funding and
+# governance all need them to exist at genesis.
 - name: treasury
   coins: ["2000000000qdn"] # 2 billion 
   mnemonic: "eyebrow unaware jealous actor annual farm radio open sword memory other secret twelve reduce festival buddy peace fun film return sniff december february post"
-- name: coingecko-oracle
-  coins: ["100000qdn"]
-  mnemonic: "area symptom room bomb atom relief give pole relief truly elbow unknown undo wild clutch ozone liar small occur off enjoy shop busy meadow"
-- name: band-protocol-oracle
-  coins: ["100000qdn"]
-  mnemonic: "verb select bread spirit beyond snow slender lumber ramp rule tribe soldier help area remove guard cage knife witness era mule afford wage like"
-- name: coopnetidentitysrvprv
-  coins: ["1000000qdn"]
-  mnemonic: "clarify whip jungle dune joke entry federal liquid pen journey reject flush evolve disorder slim upon stomach airport affair member occur code twice isolate"
-- name: mayaidentitysrvprv
-  coins: ["1000000qdn"]
-  mnemonic: "penalty caution equip sound they soccer edge debris paddle add purity swap minute defense mass nature hood long diagram auction fat wish story minute"
-- name: coinsphidentitysrvprv
-  coins: ["1000000qdn"]
-  mnemonic: "crunch theory census zoo olympic holiday they early chunk before humor word smile wisdom casual album nation perfect rotate toward have dress wear also"
-- name: unionbankidentitysrvprv
-  coins: ["1000000qdn"]
-  mnemonic: "among umbrella kingdom vote demise fetch eternal era lab thumb artefact tourist mail cactus album nation tuna fresh rule caution patch guilt body bean"
-- name: testfinancesrvprv
-  coins: ["1000000qdn"]
-  mnemonic: "ill seed tent goose two trophy harsh noise winter conduct educate lady man spice sport charge primary fever acoustic famous message myth unlock dust"
-- name: testidentitysrvprv
-  coins: ["1000000qdn"]
-  mnemonic: "lemon onion exit success feature wait admit permit nation behind vintage summer oven weird blue flash motor maple fiber domain cement inmate slogan avoid"
-- name: testdsvssrvprv
-  coins: ["1000000qdn"]
-  mnemonic: "twenty shoulder tomato hawk toilet pave famous critic undo beef country object perfect staff net dilemma fade insane enemy oven barrel organ cherry problem"
+# No oracle accounts.  The seeded postedPriceList below carries no oracleAddress, so genesis needs
+# no oracle identity to load prices; registering an address that may post NEW prices is a pricefeed
+# MsgUpdateParams governance decision, made once a real price source exists.
+#
+# NO service provider is a genesis account -- not the coopnet / maya / coinsph / unionbank identity
+# providers, and not testfinancesrvprv either.  They are all srv-prv nodes, so they belong in a
+# MsgAddServiceProvider governance proposal, and a genesis-declared provider has no
+# <name>-credential key (see the note below).
+#
+# testidentitysrvprv and testdsvssrvprv are deliberately NOT genesis accounts.  They are onboarded
+# at runtime by testscripts/setup_prerequisites.sh, which creates their wallets with
+# `tx qadena create-wallet` and registers them through a governance proposal.
+#
+# This is not just tidiness.  create-wallet derives BOTH the transaction key (account index 0) and
+# the <name>-credential key (index 1, CredentialWalletType in x/qadena/types/keys.go) from the one
+# provider mnemonic and registers both pubKs.  A genesis-declared provider never runs create-wallet,
+# so it has no -credential key at all -- which is why sign-recover-key's service-provider branch
+# (tx_sign_recover_key.go) fails for genesis providers when they are used as recovery partners.
 
 client:
   openapi:
@@ -216,6 +213,27 @@ genesis:
         ekyc_submit_reuse_app_royalty_percentage: "20"
         ekyc_submit_reuse_provider_royalty_percentage: "20"
         ekyc_identity_owner_royalty_percentage: "30"
+        # MsgUpdateCredential.  The numerics match the compiled-in defaults in
+        # x/qadena/common/credential_policy.go; they are repeated here so an operator can see and
+        # tune them.  The two allow_ gates must be set explicitly: proto3 cannot distinguish an
+        # unset bool from false, so an unset gate reads as closed.
+        update_credential_fee: "30php"
+        # bump whenever the policy engine's behaviour changes, so a divergence between enclave
+        # builds is visible on chain instead of silent
+        update_credential_policy_version: 1
+        # the alias list holds the original identity plus one hash per hash-changing update, so 4
+        # aliases is a lifetime budget of 3 such updates
+        update_credential_max_identity_aliases: 4
+        update_credential_max_life_events: 2
+        update_name_max_edit_distance: 2
+        # relative cap, in percent of the longer name; 34 means a 1-edit fix needs >= 3 runes
+        update_name_max_edit_distance_percent: 34
+        update_birthdate_max_year_delta: 1
+        # ~1 day at 8s blocks
+        update_credential_min_blocks_between_updates: "10000"
+        # marriage/divorce surname replacement
+        update_credential_allow_last_name_life_event: true
+        update_credential_allow_gender_change: true
       enclaveIdentityList:
         - uniqueID: test-unique-id
           signerID: test-signer-id
@@ -228,48 +246,8 @@ genesis:
         - pubKID: pioneer1PubKID
           pubK: pioneer1PubK_pubk
           pubKType: credential
-        - pubKID: testidentitysrvprvPubKID
-          pubK: testidentitysrvprvPubK_pubk
-          pubKType: transaction
-        - pubKID: testidentitysrvprvPubKID
-          pubK: testidentitysrvprvPubK_pubk
-          pubKType: credential
-        - pubKID: testdsvssrvprvPubKID
-          pubK: testdsvssrvprvPubK_pubk
-          pubKType: transaction
-        - pubKID: testdsvssrvprvPubKID
-          pubK: testdsvssrvprvPubK_pubk
-          pubKType: credential
-        - pubKID: testfinancesrvprvPubKID
-          pubK: testfinancesrvprvPubK_pubk
-          pubKType: transaction
-        - pubKID: testfinancesrvprvPubKID
-          pubK: testfinancesrvprvPubK_pubk
-          pubKType: credential
-        - pubKID: mayaidentitysrvprvPubKID
-          pubK: mayaidentitysrvprvPubK_pubk
-          pubKType: transaction
-        - pubKID: mayaidentitysrvprvPubKID
-          pubK: mayaidentitysrvprvPubK_pubk
-          pubKType: credential
-        - pubKID: coopnetidentitysrvprvPubKID
-          pubK: coopnetidentitysrvprvPubK_pubk
-          pubKType: transaction
-        - pubKID: coopnetidentitysrvprvPubKID
-          pubK: coopnetidentitysrvprvPubK_pubk
-          pubKType: credential
-        - pubKID: coinsphidentitysrvprvPubKID
-          pubK: coinsphidentitysrvprvPubK_pubk
-          pubKType: transaction
-        - pubKID: coinsphidentitysrvprvPubKID
-          pubK: coinsphidentitysrvprvPubK_pubk
-          pubKType: credential
-        - pubKID: unionbankidentitysrvprvPubKID
-          pubK: unionbankidentitysrvprvPubK_pubk
-          pubKType: transaction
-        - pubKID: unionbankidentitysrvprvPubKID
-          pubK: unionbankidentitysrvprvPubK_pubk
-          pubKType: credential
+        # No service provider pubKs here: create-wallet registers them at onboarding time
+        # -- see the note above the client: section
       intervalPublicKeyIDList:
         - pubKID: pioneer1PubKID
           nodeType: pioneer
@@ -277,108 +255,82 @@ genesis:
         - pubKID: treasuryPubKID
           nodeType: treasury
           nodeID: treasury
-        - pubKID: testidentitysrvprvPubKID
-          nodeType: srv-prv
-          nodeID: testidentitysrvprv
-          serviceProviderType: identity
-          homePioneerID: pioneer1
-        - pubKID: testdsvssrvprvPubKID
-          nodeType: srv-prv
-          nodeID: testdsvssrvprv
-          serviceProviderType: dsvs
-          homePioneerID: pioneer1
-        - pubKID: testfinancesrvprvPubKID
-          nodeType: srv-prv
-          nodeID: testfinancesrvprv
-          serviceProviderType: finance
-          homePioneerID: pioneer1
-        - pubKID: mayaidentitysrvprvPubKID
-          nodeType: srv-prv
-          nodeID: mayaidentitysrvprv
-          serviceProviderType: identity
-          homePioneerID: pioneer1
-        - pubKID: coinsphidentitysrvprvPubKID
-          nodeType: srv-prv
-          nodeID: coinsphidentitysrvprv
-          serviceProviderType: identity
-          homePioneerID: pioneer1
-        - pubKID: coopnetidentitysrvprvPubKID
-          nodeType: srv-prv
-          nodeID: coopnetidentitysrvprv
-          serviceProviderType: identity
-          homePioneerID: pioneer1
-        - pubKID: unionbankidentitysrvprvPubKID
-          nodeType: srv-prv
-          nodeID: unionbankidentitysrvprv
-          serviceProviderType: identity
-          homePioneerID: pioneer1
+        # No srv-prv entries: every service provider is registered by a MsgAddServiceProvider
+        # governance proposal at onboarding time -- see the note above the client: section
     pricefeed:
       params:
+        # Every market starts with NO registered oracle: nobody may post a price until a pricefeed
+        # MsgUpdateParams proposal adds one.  The seeded postedPriceList below still produces working
+        # current prices at genesis -- InitGenesis calls keeper.SetPrice, which validates only the
+        # expiry, and SetCurrentPrices aggregates raw prices without ever consulting market.oracles.
+        # Registration gates future MsgPostPrice only.
+        #
+        # NOTE when you do add oracles: MsgUpdateParams REPLACES the whole params object (see the
+        # "All parameters must be supplied" note in proto/qadena/pricefeed/tx.proto), so the proposal
+        # must carry all six markets.  Omitting one deletes it, and Params.Validate() is a no-op that
+        # will not catch it.  Generate the proposal from `query pricefeed params`, do not hand-write.
         markets:
           - active: true
             baseAsset: "qdn"
             marketId: "cn:qdn:usd"
             quoteAsset: "usd"
-            oracles:
-              - "coingecko-oraclePubKID"
-              - "band-protocol-oraclePubKID"
+            oracles: []
           - active: true
             baseAsset: "qdn"
             marketId: "cn:qdn:php"
             quoteAsset: "php"
-            oracles:
-              - "coingecko-oraclePubKID"
-              - "band-protocol-oraclePubKID"
+            oracles: []
           - active: true
             baseAsset: "php"
             marketId: "fn:php:usd"
             quoteAsset: "usd"
-            oracles:
-              - "coingecko-oraclePubKID"
-              - "band-protocol-oraclePubKID"
+            oracles: []
           - active: true
             baseAsset: "aud"
             marketId: "fn:aud:usd"
             quoteAsset: "usd"
-            oracles:
-              - "coingecko-oraclePubKID"
-              - "band-protocol-oraclePubKID"
+            oracles: []
           - active: true
             baseAsset: "btc"
             marketId: "cn:btc:usd"
             quoteAsset: "usd"
-            oracles:
-              - "coingecko-oraclePubKID"
-              - "band-protocol-oraclePubKID"
+            oracles: []
           - active: true
             baseAsset: "eth"
             marketId: "cn:eth:usd"
             quoteAsset: "usd"
-            oracles:
-              - "coingecko-oraclePubKID"
-              - "band-protocol-oraclePubKID"
+            oracles: []
+      # Bootstrap prices, attributed to no oracle.  oracleAddress is omitted deliberately: SetPrice
+      # never validates it, and PostedPriceKey length-prefixes the empty address to 0x00, giving a
+      # valid key that stays unique because there is one seeded price per market.
+      #
+      # Non-qdn rates are spot values as of 2026-07-29.  qdn is not traded yet, so cn:qdn:usd keeps
+      # its 0.01 placeholder -- and cn:qdn:php is DERIVED from it, not independent:
+      #     qdn:php = qdn:usd / php:usd = 0.01 / 0.016297 = 0.613610
+      # Keep those three in step; cn:qdn:php is the one that matters in practice, since it is what
+      # msg_server_create_credential.go converts the "30php" fee through.
       postedPriceList:
+        # placeholder: qdn is not traded yet, so this rate is assumed, not observed
         - expiry: "2030-01-01T00:00:00Z"
           marketId: "cn:qdn:usd"
-          oracleAddress: "band-protocol-oraclePubKID"
           price: "0.01"
+        # derived from cn:qdn:usd and fn:php:usd as of 2026-07-29: 0.01 / 0.016297
         - expiry: "2030-01-01T00:00:00Z"
           marketId: "cn:qdn:php"
-          oracleAddress: "band-protocol-oraclePubKID"
-          price: "0.5713"
+          price: "0.613610"
+        # as of 2026-07-29: 1 USD = 61.360986685 PHP (xe.com)
         - expiry: "2030-01-01T00:00:00Z"
           marketId: "fn:php:usd"
-          oracleAddress: "band-protocol-oraclePubKID"
-          price: "0.0174"
+          price: "0.016297"
+        # as of 2026-07-29 (exchangerates.org.uk)
         - expiry: "2030-01-01T00:00:00Z"
           marketId: "fn:aud:usd"
-          oracleAddress: "band-protocol-oraclePubKID"
-          price: "0.676955"
+          price: "0.696"
+        # as of 2026-07-29 (Fortune; MetaMask quoted 63766 the same day)
         - expiry: "2030-01-01T00:00:00Z"
           marketId: "cn:btc:usd"
-          oracleAddress: "band-protocol-oraclePubKID"
-          price: "17217.06"
+          price: "64363.66"
+        # as of 2026-07-29 (Fortune; MetaMask quoted 1914.28 the same day)
         - expiry: "2030-01-01T00:00:00Z"
           marketId: "cn:eth:usd"
-          oracleAddress: "band-protocol-oraclePubKID"
-          price: "1282.63"
+          price: "1916.18"

@@ -170,15 +170,15 @@ func CmdCreateCredential() *cobra.Command {
 					credentialHash = c.Hash(firstMiddleLast)
 				*/
 
-				const shortForm = "2006-Jan-02"
-				t, err := time.Parse(shortForm, p.Details.Birthdate)
+				p.Details.Birthdate, err = c.NormalizeBirthdate(p.Details.Birthdate)
 				if err != nil {
 					return err
 				}
-				p.Details.Birthdate = t.Format(shortForm)
 
-				if !types.ValidateGender(p.Details.Gender) {
-					return errors.New("invalid gender")
+				// the enclave re-checks this at claim/update time; doing it here just gives a
+				// better error than a rejected transaction
+				if err := c.ValidatePersonalInfoDetails(p.Details); err != nil {
+					return err
 				}
 
 				query := gountries.New()

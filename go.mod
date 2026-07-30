@@ -71,6 +71,7 @@ require (
 	github.com/cosmos/evm v0.5.1
 	github.com/cosmos/ibc-go/v10 v10.3.1-0.20250909102629-ed3b125c7b6f
 	github.com/spf13/cast v1.10.0
+	sigs.k8s.io/yaml v1.6.0
 )
 
 require (
@@ -487,7 +488,6 @@ require (
 	nhooyr.io/websocket v1.8.17 // indirect
 	pgregory.net/rapid v1.2.0 // indirect
 	rsc.io/qr v0.2.0 // indirect
-	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
 tool (

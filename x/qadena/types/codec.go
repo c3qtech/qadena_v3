@@ -67,6 +67,12 @@ func RegisterInterfaces(registry cdctypes.InterfaceRegistry) {
 		&MsgClaimCredential{},
 	)
 	registry.RegisterImplementations((*sdk.Msg)(nil),
+		&MsgUpdateCredential{},
+	)
+	registry.RegisterImplementations((*sdk.Msg)(nil),
+		&MsgClaimUpdatedCredential{},
+	)
+	registry.RegisterImplementations((*sdk.Msg)(nil),
 		&MsgCreateBulkCredentials{},
 	)
 	// this line is used by starport scaffolding # 3

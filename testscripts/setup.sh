@@ -10,6 +10,7 @@ specific_user=""
 prefix=""
 no_execute="false"
 no_log="false"
+skip_prerequisites="false"
 
 # Define additional parameters
 pioneer="pioneer1"
@@ -35,6 +36,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-log)
             no_log="true"
+            shift 1
+            ;;
+        --skip-prerequisites)
+            skip_prerequisites="true"
             shift 1
             ;;
         --reset)
@@ -63,6 +68,7 @@ while [[ $# -gt 0 ]]; do
             echo "--reset: removes all log files and the prefix-generated test users (preserves test_data/users.json)"
             echo "--no-execute: Do not execute the setup"
             echo "--no-log: Do not redirect output to the logs directory; print output directly"
+            echo "--skip-prerequisites: Do not run setup_prerequisites.sh (providers, create-wallet sponsor)"
             exit 0
             ;;
         *)
@@ -187,6 +193,25 @@ fi
 if [ "$no_execute" = "true" ]; then
     echo "No execute mode enabled. Skipping execution."
     exit 0
+fi
+
+# The service providers and the create-wallet sponsor are no longer genesis accounts, so they have
+# to be onboarded before any user can be created.  setup_prerequisites.sh is idempotent -- it skips
+# anything already in the keyring and only stakes if the treasury has no delegation -- so running it
+# on every setup.sh costs a few queries when there is nothing to do.
+#
+# Use --skip-prerequisites if you have already run it, or if you overrode --identityprovider /
+# --serviceprovider, since setup_prerequisites.sh onboards the default pair.
+if [ "$skip_prerequisites" != "true" ]; then
+    echo "-------------------------"
+    echo "Setting up prerequisites (providers, create-wallet sponsor)"
+    echo "-------------------------"
+    if $qadenatestscripts/setup_prerequisites.sh --pioneer "$pioneer" ; then
+        echo "Prerequisites ready"
+    else
+        echo "setup_prerequisites.sh failed"
+        exit 1
+    fi
 fi
 
 if [ -n "$prefix" ]; then

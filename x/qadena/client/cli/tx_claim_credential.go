@@ -25,29 +25,108 @@ import (
 
 var _ = strconv.Itoa(0)
 
-func createClaimContactInfoMessage(ctx client.Context, findCredentialPC *c.PedersenCommit, credWalletID string, credPubKey string, credType string, contactDetails proto.Message, oldPin string, credentialHash string, srcWalletID string, srcWallet types.Wallet, ewa types.EncryptableWalletAmount, recover bool) (*types.MsgClaimCredential, error) {
+// reblindedCredential is the Pedersen material and re-encrypted payload the enclave needs in
+// order to move a credential from the identity provider's blinding factor to the user's own.
+// Claim and update build it identically -- see reblindCredential.
+type reblindedCredential struct {
+	encCredentialInfoVShare  []byte
+	credentialInfoVShareBind *c.VShareBindData
+	// blinded: the amount and blinding factor are stripped before this leaves the client
+	newCredentialPC *c.PedersenCommit
+	claimPC         *c.PedersenCommit
+	// NOT blinded: the enclave needs zeroPC's A and X to check it commits to zero
+	zeroPC *c.PedersenCommit
+}
 
-	address := ctx.GetFromAddress().String()
-
-	var all []byte
-
+// reblindCredential re-encrypts a credential's plaintext under a fresh PIN and produces the three
+// commitments that prove the result is the same data the identity provider issued:
+//
+//	newCredentialPC = commit(hash(details), newPin)      -- the user's own commitment
+//	zeroPC          = ipCredentialPC - newCredentialPC   -- proves the plaintext is unchanged
+//	claimPC         = walletPC + newCredentialPC         -- proves the user controls the wallet
+//
+// The identity provider's commitment is recomputed locally from the plaintext and the PIN it
+// issued, rather than read off the chain, which is what makes zeroPC checkable at all.
+func reblindCredential(credType string, contactDetails proto.Message, oldPin string, walletPC *c.PedersenCommit, innerCCPubK []c.VSharePubKInfo) (*reblindedCredential, error) {
 	all, err := proto.Marshal(contactDetails)
 	if err != nil {
 		return nil, err
 	}
 
 	oldPinInt, ok := big.NewInt(0).SetString(oldPin, 10)
-
 	if !ok {
 		return nil, errors.New("pin not numeric")
 	}
 
-	credentialPC := c.NewPedersenCommit(big.NewInt(0).SetBytes(tmhash.Sum(all)), oldPinInt)
+	ipCredentialPC := c.NewPedersenCommit(big.NewInt(0).SetBytes(tmhash.Sum(all)), oldPinInt)
 
 	newPin, err := c.GenerateRandomBlindingFactor()
 	if err != nil {
 		return nil, err
 	}
+
+	var ret reblindedCredential
+
+	switch credType {
+	case types.PersonalInfoCredentialType:
+		var p types.EncryptablePersonalInfo
+		var details types.EncryptablePersonalInfoDetails
+		if err := proto.Unmarshal(all, &details); err != nil {
+			return nil, err
+		}
+		p.Details = &details
+		p.PIN = newPin.String()
+		ret.encCredentialInfoVShare, ret.credentialInfoVShareBind = c.ProtoMarshalAndVShareBEncrypt(innerCCPubK, &p)
+		if c.Debug {
+			fmt.Println("contact", p)
+		}
+	default:
+		var p types.EncryptableSingleContactInfo
+		var details types.EncryptableSingleContactInfoDetails
+		if err := proto.Unmarshal(all, &details); err != nil {
+			return nil, err
+		}
+		p.Details = &details
+		p.PIN = newPin.String()
+		ret.encCredentialInfoVShare, ret.credentialInfoVShareBind = c.ProtoMarshalAndVShareBEncrypt(innerCCPubK, &p)
+		if c.Debug {
+			fmt.Println("contact", p)
+		}
+	}
+
+	ret.newCredentialPC = c.NewPedersenCommit(big.NewInt(0).SetBytes(tmhash.Sum(all)), newPin)
+	ret.claimPC = c.AddPedersenCommitNoMaxCheck(walletPC, ret.newCredentialPC)
+	ret.zeroPC = c.SubPedersenCommitNoMinCheck(ipCredentialPC, ret.newCredentialPC)
+
+	if c.Debug {
+		fmt.Println("walletPC", c.PrettyPrint(walletPC), "\nnewCredentialPC", c.PrettyPrint(*ret.newCredentialPC), "\nclaimPC", c.PrettyPrint(*ret.claimPC))
+	}
+
+	if c.DebugAmounts {
+	} else {
+		c.BlindPedersenCommit(ret.claimPC)
+		c.BlindPedersenCommit(ret.newCredentialPC)
+		// NEED TO KEEP zeroPC's A & X
+	}
+
+	// Warn rather than fail, as the claim flow has always done: the enclave re-runs both checks
+	// and is the authority on them, and DebugAmounts changes what is left unblinded here.
+	if !c.ValidateSubPedersenCommit(ipCredentialPC, ret.newCredentialPC, ret.zeroPC) {
+		fmt.Println("failed to validate credentialPC - newCredentialPC - zeroPC = 0")
+	}
+
+	if c.ValidateAddPedersenCommit(walletPC, ret.newCredentialPC, ret.claimPC) {
+		fmt.Println("validated claimPC")
+	}
+
+	return &ret, nil
+}
+
+func createClaimContactInfoMessage(ctx client.Context, findCredentialPC *c.PedersenCommit, credWalletID string, credPubKey string, credType string, contactDetails proto.Message, oldPin string, credentialHash string, srcWalletID string, srcWallet types.Wallet, ewa types.EncryptableWalletAmount, recover bool) (*types.MsgClaimCredential, error) {
+
+	address := ctx.GetFromAddress().String()
+
+	var err error
 
 	ccPubK := []c.VSharePubKInfo{
 		{PubK: credPubKey, NodeID: "", NodeType: ""},
@@ -76,76 +155,29 @@ func createClaimContactInfoMessage(ctx client.Context, findCredentialPC *c.Peder
 		}
 	}
 
-	var encCredentialInfoVShare []byte
-	var credentialInfoVShareBind *c.VShareBindData
+	walletPC := c.UnprotoizeEncryptablePedersenCommit(ewa.PedersenCommit)
 
-	switch credType {
-	case types.PersonalInfoCredentialType:
-		var p types.EncryptablePersonalInfo
-		var details types.EncryptablePersonalInfoDetails
-		proto.Unmarshal(all, &details)
-		p.Details = &details
-		p.PIN = newPin.String()
-		encCredentialInfoVShare, credentialInfoVShareBind = c.ProtoMarshalAndVShareBEncrypt(ccPubK, &p)
-		if c.Debug {
-			fmt.Println("contact", p)
-		}
-	default:
-		var p types.EncryptableSingleContactInfo
-		var details types.EncryptableSingleContactInfoDetails
-		proto.Unmarshal(all, &details)
-		p.Details = &details
-		p.PIN = newPin.String()
-		encCredentialInfoVShare, credentialInfoVShareBind = c.ProtoMarshalAndVShareBEncrypt(ccPubK, &p)
-		if c.Debug {
-			fmt.Println("contact", p)
-		}
+	reblinded, err := reblindCredential(credType, contactDetails, oldPin, walletPC, ccPubK)
+	if err != nil {
+		return nil, err
 	}
 
 	encWalletIDVShare, walletIDVShareBind := c.ProtoMarshalAndVShareBEncrypt(ccPubK, &types.EncryptableString{Value: srcWalletID})
 
 	encCredentialHashVShare, credentialHashVShareBind := c.ProtoMarshalAndVShareBEncrypt(ccPubK, &types.EncryptableString{Value: credentialHash})
 
-	newCredentialPC := c.NewPedersenCommit(big.NewInt(0).SetBytes(tmhash.Sum(all)), newPin)
-
-	walletPC := c.UnprotoizeEncryptablePedersenCommit(ewa.PedersenCommit)
-	claimPC := c.AddPedersenCommitNoMaxCheck(walletPC, newCredentialPC)
-
-	if c.Debug {
-		fmt.Println("walletPC", c.PrettyPrint(walletPC), "\nnewCredentialPC", c.PrettyPrint(*newCredentialPC), "\nclaimPC", c.PrettyPrint(*claimPC))
-	}
-
-	zeroPC := c.SubPedersenCommitNoMinCheck(credentialPC, newCredentialPC)
-
-	if c.DebugAmounts {
-	} else {
-		c.BlindPedersenCommit(claimPC)
-
-		c.BlindPedersenCommit(newCredentialPC)
-
-		// NEED TO KEEP zeroPC's A & X
-	}
-
-	if !c.ValidateSubPedersenCommit(credentialPC, newCredentialPC, zeroPC) {
-		fmt.Println("failed to validate credentialPC - newCredentialPC - zeroPC = 0")
-	}
-
-	if c.ValidateAddPedersenCommit(walletPC, newCredentialPC, claimPC) {
-		fmt.Println("validated claimPC")
-	}
-
 	encryptableClaimCredentialExtraParms := types.EncryptableClaimCredentialExtraParms{
-		EncCredentialInfoVShare:  encCredentialInfoVShare,
-		CredentialInfoVShareBind: c.ProtoizeVShareBindData(credentialInfoVShareBind),
+		EncCredentialInfoVShare:  reblinded.encCredentialInfoVShare,
+		CredentialInfoVShareBind: c.ProtoizeVShareBindData(reblinded.credentialInfoVShareBind),
 		WalletID:                 srcWalletID,
 		EncWalletIDVShare:        encWalletIDVShare,
 		WalletIDVShareBind:       c.ProtoizeVShareBindData(walletIDVShareBind),
 		EncCredentialHashVShare:  encCredentialHashVShare,
 		CredentialHashVShareBind: c.ProtoizeVShareBindData(credentialHashVShareBind),
 		FindCredentialPC:         c.ProtoizeBPedersenCommit(findCredentialPC),
-		ClaimPC:                  c.ProtoizeBPedersenCommit(claimPC),
-		ZeroPC:                   c.ProtoizeEncryptablePedersenCommit(zeroPC),
-		NewCredentialPC:          c.ProtoizeBPedersenCommit(newCredentialPC),
+		ClaimPC:                  c.ProtoizeBPedersenCommit(reblinded.claimPC),
+		ZeroPC:                   c.ProtoizeEncryptablePedersenCommit(reblinded.zeroPC),
+		NewCredentialPC:          c.ProtoizeBPedersenCommit(reblinded.newCredentialPC),
 	}
 
 	encClaimCredentialExtraParmsVShare, claimCredentialExtraParmsVShareBind := c.ProtoMarshalAndVShareBEncrypt(outerCCPubK, &encryptableClaimCredentialExtraParms)

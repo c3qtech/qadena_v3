@@ -73,8 +73,7 @@ func GenerateKeys(t *testing.T, count int) ([]string, []string) {
 
 	clientCtx, err = client.ReadPersistentCommandFlags(clientCtx, rootCmd.Flags())
 	if err != nil {
-		fmt.Errorf("couldn't read persistent command flags " + err.Error() + "\n")
-		t.Errorf("couldn't read persistent command flags " + err.Error() + "\n")
+		t.Errorf("couldn't read persistent command flags %v", err)
 	}
 
 	clientCtx.SkipConfirm = true

@@ -196,6 +196,288 @@ func (m *EncryptableClaimCredentialExtraParms) GetClaimPC() *BPedersenCommit {
 	return nil
 }
 
+// EncryptableUpdateSubCredential carries one name sub-credential's share of an update.  The
+// sub-updates travel inside the personal-info update rather than as separate messages: a
+// sub-credential on its own has no personal-info context, so the enclave could not run the
+// change policy on it, and a client could otherwise update a surname sub-credential without
+// updating the identity hash it is supposed to agree with.
+type EncryptableUpdateSubCredential struct {
+	CredentialType           string                     `protobuf:"bytes,1,opt,name=CredentialType,proto3" json:"CredentialType,omitempty"`
+	EncCredentialInfoVShare  []byte                     `protobuf:"bytes,2,opt,name=EncCredentialInfoVShare,proto3" json:"EncCredentialInfoVShare,omitempty"`
+	CredentialInfoVShareBind *VShareBindData            `protobuf:"bytes,3,opt,name=CredentialInfoVShareBind,proto3" json:"CredentialInfoVShareBind,omitempty"`
+	FindCredentialPC         *BPedersenCommit           `protobuf:"bytes,4,opt,name=FindCredentialPC,proto3" json:"FindCredentialPC,omitempty"`
+	NewCredentialPC          *BPedersenCommit           `protobuf:"bytes,5,opt,name=NewCredentialPC,proto3" json:"NewCredentialPC,omitempty"`
+	ZeroPC                   *EncryptablePedersenCommit `protobuf:"bytes,6,opt,name=ZeroPC,proto3" json:"ZeroPC,omitempty"`
+	ClaimPC                  *BPedersenCommit           `protobuf:"bytes,7,opt,name=ClaimPC,proto3" json:"ClaimPC,omitempty"`
+}
+
+func (m *EncryptableUpdateSubCredential) Reset()         { *m = EncryptableUpdateSubCredential{} }
+func (m *EncryptableUpdateSubCredential) String() string { return proto.CompactTextString(m) }
+func (*EncryptableUpdateSubCredential) ProtoMessage()    {}
+func (*EncryptableUpdateSubCredential) Descriptor() ([]byte, []int) {
+	return fileDescriptor_ef4cf267f6afd07c, []int{2}
+}
+func (m *EncryptableUpdateSubCredential) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *EncryptableUpdateSubCredential) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_EncryptableUpdateSubCredential.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *EncryptableUpdateSubCredential) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_EncryptableUpdateSubCredential.Merge(m, src)
+}
+func (m *EncryptableUpdateSubCredential) XXX_Size() int {
+	return m.Size()
+}
+func (m *EncryptableUpdateSubCredential) XXX_DiscardUnknown() {
+	xxx_messageInfo_EncryptableUpdateSubCredential.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_EncryptableUpdateSubCredential proto.InternalMessageInfo
+
+func (m *EncryptableUpdateSubCredential) GetCredentialType() string {
+	if m != nil {
+		return m.CredentialType
+	}
+	return ""
+}
+
+func (m *EncryptableUpdateSubCredential) GetEncCredentialInfoVShare() []byte {
+	if m != nil {
+		return m.EncCredentialInfoVShare
+	}
+	return nil
+}
+
+func (m *EncryptableUpdateSubCredential) GetCredentialInfoVShareBind() *VShareBindData {
+	if m != nil {
+		return m.CredentialInfoVShareBind
+	}
+	return nil
+}
+
+func (m *EncryptableUpdateSubCredential) GetFindCredentialPC() *BPedersenCommit {
+	if m != nil {
+		return m.FindCredentialPC
+	}
+	return nil
+}
+
+func (m *EncryptableUpdateSubCredential) GetNewCredentialPC() *BPedersenCommit {
+	if m != nil {
+		return m.NewCredentialPC
+	}
+	return nil
+}
+
+func (m *EncryptableUpdateSubCredential) GetZeroPC() *EncryptablePedersenCommit {
+	if m != nil {
+		return m.ZeroPC
+	}
+	return nil
+}
+
+func (m *EncryptableUpdateSubCredential) GetClaimPC() *BPedersenCommit {
+	if m != nil {
+		return m.ClaimPC
+	}
+	return nil
+}
+
+// EncryptableUpdateCredentialExtraParms mirrors EncryptableClaimCredentialExtraParms with two
+// deliberate omissions: no EncWalletIDVShare/WalletIDVShareBind, which exist only to feed
+// recoverKeyByCredential and an update never recovers; and no old identity hash, because the
+// enclave recomputes it from the old row's own plaintext, which it must decrypt anyway.  A
+// client-supplied old hash would be trusting the client with the alias index.
+type EncryptableUpdateCredentialExtraParms struct {
+	EncCredentialInfoVShare  []byte                            `protobuf:"bytes,1,opt,name=EncCredentialInfoVShare,proto3" json:"EncCredentialInfoVShare,omitempty"`
+	CredentialInfoVShareBind *VShareBindData                   `protobuf:"bytes,2,opt,name=CredentialInfoVShareBind,proto3" json:"CredentialInfoVShareBind,omitempty"`
+	WalletID                 string                            `protobuf:"bytes,3,opt,name=WalletID,proto3" json:"WalletID,omitempty"`
+	FindCredentialPC         *BPedersenCommit                  `protobuf:"bytes,4,opt,name=FindCredentialPC,proto3" json:"FindCredentialPC,omitempty"`
+	NewCredentialPC          *BPedersenCommit                  `protobuf:"bytes,5,opt,name=NewCredentialPC,proto3" json:"NewCredentialPC,omitempty"`
+	EncCredentialHashVShare  []byte                            `protobuf:"bytes,8,opt,name=EncCredentialHashVShare,proto3" json:"EncCredentialHashVShare,omitempty"`
+	CredentialHashVShareBind *VShareBindData                   `protobuf:"bytes,9,opt,name=CredentialHashVShareBind,proto3" json:"CredentialHashVShareBind,omitempty"`
+	ZeroPC                   *EncryptablePedersenCommit        `protobuf:"bytes,10,opt,name=ZeroPC,proto3" json:"ZeroPC,omitempty"`
+	ClaimPC                  *BPedersenCommit                  `protobuf:"bytes,11,opt,name=ClaimPC,proto3" json:"ClaimPC,omitempty"`
+	SubUpdates               []*EncryptableUpdateSubCredential `protobuf:"bytes,12,rep,name=SubUpdates,proto3" json:"SubUpdates,omitempty"`
+}
+
+func (m *EncryptableUpdateCredentialExtraParms) Reset()         { *m = EncryptableUpdateCredentialExtraParms{} }
+func (m *EncryptableUpdateCredentialExtraParms) String() string { return proto.CompactTextString(m) }
+func (*EncryptableUpdateCredentialExtraParms) ProtoMessage()    {}
+func (*EncryptableUpdateCredentialExtraParms) Descriptor() ([]byte, []int) {
+	return fileDescriptor_ef4cf267f6afd07c, []int{3}
+}
+func (m *EncryptableUpdateCredentialExtraParms) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *EncryptableUpdateCredentialExtraParms) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_EncryptableUpdateCredentialExtraParms.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *EncryptableUpdateCredentialExtraParms) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_EncryptableUpdateCredentialExtraParms.Merge(m, src)
+}
+func (m *EncryptableUpdateCredentialExtraParms) XXX_Size() int {
+	return m.Size()
+}
+func (m *EncryptableUpdateCredentialExtraParms) XXX_DiscardUnknown() {
+	xxx_messageInfo_EncryptableUpdateCredentialExtraParms.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_EncryptableUpdateCredentialExtraParms proto.InternalMessageInfo
+
+func (m *EncryptableUpdateCredentialExtraParms) GetEncCredentialInfoVShare() []byte {
+	if m != nil {
+		return m.EncCredentialInfoVShare
+	}
+	return nil
+}
+
+func (m *EncryptableUpdateCredentialExtraParms) GetCredentialInfoVShareBind() *VShareBindData {
+	if m != nil {
+		return m.CredentialInfoVShareBind
+	}
+	return nil
+}
+
+func (m *EncryptableUpdateCredentialExtraParms) GetWalletID() string {
+	if m != nil {
+		return m.WalletID
+	}
+	return ""
+}
+
+func (m *EncryptableUpdateCredentialExtraParms) GetFindCredentialPC() *BPedersenCommit {
+	if m != nil {
+		return m.FindCredentialPC
+	}
+	return nil
+}
+
+func (m *EncryptableUpdateCredentialExtraParms) GetNewCredentialPC() *BPedersenCommit {
+	if m != nil {
+		return m.NewCredentialPC
+	}
+	return nil
+}
+
+func (m *EncryptableUpdateCredentialExtraParms) GetEncCredentialHashVShare() []byte {
+	if m != nil {
+		return m.EncCredentialHashVShare
+	}
+	return nil
+}
+
+func (m *EncryptableUpdateCredentialExtraParms) GetCredentialHashVShareBind() *VShareBindData {
+	if m != nil {
+		return m.CredentialHashVShareBind
+	}
+	return nil
+}
+
+func (m *EncryptableUpdateCredentialExtraParms) GetZeroPC() *EncryptablePedersenCommit {
+	if m != nil {
+		return m.ZeroPC
+	}
+	return nil
+}
+
+func (m *EncryptableUpdateCredentialExtraParms) GetClaimPC() *BPedersenCommit {
+	if m != nil {
+		return m.ClaimPC
+	}
+	return nil
+}
+
+func (m *EncryptableUpdateCredentialExtraParms) GetSubUpdates() []*EncryptableUpdateSubCredential {
+	if m != nil {
+		return m.SubUpdates
+	}
+	return nil
+}
+
+// EncryptableCredentialIdentityHistory is the enclave's per-credential record of every identity
+// hash that has ever resolved to it.  Its length doubles as the rate-limit counter: one entry for
+// the original identity plus one per hash-changing update.  Scalars and a repeated field only --
+// a proto map would not marshal deterministically.
+type EncryptableCredentialIdentityHistory struct {
+	Hashes           []string `protobuf:"bytes,1,rep,name=Hashes,proto3" json:"Hashes,omitempty"`
+	LifeEventCount   uint32   `protobuf:"varint,2,opt,name=LifeEventCount,proto3" json:"LifeEventCount,omitempty"`
+	LastUpdateHeight int64    `protobuf:"varint,3,opt,name=LastUpdateHeight,proto3" json:"LastUpdateHeight,omitempty"`
+}
+
+func (m *EncryptableCredentialIdentityHistory) Reset()         { *m = EncryptableCredentialIdentityHistory{} }
+func (m *EncryptableCredentialIdentityHistory) String() string { return proto.CompactTextString(m) }
+func (*EncryptableCredentialIdentityHistory) ProtoMessage()    {}
+func (*EncryptableCredentialIdentityHistory) Descriptor() ([]byte, []int) {
+	return fileDescriptor_ef4cf267f6afd07c, []int{4}
+}
+func (m *EncryptableCredentialIdentityHistory) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *EncryptableCredentialIdentityHistory) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_EncryptableCredentialIdentityHistory.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *EncryptableCredentialIdentityHistory) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_EncryptableCredentialIdentityHistory.Merge(m, src)
+}
+func (m *EncryptableCredentialIdentityHistory) XXX_Size() int {
+	return m.Size()
+}
+func (m *EncryptableCredentialIdentityHistory) XXX_DiscardUnknown() {
+	xxx_messageInfo_EncryptableCredentialIdentityHistory.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_EncryptableCredentialIdentityHistory proto.InternalMessageInfo
+
+func (m *EncryptableCredentialIdentityHistory) GetHashes() []string {
+	if m != nil {
+		return m.Hashes
+	}
+	return nil
+}
+
+func (m *EncryptableCredentialIdentityHistory) GetLifeEventCount() uint32 {
+	if m != nil {
+		return m.LifeEventCount
+	}
+	return 0
+}
+
+func (m *EncryptableCredentialIdentityHistory) GetLastUpdateHeight() int64 {
+	if m != nil {
+		return m.LastUpdateHeight
+	}
+	return 0
+}
+
 type EncryptableAuthorizedSignatory struct {
 	Nonce    string   `protobuf:"bytes,1,opt,name=Nonce,proto3" json:"Nonce,omitempty"`
 	WalletID []string `protobuf:"bytes,2,rep,name=WalletID,proto3" json:"WalletID,omitempty"`
@@ -205,7 +487,7 @@ func (m *EncryptableAuthorizedSignatory) Reset()         { *m = EncryptableAutho
 func (m *EncryptableAuthorizedSignatory) String() string { return proto.CompactTextString(m) }
 func (*EncryptableAuthorizedSignatory) ProtoMessage()    {}
 func (*EncryptableAuthorizedSignatory) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{2}
+	return fileDescriptor_ef4cf267f6afd07c, []int{5}
 }
 func (m *EncryptableAuthorizedSignatory) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -258,7 +540,7 @@ func (m *EncryptableSignatory) Reset()         { *m = EncryptableSignatory{} }
 func (m *EncryptableSignatory) String() string { return proto.CompactTextString(m) }
 func (*EncryptableSignatory) ProtoMessage()    {}
 func (*EncryptableSignatory) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{3}
+	return fileDescriptor_ef4cf267f6afd07c, []int{6}
 }
 func (m *EncryptableSignatory) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -323,7 +605,7 @@ func (m *EncryptableWalletAmount) Reset()         { *m = EncryptableWalletAmount
 func (m *EncryptableWalletAmount) String() string { return proto.CompactTextString(m) }
 func (*EncryptableWalletAmount) ProtoMessage()    {}
 func (*EncryptableWalletAmount) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{4}
+	return fileDescriptor_ef4cf267f6afd07c, []int{7}
 }
 func (m *EncryptableWalletAmount) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -422,7 +704,7 @@ func (m *EncryptablePersonalInfoDetails) Reset()         { *m = EncryptablePerso
 func (m *EncryptablePersonalInfoDetails) String() string { return proto.CompactTextString(m) }
 func (*EncryptablePersonalInfoDetails) ProtoMessage()    {}
 func (*EncryptablePersonalInfoDetails) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{5}
+	return fileDescriptor_ef4cf267f6afd07c, []int{8}
 }
 func (m *EncryptablePersonalInfoDetails) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -510,7 +792,7 @@ func (m *EncryptablePersonalInfo) Reset()         { *m = EncryptablePersonalInfo
 func (m *EncryptablePersonalInfo) String() string { return proto.CompactTextString(m) }
 func (*EncryptablePersonalInfo) ProtoMessage()    {}
 func (*EncryptablePersonalInfo) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{6}
+	return fileDescriptor_ef4cf267f6afd07c, []int{9}
 }
 func (m *EncryptablePersonalInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -568,7 +850,7 @@ func (m *EncryptableSingleContactInfoDetails) Reset()         { *m = Encryptable
 func (m *EncryptableSingleContactInfoDetails) String() string { return proto.CompactTextString(m) }
 func (*EncryptableSingleContactInfoDetails) ProtoMessage()    {}
 func (*EncryptableSingleContactInfoDetails) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{7}
+	return fileDescriptor_ef4cf267f6afd07c, []int{10}
 }
 func (m *EncryptableSingleContactInfoDetails) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -614,7 +896,7 @@ func (m *EncryptableSingleContactInfo) Reset()         { *m = EncryptableSingleC
 func (m *EncryptableSingleContactInfo) String() string { return proto.CompactTextString(m) }
 func (*EncryptableSingleContactInfo) ProtoMessage()    {}
 func (*EncryptableSingleContactInfo) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{8}
+	return fileDescriptor_ef4cf267f6afd07c, []int{11}
 }
 func (m *EncryptableSingleContactInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -674,7 +956,7 @@ func (m *EncryptableValidatedCredential) Reset()         { *m = EncryptableValid
 func (m *EncryptableValidatedCredential) String() string { return proto.CompactTextString(m) }
 func (*EncryptableValidatedCredential) ProtoMessage()    {}
 func (*EncryptableValidatedCredential) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{9}
+	return fileDescriptor_ef4cf267f6afd07c, []int{12}
 }
 func (m *EncryptableValidatedCredential) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -732,7 +1014,7 @@ func (m *EncryptableValidatedCredentials) Reset()         { *m = EncryptableVali
 func (m *EncryptableValidatedCredentials) String() string { return proto.CompactTextString(m) }
 func (*EncryptableValidatedCredentials) ProtoMessage()    {}
 func (*EncryptableValidatedCredentials) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{10}
+	return fileDescriptor_ef4cf267f6afd07c, []int{13}
 }
 func (m *EncryptableValidatedCredentials) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -780,7 +1062,7 @@ func (m *EncryptableCreateWalletEWalletIDExtraParms) String() string {
 }
 func (*EncryptableCreateWalletEWalletIDExtraParms) ProtoMessage() {}
 func (*EncryptableCreateWalletEWalletIDExtraParms) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{11}
+	return fileDescriptor_ef4cf267f6afd07c, []int{14}
 }
 func (m *EncryptableCreateWalletEWalletIDExtraParms) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -826,7 +1108,7 @@ func (m *EncryptableCreateWalletEWalletID) Reset()         { *m = EncryptableCre
 func (m *EncryptableCreateWalletEWalletID) String() string { return proto.CompactTextString(m) }
 func (*EncryptableCreateWalletEWalletID) ProtoMessage()    {}
 func (*EncryptableCreateWalletEWalletID) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{12}
+	return fileDescriptor_ef4cf267f6afd07c, []int{15}
 }
 func (m *EncryptableCreateWalletEWalletID) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -884,7 +1166,7 @@ func (m *EncryptableCreateWallet) Reset()         { *m = EncryptableCreateWallet
 func (m *EncryptableCreateWallet) String() string { return proto.CompactTextString(m) }
 func (*EncryptableCreateWallet) ProtoMessage()    {}
 func (*EncryptableCreateWallet) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{13}
+	return fileDescriptor_ef4cf267f6afd07c, []int{16}
 }
 func (m *EncryptableCreateWallet) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -941,7 +1223,7 @@ func (m *EncryptableTransferFundsEWalletIDExtraParms) String() string {
 }
 func (*EncryptableTransferFundsEWalletIDExtraParms) ProtoMessage() {}
 func (*EncryptableTransferFundsEWalletIDExtraParms) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{14}
+	return fileDescriptor_ef4cf267f6afd07c, []int{17}
 }
 func (m *EncryptableTransferFundsEWalletIDExtraParms) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1050,7 +1332,7 @@ func (m *EncryptableTransferFundsEWalletID) Reset()         { *m = EncryptableTr
 func (m *EncryptableTransferFundsEWalletID) String() string { return proto.CompactTextString(m) }
 func (*EncryptableTransferFundsEWalletID) ProtoMessage()    {}
 func (*EncryptableTransferFundsEWalletID) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{15}
+	return fileDescriptor_ef4cf267f6afd07c, []int{18}
 }
 func (m *EncryptableTransferFundsEWalletID) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1110,7 +1392,7 @@ func (m *EncryptableTransferFunds) Reset()         { *m = EncryptableTransferFun
 func (m *EncryptableTransferFunds) String() string { return proto.CompactTextString(m) }
 func (*EncryptableTransferFunds) ProtoMessage()    {}
 func (*EncryptableTransferFunds) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{16}
+	return fileDescriptor_ef4cf267f6afd07c, []int{19}
 }
 func (m *EncryptableTransferFunds) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1172,7 +1454,7 @@ func (m *EncryptableReceiveFundsEWalletIDExtraParms) String() string {
 }
 func (*EncryptableReceiveFundsEWalletIDExtraParms) ProtoMessage() {}
 func (*EncryptableReceiveFundsEWalletIDExtraParms) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{17}
+	return fileDescriptor_ef4cf267f6afd07c, []int{20}
 }
 func (m *EncryptableReceiveFundsEWalletIDExtraParms) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1218,7 +1500,7 @@ func (m *EncryptableReceiveFundsEWalletID) Reset()         { *m = EncryptableRec
 func (m *EncryptableReceiveFundsEWalletID) String() string { return proto.CompactTextString(m) }
 func (*EncryptableReceiveFundsEWalletID) ProtoMessage()    {}
 func (*EncryptableReceiveFundsEWalletID) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{18}
+	return fileDescriptor_ef4cf267f6afd07c, []int{21}
 }
 func (m *EncryptableReceiveFundsEWalletID) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1277,7 +1559,7 @@ func (m *EncryptableSignRecoverKeyEWalletID) Reset()         { *m = EncryptableS
 func (m *EncryptableSignRecoverKeyEWalletID) String() string { return proto.CompactTextString(m) }
 func (*EncryptableSignRecoverKeyEWalletID) ProtoMessage()    {}
 func (*EncryptableSignRecoverKeyEWalletID) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{19}
+	return fileDescriptor_ef4cf267f6afd07c, []int{22}
 }
 func (m *EncryptableSignRecoverKeyEWalletID) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1328,7 +1610,7 @@ func (m *EncryptableReceiveFunds) Reset()         { *m = EncryptableReceiveFunds
 func (m *EncryptableReceiveFunds) String() string { return proto.CompactTextString(m) }
 func (*EncryptableReceiveFunds) ProtoMessage()    {}
 func (*EncryptableReceiveFunds) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{20}
+	return fileDescriptor_ef4cf267f6afd07c, []int{23}
 }
 func (m *EncryptableReceiveFunds) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1373,7 +1655,7 @@ func (m *EncryptableAnonTransferFunds) Reset()         { *m = EncryptableAnonTra
 func (m *EncryptableAnonTransferFunds) String() string { return proto.CompactTextString(m) }
 func (*EncryptableAnonTransferFunds) ProtoMessage()    {}
 func (*EncryptableAnonTransferFunds) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{21}
+	return fileDescriptor_ef4cf267f6afd07c, []int{24}
 }
 func (m *EncryptableAnonTransferFunds) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1426,7 +1708,7 @@ func (m *EncryptableESuspiciousAmount) Reset()         { *m = EncryptableESuspic
 func (m *EncryptableESuspiciousAmount) String() string { return proto.CompactTextString(m) }
 func (*EncryptableESuspiciousAmount) ProtoMessage()    {}
 func (*EncryptableESuspiciousAmount) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{22}
+	return fileDescriptor_ef4cf267f6afd07c, []int{25}
 }
 func (m *EncryptableESuspiciousAmount) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1486,7 +1768,7 @@ func (m *EncryptableSSIDAndPrivK) Reset()         { *m = EncryptableSSIDAndPrivK
 func (m *EncryptableSSIDAndPrivK) String() string { return proto.CompactTextString(m) }
 func (*EncryptableSSIDAndPrivK) ProtoMessage()    {}
 func (*EncryptableSSIDAndPrivK) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{23}
+	return fileDescriptor_ef4cf267f6afd07c, []int{26}
 }
 func (m *EncryptableSSIDAndPrivK) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1544,7 +1826,7 @@ func (m *EncryptablePioneerIDs) Reset()         { *m = EncryptablePioneerIDs{} }
 func (m *EncryptablePioneerIDs) String() string { return proto.CompactTextString(m) }
 func (*EncryptablePioneerIDs) ProtoMessage()    {}
 func (*EncryptablePioneerIDs) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{24}
+	return fileDescriptor_ef4cf267f6afd07c, []int{27}
 }
 func (m *EncryptablePioneerIDs) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1588,7 +1870,7 @@ func (m *EncryptableEnclaveSSOwnerMap) Reset()         { *m = EncryptableEnclave
 func (m *EncryptableEnclaveSSOwnerMap) String() string { return proto.CompactTextString(m) }
 func (*EncryptableEnclaveSSOwnerMap) ProtoMessage()    {}
 func (*EncryptableEnclaveSSOwnerMap) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{25}
+	return fileDescriptor_ef4cf267f6afd07c, []int{28}
 }
 func (m *EncryptableEnclaveSSOwnerMap) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1632,7 +1914,7 @@ func (m *EncryptableEnclavePubKCacheMap) Reset()         { *m = EncryptableEncla
 func (m *EncryptableEnclavePubKCacheMap) String() string { return proto.CompactTextString(m) }
 func (*EncryptableEnclavePubKCacheMap) ProtoMessage()    {}
 func (*EncryptableEnclavePubKCacheMap) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{26}
+	return fileDescriptor_ef4cf267f6afd07c, []int{29}
 }
 func (m *EncryptableEnclavePubKCacheMap) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1686,7 +1968,7 @@ func (m *EncryptableSharedEnclaveParams) Reset()         { *m = EncryptableShare
 func (m *EncryptableSharedEnclaveParams) String() string { return proto.CompactTextString(m) }
 func (*EncryptableSharedEnclaveParams) ProtoMessage()    {}
 func (*EncryptableSharedEnclaveParams) Descriptor() ([]byte, []int) {
-	return fileDescriptor_ef4cf267f6afd07c, []int{27}
+	return fileDescriptor_ef4cf267f6afd07c, []int{30}
 }
 func (m *EncryptableSharedEnclaveParams) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1788,6 +2070,9 @@ func (m *EncryptableSharedEnclaveParams) GetSSIntervalPubKCache() *EncryptableEn
 func init() {
 	proto.RegisterType((*EncryptableString)(nil), "qadena.qadena.EncryptableString")
 	proto.RegisterType((*EncryptableClaimCredentialExtraParms)(nil), "qadena.qadena.EncryptableClaimCredentialExtraParms")
+	proto.RegisterType((*EncryptableUpdateSubCredential)(nil), "qadena.qadena.EncryptableUpdateSubCredential")
+	proto.RegisterType((*EncryptableUpdateCredentialExtraParms)(nil), "qadena.qadena.EncryptableUpdateCredentialExtraParms")
+	proto.RegisterType((*EncryptableCredentialIdentityHistory)(nil), "qadena.qadena.EncryptableCredentialIdentityHistory")
 	proto.RegisterType((*EncryptableAuthorizedSignatory)(nil), "qadena.qadena.EncryptableAuthorizedSignatory")
 	proto.RegisterType((*EncryptableSignatory)(nil), "qadena.qadena.EncryptableSignatory")
 	proto.RegisterType((*EncryptableWalletAmount)(nil), "qadena.qadena.EncryptableWalletAmount")
@@ -1821,124 +2106,134 @@ func init() {
 func init() { proto.RegisterFile("qadena/qadena/encryptable.proto", fileDescriptor_ef4cf267f6afd07c) }
 
 var fileDescriptor_ef4cf267f6afd07c = []byte{
-	// 1860 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xb4, 0x18, 0x4b, 0x93, 0x1b, 0x47,
-	0xd9, 0xb2, 0xbc, 0x0f, 0x7d, 0xf6, 0x86, 0x4d, 0x7b, 0x9d, 0xc8, 0x5b, 0xb1, 0xbc, 0x99, 0x18,
-	0x30, 0x31, 0x91, 0x62, 0x9b, 0x82, 0x8d, 0x2f, 0x61, 0x57, 0x2b, 0xc7, 0x5a, 0xc7, 0x6b, 0x31,
-	0xda, 0x38, 0x15, 0x43, 0x95, 0xaa, 0x35, 0xd3, 0x2b, 0x75, 0x59, 0xea, 0x96, 0x7b, 0x5a, 0xb2,
-	0x37, 0x3f, 0x01, 0x2e, 0x1c, 0xa8, 0xe2, 0xc6, 0x0f, 0xe0, 0x02, 0xfc, 0x0a, 0x38, 0xe6, 0x98,
-	0x23, 0x65, 0x5f, 0x38, 0x51, 0xdc, 0xb9, 0x50, 0xdd, 0xd3, 0xa3, 0x99, 0x1e, 0xcd, 0x48, 0x5a,
-	0xbb, 0xb8, 0x48, 0xf3, 0xbd, 0x9f, 0xfd, 0xf5, 0x03, 0xae, 0x3f, 0xc7, 0x3e, 0x61, 0xb8, 0x66,
-	0xfe, 0x08, 0xf3, 0xc4, 0xe9, 0x48, 0xe2, 0xee, 0x80, 0x54, 0x47, 0x82, 0x4b, 0x8e, 0x36, 0x42,
-	0x4a, 0x35, 0xfc, 0xdb, 0x7e, 0x17, 0x0f, 0x29, 0xe3, 0x35, 0xfd, 0x1b, 0x72, 0x6c, 0xbf, 0xef,
-	0xf1, 0x60, 0xc8, 0x83, 0xda, 0x30, 0xe8, 0xd5, 0x26, 0xb7, 0xd5, 0x9f, 0x21, 0x5c, 0x0d, 0x09,
-	0x1d, 0x0d, 0xd5, 0x42, 0xc0, 0x90, 0x2a, 0x46, 0xa6, 0x8b, 0x03, 0x52, 0x9b, 0xdc, 0xee, 0x12,
-	0x89, 0x6f, 0xd7, 0x3c, 0x4e, 0x99, 0xa1, 0x6f, 0xf5, 0x78, 0x8f, 0x87, 0x72, 0xea, 0xcb, 0x60,
-	0xb7, 0x6d, 0x67, 0x47, 0x58, 0xe0, 0x61, 0xa4, 0xf1, 0x63, 0x9b, 0x16, 0x8c, 0x83, 0x11, 0xf5,
-	0x28, 0x1f, 0x07, 0x1d, 0x29, 0x30, 0x0b, 0xb0, 0x27, 0x29, 0x8f, 0xb4, 0x7f, 0x94, 0xd2, 0x43,
-	0x7c, 0x22, 0x02, 0xc2, 0x3a, 0x1e, 0x1f, 0x0e, 0xa9, 0x34, 0x4c, 0xd7, 0x6c, 0xa6, 0x2e, 0x65,
-	0x7e, 0xc7, 0xc7, 0x12, 0x1b, 0x72, 0x2a, 0x71, 0x02, 0xb3, 0x1e, 0x51, 0x91, 0xf2, 0x13, 0xc3,
-	0xf0, 0xc3, 0x94, 0x7c, 0x27, 0xdb, 0x4c, 0x8a, 0x6d, 0xd2, 0x09, 0xfa, 0x58, 0x90, 0x4e, 0xda,
-	0xdc, 0xd5, 0x54, 0x78, 0x8a, 0xc9, 0x90, 0x7e, 0x9c, 0x22, 0x11, 0x4f, 0x10, 0x69, 0xd4, 0x8c,
-	0x04, 0x9d, 0x74, 0x9e, 0x19, 0xc6, 0x0f, 0x53, 0x2e, 0x13, 0x8f, 0x4f, 0x88, 0xe8, 0x24, 0x75,
-	0xa5, 0x32, 0xd3, 0x1d, 0x0f, 0x9e, 0x75, 0x3c, 0x41, 0x7c, 0xc2, 0x24, 0xc5, 0x83, 0xec, 0x32,
-	0x74, 0x69, 0x8f, 0xb2, 0x28, 0x9c, 0xeb, 0x3d, 0xce, 0x7b, 0x03, 0x52, 0xd3, 0x50, 0x77, 0x7c,
-	0x52, 0x93, 0x74, 0x48, 0x02, 0x89, 0x87, 0xa3, 0x90, 0xc1, 0xf9, 0x09, 0xbc, 0xdb, 0x88, 0x9b,
-	0xac, 0x2d, 0x05, 0x65, 0x3d, 0xb4, 0x05, 0x2b, 0x4f, 0xf0, 0x60, 0x4c, 0xca, 0x85, 0x9d, 0xc2,
-	0xcd, 0x92, 0x1b, 0x02, 0xce, 0x7f, 0x57, 0xe0, 0x46, 0x82, 0xb7, 0x3e, 0xc0, 0x74, 0x58, 0x9f,
-	0x3a, 0xd3, 0x78, 0x29, 0x05, 0x6e, 0x61, 0x31, 0x0c, 0xd0, 0x2e, 0xbc, 0xdf, 0x60, 0x5e, 0x4c,
-	0x6a, 0xb2, 0x13, 0xfe, 0xa4, 0xad, 0xc2, 0xd2, 0x0a, 0x2f, 0xb9, 0x79, 0x64, 0xf4, 0x0d, 0x94,
-	0xb3, 0xf0, 0xfb, 0x94, 0xf9, 0xe5, 0xf3, 0x3b, 0x85, 0x9b, 0x17, 0xef, 0x5c, 0xab, 0x5a, 0x0b,
-	0xa0, 0x1a, 0x33, 0x1c, 0x60, 0x89, 0xdd, 0x5c, 0x71, 0xb4, 0x0d, 0xeb, 0x5f, 0xe3, 0xc1, 0x80,
-	0xc8, 0xe6, 0x41, 0xb9, 0xa8, 0xc3, 0x9a, 0xc2, 0xe8, 0x10, 0x36, 0xef, 0x53, 0xe6, 0xc7, 0xb2,
-	0xad, 0x7a, 0xf9, 0x82, 0x36, 0x57, 0x49, 0x99, 0xdb, 0x6f, 0x99, 0xae, 0xa9, 0xeb, 0xa6, 0x71,
-	0x67, 0xe4, 0xd0, 0x03, 0xf8, 0xc1, 0x11, 0x79, 0x61, 0xa9, 0x5a, 0x59, 0x4a, 0x55, 0x5a, 0x0c,
-	0xfd, 0x54, 0x97, 0x26, 0x72, 0xd2, 0x24, 0x70, 0x55, 0x27, 0x70, 0x96, 0x80, 0x1e, 0x01, 0xb2,
-	0x31, 0x3a, 0x69, 0x6b, 0xcb, 0x24, 0x2d, 0x43, 0x70, 0xa6, 0x86, 0x0f, 0x70, 0xd0, 0x37, 0x2e,
-	0xac, 0x67, 0xd4, 0x30, 0x26, 0xdb, 0x35, 0x8c, 0xf1, 0xda, 0x9d, 0xd2, 0x19, 0x6b, 0x68, 0x8b,
-	0xa3, 0x5f, 0xc2, 0xea, 0x53, 0x22, 0x78, 0xab, 0x5e, 0x06, 0xad, 0xe8, 0x66, 0x4a, 0x51, 0xa2,
-	0x3b, 0x53, 0xc9, 0x35, 0x72, 0x68, 0x17, 0xd6, 0x74, 0xdf, 0xb6, 0xea, 0xe5, 0x8b, 0x4b, 0x55,
-	0x25, 0x62, 0x77, 0x5c, 0xa8, 0x24, 0xd4, 0xef, 0x8d, 0x65, 0x9f, 0x0b, 0xfa, 0x2d, 0xf1, 0xdb,
-	0xb4, 0xc7, 0xb0, 0xe4, 0xe2, 0x54, 0xad, 0x9a, 0x23, 0xce, 0xbc, 0xe9, 0xaa, 0xd1, 0x80, 0xd5,
-	0x77, 0xe7, 0x77, 0x8a, 0xc9, 0xbe, 0x73, 0x7c, 0xd8, 0x4a, 0x2e, 0xbe, 0x05, 0x9a, 0xb6, 0x60,
-	0xa5, 0x31, 0xc4, 0x74, 0xa0, 0x57, 0x42, 0xc9, 0x0d, 0x01, 0xb4, 0x03, 0x17, 0x5b, 0x7d, 0xce,
-	0xc8, 0xd1, 0x78, 0xd8, 0x25, 0xc2, 0xb4, 0x76, 0x12, 0xe5, 0xfc, 0xb1, 0xa8, 0x6b, 0x19, 0x99,
-	0x09, 0xad, 0xef, 0x0d, 0xf9, 0x98, 0xc9, 0x1c, 0x4b, 0x37, 0x60, 0xe3, 0x38, 0x9e, 0xd2, 0xda,
-	0x71, 0x45, 0xb5, 0x91, 0xa8, 0x05, 0xef, 0xd8, 0xc9, 0xd2, 0xc6, 0xcf, 0x52, 0x95, 0x94, 0x3c,
-	0x42, 0x70, 0xe1, 0x88, 0x4b, 0xa2, 0xd7, 0x5e, 0xc9, 0xd5, 0xdf, 0x6a, 0x15, 0xb8, 0xe4, 0xf9,
-	0x98, 0x0a, 0xe2, 0xb7, 0x09, 0xf3, 0x89, 0x68, 0x35, 0x8f, 0xf4, 0x8a, 0x2a, 0xb9, 0xb3, 0x04,
-	0xd5, 0xb6, 0x36, 0xf2, 0x3e, 0x15, 0x81, 0x3c, 0xc2, 0xc3, 0x70, 0xe5, 0x94, 0xdc, 0x3c, 0x32,
-	0xba, 0x07, 0x65, 0x9b, 0xf4, 0x88, 0xfa, 0xfe, 0x80, 0x68, 0xd1, 0x35, 0x2d, 0x9a, 0x4b, 0x47,
-	0x3f, 0x87, 0xf7, 0x6c, 0xda, 0x97, 0xd8, 0x18, 0x5d, 0xd7, 0x92, 0x39, 0x54, 0xe7, 0x3f, 0x05,
-	0xab, 0xa9, 0x5a, 0x44, 0x04, 0x9c, 0x85, 0x93, 0xeb, 0x80, 0x48, 0x4c, 0x07, 0x01, 0xfa, 0x00,
-	0x4a, 0x71, 0x08, 0x61, 0x91, 0x62, 0x04, 0xaa, 0x00, 0x24, 0xdc, 0x0c, 0xab, 0x94, 0xc0, 0xa8,
-	0xe6, 0x9b, 0xba, 0x62, 0x86, 0x5e, 0x04, 0x2b, 0xcd, 0xfb, 0x54, 0xc8, 0xbe, 0x8f, 0xa7, 0x19,
-	0x8f, 0x11, 0xaa, 0xad, 0xea, 0x54, 0xd2, 0x6f, 0x09, 0x0b, 0xfa, 0x74, 0x64, 0x12, 0x9e, 0x44,
-	0x29, 0x79, 0x97, 0x04, 0xd4, 0x27, 0xcc, 0x3b, 0x35, 0xc9, 0x8d, 0x11, 0xe8, 0x3d, 0x58, 0xfd,
-	0x42, 0x07, 0x6b, 0x92, 0x67, 0x20, 0xe7, 0xb7, 0x05, 0xab, 0x19, 0x93, 0x21, 0xe7, 0x34, 0xe3,
-	0x26, 0x14, 0x55, 0xc9, 0xc3, 0xe0, 0xd4, 0x27, 0xfa, 0x02, 0xd6, 0x4c, 0x7a, 0x4c, 0xc7, 0x7d,
-	0x32, 0xaf, 0xe3, 0x66, 0x72, 0xea, 0x46, 0xd2, 0xce, 0xe7, 0xf0, 0x91, 0xb5, 0xfe, 0x58, 0x6f,
-	0x40, 0xea, 0x9c, 0x49, 0xec, 0xc9, 0x64, 0x0d, 0xca, 0xb0, 0x66, 0xb0, 0xc6, 0xb3, 0x08, 0x74,
-	0xfe, 0x50, 0x80, 0x0f, 0xe6, 0x69, 0x58, 0x3a, 0xa4, 0x2f, 0xd3, 0x21, 0xdd, 0xc9, 0x0f, 0x29,
-	0xcf, 0xcf, 0x38, 0xae, 0x3f, 0xd9, 0x7d, 0xf5, 0x04, 0x0f, 0xa8, 0x2a, 0x6a, 0x62, 0xa3, 0x42,
-	0x3f, 0x82, 0x77, 0x62, 0xe8, 0xf8, 0x74, 0x14, 0x79, 0x98, 0xc2, 0x66, 0xb8, 0xba, 0x0f, 0x97,
-	0xac, 0xdd, 0xad, 0xb8, 0xd4, 0x1c, 0xb5, 0x64, 0x1c, 0x01, 0xd7, 0xe7, 0xfb, 0x17, 0xa0, 0xc7,
-	0x70, 0x31, 0x01, 0x96, 0x0b, 0x3b, 0xc5, 0xf9, 0x85, 0xce, 0x50, 0xe2, 0x26, 0x35, 0x38, 0x27,
-	0xf0, 0x71, 0xf2, 0xf4, 0x22, 0x08, 0x96, 0x66, 0x16, 0x36, 0xa2, 0x81, 0x6c, 0x9d, 0x61, 0xd6,
-	0x5a, 0xea, 0xf4, 0xd8, 0xaa, 0xeb, 0xc4, 0x2c, 0xb1, 0x51, 0x18, 0x76, 0xe7, 0x2f, 0x05, 0xd8,
-	0x59, 0x64, 0x68, 0xa9, 0xbd, 0xc2, 0x3e, 0xa3, 0x7c, 0x03, 0x10, 0xbb, 0x67, 0x92, 0xfe, 0x59,
-	0x7e, 0x3a, 0x16, 0xc4, 0xe7, 0x26, 0x94, 0x39, 0xcc, 0x5a, 0x92, 0x49, 0x49, 0xd4, 0x86, 0x4b,
-	0x07, 0x41, 0xac, 0xc0, 0xe4, 0xa2, 0x76, 0x46, 0xbb, 0xae, 0xa5, 0xc4, 0xf9, 0xdd, 0x1a, 0xdc,
-	0x4a, 0x88, 0xe8, 0x5d, 0xe5, 0x84, 0x88, 0xfb, 0x63, 0xe6, 0x07, 0x59, 0xb5, 0x38, 0x84, 0xcd,
-	0x3d, 0xcf, 0x23, 0x23, 0xd9, 0xc2, 0x41, 0xf0, 0x82, 0x0b, 0x7f, 0xe9, 0xa2, 0xcc, 0xc8, 0xa1,
-	0x9f, 0xc1, 0x95, 0x47, 0x58, 0x7a, 0xfd, 0xe9, 0x0c, 0x55, 0x47, 0x8c, 0x07, 0xe4, 0xa5, 0xce,
-	0xf7, 0x25, 0x37, 0x9b, 0xa8, 0x06, 0xbc, 0x26, 0xc4, 0xa3, 0x35, 0x12, 0x2b, 0x6a, 0xb1, 0x1c,
-	0x2a, 0xba, 0x03, 0x5b, 0x9a, 0x12, 0x0d, 0xdd, 0x48, 0xea, 0x82, 0x96, 0xca, 0xa4, 0xa1, 0x13,
-	0xa8, 0xe4, 0xec, 0x51, 0xf5, 0x3e, 0xf1, 0x9e, 0x2d, 0x7d, 0x9e, 0x5c, 0xa0, 0x65, 0x8e, 0x9d,
-	0xa8, 0xf1, 0x57, 0xdf, 0xca, 0x8e, 0xd1, 0x82, 0xfa, 0x70, 0x3d, 0x6f, 0xe3, 0x8c, 0x02, 0x5a,
-	0x5b, 0xca, 0xd0, 0x22, 0x35, 0xf3, 0x2c, 0x45, 0x21, 0xad, 0xbf, 0x9d, 0xa5, 0x28, 0x26, 0x1f,
-	0xae, 0x65, 0x6f, 0xe9, 0x51, 0x44, 0xa5, 0xa5, 0xec, 0xcc, 0x57, 0x92, 0x6f, 0x25, 0x8a, 0x06,
-	0xde, 0xc6, 0x4a, 0x34, 0xaf, 0xfe, 0x56, 0x80, 0x0f, 0x17, 0xae, 0xc6, 0x37, 0x18, 0x58, 0x4f,
-	0x33, 0x06, 0xd6, 0xbd, 0xfc, 0xc1, 0xb1, 0x68, 0x0a, 0x58, 0x13, 0xeb, 0x5f, 0x05, 0x28, 0xe7,
-	0xc9, 0xa2, 0x63, 0xd8, 0x7c, 0x40, 0x7d, 0x9f, 0xb0, 0x08, 0x3d, 0x1d, 0x17, 0xcb, 0x9f, 0x4c,
-	0x67, 0x34, 0xa0, 0xe3, 0xd4, 0x24, 0x0c, 0xaf, 0xa3, 0x9f, 0x9e, 0x35, 0x20, 0x7b, 0x14, 0xaa,
-	0x63, 0xd6, 0xe3, 0x91, 0x6c, 0x32, 0x97, 0xe0, 0x80, 0xb3, 0xe8, 0xf4, 0x9e, 0x40, 0x39, 0xfb,
-	0xd6, 0xb6, 0xe5, 0x12, 0x8f, 0xd0, 0x09, 0xc9, 0x1d, 0x95, 0x5b, 0xb0, 0xf2, 0xab, 0x31, 0x89,
-	0x6f, 0xee, 0x1a, 0x48, 0x6f, 0x49, 0x99, 0x4a, 0xfe, 0xff, 0x5b, 0xd2, 0x02, 0xdf, 0xad, 0x02,
-	0x3f, 0x01, 0x27, 0x75, 0x33, 0x72, 0xc3, 0xe7, 0x91, 0x87, 0xe4, 0xf4, 0x2d, 0x5c, 0x4e, 0x6d,
-	0x75, 0x49, 0x8f, 0xd4, 0x56, 0xd7, 0x18, 0xf5, 0xcf, 0xb0, 0xd5, 0x65, 0xc6, 0xe3, 0x5a, 0x4a,
-	0x9c, 0xbf, 0xdb, 0x07, 0xc4, 0x3d, 0xc6, 0x99, 0xdd, 0xac, 0xbf, 0x81, 0xad, 0x63, 0x2e, 0xf1,
-	0x60, 0xda, 0x69, 0x82, 0x0e, 0xc9, 0x1b, 0x34, 0x6c, 0xa6, 0x16, 0xd4, 0x84, 0x2b, 0x1a, 0x35,
-	0xc2, 0x82, 0x30, 0x19, 0x51, 0xf7, 0xef, 0x9b, 0xee, 0xbd, 0x9c, 0x9e, 0x1c, 0x4d, 0x26, 0xdd,
-	0x6c, 0x09, 0xe7, 0xaf, 0x76, 0x24, 0x8d, 0xf6, 0xf4, 0x45, 0x6f, 0xee, 0x55, 0xf2, 0x73, 0xd8,
-	0xf8, 0xaa, 0x7d, 0x50, 0xe7, 0x94, 0x85, 0x6c, 0xc6, 0xf2, 0xd5, 0xaa, 0x79, 0x7f, 0xec, 0xe2,
-	0x80, 0x54, 0xcd, 0x8b, 0x63, 0x55, 0xb1, 0xb9, 0x36, 0x3f, 0xfa, 0x0c, 0x20, 0x21, 0x5d, 0x5c,
-	0x24, 0x9d, 0x60, 0x76, 0x7e, 0x6d, 0x15, 0xbb, 0xdd, 0x6e, 0x1e, 0xec, 0x31, 0xbf, 0x25, 0xe8,
-	0xe4, 0xa1, 0xba, 0x9e, 0xb4, 0xc6, 0xdd, 0x87, 0xa6, 0xcc, 0x25, 0xd7, 0x40, 0xea, 0x06, 0xaa,
-	0xbe, 0x4c, 0xdf, 0xe8, 0x6f, 0x15, 0x98, 0x16, 0x32, 0xab, 0x33, 0x04, 0x9c, 0x5f, 0xc0, 0x95,
-	0x64, 0x35, 0x28, 0x67, 0x84, 0x88, 0xe6, 0x41, 0xa0, 0xee, 0x64, 0x31, 0xa4, 0xcf, 0xad, 0x25,
-	0x37, 0x81, 0x71, 0xbe, 0x4f, 0x25, 0x92, 0x79, 0x03, 0x3c, 0x21, 0xed, 0xf6, 0xe3, 0x17, 0x8c,
-	0x88, 0x47, 0x78, 0x84, 0xbe, 0x82, 0x75, 0xc3, 0x1e, 0x1d, 0x7b, 0xe7, 0x2c, 0xaa, 0x19, 0xf1,
-	0x6a, 0x24, 0xdb, 0x60, 0x52, 0x9c, 0xba, 0x53, 0x55, 0xdb, 0x18, 0x36, 0x2c, 0x92, 0x3a, 0xda,
-	0x3f, 0x23, 0xa7, 0x26, 0x01, 0xea, 0x13, 0xdd, 0x83, 0x95, 0x89, 0x7e, 0xf7, 0x0b, 0x8b, 0x74,
-	0x63, 0x4e, 0xf7, 0x4d, 0xe3, 0x71, 0x43, 0x91, 0x7b, 0xe7, 0x77, 0x0b, 0xce, 0x9f, 0xed, 0x7b,
-	0x87, 0xf1, 0x4d, 0x25, 0xb1, 0x8e, 0xbd, 0x3e, 0x51, 0xc1, 0x1d, 0xc1, 0x8a, 0x82, 0xa3, 0xc8,
-	0x76, 0x17, 0x46, 0x96, 0x94, 0xae, 0x6a, 0xd1, 0x30, 0xb0, 0x50, 0xcd, 0xf6, 0x2e, 0x40, 0x8c,
-	0xcc, 0x08, 0x69, 0x2b, 0x19, 0x52, 0x29, 0xe9, 0xec, 0xbf, 0x8b, 0x96, 0xb3, 0xfa, 0x95, 0xc9,
-	0x8f, 0x8c, 0xea, 0xa7, 0x6c, 0x25, 0x7c, 0x88, 0xc5, 0xb4, 0x49, 0x42, 0x00, 0xdd, 0x80, 0x8d,
-	0x43, 0x2c, 0xf6, 0xc4, 0x90, 0x8b, 0xb0, 0x2f, 0xcc, 0xeb, 0x88, 0x85, 0x54, 0x53, 0xe8, 0x10,
-	0x8b, 0x64, 0xe3, 0x4c, 0x61, 0x75, 0xa1, 0x54, 0xdf, 0xaa, 0xd1, 0xc2, 0x8b, 0x77, 0x04, 0xaa,
-	0xfd, 0xc0, 0x25, 0xbd, 0xf1, 0x00, 0x4b, 0xae, 0xec, 0x9a, 0x6b, 0x77, 0x02, 0x85, 0x3e, 0x85,
-	0xcb, 0x53, 0x30, 0xe1, 0x43, 0x78, 0x01, 0xcf, 0x22, 0xa9, 0xab, 0xde, 0x14, 0x1d, 0x32, 0x87,
-	0x57, 0xf2, 0x14, 0x56, 0xc5, 0x15, 0x63, 0x94, 0x6f, 0xe1, 0xe3, 0x85, 0x8d, 0x44, 0x5f, 0xc3,
-	0x66, 0xbb, 0xdd, 0x64, 0x92, 0x88, 0x09, 0x1e, 0xe8, 0xa6, 0x0b, 0xcc, 0x69, 0xe7, 0xd6, 0x19,
-	0xba, 0xd4, 0x9d, 0x51, 0x82, 0x3a, 0x70, 0x39, 0xc6, 0x4d, 0xab, 0x6e, 0xce, 0x38, 0x9f, 0x9c,
-	0xa9, 0x4f, 0xdc, 0x2c, 0x4d, 0xfb, 0x8d, 0x7f, 0xbc, 0xaa, 0x14, 0xbe, 0x7b, 0x55, 0x29, 0xfc,
-	0xf3, 0x55, 0xa5, 0xf0, 0xfb, 0xd7, 0x95, 0x73, 0xdf, 0xbd, 0xae, 0x9c, 0xfb, 0xfe, 0x75, 0xe5,
-	0xdc, 0xd3, 0x5b, 0x3d, 0x2a, 0xfb, 0xe3, 0x6e, 0xd5, 0xe3, 0xc3, 0x9a, 0x77, 0xf7, 0xb9, 0x24,
-	0x5e, 0xdf, 0xbc, 0xa6, 0x77, 0x26, 0x77, 0x6b, 0x2f, 0xa3, 0x97, 0x75, 0x79, 0x3a, 0x22, 0x41,
-	0x77, 0x55, 0x3f, 0x9c, 0xdf, 0xfd, 0x5f, 0x00, 0x00, 0x00, 0xff, 0xff, 0x89, 0xff, 0xb7, 0xbc,
-	0xab, 0x19, 0x00, 0x00,
+	// 2028 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xec, 0x59, 0x4f, 0x73, 0x1b, 0xb7,
+	0x15, 0x37, 0x4d, 0x49, 0x14, 0x9f, 0xac, 0x54, 0x81, 0xe5, 0x84, 0xd6, 0xc4, 0xb4, 0xb2, 0x71,
+	0x5a, 0xd5, 0xae, 0xc9, 0xd8, 0xee, 0xb4, 0x8a, 0x2f, 0xa9, 0x44, 0xd1, 0x91, 0x64, 0x4b, 0x66,
+	0x97, 0xb2, 0x33, 0x71, 0x3b, 0xc3, 0x01, 0x77, 0x21, 0x12, 0x63, 0x12, 0x4b, 0x63, 0x41, 0xda,
+	0xcc, 0x47, 0x68, 0x2f, 0x9d, 0x4e, 0x67, 0x7a, 0xeb, 0x07, 0xe8, 0xa5, 0xed, 0xa7, 0x68, 0x8f,
+	0x39, 0x66, 0x7a, 0xea, 0xd8, 0x97, 0x9e, 0xda, 0xde, 0x7b, 0xe9, 0x00, 0x8b, 0xe5, 0x2e, 0x96,
+	0xcb, 0x3f, 0xb2, 0x26, 0x33, 0x3d, 0xe4, 0x42, 0xee, 0x7b, 0x0f, 0xef, 0xe1, 0xfd, 0xf9, 0xe1,
+	0x01, 0xd8, 0x85, 0xeb, 0x2f, 0xb0, 0x4b, 0x18, 0x2e, 0xeb, 0x3f, 0xc2, 0x1c, 0x3e, 0xec, 0x09,
+	0xdc, 0xec, 0x90, 0x52, 0x8f, 0x7b, 0xc2, 0x43, 0xab, 0x81, 0xa4, 0x14, 0xfc, 0x6d, 0xbc, 0x8b,
+	0xbb, 0x94, 0x79, 0x65, 0xf5, 0x1b, 0x8c, 0xd8, 0x78, 0xdf, 0xf1, 0xfc, 0xae, 0xe7, 0x97, 0xbb,
+	0x7e, 0xab, 0x3c, 0xb8, 0x23, 0xff, 0xb4, 0xe0, 0x6a, 0x20, 0x68, 0x28, 0xaa, 0x1c, 0x10, 0x5a,
+	0x54, 0xd4, 0x3a, 0x4d, 0xec, 0x93, 0xf2, 0xe0, 0x4e, 0x93, 0x08, 0x7c, 0xa7, 0xec, 0x78, 0x94,
+	0x69, 0xf9, 0x7a, 0xcb, 0x6b, 0x79, 0x81, 0x9e, 0x7c, 0xd2, 0xdc, 0x0d, 0xd3, 0xd9, 0x1e, 0xe6,
+	0xb8, 0x1b, 0x5a, 0xbc, 0x69, 0xca, 0xfc, 0xbe, 0xdf, 0xa3, 0x0e, 0xf5, 0xfa, 0x7e, 0x43, 0x70,
+	0xcc, 0x7c, 0xec, 0x08, 0xea, 0x85, 0xd6, 0x3f, 0x4a, 0xd8, 0x21, 0x2e, 0xe1, 0x3e, 0x61, 0x0d,
+	0xc7, 0xeb, 0x76, 0xa9, 0xd0, 0x83, 0xae, 0x99, 0x83, 0x9a, 0x94, 0xb9, 0x0d, 0x17, 0x0b, 0xac,
+	0xc5, 0x89, 0xc4, 0x71, 0xcc, 0x5a, 0x44, 0x46, 0xea, 0x9d, 0xea, 0x01, 0x1f, 0x27, 0xf4, 0x1b,
+	0xe9, 0xd3, 0x24, 0x86, 0x0d, 0x1a, 0x7e, 0x1b, 0x73, 0xd2, 0x48, 0x4e, 0x77, 0x35, 0x11, 0x9e,
+	0x1c, 0xa4, 0x45, 0x3f, 0x48, 0x88, 0x88, 0xc3, 0x89, 0xd0, 0x66, 0x7a, 0x9c, 0x0e, 0x1a, 0xcf,
+	0xf5, 0xc0, 0x0f, 0x13, 0x2e, 0x13, 0xc7, 0x1b, 0x10, 0xde, 0x88, 0xdb, 0x4a, 0x64, 0xa6, 0xd9,
+	0xef, 0x3c, 0x6f, 0x38, 0x9c, 0xb8, 0x84, 0x09, 0x8a, 0x3b, 0xe9, 0x65, 0x68, 0xd2, 0x16, 0x65,
+	0x61, 0x38, 0xd7, 0x5b, 0x9e, 0xd7, 0xea, 0x90, 0xb2, 0xa2, 0x9a, 0xfd, 0xd3, 0xb2, 0xa0, 0x5d,
+	0xe2, 0x0b, 0xdc, 0xed, 0x05, 0x03, 0xac, 0x1f, 0xc2, 0xbb, 0xd5, 0x08, 0x64, 0x75, 0xc1, 0x29,
+	0x6b, 0xa1, 0x75, 0x58, 0x7c, 0x8a, 0x3b, 0x7d, 0x52, 0xc8, 0x6c, 0x66, 0xb6, 0xf2, 0x76, 0x40,
+	0x58, 0xff, 0x5d, 0x84, 0x1b, 0xb1, 0xb1, 0x95, 0x0e, 0xa6, 0xdd, 0xca, 0xc8, 0x99, 0xea, 0x2b,
+	0xc1, 0x71, 0x0d, 0xf3, 0xae, 0x8f, 0xb6, 0xe1, 0xfd, 0x2a, 0x73, 0x22, 0xd1, 0x01, 0x3b, 0xf5,
+	0x9e, 0xd6, 0x65, 0x58, 0xca, 0xe0, 0x25, 0x7b, 0x92, 0x18, 0x7d, 0x09, 0x85, 0x34, 0xfe, 0x2e,
+	0x65, 0x6e, 0xe1, 0xe2, 0x66, 0x66, 0x6b, 0xe5, 0xee, 0xb5, 0x92, 0xb1, 0x00, 0x4a, 0xd1, 0x80,
+	0x3d, 0x2c, 0xb0, 0x3d, 0x51, 0x1d, 0x6d, 0xc0, 0xf2, 0x17, 0xb8, 0xd3, 0x21, 0xe2, 0x60, 0xaf,
+	0x90, 0x55, 0x61, 0x8d, 0x68, 0x74, 0x08, 0x6b, 0x0f, 0x28, 0x73, 0x23, 0xdd, 0x5a, 0xa5, 0xb0,
+	0xa0, 0xa6, 0x2b, 0x26, 0xa6, 0xdb, 0xad, 0x69, 0xd4, 0x54, 0x14, 0x68, 0xec, 0x31, 0x3d, 0xb4,
+	0x0f, 0xdf, 0x3b, 0x26, 0x2f, 0x0d, 0x53, 0x8b, 0x73, 0x99, 0x4a, 0xaa, 0xa1, 0x1f, 0xa9, 0xd2,
+	0x84, 0x4e, 0xea, 0x04, 0x2e, 0xa9, 0x04, 0x8e, 0x0b, 0xd0, 0x11, 0x20, 0x93, 0xa3, 0x92, 0x96,
+	0x9b, 0x27, 0x69, 0x29, 0x8a, 0x63, 0x35, 0xdc, 0xc7, 0x7e, 0x5b, 0xbb, 0xb0, 0x9c, 0x52, 0xc3,
+	0x48, 0x6c, 0xd6, 0x30, 0xe2, 0x2b, 0x77, 0xf2, 0x67, 0xac, 0xa1, 0xa9, 0x8e, 0x7e, 0x06, 0x4b,
+	0xcf, 0x08, 0xf7, 0x6a, 0x95, 0x02, 0x28, 0x43, 0x5b, 0x09, 0x43, 0x31, 0x74, 0x26, 0x92, 0xab,
+	0xf5, 0xd0, 0x36, 0xe4, 0x14, 0x6e, 0x6b, 0x95, 0xc2, 0xca, 0x5c, 0x55, 0x09, 0x87, 0x5b, 0xff,
+	0xce, 0x42, 0x31, 0x66, 0xff, 0x49, 0xcf, 0xc5, 0x82, 0xd4, 0xfb, 0xcd, 0xc8, 0x59, 0xf4, 0x7d,
+	0x78, 0x27, 0xa2, 0x4e, 0x86, 0xbd, 0x70, 0xfd, 0x24, 0xb8, 0xd3, 0xd6, 0xc7, 0xc5, 0xb7, 0x5f,
+	0x1f, 0xd9, 0xf3, 0xad, 0x8f, 0xff, 0xcf, 0x35, 0x10, 0x55, 0x7c, 0xe9, 0xfc, 0x15, 0xcf, 0x9d,
+	0xad, 0xe2, 0x7f, 0x5f, 0x84, 0x8f, 0xc7, 0x2a, 0xfe, 0x5d, 0xc3, 0xfb, 0xf6, 0x8a, 0xfd, 0x5d,
+	0xcf, 0x31, 0x11, 0x88, 0x8e, 0x00, 0xea, 0xfd, 0x66, 0x00, 0x3c, 0xbf, 0x70, 0x69, 0x33, 0xbb,
+	0xb5, 0x72, 0xf7, 0xf6, 0xe4, 0xf9, 0x53, 0x7a, 0x92, 0x1d, 0x33, 0x70, 0xb8, 0xb0, 0xbc, 0xb4,
+	0x96, 0x3b, 0x5c, 0x58, 0xce, 0xad, 0x2d, 0x5b, 0xbf, 0xcd, 0x98, 0x9b, 0x79, 0x84, 0x22, 0xf5,
+	0x2f, 0x86, 0xfb, 0xd4, 0x17, 0x1e, 0x1f, 0xa2, 0xf7, 0x60, 0x49, 0x66, 0x84, 0xf8, 0x85, 0xcc,
+	0x66, 0x76, 0x2b, 0x6f, 0x6b, 0x4a, 0x36, 0xbb, 0x47, 0xf4, 0x94, 0x54, 0x07, 0x84, 0x89, 0x8a,
+	0xd7, 0x67, 0x42, 0xe1, 0x75, 0xd5, 0x4e, 0x70, 0xd1, 0x4d, 0x58, 0x7b, 0x84, 0x7d, 0x11, 0xf8,
+	0xb0, 0x4f, 0x68, 0xab, 0x2d, 0x14, 0x1c, 0xb3, 0xf6, 0x18, 0xdf, 0xb2, 0x8d, 0x16, 0xbb, 0xd3,
+	0x17, 0x6d, 0x8f, 0xd3, 0xaf, 0x88, 0x5b, 0xa7, 0x2d, 0x86, 0x95, 0x37, 0xeb, 0xb0, 0x78, 0xec,
+	0x31, 0x67, 0x74, 0x32, 0x51, 0x84, 0x01, 0xf5, 0x8b, 0xca, 0xcb, 0x11, 0x6d, 0xb9, 0xb0, 0x1e,
+	0x3f, 0xe0, 0xcc, 0xb0, 0xb4, 0x0e, 0x8b, 0xd5, 0x2e, 0xa6, 0x1d, 0x15, 0x4c, 0xde, 0x0e, 0x08,
+	0xb4, 0x09, 0x2b, 0xb5, 0xb6, 0xc7, 0xc8, 0x71, 0xbf, 0xdb, 0x24, 0x5c, 0xaf, 0xa6, 0x38, 0xcb,
+	0xfa, 0x7d, 0x56, 0x61, 0x37, 0x9c, 0x26, 0x98, 0x7d, 0xa7, 0xab, 0x32, 0x90, 0x3e, 0xd3, 0x0d,
+	0x58, 0x3d, 0x89, 0x4e, 0xc2, 0xca, 0x71, 0x29, 0x35, 0x99, 0xa8, 0x06, 0xef, 0x98, 0xe0, 0xd0,
+	0x6d, 0x7e, 0x7e, 0x14, 0x26, 0xf4, 0x11, 0x82, 0x85, 0x63, 0x4f, 0x10, 0xb5, 0xdc, 0xf3, 0xb6,
+	0x7a, 0x96, 0x27, 0x0d, 0x9b, 0xbc, 0xe8, 0x53, 0x4e, 0xdc, 0x3a, 0x61, 0x2e, 0xe1, 0xb5, 0x83,
+	0x63, 0xb5, 0x88, 0xf3, 0xf6, 0xb8, 0x40, 0x2e, 0x53, 0x93, 0xf9, 0x80, 0x72, 0x5f, 0x1c, 0xe3,
+	0x6e, 0x70, 0x3a, 0xc9, 0xdb, 0x93, 0xc4, 0xe8, 0x3e, 0x14, 0x4c, 0xd1, 0x11, 0x75, 0xdd, 0x0e,
+	0x51, 0xaa, 0x39, 0xa5, 0x3a, 0x51, 0x8e, 0x7e, 0x02, 0xef, 0x99, 0x32, 0x89, 0x1e, 0xa5, 0xb9,
+	0xac, 0x34, 0x27, 0x48, 0xad, 0xff, 0x64, 0x0c, 0x50, 0xd5, 0x08, 0xf7, 0x3d, 0x16, 0x34, 0xcb,
+	0x3d, 0x22, 0x30, 0xed, 0xf8, 0xe8, 0x03, 0xc8, 0x47, 0x21, 0x04, 0x45, 0x8a, 0x18, 0xa8, 0x08,
+	0x10, 0x73, 0x33, 0xa8, 0x52, 0x8c, 0x23, 0xc1, 0x37, 0x72, 0x45, 0xf7, 0xd9, 0x90, 0x96, 0x96,
+	0x77, 0x29, 0x17, 0x6d, 0x89, 0x71, 0x9d, 0xf1, 0x88, 0x21, 0x61, 0x55, 0xa1, 0x82, 0x7e, 0x45,
+	0x98, 0xdf, 0xa6, 0x3d, 0x9d, 0xf0, 0x38, 0x4b, 0xea, 0xdb, 0xc4, 0xa7, 0x2e, 0x61, 0xce, 0x50,
+	0x27, 0x37, 0x62, 0xc8, 0xa5, 0xf9, 0xb9, 0x0a, 0x56, 0x27, 0x4f, 0x53, 0xd6, 0xaf, 0x32, 0x06,
+	0x18, 0xe3, 0x21, 0x4f, 0x00, 0xe3, 0x1a, 0x64, 0x65, 0xc9, 0x83, 0xe0, 0xe4, 0x23, 0xfa, 0x1c,
+	0x72, 0x3a, 0x3d, 0x1a, 0x71, 0xb7, 0xa7, 0x21, 0x6e, 0x2c, 0xa7, 0x76, 0xa8, 0x6d, 0x7d, 0x06,
+	0x1f, 0x19, 0xeb, 0x8f, 0xb5, 0x3a, 0xa4, 0xe2, 0x31, 0x81, 0x1d, 0x11, 0xaf, 0x41, 0x01, 0x72,
+	0x9a, 0xab, 0x3d, 0x0b, 0x49, 0xeb, 0x77, 0x19, 0xf8, 0x60, 0x9a, 0x85, 0xb9, 0x43, 0x7a, 0x94,
+	0x0c, 0xe9, 0xee, 0xe4, 0x90, 0x26, 0xf9, 0x19, 0xc5, 0xf5, 0x07, 0x13, 0x57, 0x4f, 0x71, 0x87,
+	0xca, 0xa2, 0xba, 0x6f, 0x71, 0x1e, 0x1c, 0x77, 0x75, 0x17, 0x2e, 0x19, 0x1b, 0x6a, 0x76, 0xae,
+	0x7d, 0xc3, 0xd0, 0xb1, 0x38, 0x5c, 0x9f, 0xee, 0x9f, 0x8f, 0x1e, 0xc3, 0x4a, 0x8c, 0x54, 0x0d,
+	0x7e, 0x6a, 0xa1, 0x53, 0x8c, 0xd8, 0x71, 0x0b, 0xd6, 0x29, 0xdc, 0x34, 0x37, 0x15, 0x2c, 0x74,
+	0x2f, 0xac, 0x86, 0x0d, 0xd9, 0x38, 0x36, 0xe5, 0x6a, 0xf2, 0x86, 0x5e, 0xab, 0xa8, 0xc4, 0xcc,
+	0xb1, 0x31, 0xea, 0xe1, 0xd6, 0x9f, 0x32, 0xb0, 0x39, 0x6b, 0xa2, 0xb9, 0xf6, 0x0a, 0xf3, 0x58,
+	0xf4, 0x25, 0x40, 0xe4, 0x9e, 0x4e, 0xfa, 0xa7, 0x93, 0xd3, 0x31, 0x23, 0x3e, 0x3b, 0x66, 0xcc,
+	0x62, 0xc6, 0x92, 0x8c, 0x6b, 0xa2, 0x3a, 0x5c, 0xda, 0xf3, 0x23, 0x03, 0x3a, 0x17, 0xe5, 0x33,
+	0xce, 0x6b, 0x1b, 0x46, 0xac, 0x5f, 0xe7, 0xe0, 0x56, 0x4c, 0x45, 0xed, 0x2a, 0xa7, 0x84, 0x3f,
+	0xe8, 0x33, 0xd7, 0x4f, 0xab, 0xc5, 0x21, 0xac, 0xed, 0x38, 0x0e, 0xe9, 0x89, 0x1a, 0xf6, 0xfd,
+	0x97, 0x1e, 0x77, 0xe7, 0x2e, 0xca, 0x98, 0x1e, 0xfa, 0x31, 0x5c, 0x39, 0xc2, 0xc2, 0x69, 0x8f,
+	0x7a, 0xa8, 0x3c, 0x32, 0xec, 0x93, 0x57, 0xfa, 0x76, 0x93, 0x2e, 0x94, 0x0d, 0x5e, 0x09, 0xa2,
+	0xd6, 0x1a, 0xaa, 0x65, 0x95, 0xda, 0x04, 0x29, 0xba, 0x0b, 0xeb, 0x4a, 0x12, 0x36, 0xdd, 0x50,
+	0x6b, 0x41, 0x69, 0xa5, 0xca, 0xd0, 0x29, 0x14, 0x27, 0xec, 0x51, 0x95, 0x36, 0x71, 0x9e, 0xcf,
+	0x7d, 0x84, 0x9d, 0x61, 0x65, 0xca, 0x3c, 0x21, 0xf0, 0x97, 0xce, 0x35, 0x8f, 0xb6, 0x82, 0xda,
+	0x70, 0x7d, 0xd2, 0xc6, 0x19, 0x06, 0x34, 0xdf, 0xe5, 0x67, 0x96, 0x99, 0x69, 0x33, 0x85, 0x21,
+	0x2d, 0x9f, 0x6f, 0xa6, 0x30, 0x26, 0x17, 0xae, 0xa5, 0x6f, 0xe9, 0x61, 0x44, 0xf9, 0xb9, 0xe6,
+	0x99, 0x6e, 0x64, 0xf2, 0x2c, 0x61, 0x34, 0x70, 0x9e, 0x59, 0xc2, 0x7e, 0xf5, 0x97, 0x0c, 0x7c,
+	0x38, 0x73, 0x35, 0xbe, 0x45, 0xc3, 0x7a, 0x96, 0xd2, 0xb0, 0xee, 0x4f, 0x6e, 0x1c, 0xb3, 0xba,
+	0x80, 0xd1, 0xb1, 0xfe, 0x99, 0x81, 0xc2, 0x24, 0x5d, 0x74, 0x02, 0x6b, 0xfb, 0xd4, 0x75, 0x09,
+	0x0b, 0xd9, 0xa3, 0x76, 0x31, 0xff, 0xc9, 0x74, 0xcc, 0x02, 0x3a, 0x49, 0x74, 0xc2, 0xe0, 0x06,
+	0xfc, 0xc9, 0x59, 0x03, 0x32, 0x5b, 0xa1, 0x3c, 0x66, 0x3d, 0xee, 0x89, 0x03, 0x66, 0x13, 0xec,
+	0x7b, 0x2c, 0x3c, 0xbd, 0xc7, 0x58, 0xd6, 0xae, 0xb1, 0x6d, 0xd9, 0xc4, 0x21, 0x74, 0x40, 0x26,
+	0xb6, 0xca, 0x75, 0x58, 0xfc, 0x79, 0x9f, 0x44, 0x6f, 0x47, 0x15, 0x91, 0xdc, 0x92, 0x52, 0x8d,
+	0x7c, 0xfb, 0x5b, 0xd2, 0x0c, 0xdf, 0x8d, 0x02, 0x3f, 0x05, 0x2b, 0x71, 0x33, 0xb2, 0x83, 0x57,
+	0xd0, 0x0f, 0xc9, 0xf0, 0x1c, 0x2e, 0x27, 0xb6, 0xba, 0xb8, 0x47, 0x72, 0xab, 0xab, 0xf6, 0xda,
+	0x67, 0xd8, 0xea, 0x52, 0xe3, 0xb1, 0x0d, 0x23, 0xd6, 0x5f, 0xcd, 0x03, 0xe2, 0x0e, 0xf3, 0x98,
+	0x09, 0xd6, 0x5f, 0xc2, 0xfa, 0x89, 0x27, 0x70, 0x67, 0x84, 0x34, 0x4e, 0xbb, 0xe4, 0x2d, 0x00,
+	0x9b, 0x6a, 0x05, 0x1d, 0xc0, 0x15, 0xc5, 0xea, 0x61, 0x4e, 0x98, 0x08, 0xa5, 0xbb, 0x0f, 0x34,
+	0x7a, 0x2f, 0x27, 0x3b, 0xc7, 0x01, 0x13, 0x76, 0xba, 0x86, 0xf5, 0x67, 0x33, 0x92, 0x6a, 0x7d,
+	0xf4, 0xd5, 0x64, 0xea, 0x55, 0xf2, 0x33, 0x58, 0x7d, 0x52, 0xdf, 0xab, 0x78, 0x94, 0x05, 0xc3,
+	0xf4, 0xcc, 0x57, 0x4b, 0xfa, 0x1b, 0x4f, 0x13, 0xfb, 0xa4, 0xa4, 0xbf, 0xea, 0x94, 0xe4, 0x30,
+	0xdb, 0x1c, 0x8f, 0x3e, 0x05, 0x88, 0x69, 0x67, 0x67, 0x69, 0xc7, 0x06, 0x5b, 0xbf, 0x30, 0x8a,
+	0x5d, 0xaf, 0x1f, 0xec, 0xed, 0x30, 0xb7, 0xc6, 0xe9, 0xe0, 0xa1, 0xbc, 0x9e, 0xd4, 0xfa, 0xcd,
+	0x87, 0xba, 0xcc, 0x79, 0x5b, 0x53, 0xf2, 0x06, 0x2a, 0x9f, 0x34, 0x6e, 0xd4, 0xb3, 0x0c, 0x4c,
+	0x29, 0xe9, 0xd5, 0x19, 0x10, 0xd6, 0x4f, 0xe1, 0x4a, 0xbc, 0x1a, 0xd4, 0x63, 0x84, 0xf0, 0x83,
+	0x3d, 0x5f, 0xde, 0xc9, 0x22, 0x4a, 0xbf, 0x98, 0x88, 0x71, 0xac, 0x6f, 0x12, 0x89, 0x64, 0x4e,
+	0x07, 0x0f, 0x48, 0xbd, 0xfe, 0xf8, 0x25, 0x23, 0xfc, 0x08, 0xf7, 0xd0, 0x13, 0x58, 0xd6, 0xc3,
+	0xc3, 0x63, 0xef, 0x94, 0x45, 0x35, 0xa6, 0x5e, 0x0a, 0x75, 0xab, 0x4c, 0xf0, 0xa1, 0x3d, 0x32,
+	0xb5, 0x81, 0x61, 0xd5, 0x10, 0xc9, 0xa3, 0xfd, 0x73, 0x32, 0xd4, 0x09, 0x90, 0x8f, 0xe8, 0x3e,
+	0x2c, 0x0e, 0xd4, 0xb7, 0x95, 0xa0, 0x48, 0x37, 0xa6, 0xa0, 0x6f, 0x14, 0x8f, 0x1d, 0xa8, 0xdc,
+	0xbf, 0xb8, 0x9d, 0xb1, 0xfe, 0x68, 0xde, 0x3b, 0xb4, 0x6f, 0x32, 0x89, 0x15, 0xec, 0xb4, 0x89,
+	0x0c, 0xee, 0x18, 0x16, 0x25, 0x1d, 0x46, 0xb6, 0x3d, 0x33, 0xb2, 0xb8, 0x76, 0x49, 0xa9, 0x06,
+	0x81, 0x05, 0x66, 0x36, 0xb6, 0x01, 0x22, 0x66, 0x4a, 0x48, 0xeb, 0xf1, 0x90, 0xf2, 0x71, 0x67,
+	0xff, 0x65, 0xbe, 0x34, 0x57, 0x6f, 0xd5, 0xdc, 0x70, 0x52, 0xf5, 0xb9, 0x50, 0x2a, 0x1f, 0x62,
+	0x3e, 0x02, 0x49, 0x40, 0xa0, 0x1b, 0xb0, 0x7a, 0x88, 0xf9, 0x0e, 0xef, 0x7a, 0x3c, 0xc0, 0x85,
+	0x7e, 0x3b, 0x62, 0x30, 0x65, 0x17, 0x3a, 0xc4, 0x3c, 0x0e, 0x9c, 0x11, 0x2d, 0x2f, 0x94, 0xf2,
+	0x59, 0x02, 0x2d, 0xb8, 0x78, 0x87, 0xa4, 0xdc, 0x0f, 0x6c, 0xd2, 0xea, 0x77, 0xb0, 0xf0, 0xe4,
+	0xbc, 0xfa, 0xda, 0x1d, 0x63, 0xa1, 0x4f, 0xe0, 0xf2, 0x88, 0x8c, 0xf9, 0x10, 0x5c, 0xc0, 0xd3,
+	0x44, 0xf2, 0xaa, 0x37, 0x62, 0x07, 0x83, 0x83, 0x2b, 0x79, 0x82, 0x2b, 0xe3, 0x8a, 0x38, 0xd2,
+	0xb7, 0xe0, 0xe5, 0x85, 0xc9, 0x44, 0x5f, 0xc0, 0x5a, 0xbd, 0x7e, 0xc0, 0x04, 0xe1, 0x03, 0xdc,
+	0x51, 0xa0, 0xf3, 0xf5, 0x69, 0xe7, 0xd6, 0x19, 0x50, 0x6a, 0x8f, 0x19, 0x41, 0x0d, 0xb8, 0x1c,
+	0xf1, 0x46, 0x55, 0xd7, 0x67, 0x9c, 0xdb, 0x67, 0xc2, 0x89, 0x9d, 0x66, 0x69, 0xb7, 0xfa, 0xb7,
+	0xd7, 0xc5, 0xcc, 0xd7, 0xaf, 0x8b, 0x99, 0x7f, 0xbc, 0x2e, 0x66, 0x7e, 0xf3, 0xa6, 0x78, 0xe1,
+	0xeb, 0x37, 0xc5, 0x0b, 0xdf, 0xbc, 0x29, 0x5e, 0x78, 0x76, 0xab, 0x45, 0x45, 0xbb, 0xdf, 0x2c,
+	0x39, 0x5e, 0xb7, 0xec, 0xdc, 0x7b, 0x21, 0x88, 0xd3, 0xd6, 0x5f, 0x2c, 0x1b, 0x83, 0x7b, 0xe5,
+	0x57, 0xe1, 0xd7, 0x4b, 0x31, 0xec, 0x11, 0xbf, 0xb9, 0xa4, 0x3e, 0x4e, 0xde, 0xfb, 0x5f, 0x00,
+	0x00, 0x00, 0xff, 0xff, 0xd5, 0xc5, 0x6a, 0xee, 0x0f, 0x1f, 0x00, 0x00,
 }
 
 func (m *EncryptableString) Marshal() (dAtA []byte, err error) {
@@ -2102,6 +2397,275 @@ func (m *EncryptableClaimCredentialExtraParms) MarshalToSizedBuffer(dAtA []byte)
 		i = encodeVarintEncryptable(dAtA, i, uint64(len(m.EncCredentialInfoVShare)))
 		i--
 		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *EncryptableUpdateSubCredential) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *EncryptableUpdateSubCredential) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *EncryptableUpdateSubCredential) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.ClaimPC != nil {
+		{
+			size, err := m.ClaimPC.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintEncryptable(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x3a
+	}
+	if m.ZeroPC != nil {
+		{
+			size, err := m.ZeroPC.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintEncryptable(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x32
+	}
+	if m.NewCredentialPC != nil {
+		{
+			size, err := m.NewCredentialPC.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintEncryptable(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x2a
+	}
+	if m.FindCredentialPC != nil {
+		{
+			size, err := m.FindCredentialPC.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintEncryptable(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x22
+	}
+	if m.CredentialInfoVShareBind != nil {
+		{
+			size, err := m.CredentialInfoVShareBind.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintEncryptable(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x1a
+	}
+	if len(m.EncCredentialInfoVShare) > 0 {
+		i -= len(m.EncCredentialInfoVShare)
+		copy(dAtA[i:], m.EncCredentialInfoVShare)
+		i = encodeVarintEncryptable(dAtA, i, uint64(len(m.EncCredentialInfoVShare)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.CredentialType) > 0 {
+		i -= len(m.CredentialType)
+		copy(dAtA[i:], m.CredentialType)
+		i = encodeVarintEncryptable(dAtA, i, uint64(len(m.CredentialType)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *EncryptableUpdateCredentialExtraParms) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *EncryptableUpdateCredentialExtraParms) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *EncryptableUpdateCredentialExtraParms) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if len(m.SubUpdates) > 0 {
+		for iNdEx := len(m.SubUpdates) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.SubUpdates[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintEncryptable(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x62
+		}
+	}
+	if m.ClaimPC != nil {
+		{
+			size, err := m.ClaimPC.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintEncryptable(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x5a
+	}
+	if m.ZeroPC != nil {
+		{
+			size, err := m.ZeroPC.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintEncryptable(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x52
+	}
+	if m.CredentialHashVShareBind != nil {
+		{
+			size, err := m.CredentialHashVShareBind.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintEncryptable(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x4a
+	}
+	if len(m.EncCredentialHashVShare) > 0 {
+		i -= len(m.EncCredentialHashVShare)
+		copy(dAtA[i:], m.EncCredentialHashVShare)
+		i = encodeVarintEncryptable(dAtA, i, uint64(len(m.EncCredentialHashVShare)))
+		i--
+		dAtA[i] = 0x42
+	}
+	if m.NewCredentialPC != nil {
+		{
+			size, err := m.NewCredentialPC.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintEncryptable(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x2a
+	}
+	if m.FindCredentialPC != nil {
+		{
+			size, err := m.FindCredentialPC.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintEncryptable(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x22
+	}
+	if len(m.WalletID) > 0 {
+		i -= len(m.WalletID)
+		copy(dAtA[i:], m.WalletID)
+		i = encodeVarintEncryptable(dAtA, i, uint64(len(m.WalletID)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if m.CredentialInfoVShareBind != nil {
+		{
+			size, err := m.CredentialInfoVShareBind.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintEncryptable(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.EncCredentialInfoVShare) > 0 {
+		i -= len(m.EncCredentialInfoVShare)
+		copy(dAtA[i:], m.EncCredentialInfoVShare)
+		i = encodeVarintEncryptable(dAtA, i, uint64(len(m.EncCredentialInfoVShare)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *EncryptableCredentialIdentityHistory) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *EncryptableCredentialIdentityHistory) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *EncryptableCredentialIdentityHistory) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.LastUpdateHeight != 0 {
+		i = encodeVarintEncryptable(dAtA, i, uint64(m.LastUpdateHeight))
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.LifeEventCount != 0 {
+		i = encodeVarintEncryptable(dAtA, i, uint64(m.LifeEventCount))
+		i--
+		dAtA[i] = 0x10
+	}
+	if len(m.Hashes) > 0 {
+		for iNdEx := len(m.Hashes) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.Hashes[iNdEx])
+			copy(dAtA[i:], m.Hashes[iNdEx])
+			i = encodeVarintEncryptable(dAtA, i, uint64(len(m.Hashes[iNdEx])))
+			i--
+			dAtA[i] = 0xa
+		}
 	}
 	return len(dAtA) - i, nil
 }
@@ -3508,6 +4072,115 @@ func (m *EncryptableClaimCredentialExtraParms) Size() (n int) {
 	return n
 }
 
+func (m *EncryptableUpdateSubCredential) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.CredentialType)
+	if l > 0 {
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	l = len(m.EncCredentialInfoVShare)
+	if l > 0 {
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	if m.CredentialInfoVShareBind != nil {
+		l = m.CredentialInfoVShareBind.Size()
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	if m.FindCredentialPC != nil {
+		l = m.FindCredentialPC.Size()
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	if m.NewCredentialPC != nil {
+		l = m.NewCredentialPC.Size()
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	if m.ZeroPC != nil {
+		l = m.ZeroPC.Size()
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	if m.ClaimPC != nil {
+		l = m.ClaimPC.Size()
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	return n
+}
+
+func (m *EncryptableUpdateCredentialExtraParms) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.EncCredentialInfoVShare)
+	if l > 0 {
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	if m.CredentialInfoVShareBind != nil {
+		l = m.CredentialInfoVShareBind.Size()
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	l = len(m.WalletID)
+	if l > 0 {
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	if m.FindCredentialPC != nil {
+		l = m.FindCredentialPC.Size()
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	if m.NewCredentialPC != nil {
+		l = m.NewCredentialPC.Size()
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	l = len(m.EncCredentialHashVShare)
+	if l > 0 {
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	if m.CredentialHashVShareBind != nil {
+		l = m.CredentialHashVShareBind.Size()
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	if m.ZeroPC != nil {
+		l = m.ZeroPC.Size()
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	if m.ClaimPC != nil {
+		l = m.ClaimPC.Size()
+		n += 1 + l + sovEncryptable(uint64(l))
+	}
+	if len(m.SubUpdates) > 0 {
+		for _, e := range m.SubUpdates {
+			l = e.Size()
+			n += 1 + l + sovEncryptable(uint64(l))
+		}
+	}
+	return n
+}
+
+func (m *EncryptableCredentialIdentityHistory) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if len(m.Hashes) > 0 {
+		for _, s := range m.Hashes {
+			l = len(s)
+			n += 1 + l + sovEncryptable(uint64(l))
+		}
+	}
+	if m.LifeEventCount != 0 {
+		n += 1 + sovEncryptable(uint64(m.LifeEventCount))
+	}
+	if m.LastUpdateHeight != 0 {
+		n += 1 + sovEncryptable(uint64(m.LastUpdateHeight))
+	}
+	return n
+}
+
 func (m *EncryptableAuthorizedSignatory) Size() (n int) {
 	if m == nil {
 		return 0
@@ -4584,6 +5257,822 @@ func (m *EncryptableClaimCredentialExtraParms) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipEncryptable(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *EncryptableUpdateSubCredential) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowEncryptable
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: EncryptableUpdateSubCredential: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: EncryptableUpdateSubCredential: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CredentialType", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.CredentialType = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field EncCredentialInfoVShare", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.EncCredentialInfoVShare = append(m.EncCredentialInfoVShare[:0], dAtA[iNdEx:postIndex]...)
+			if m.EncCredentialInfoVShare == nil {
+				m.EncCredentialInfoVShare = []byte{}
+			}
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CredentialInfoVShareBind", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.CredentialInfoVShareBind == nil {
+				m.CredentialInfoVShareBind = &VShareBindData{}
+			}
+			if err := m.CredentialInfoVShareBind.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field FindCredentialPC", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.FindCredentialPC == nil {
+				m.FindCredentialPC = &BPedersenCommit{}
+			}
+			if err := m.FindCredentialPC.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NewCredentialPC", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.NewCredentialPC == nil {
+				m.NewCredentialPC = &BPedersenCommit{}
+			}
+			if err := m.NewCredentialPC.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ZeroPC", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.ZeroPC == nil {
+				m.ZeroPC = &EncryptablePedersenCommit{}
+			}
+			if err := m.ZeroPC.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ClaimPC", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.ClaimPC == nil {
+				m.ClaimPC = &BPedersenCommit{}
+			}
+			if err := m.ClaimPC.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipEncryptable(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *EncryptableUpdateCredentialExtraParms) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowEncryptable
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: EncryptableUpdateCredentialExtraParms: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: EncryptableUpdateCredentialExtraParms: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field EncCredentialInfoVShare", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.EncCredentialInfoVShare = append(m.EncCredentialInfoVShare[:0], dAtA[iNdEx:postIndex]...)
+			if m.EncCredentialInfoVShare == nil {
+				m.EncCredentialInfoVShare = []byte{}
+			}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CredentialInfoVShareBind", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.CredentialInfoVShareBind == nil {
+				m.CredentialInfoVShareBind = &VShareBindData{}
+			}
+			if err := m.CredentialInfoVShareBind.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field WalletID", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.WalletID = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field FindCredentialPC", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.FindCredentialPC == nil {
+				m.FindCredentialPC = &BPedersenCommit{}
+			}
+			if err := m.FindCredentialPC.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NewCredentialPC", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.NewCredentialPC == nil {
+				m.NewCredentialPC = &BPedersenCommit{}
+			}
+			if err := m.NewCredentialPC.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 8:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field EncCredentialHashVShare", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.EncCredentialHashVShare = append(m.EncCredentialHashVShare[:0], dAtA[iNdEx:postIndex]...)
+			if m.EncCredentialHashVShare == nil {
+				m.EncCredentialHashVShare = []byte{}
+			}
+			iNdEx = postIndex
+		case 9:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CredentialHashVShareBind", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.CredentialHashVShareBind == nil {
+				m.CredentialHashVShareBind = &VShareBindData{}
+			}
+			if err := m.CredentialHashVShareBind.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 10:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ZeroPC", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.ZeroPC == nil {
+				m.ZeroPC = &EncryptablePedersenCommit{}
+			}
+			if err := m.ZeroPC.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 11:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ClaimPC", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.ClaimPC == nil {
+				m.ClaimPC = &BPedersenCommit{}
+			}
+			if err := m.ClaimPC.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 12:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SubUpdates", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.SubUpdates = append(m.SubUpdates, &EncryptableUpdateSubCredential{})
+			if err := m.SubUpdates[len(m.SubUpdates)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipEncryptable(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *EncryptableCredentialIdentityHistory) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowEncryptable
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: EncryptableCredentialIdentityHistory: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: EncryptableCredentialIdentityHistory: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Hashes", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthEncryptable
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Hashes = append(m.Hashes, string(dAtA[iNdEx:postIndex]))
+			iNdEx = postIndex
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LifeEventCount", wireType)
+			}
+			m.LifeEventCount = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.LifeEventCount |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LastUpdateHeight", wireType)
+			}
+			m.LastUpdateHeight = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEncryptable
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.LastUpdateHeight |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipEncryptable(dAtA[iNdEx:])

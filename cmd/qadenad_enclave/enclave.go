@@ -128,6 +128,9 @@ type qadenaServer struct {
 	// for tracking what's changed within a block
 	changedWallets     []string
 	changedCredentials []CredentialKey
+	// credentials the enclave deleted, which have no other way to reach the chain --
+	// SetCredentialNoEnclave can only write
+	removedCredentials []CredentialKey
 	//changedEnclaveIdentities []string // uniqueid
 	changedRecoverKeys []string
 
@@ -188,11 +191,16 @@ var unvalidatedEnclaveIdentitiesCheckCounter int64 = 1
 var SupportsUnixDomainSockets bool = true
 
 const (
-	EnclaveSSIntervalOwnersKeyPrefix                     = "Enclave/SSIntervalOwners/value/"
-	EnclaveSSIntervalSharesKeyPrefix                     = "Enclave/SSIntervalShares/value/"
-	EnclaveSSIntervalPrivKKeyPrefix                      = "Enclave/SSIntervalPrivK/value/"
-	EnclaveSSIntervalPubKKeyPrefix                       = "Enclave/SSIntervalPubK/value/"
-	EnclaveCredentialHashKeyPrefix                       = "Enclave/CredentialHash/value/"
+	EnclaveSSIntervalOwnersKeyPrefix = "Enclave/SSIntervalOwners/value/"
+	EnclaveSSIntervalSharesKeyPrefix = "Enclave/SSIntervalShares/value/"
+	EnclaveSSIntervalPrivKKeyPrefix  = "Enclave/SSIntervalPrivK/value/"
+	EnclaveSSIntervalPubKKeyPrefix   = "Enclave/SSIntervalPubK/value/"
+	EnclaveCredentialHashKeyPrefix   = "Enclave/CredentialHash/value/"
+	// reverse of EnclaveCredentialHashKeyPrefix: credentialID -> every identity hash that
+	// resolves to it.  Hashes cannot be enumerated backwards out of the forward index, and
+	// without this a removed credential would leave its hashes permanently blocking the
+	// uniqueness check.
+	EnclaveCredentialHashesByCredentialIDKeyPrefix       = "Enclave/CredentialHashesByCredentialID/value/"
 	EnclaveCredentialPCXYKeyPrefix                       = "Enclave/CredentialPCXY/value/"
 	EnclaveProtectSubWalletIDByOriginalWalletIDKeyPrefix = "Enclave/ProtectSubWalletIDByOriginalWalletID/value/"
 	EnclaveRecoverOriginalWalletIDByNewWalletIDKeyPrefix = "Enclave/RecoverOriginalWalletIDByNewWalletID/value/"
@@ -1017,6 +1025,7 @@ func (s *qadenaServer) ExportPrivateState(ctx context.Context, in *types.MsgExpo
 		Wallets                                 []types.Wallet
 		Credentials                             []types.Credential
 		CredentialHashMap                       map[string]string
+		CredentialHashAliasMap                  map[string]types.EncryptableCredentialIdentityHistory
 		RecoverOriginalWalletIDByNewWalletIDMap map[string]string
 		RecoverKeyByOriginalWalletIDs           []types.RecoverKey
 		JarRegulators                           []types.JarRegulator
@@ -1050,6 +1059,8 @@ func (s *qadenaServer) ExportPrivateState(ctx context.Context, in *types.MsgExpo
 	state.Credentials = s.getAllCredentials()
 
 	state.CredentialHashMap = s.exportSealedTable(EnclaveCredentialHashKeyPrefix)
+
+	state.CredentialHashAliasMap = s.exportSealedCredentialIdentityHistoryTable()
 
 	state.CredentialPCXYMap = s.exportTable(EnclaveCredentialPCXYKeyPrefix)
 
@@ -1123,6 +1134,25 @@ func (s *qadenaServer) exportSealedTable(pfx string) (tableMap map[string]string
 		var val types.EnclaveStoreString
 		s.Cdc.MustUnmarshal(s.MustUnseal(itr.Value()), &val)
 		tableMap[fixedKey] = val.GetS()
+		itr.Next()
+	}
+	itr.Close()
+	return
+}
+
+// exportSealedCredentialIdentityHistoryTable is exportSealedTable for the alias index, which
+// stores EncryptableCredentialIdentityHistory rather than EnclaveStoreString.  The generic
+// exporter would decode those values as a bare string and silently drop all but the last hash.
+func (s *qadenaServer) exportSealedCredentialIdentityHistoryTable() (tableMap map[string]types.EncryptableCredentialIdentityHistory) {
+	tableMap = make(map[string]types.EncryptableCredentialIdentityHistory)
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveCredentialHashesByCredentialIDKeyPrefix))
+	itr := store.Iterator(nil, nil)
+	for itr.Valid() {
+		key := s.MustUnsealStable(itr.Key())
+		fixedKey := string(key[:len(key)-1])
+		var val types.EncryptableCredentialIdentityHistory
+		s.Cdc.MustUnmarshal(s.MustUnseal(itr.Value()), &val)
+		tableMap[fixedKey] = val
 		itr.Next()
 	}
 	itr.Close()
@@ -3086,6 +3116,13 @@ func (s *qadenaServer) ClaimCredential(ctx context.Context, in *types.MsgClaimCr
 			c.LoggerError(logger, "couldn't get decrypt credential")
 			return nil, err
 		}
+		// the hash below is the chain's permanent identity key, so the fields going into it must be
+		// canonical and separator-free no matter what the identity provider or the client sent
+		if err := c.ValidatePersonalInfoDetails(p.Details); err != nil {
+			c.LoggerError(logger, "invalid personal info details "+err.Error())
+			return nil, types.ErrInvalidPersonalInfo
+		}
+
 		all, _ = proto.Marshal(p.Details)
 		pin = p.PIN
 
@@ -3196,7 +3233,7 @@ func (s *qadenaServer) ClaimCredential(ctx context.Context, in *types.MsgClaimCr
 	s.setWallet(wallet)
 
 	// invalidate the claimed credential
-	ipCredential.WalletID = "CLAIMED"
+	ipCredential.WalletID = types.ClaimedCredentialWalletID
 	s.setCredential(ipCredential.CredentialID, ipCredential.CredentialType, ipCredential)
 
 	return &types.MsgClaimCredentialResponse{}, nil
@@ -3680,7 +3717,7 @@ func (s *qadenaServer) SetCredential(ctx context.Context, in *types.Credential) 
 	return &types.SetCredentialReply{Status: true}, nil
 }
 
-func (s *qadenaServer) RemoveCredential(ctx context.Context, in *types.Credential) (*types.RemoveCredentialReply, error) {
+func (s *qadenaServer) RemoveCredential(ctx context.Context, in *types.EnclaveRemoveCredentialRequest) (*types.RemoveCredentialReply, error) {
 
 	if s.RealEnclave {
 		c.LoggerDebug(logger, "RemoveCredential")
@@ -3688,20 +3725,38 @@ func (s *qadenaServer) RemoveCredential(ctx context.Context, in *types.Credentia
 		c.LoggerDebug(logger, "RemoveCredential "+c.PrettyPrint(in))
 	}
 
+	if in.Credential == nil {
+		return &types.RemoveCredentialReply{Status: false}, types.ErrCredentialNotExists
+	}
+
 	// get the credential
-	credential, found := s.getCredential(in.CredentialID, in.CredentialType)
+	credential, found := s.getCredential(in.Credential.CredentialID, in.Credential.CredentialType)
 	if !found {
 		c.LoggerError(logger, "credential does not exist")
 		return &types.RemoveCredentialReply{Status: false}, types.ErrCredentialNotExists
 	}
 
-	if credential.WalletID != "" {
-		c.LoggerError(logger, "credential is already claimed: "+credential.WalletID)
-		return &types.RemoveCredentialReply{Status: false}, types.ErrCredentialClaimed
+	if in.RequesterWalletID == "" {
+		// the identity provider path: ownerless credentials only, unchanged
+		if credential.WalletID != "" {
+			c.LoggerError(logger, "credential is already claimed: "+credential.WalletID)
+			return &types.RemoveCredentialReply{Status: false}, types.ErrCredentialClaimed
+		}
+	} else if credential.WalletID != in.RequesterWalletID {
+		// the owner path: the requester must be exactly who the row says owns it
+		c.LoggerError(logger, "credential is owned by "+credential.WalletID+", not "+in.RequesterWalletID)
+		return &types.RemoveCredentialReply{Status: false}, types.ErrCredentialUpdateNotOwner
 	}
 
 	s.removeCredentialByPCXY(&credential)
-	s.removeCredentialNoNotify(in.CredentialID, in.CredentialType)
+	// Drop the identity hashes too, otherwise they keep blocking the uniqueness check for an
+	// identity that no longer exists.  Only the personal-info row carries any; the sub-credentials
+	// share its credentialID, so this is guarded on type to avoid a sub-credential removal taking
+	// the whole identity's aliases with it.
+	if credential.CredentialType == types.PersonalInfoCredentialType {
+		s.removeAllCredentialHashAliases(credential.CredentialID)
+	}
+	s.removeCredentialNoNotify(credential.CredentialID, credential.CredentialType)
 
 	return &types.RemoveCredentialReply{Status: true}, nil
 }
@@ -3879,11 +3934,12 @@ func (s *qadenaServer) recoverKeyByCredential(ctx context.Context, in *types.Cre
 					s.setRecoverKeyByOriginalWalletID(subWalletID, &recoverKey)
 					//					changedRecoverKeys = append(changedRecoverKeys, subWalletID)
 
-					// update the credential used to find the
+					// mark the credential used to initiate recovery so it can't be mistaken for an owned credential
 					newCredential, exists := s.getCredential(in.CredentialID, in.CredentialType)
 					if exists {
-						newCredential.WalletID = "RECOVERKEY"
-						c.LoggerDebug(logger, "Setting WalletID to RECOVERKEY")
+						newCredential.WalletID = types.RecoverKeyCredentialWalletID
+						c.LoggerDebug(logger, "Setting WalletID to "+types.RecoverKeyCredentialWalletID)
+						s.setCredential(newCredential.CredentialID, newCredential.CredentialType, newCredential)
 					}
 				} else {
 					return nil, types.ErrInvalidRecoverKey
@@ -4332,6 +4388,67 @@ func (s *qadenaServer) getCredentialByHash(credentialHash string) (credential ty
 	}
 
 	return
+}
+
+func (s *qadenaServer) removeCredentialByHash(credentialHash string) {
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveCredentialHashKeyPrefix))
+	store.Delete(s.MustSealStable(EnclaveKeyKey(credentialHash)))
+	c.LoggerDebug(logger, "Removed credentialByHash "+credentialHash)
+}
+
+func (s *qadenaServer) setCredentialIdentityHistory(credentialID string, history types.EncryptableCredentialIdentityHistory) {
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveCredentialHashesByCredentialIDKeyPrefix))
+	b := s.Cdc.MustMarshal(&history)
+	store.Set(s.MustSealStable(EnclaveKeyKey(credentialID)), s.MustSeal(b))
+}
+
+func (s *qadenaServer) getCredentialIdentityHistory(credentialID string) (history types.EncryptableCredentialIdentityHistory, found bool) {
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveCredentialHashesByCredentialIDKeyPrefix))
+
+	b := store.Get(s.MustSealStable(EnclaveKeyKey(credentialID)))
+	if b == nil {
+		c.LoggerDebug(logger, "Couldn't find credential identity history "+credentialID)
+		return types.EncryptableCredentialIdentityHistory{}, false
+	}
+
+	s.Cdc.MustUnmarshal(s.MustUnseal(b), &history)
+	return history, true
+}
+
+// addCredentialHashAlias points one more identity hash at an existing credential.  The old hash
+// is deliberately left in place: key recovery resolves hash -> credentialID -> live row, so
+// leaving the old hash mapped is exactly what lets a user recover with their pre-update name,
+// and it also stops the abandoned identity from being claimed by somebody else.
+func (s *qadenaServer) addCredentialHashAlias(credentialHash string, credentialID string, history types.EncryptableCredentialIdentityHistory) types.EncryptableCredentialIdentityHistory {
+	s.setCredentialByHash(credentialHash, credentialID)
+
+	if !slices.Contains(history.Hashes, credentialHash) {
+		history.Hashes = append(history.Hashes, credentialHash)
+	}
+	s.setCredentialIdentityHistory(credentialID, history)
+
+	c.LoggerDebug(logger, "Added credential hash alias "+credentialHash+" -> "+credentialID)
+
+	return history
+}
+
+// removeAllCredentialHashAliases drops every hash that resolves to this credential, plus the
+// history record itself.  Without it, removing a credential would leave its hashes poisoning the
+// uniqueness check forever.
+func (s *qadenaServer) removeAllCredentialHashAliases(credentialID string) {
+	history, found := s.getCredentialIdentityHistory(credentialID)
+	if !found {
+		return
+	}
+
+	for _, hash := range history.Hashes {
+		s.removeCredentialByHash(hash)
+	}
+
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveCredentialHashesByCredentialIDKeyPrefix))
+	store.Delete(s.MustSealStable(EnclaveKeyKey(credentialID)))
+
+	c.LoggerDebug(logger, "Removed all credential hash aliases for "+credentialID)
 }
 
 func (s *qadenaServer) setProtectSubWalletIDByOriginalWalletID(originalWalletID string, subWalletID string) {
@@ -4884,6 +5001,10 @@ func (s *qadenaServer) removeCredentialNoNotify(credID string, credType string) 
 		credID,
 		credType,
 	))
+	// Note the removal so SyncCredentials can mirror it to the chain.  Unlike setCredential there is
+	// no NoNotify/notify pair here: a deletion that the chain never hears about leaves the two
+	// copies permanently disagreeing, and no caller wants that.
+	s.removedCredentials = append(s.removedCredentials, CredentialKey{credID, credType})
 }
 
 func (s *qadenaServer) setCredential(credID string, credType string, credential types.Credential) {
@@ -5213,12 +5334,33 @@ func (s *qadenaServer) SyncCredentials(ctx context.Context, in *types.MsgSyncCre
 		}
 	}
 
+	removed := []*types.CredentialRef{}
+
+	for _, removedCredential := range s.removedCredentials {
+		// Re-check the store rather than trusting the note we made.  A rolled-back transaction
+		// (TransactionComplete with success=false) restores the row but leaves this list alone, and
+		// reporting a deletion the enclave no longer believes in would delete it on chain for good.
+		if _, found := s.getCredential(removedCredential.credentialID, removedCredential.credentialType); found {
+			c.LoggerDebug(logger, "Credential removal was rolled back "+c.PrettyPrint(removedCredential))
+			continue
+		}
+		removed = append(removed, &types.CredentialRef{
+			CredentialID:   removedCredential.credentialID,
+			CredentialType: removedCredential.credentialType,
+		})
+	}
+
 	if in.Clear && len(credentials) > 0 {
 		c.LoggerDebug(logger, "Clearing changedCredentials")
 		s.changedCredentials = nil
 	}
 
-	return &types.SyncCredentialsReply{Credentials: credentials}, nil
+	if in.Clear && len(s.removedCredentials) > 0 {
+		c.LoggerDebug(logger, "Clearing removedCredentials")
+		s.removedCredentials = nil
+	}
+
+	return &types.SyncCredentialsReply{Credentials: credentials, RemovedCredentials: removed}, nil
 }
 
 func (s *qadenaServer) SyncRecoverKeys(ctx context.Context, in *types.MsgSyncRecoverKeys) (*types.SyncRecoverKeysReply, error) {

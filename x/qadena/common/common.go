@@ -166,6 +166,66 @@ func StoreHashByStoreKey(ctx sdktypes.Context, storeKey storetypes.StoreKey, p s
 	return ret
 }
 
+// PersonalInfoBirthdateLayout is the one and only accepted representation of a birthdate.  It
+// feeds CreateCredentialHash directly, so two spellings of the same date ("1970-Feb-02" vs
+// "1970-feb-02") would hash to two different identities for the same person.
+const PersonalInfoBirthdateLayout = "2006-Jan-02"
+
+// CreateCredentialHash joins the identity-bearing fields with "," and "|" separators, so a field
+// containing a separator could be re-parsed as a different split: ("a,b", "c") and ("a", "b,c")
+// produce the same hash.  ValidatePersonalInfoDetails rejects those characters up front, which
+// keeps the hash injective without changing its encoding (and therefore without invalidating
+// every hash already recorded in the enclave's uniqueness index).
+const credentialHashSeparators = ",|"
+
+var ErrCredentialHashSeparatorInField = errors.New("personal info fields may not contain ',' or '|'")
+
+// NormalizeBirthdateTime parses a birthdate in the canonical layout.  Case-insensitive month
+// spellings ("1970-feb-02") parse fine; it is Format, not Parse, that fixes the canonical
+// spelling, which is why NormalizeBirthdate round-trips through both.
+func NormalizeBirthdateTime(birthdate string) (time.Time, error) {
+	return time.Parse(PersonalInfoBirthdateLayout, birthdate)
+}
+
+// NormalizeBirthdate parses a birthdate and re-emits it in the canonical layout.  It returns an
+// error rather than a best guess: an unparseable birthdate must not reach CreateCredentialHash.
+func NormalizeBirthdate(birthdate string) (string, error) {
+	t, err := NormalizeBirthdateTime(birthdate)
+	if err != nil {
+		return "", err
+	}
+	return t.Format(PersonalInfoBirthdateLayout), nil
+}
+
+// ValidatePersonalInfoDetails enforces the invariants CreateCredentialHash depends on.  Call it
+// before hashing personal info, on both the client (for a friendly error) and inside the enclave
+// (because the client cannot be trusted).
+func ValidatePersonalInfoDetails(pd *types.EncryptablePersonalInfoDetails) error {
+	if pd == nil {
+		return errors.New("personal info details are nil")
+	}
+
+	for _, f := range []string{pd.FirstName, pd.MiddleName, pd.LastName, pd.Birthdate, pd.Gender} {
+		if strings.ContainsAny(f, credentialHashSeparators) {
+			return ErrCredentialHashSeparatorInField
+		}
+	}
+
+	normalized, err := NormalizeBirthdate(pd.Birthdate)
+	if err != nil {
+		return errors.New("birthdate must be formatted as " + PersonalInfoBirthdateLayout)
+	}
+	if normalized != pd.Birthdate {
+		return errors.New("birthdate is not canonical, expected " + normalized)
+	}
+
+	if !types.ValidateGender(pd.Gender) {
+		return errors.New("invalid gender " + pd.Gender)
+	}
+
+	return nil
+}
+
 func CreateCredentialHash(pd *types.EncryptablePersonalInfoDetails) string {
 	firstMiddleLast := pd.LastName + "," + pd.MiddleName + "," + pd.FirstName
 	credentialHash := hex.EncodeToString(tmhash.Sum([]byte(firstMiddleLast + "|" + pd.Birthdate + "|" + pd.Gender)))

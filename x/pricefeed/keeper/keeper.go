@@ -366,11 +366,17 @@ func (k Keeper) GetRawPrices(ctx sdk.Context, marketId string) pricefeedtypes.Po
 	return pps
 }
 
-// IterateRawPrices iterates over all raw prices in the store and performs a callback function
+// IterateRawPricesByMarket iterates over the raw prices posted for ONE market and performs a
+// callback function.
+//
+// PostedPriceKey lays the key out as "<marketId>/<length-prefixed oracle>/", so restricting the
+// iterator to "<marketId>/" selects exactly that market.  The trailing separator is what makes this
+// unambiguous: a market whose id is a prefix of another's cannot match, because the next byte must
+// be "/".
 func (k Keeper) IterateRawPricesByMarket(ctx sdk.Context, marketId string, cb func(record pricefeedtypes.PostedPrice) (stop bool)) {
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, pricefeedtypes.KeyPrefix(pricefeedtypes.PostedPriceKeyPrefix))
-	iterator := storetypes.KVStorePrefixIterator(store, []byte{})
+	iterator := storetypes.KVStorePrefixIterator(store, []byte(marketId+"/"))
 	defer iterator.Close()
 	for ; iterator.Valid(); iterator.Next() {
 		var record pricefeedtypes.PostedPrice

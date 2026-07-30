@@ -17,6 +17,7 @@ package qadena.qadena;
 
 import "qadena/qadena/wallet.proto";
 import "qadena/qadena/tx.proto";
+import "qadena/qadena/params.proto";
 import "qadena/qadena/credential.proto";
 import "qadena/qadena/suspicious_transaction.proto";
 import "qadena/qadena/public_key.proto";
@@ -80,9 +81,11 @@ service QadenaEnclave {
   rpc SetProtectKey (ProtectKey) returns (SetProtectKeyReply) {}
   rpc SetRecoverKey (RecoverKey) returns (SetRecoverKeyReply) {}
   rpc SetCredential (Credential) returns (SetCredentialReply) {}
-  rpc RemoveCredential (Credential) returns (RemoveCredentialReply) {}
+  rpc RemoveCredential (EnclaveRemoveCredentialRequest) returns (RemoveCredentialReply) {}
   rpc RecoverKeyByCredential (Credential) returns (RecoverKeyReply) {}
   rpc ClaimCredential(MsgClaimCredential) returns (MsgClaimCredentialResponse) {}
+  rpc UpdateCredential(EnclaveUpdateCredentialRequest) returns (MsgUpdateCredentialResponse) {}
+  rpc ClaimUpdatedCredential(MsgClaimUpdatedCredential) returns (MsgClaimUpdatedCredentialResponse) {}
   rpc SignRecoverKey(MsgSignRecoverPrivateKey) returns (SignRecoverKeyReply) {}
   rpc QueryGetRecoverKey(QueryGetRecoverKeyRequest) returns (QueryGetRecoverKeyResponse) {}
   rpc QueryFindCredential(QueryFindCredentialRequest) returns (QueryFindCredentialResponse) {}
@@ -276,8 +279,38 @@ message MsgSyncCredentials {
   bool clear = 1;
 }
 
+// CredentialRef names a credential without carrying it.  Not "CredentialKey": that name is
+// already the store-key helper in x/qadena/types/key_credential.go.
+message CredentialRef {
+  string credentialID = 1;
+  string credentialType = 2;
+}
+
 message SyncCredentialsReply {
   repeated Credential credentials = 1;
+  // Credentials the enclave deleted.  Today deletion always originates on-chain, so nothing
+  // populates this yet; it is the channel an enclave-originated removal will need once
+  // MsgRemoveCredential grows a user-initiated path.
+  repeated CredentialRef removedCredentials = 2;
+}
+
+// EnclaveRemoveCredentialRequest carries who asked for the removal.  An empty requesterWalletID
+// means the identity provider path, which may only remove ownerless credentials; a non-empty one
+// is a user removing a credential they own.  Passing it explicitly keeps the identity provider's
+// ownerless-only guarantee intact rather than loosening the check for both callers.
+message EnclaveRemoveCredentialRequest {
+  Credential credential = 1;
+  string requesterWalletID = 2;
+}
+
+// EnclaveUpdateCredentialRequest wraps the user's message with the two things the enclave cannot
+// determine for itself and must not take from the client: the block height, and the module
+// params the change policy is evaluated against.  Both are stamped by the keeper, so they are
+// identical across validators and the verdict stays deterministic.
+message EnclaveUpdateCredentialRequest {
+  MsgUpdateCredential msg = 1;
+  int64 blockHeight = 2;
+  Params params = 3 [(gogoproto.nullable) = false];
 }
 
 

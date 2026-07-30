@@ -93,4 +93,10 @@ var (
 	ErrNotEnoughSignatoriesQueryGetRecoverKey = sdkerrors.Register(ModuleName, 1151, "Not enough signatories")
 
 	ErrInvalidCreateWallet = sdkerrors.Register(ModuleName, 1152, "Invalid create wallet")
+
+	ErrInvalidPersonalInfo = sdkerrors.Register(ModuleName, 1153, "Invalid personal info")
+
+	ErrCredentialUpdateRejected    = sdkerrors.Register(ModuleName, 1154, "Credential update rejected by change policy")
+	ErrCredentialUpdateRateLimited = sdkerrors.Register(ModuleName, 1155, "Credential update rate limited")
+	ErrCredentialUpdateNotOwner    = sdkerrors.Register(ModuleName, 1156, "Not the owner of this credential")
 )
