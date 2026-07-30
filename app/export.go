@@ -69,8 +69,9 @@ func (app *App) prepForZeroHeightGenesis(ctx sdk.Context, jailAllowedAddrs []str
 		allowedAddrsMap[addr] = true
 	}
 
-	/* Just to be safe, assert the invariants on current state. */
-	app.CrisisKeeper.AssertInvariants(ctx)
+	/* Invariants are no longer asserted here: x/crisis was the invariant registry and has been
+	   removed (deprecated in cosmos-sdk v0.53, moved to contrib/ in v0.54).  Run consistency checks
+	   against the exported genesis offline if an upgrade needs them. */
 
 	/* Handle fee distribution state. */
 

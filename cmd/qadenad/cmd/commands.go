@@ -23,7 +23,6 @@ import (
 	servertypes "github.com/cosmos/cosmos-sdk/server/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
 	authcmd "github.com/cosmos/cosmos-sdk/x/auth/client/cli"
-	"github.com/cosmos/cosmos-sdk/x/crisis"
 	genutilcli "github.com/cosmos/cosmos-sdk/x/genutil/client/cli"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -98,7 +97,6 @@ func initRootCmd(
 }
 
 func addModuleInitFlags(startCmd *cobra.Command) {
-	crisis.AddModuleInitFlags(startCmd)
 	startCmd.Flags().StringVar(&c.EnclaveAddr, "enclave-addr", "", "address:port of enclave (e.g. localhost:50051)")
 	startCmd.Flags().StringVar(&c.EnclaveSignerID, "enclave-signer-id", "", "signer-id of enclave")
 	startCmd.Flags().StringVar(&c.EnclaveUniqueID, "enclave-unique-id", "", "unique-id of enclave")
@@ -259,8 +257,7 @@ func appExport(
 		return servertypes.ExportedApp{}, errors.New("appOpts is not viper.Viper")
 	}
 
-	// overwrite the FlagInvCheckPeriod
-	viperAppOpts.Set(server.FlagInvCheckPeriod, 1)
+	// FlagInvCheckPeriod is a no-op now that x/crisis is gone -- it was the invariant registry
 	appOpts = viperAppOpts
 
 	if height != -1 {

@@ -115,9 +115,32 @@ build:
 genesis:
   chain_id: "qadena_4444-1"
   app_state:
+    # Params below are kept IDENTICAL to config/launch-config.yml wherever the value does not affect
+    # how fast the test suite runs.  A param that only ever appears in the launch config is a param
+    # that has never actually been exercised.  The handful that must differ are marked TEST VALUE
+    # with the reason.
     staking:
       params:
         bond_denom: "aqdn"
+        unbonding_time: "1814400s"
+        max_validators: 100
+        max_entries: 7
+        historical_entries: 10000
+        # safe here: ignite generates pioneer1's gentx at 10% commission, above this floor
+        min_commission_rate: "0.05"
+
+    slashing:
+      params:
+        signed_blocks_window: "20000"
+        min_signed_per_window: "0.05"
+        downtime_jail_duration: "600s"
+        slash_fraction_double_sign: "0.05"
+        slash_fraction_downtime: "0.0001"
+
+    distribution:
+      params:
+        community_tax: "0.02"
+        withdraw_addr_enabled: true
     "bank": {
       "denom_metadata": [
         {
@@ -144,16 +167,40 @@ genesis:
     mint:
       params:
         mint_denom: "aqdn"
+        # TEST VALUE: 31,536,000 / 1.5s, this chain's single-validator block time.  Mainnet targets
+        # 3s and therefore 10,512,000 -- see config/launch-config.yml.
+        blocks_per_year: "21024000"
+        inflation_max: "0.10"
+        inflation_min: "0.03"
+        inflation_rate_change: "0.13"
+        goal_bonded: "0.67"
+
     gov:
       params:
-        expedited_min_deposit:
-          - denom: "aqdn"
-            amount: "10000000000000000000"
-        expedited_voting_period: "30s"
+        # Deposits match launch.  Nothing slows down: setup_prerequisites.sh submits proposals
+        # carrying a 100,000qdn deposit, so the threshold is met on submission either way -- but now
+        # the deposit path is exercised against a realistic figure instead of 1qdn.
         min_deposit:
           - denom: "aqdn"
-            amount: "1000000000000000000"
+            amount: "10000000000000000000000"
+        expedited_min_deposit:
+          - denom: "aqdn"
+            amount: "50000000000000000000000"
+        max_deposit_period: "172800s"
+        # TEST VALUES: the only two params here that gate wall-clock time.  setup_prerequisites.sh
+        # waits out the expedited period three times per run, so 30s is load-bearing for the test
+        # suite.  Mainnet is 7 days / 1 day -- see config/launch-config.yml.
         voting_period: "300s"
+        expedited_voting_period: "30s"
+        # Tally params match launch and are genuinely exercised: treasury delegates 10,000,000qdn
+        # against pioneer1's 100,000qdn self-bond, so its yes vote carries ~99% -- clearing quorum,
+        # threshold and the expedited threshold on real numbers rather than by default.
+        quorum: "0.334"
+        threshold: "0.5"
+        veto_threshold: "0.334"
+        expedited_threshold: "0.667"
+        burn_vote_veto: true
+        min_initial_deposit_ratio: "0.25"
     wasm:
       codes: []
       contracts: []
@@ -181,10 +228,9 @@ genesis:
         extra_eips: []
         history_serve_window: "8192"
       preinstalls: []
-    crisis:
-      constant_fee:
-        amount: "1000000"
-        denom: "qdn"
+    # no crisis section: x/crisis has been removed from the app entirely (deprecated in
+    # cosmos-sdk v0.53, this chain's version; moved to contrib/ in v0.54).  Removed pre-launch,
+    # while it was still just a code change rather than a chain upgrade with a migration handler.
     protocolpool:
       params:
         enabled_distribution_denoms:
@@ -229,7 +275,11 @@ genesis:
         # relative cap, in percent of the longer name; 34 means a 1-edit fix needs >= 3 runes
         update_name_max_edit_distance_percent: 34
         update_birthdate_max_year_delta: 1
-        # ~1 day at 8s blocks
+        # TEST VALUE.  ~4 hours at this chain's 1.5s blocks -- the old "~1 day at 8s blocks" comment
+        # never matched this config, which sets timeout_commit 1.5s.  4 hours is fine here: case 9
+        # of update_credentials.sh only needs the window to still be open moments after case 1.
+        # Mainnet targets 3s blocks and a real day: see update_credential_min_blocks_between_updates
+        # in config/launch-config.yml.
         update_credential_min_blocks_between_updates: "10000"
         # marriage/divorce surname replacement
         update_credential_allow_last_name_life_event: true

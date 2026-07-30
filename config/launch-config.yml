@@ -1,0 +1,376 @@
+# Qadena mainnet launch parameters -- TEMPLATE, NOT RUNNABLE.
+#
+# This is a parameter recommendation to feed genesis construction.  It is deliberately NOT a working
+# ignite config: every value that only you can decide is a TODO_ placeholder that will fail loudly
+# rather than quietly launching something wrong.
+#
+# HOW A MAINNET GENESIS IS ACTUALLY BUILT
+#
+#   Not with `ignite chain init`.  That trusts one machine's keyring for the validator key, which is
+#   fine for a test chain and wrong for mainnet.  The normal flow is:
+#     1. publish a genesis.json containing accounts, balances and params (this file's contents)
+#     2. each validator runs `gentx` with their own key and submits it
+#     3. the gentxs are collected (`collect-gentxs`) into the final genesis
+#     4. everyone verifies the same genesis hash before starting
+#   config/config.yml stays as it is -- the test chain -- and does not inherit from this.
+#
+# BLOCK TIME: TARGET 3s
+#
+#   The single-validator test chain runs at exactly timeout_commit (1.5s) because there is no
+#   consensus round-trip -- that number is the floor, not a prediction.  A real validator set is
+#   dominated by propagation latency: Cosmos Hub sets timeout_commit 5s and observes ~6.5s blocks.
+#
+#   3s is the stated target here, which is achievable but on the fast side for a globally
+#   distributed set.  It suits timeout_commit ~2s.  VERIFY ON A MULTI-VALIDATOR TESTNET before
+#   freezing these, then recompute:
+#       blocks_per_year = 31,536,000 / observed_block_time
+#   Getting it wrong does not break anything, it makes real inflation drift from target: if blocks
+#   are faster than blocks_per_year assumes, you mint more than intended.
+#
+#   At 3s:  1 day = 28,800 blocks   1 year = 10,512,000 blocks
+#
+# REFERENCE POINTS USED BELOW (researched, not recalled)
+#
+#   param                       Cosmos Hub        Osmosis           this file
+#   unbonding_time              21 days           14 days           21 days
+#   max_validators              100               -                 100
+#   signed_blocks_window        10000 (~18h)      -                 20000 (~16.7h at 3s)
+#   min_signed_per_window       5%                -                 5%
+#   slash_fraction_double_sign  5%                5% + perm jail    5%
+#   slash_fraction_downtime     0.01%             0 (jail only)     0.01%  -- see note
+#   voting_period               14 days           -                 7 days -- see note
+#   min_deposit                 250 ATOM          6000 OSMO         see note
+#   inflation_max / min         20% / 7%          -                 10% / 3% -- see note
+#   goal_bonded                 67%               -                 67%
+#   community_tax               2%                -                 2%
+
+version: 1
+
+# TODO_CHAIN_ID: the numeric part is your EIP-155 chain ID and must be registered before anything
+# EVM-facing exists.  4444 is the test value.
+chain_id: "TODO_CHAIN_ID"
+
+# ---------------------------------------------------------------------------------------------
+# ACCOUNTS AND TOKEN ALLOCATION
+# ---------------------------------------------------------------------------------------------
+#
+# NO MNEMONICS.  Production keys must never live in a repo file; supply addresses generated in
+# whatever custody you are using (hardware, multisig, MPC).  Everything here is TODO_ADDR_.
+#
+# Only pioneer1 and treasury need to exist for the chain to bootstrap.  Everything else is an
+# allocation decision, and the splits below are a starting structure, not a recommendation about
+# your cap table -- percentages are yours to set.
+#
+# VESTING: ignite's accounts: block only writes plain balances.  Vesting accounts are written into
+# genesis.json afterwards, the same shape as the existing setPubKAndPubKID.sh step.  Four types:
+#   ContinuousVestingAccount  linear between start and end
+#   DelayedVestingAccount     single cliff, all at once
+#   PeriodicVestingAccount    tranches -- use this for cliff-then-monthly
+#   PermanentLockedAccount    never vests; only staking rewards are ever spendable
+#
+# The property that makes this work: vesting accounts CAN stake and vote while locked, they just
+# cannot transfer.  Founder and foundation allocations therefore contribute to chain security and
+# governance from block one instead of sitting idle.
+accounts:
+  # --- must exist at genesis; cannot be moved to runtime ---
+  - name: pioneer1
+    address: "TODO_ADDR_PIONEER1"
+    coins: ["1000000qdn"]
+  - name: treasury
+    address: "TODO_ADDR_TREASURY"
+    coins: ["TODO_AMOUNT_TREASURYqdn"]
+
+  # --- allocation buckets; see vesting note above ---
+  # foundation: long-term endowment.  PermanentLockedAccount is common here so the principal can
+  # never be spent, only the staking rewards it earns.
+  - name: foundation
+    address: "TODO_ADDR_FOUNDATION"
+    coins: ["TODO_AMOUNT_FOUNDATIONqdn"]
+
+  # founders/core: PeriodicVestingAccount, 12-month cliff then monthly over 36-48 months
+  - name: founders
+    address: "TODO_ADDR_FOUNDERS"
+    coins: ["TODO_AMOUNT_FOUNDERSqdn"]
+
+  # investors: PeriodicVestingAccount on its own schedule
+  - name: investors
+    address: "TODO_ADDR_INVESTORS"
+    coins: ["TODO_AMOUNT_INVESTORSqdn"]
+
+  # ecosystem/grants: foundation-controlled, usually liquid or lightly vested
+  - name: ecosystem
+    address: "TODO_ADDR_ECOSYSTEM"
+    coins: ["TODO_AMOUNT_ECOSYSTEMqdn"]
+
+  # community/airdrop: liquid, usually claim-gated
+  - name: community
+    address: "TODO_ADDR_COMMUNITY"
+    coins: ["TODO_AMOUNT_COMMUNITYqdn"]
+
+  # create-wallet sponsor: a LIVE HOT account that pays user-onboarding incentives.  Size it against
+  # your growth plan -- see the incentive note in the qadena section below.
+  - name: create-wallet-sponsor
+    address: "TODO_ADDR_SPONSOR"
+    coins: ["TODO_AMOUNT_SPONSORqdn"]
+
+genesis:
+  chain_id: "TODO_CHAIN_ID"
+
+  app_state:
+
+    # -----------------------------------------------------------------------------------------
+    # STAKING
+    # -----------------------------------------------------------------------------------------
+    staking:
+      params:
+        bond_denom: "aqdn"
+        # 21 days is the Cosmos default and the usual choice.  It is the window during which a
+        # validator's stake is still slashable after they unbond, so it is the main defence against
+        # long-range attacks -- shortening it to please delegators weakens exactly that.
+        unbonding_time: "1814400s"
+        # 100 is a common launch size.  Raising it later is easy, lowering it forcibly unbonds the
+        # tail, so start at or below where you intend to end up.
+        max_validators: 100
+        max_entries: 7
+        historical_entries: 10000
+        # CONTESTED -- decide deliberately.  The SDK default is 0.  A floor prevents a race to 0%
+        # commission, which pushes validators to fund themselves by other means and tends to
+        # centralise the set.  But it is not settled practice: the Cosmos Hub REJECTED a 5% floor in
+        # proposal 76 before revisiting it later.  5% is the usual figure where chains do set one.
+        min_commission_rate: "0.05"
+
+    # -----------------------------------------------------------------------------------------
+    # SLASHING -- entirely absent from config/config.yml today
+    # -----------------------------------------------------------------------------------------
+    slashing:
+      params:
+        # ~16.7 hours at 3s.  Cosmos Hub uses 10000 blocks which at its ~6.5s is ~18h, so this is
+        # the same real-world window expressed in faster blocks.  RECOMPUTE if block time moves --
+        # this is a duration written in blocks, so a wrong block-time assumption shifts it directly.
+        signed_blocks_window: "20000"
+        # must sign 5% of the window to avoid jail -- Hub's value, tolerant of ordinary blips
+        min_signed_per_window: "0.05"
+        downtime_jail_duration: "600s"
+        # 5% -- both Cosmos Hub and Osmosis.  Equivocation is never accidental, so this is the one
+        # fault with a serious penalty.  Osmosis additionally jails permanently.
+        slash_fraction_double_sign: "0.05"
+        # DECIDE DELIBERATELY.  0.01% is the Hub's value.  Osmosis slashes NOTHING for downtime and
+        # relies on jailing alone, reasoning that downtime is an operator mistake and slashing it
+        # punishes delegators who cannot control it.  Since jail already costs the validator all
+        # rewards, the slash adds little deterrence.  Set 0 here if you find that argument
+        # persuasive -- for an identity chain where operators may be regulated institutions rather
+        # than professional validators, it is worth weighing.
+        slash_fraction_downtime: "0.0001"
+
+    # -----------------------------------------------------------------------------------------
+    # MINT
+    # -----------------------------------------------------------------------------------------
+    mint:
+      params:
+        mint_denom: "aqdn"
+        # 31,536,000 / 3s.  RECOMPUTE -- see the block time note at the top.
+        blocks_per_year: "10512000"
+        # DELIBERATELY BELOW the Cosmos Hub's 20%/7% band.  The Hub buys security almost entirely
+        # with inflation; Qadena earns real fee revenue from credential issuance and ekyc royalties,
+        # so it can hold a lower band and dilute holders less.
+        #
+        # The risk is under-securing: if the bonded ratio settles well below goal_bonded, inflation
+        # rises to inflation_max and if that ceiling is too low it cannot pull bonding up.  Watch
+        # the bonded ratio for the first months and raise by governance if it stalls under ~50%.
+        inflation_max: "0.10"
+        inflation_min: "0.03"
+        inflation_rate_change: "0.13"
+        # the bonded ratio inflation steers towards
+        goal_bonded: "0.67"
+
+    # -----------------------------------------------------------------------------------------
+    # GOVERNANCE -- config/config.yml values are test-only (300s voting)
+    # -----------------------------------------------------------------------------------------
+    gov:
+      params:
+        # TODO_MIN_DEPOSIT: set this by TARGET FIAT VALUE, not token count.  The real chains anchor
+        # around USD 1-2k of deposit: Cosmos Hub 250 ATOM, Osmosis 6000 OSMO.  qdn has no market
+        # price yet, so pick the token amount that lands in that band at your expected launch price
+        # and revisit by governance once a price exists.  10,000 qdn below is a placeholder shape.
+        min_deposit:
+          - denom: "aqdn"
+            amount: "10000000000000000000000"
+        max_deposit_period: "172800s"
+        # 7 days.  Cosmos Hub uses 14.  7 is the shorter end of normal and common for newer chains:
+        # it keeps governance responsive, at the cost of giving distributed delegators less time to
+        # notice a proposal.  Do not go below ~5 days -- the 300s in the test config exists purely
+        # so tests finish, and shipping anything near it makes governance capturable by whoever is
+        # simply paying attention that day.
+        voting_period: "604800s"
+        # expedited is for emergencies (a security patch), so it costs 5x and gets 1 day
+        expedited_min_deposit:
+          - denom: "aqdn"
+            amount: "50000000000000000000000"
+        expedited_voting_period: "86400s"
+        expedited_threshold: "0.667"
+        quorum: "0.334"
+        threshold: "0.5"
+        veto_threshold: "0.334"
+        # burn the deposit of a vetoed proposal -- makes spamming governance expensive
+        burn_vote_veto: true
+        # a proposal must arrive with 25% of the deposit, so the mempool is not free to fill
+        min_initial_deposit_ratio: "0.25"
+
+    # -----------------------------------------------------------------------------------------
+    # DISTRIBUTION -- absent from config/config.yml today
+    # -----------------------------------------------------------------------------------------
+    distribution:
+      params:
+        # 2% of staking rewards to the community pool, spendable by governance
+        community_tax: "0.02"
+        withdraw_addr_enabled: true
+
+    # -----------------------------------------------------------------------------------------
+    # CRISIS
+    # -----------------------------------------------------------------------------------------
+    # crisis: DELIBERATELY ABSENT -- decide this BEFORE launch, not after.
+    #
+    # x/crisis is deprecated as of cosmos-sdk v0.53, which is the version this chain runs
+    # (go.mod: v0.53.5).  It moves to contrib/ in v0.54, so the next SDK upgrade forces a choice
+    # between a contrib import and removal.  There is also an advisory that it does not actually
+    # charge ConstantFee (GHSA-w5w5-2882-47pc), so tuning the fee buys nothing.
+    #
+    # The asymmetry that matters: dropping it from app wiring before genesis costs nothing.
+    # Dropping it from a LIVE chain is a coordinated upgrade with a migration handler, because the
+    # module's genesis state and store keys already exist.  Launching with a module you have already
+    # decided to remove means signing up for that migration.
+    #
+    # It is still wired in app/app.go and app/app_config.go today, so removing it is a code change,
+    # not a config change.  config/config.yml keeps a crisis section only because the module is
+    # still registered there.
+
+    protocolpool:
+      params:
+        enabled_distribution_denoms:
+          - "aqdn"
+
+    bank:
+      denom_metadata:
+        - description: "Qadena Token"
+          denom_units:
+            - denom: "aqdn"
+              exponent: 0
+              aliases: []
+            - denom: "qdn"
+              exponent: 18
+              aliases: []
+          base: "aqdn"
+          display: "qdn"
+          name: "Qadena Token"
+          symbol: "qdn"
+
+    # -----------------------------------------------------------------------------------------
+    # QADENA
+    # -----------------------------------------------------------------------------------------
+    qadena:
+      params:
+        # ONBOARDING INCENTIVES, paid by create-wallet-sponsor -- an operating cost, not an
+        # allocation.  At 500 + 500 per wallet plus 50 per eph wallet, onboarding 100k users is
+        # ~100M qdn out of a live hot account.  Size the sponsor balance against your growth plan
+        # and decide whether these should start lower on mainnet than on the test chain.
+        create_wallet_incentive:
+          amount: "500"
+          denom: "qdn"
+        create_wallet_transparent_incentive:
+          amount: "500"
+          denom: "qdn"
+        create_ephemeral_wallet_incentive:
+          amount: "0"
+          denom: "qdn"
+        create_ephemeral_wallet_transparent_incentive:
+          amount: "50"
+          denom: "qdn"
+
+        # Fiat-denominated, so these REQUIRE a working pricefeed: create/update credential converts
+        # through cn:qdn:php.  Do not launch with fiat fees until prices are actually being posted.
+        create_credential_fee: "30php"
+        create_bulk_credentials_fee: "10php"
+
+        ekyc_submit_new_app_royalty_percentage: "40"
+        ekyc_submit_reuse_app_royalty_percentage: "20"
+        ekyc_submit_reuse_provider_royalty_percentage: "20"
+        ekyc_identity_owner_royalty_percentage: "30"
+
+        # CREDENTIAL UPDATE POLICY
+        update_credential_fee: "30php"
+        update_credential_policy_version: 1
+        update_credential_max_identity_aliases: 4
+        update_credential_max_life_events: 2
+        update_name_max_edit_distance: 2
+        update_name_max_edit_distance_percent: 34
+        update_birthdate_max_year_delta: 1
+        # ~1 day at 3s blocks.  RECOMPUTE with your measured block time.  The test config says
+        # "~1 day at 8s blocks" for 10000 blocks, which has never matched its own chain -- at the
+        # test chain's 1.5s that value is about 4 hours, not a day.
+        update_credential_min_blocks_between_updates: "28800"
+        update_credential_allow_last_name_life_event: true
+        update_credential_allow_gender_change: true
+
+      # THE MOST SECURITY-CRITICAL ENTRY IN THIS FILE.
+      # These are the SGX measurements the chain will trust.  The test chain ships
+      # test-unique-id/test-signer-id/test-product-id, which WORK -- so this is the item most likely
+      # to be shipped unchanged by accident.  Placeholders here are deliberately invalid.
+      enclaveIdentityList:
+        - uniqueID: "TODO_ENCLAVE_UNIQUE_ID"
+          signerID: "TODO_ENCLAVE_SIGNER_ID"
+          productID: "TODO_ENCLAVE_PRODUCT_ID"
+          status: active
+
+      # pioneer1 and treasury only.  Every service provider is onboarded at runtime by a
+      # MsgAddServiceProvider governance proposal -- see testscripts/setup_prerequisites.sh.
+      publicKeyList:
+        - pubKID: pioneer1PubKID
+          pubK: pioneer1PubK_pubk
+          pubKType: transaction
+        - pubKID: pioneer1PubKID
+          pubK: pioneer1PubK_pubk
+          pubKType: credential
+      intervalPublicKeyIDList:
+        - pubKID: pioneer1PubKID
+          nodeType: pioneer
+          nodeID: pioneer1
+        - pubKID: treasuryPubKID
+          nodeType: treasury
+          nodeID: treasury
+
+    # -----------------------------------------------------------------------------------------
+    # PRICEFEED
+    # -----------------------------------------------------------------------------------------
+    pricefeed:
+      params:
+        # No oracles at genesis; registration is a MsgUpdateParams governance proposal.
+        # REMINDER: MsgUpdateParams replaces the whole params object and Params.Validate() is a
+        # no-op, so any proposal must carry ALL markets or it silently deletes the missing ones.
+        markets:
+          - active: true
+            baseAsset: "qdn"
+            marketId: "cn:qdn:usd"
+            quoteAsset: "usd"
+            oracles: []
+          - active: true
+            baseAsset: "qdn"
+            marketId: "cn:qdn:php"
+            quoteAsset: "php"
+            oracles: []
+          - active: true
+            baseAsset: "php"
+            marketId: "fn:php:usd"
+            quoteAsset: "usd"
+            oracles: []
+
+      # BOOTSTRAP PRICES ONLY.
+      # The test chain seeds these with a 2030 expiry, which is fine there and wrong here: stale
+      # seeds never age out and would blend with real oracle postings for years, because the current
+      # price is the median of all unexpired raw prices for the market.
+      #
+      # Give them days, not years -- long enough to bootstrap, short enough that real prices take
+      # over cleanly.  And do not launch fiat-denominated fees without something actually posting.
+      postedPriceList:
+        - expiry: "TODO_EXPIRY_DAYS_AFTER_LAUNCH"
+          marketId: "cn:qdn:php"
+          price: "TODO_LAUNCH_PRICE_QDN_PHP"
