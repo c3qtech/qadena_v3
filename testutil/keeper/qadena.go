@@ -22,6 +22,13 @@ import (
 )
 
 func QadenaKeeper(t testing.TB) (keeper.Keeper, sdk.Context) {
+	return QadenaKeeperWithPricefeed(t, nil)
+}
+
+// QadenaKeeperWithPricefeed builds the keeper with a caller-supplied pricefeed, so tests can drive
+// the fiat conversion into each of its branches.  The keeper's pricefeedKeeper field is unexported,
+// so injection has to happen here at construction.
+func QadenaKeeperWithPricefeed(t testing.TB, pfk types.PricefeedKeeper) (keeper.Keeper, sdk.Context) {
 	storeKey := storetypes.NewKVStoreKey(types.StoreKey)
 
 	db := dbm.NewMemDB()
@@ -40,7 +47,7 @@ func QadenaKeeper(t testing.TB) (keeper.Keeper, sdk.Context) {
 		authority.String(),
 		nil,
 		nil,
-		nil,
+		pfk,
 		nil,
 		nil,
 	)
