@@ -88,34 +88,11 @@ func (k msgServer) CreateBulkCredentials(goCtx context.Context, msg *types.MsgCr
 	// display coin
 	c.ContextDebug(ctx, "CreateBulkCredentials fee total (numberOfCredentials="+strconv.Itoa(numberOfCredentials)+") "+createCredentialFeeCoin.String())
 
-	// if coin is not AQadenaTokenDenom, then let's do conversions
-	if !(createCredentialFeeCoin.Denom == types.AQadenaTokenDenom || createCredentialFeeCoin.Denom == types.QadenaTokenDenom) {
-		// check pricefeed
-
-		marketPrefix := "cn" // crypto == "cn", fiat == "fn"
-
-		marketID := marketPrefix + ":" + types.QadenaTokenDenom + ":" + createCredentialFeeCoin.Denom
-		cp, err := k.pricefeedKeeper.GetCurrentPrice(ctx, marketID)
-		var basePrice cosmosmath.LegacyDec
-		if err != nil {
-			basePrice = cosmosmath.LegacyNewDecFromBigInt(c.BigIntZero)
-		} else {
-			basePrice = cp.Price
-		}
-
-		c.ContextDebug(ctx, types.QadenaTokenDenom+" to "+createCredentialFeeCoin.Denom+" base fee "+basePrice.String())
-
-		price := createCredentialFeeCoin.Amount.Quo(basePrice)
-
-		c.ContextDebug(ctx, "CreateBulkCredentials fee in "+types.QadenaTokenDenom+" "+price.String())
-
-		createCredentialFeeCoin, err = sdk.ParseDecCoin(price.String() + types.QadenaTokenDenom)
-		if err != nil {
-			c.ContextError(ctx, "error parsing coin "+err.Error())
-			return nil, err
-		}
-
-		c.ContextDebug(ctx, "CreateBulkCredentials fee "+createCredentialFeeCoin.String())
+	// Convert a fiat-denominated fee through the pricefeed.  Fails closed when there is no
+	// usable price -- see ExchangeRateToQadena for why substituting zero here was unsafe.
+	createCredentialFeeCoin, err = k.ConvertFeeToQadena(ctx, createCredentialFeeCoin)
+	if err != nil {
+		return nil, err
 	}
 
 	// check if we have enough funds to create credential

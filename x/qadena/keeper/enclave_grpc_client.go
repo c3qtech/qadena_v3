@@ -26,6 +26,7 @@ import (
 
 	//tmtypes "github.com/cometbft/cometbft/proto/tendermint/types"
 	"cosmossdk.io/core/header"
+	errorsmod "cosmossdk.io/errors"
 	//	errorsmod "cosmossdk.io/errors"
 
 	//sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
@@ -84,15 +85,26 @@ func (k Keeper) ScanTransaction(sdkctx sdk.Context, msg *types.MsgTransferFunds)
 	marketID := marketPrefix + ":" + strings.ToLower(token) + ":usd"
 	cp, err := k.pricefeedKeeper.GetCurrentPrice(sdkctx, marketID)
 
-	var basePrice math.LegacyDec = math.LegacyNewDecFromBigInt(c.BigIntZero)
-
-	c.LoggerDebug(k.logger, "ScanTransaction: marketID: "+marketID+" cp: "+cp.String())
-
+	// FAIL CLOSED.  This rate is what the enclave multiplies the transfer by to get its USD value
+	// (usdCoinAmount = amount * rate), and that USD value is what the suspicious-transaction
+	// threshold is compared against.  The previous code substituted zero when no price was
+	// available, which made every transfer evaluate as 0 USD -- so the threshold never fired and
+	// arbitrarily large transfers passed unscanned, with nothing logged to say the control had been
+	// disabled.  Refusing the transfer is the correct response: a missing price is temporary, and a
+	// transfer that cannot be scanned must not be settled.
 	if err != nil {
-		basePrice = math.LegacyNewDecFromBigInt(c.BigIntZero)
-	} else {
-		basePrice = cp.Price
+		c.ContextError(sdkctx, "ScanTransaction: no price for "+marketID+", refusing to scan: "+err.Error())
+		return false, errorsmod.Wrapf(types.ErrNoPriceForDenom,
+			"cannot scan transfer: market %s: %s", marketID, err.Error())
 	}
+	if cp.Price.IsNil() || !cp.Price.IsPositive() {
+		c.ContextError(sdkctx, "ScanTransaction: non-positive price for "+marketID+", refusing to scan")
+		return false, errorsmod.Wrapf(types.ErrNoPriceForDenom,
+			"cannot scan transfer: market %s reported a non-positive price", marketID)
+	}
+
+	basePrice := cp.Price
+	c.LoggerDebug(k.logger, "ScanTransaction: marketID: "+marketID+" cp: "+cp.String())
 
 	return k.EnclaveScanTransaction(sdkctx, msg, basePrice)
 }

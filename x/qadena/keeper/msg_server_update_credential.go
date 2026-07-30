@@ -8,8 +8,6 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
-
-	cosmosmath "cosmossdk.io/math"
 )
 
 // AUTHORIZATION:
@@ -107,31 +105,12 @@ func (k msgServer) consumeUpdateCredentialFee(ctx sdk.Context, moduleParams type
 		return err
 	}
 
-	// if the fee is denominated in fiat, convert it through the pricefeed the same way
-	// CreateCredential does
-	if !(updateCredentialFeeCoin.Denom == types.AQadenaTokenDenom || updateCredentialFeeCoin.Denom == types.QadenaTokenDenom) {
-		marketPrefix := "cn" // crypto == "cn", fiat == "fn"
-
-		marketID := marketPrefix + ":" + types.QadenaTokenDenom + ":" + updateCredentialFeeCoin.Denom
-		cp, err := k.pricefeedKeeper.GetCurrentPrice(ctx, marketID)
-		var basePrice cosmosmath.LegacyDec
-		if err != nil {
-			basePrice = cosmosmath.LegacyNewDecFromBigInt(c.BigIntZero)
-		} else {
-			basePrice = cp.Price
-		}
-
-		c.ContextDebug(ctx, types.QadenaTokenDenom+" to "+updateCredentialFeeCoin.Denom+" base fee "+basePrice.String())
-
-		price := updateCredentialFeeCoin.Amount.Quo(basePrice)
-
-		updateCredentialFeeCoin, err = sdk.ParseDecCoin(price.String() + types.QadenaTokenDenom)
-		if err != nil {
-			c.ContextError(ctx, "error parsing coin "+err.Error())
-			return err
-		}
-
-		c.ContextDebug(ctx, "updateCredential fee "+updateCredentialFeeCoin.String())
+	// Convert a fiat-denominated fee through the pricefeed, the same way CreateCredential does.
+	// Fails closed when there is no usable price -- see ExchangeRateToQadena for why substituting
+	// zero here was unsafe.
+	updateCredentialFeeCoin, err = k.ConvertFeeToQadena(ctx, updateCredentialFeeCoin)
+	if err != nil {
+		return err
 	}
 
 	gas := updateCredentialFeeCoin.Amount.Quo(c.GasPriceInAQDN)

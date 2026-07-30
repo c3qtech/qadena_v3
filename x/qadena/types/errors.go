@@ -99,4 +99,9 @@ var (
 	ErrCredentialUpdateRejected    = sdkerrors.Register(ModuleName, 1154, "Credential update rejected by change policy")
 	ErrCredentialUpdateRateLimited = sdkerrors.Register(ModuleName, 1155, "Credential update rate limited")
 	ErrCredentialUpdateNotOwner    = sdkerrors.Register(ModuleName, 1156, "Not the owner of this credential")
+
+	// Returned when a fiat amount cannot be converted because the pricefeed has no usable price for
+	// the market.  Operations that need a conversion FAIL CLOSED on this rather than proceeding with
+	// a zero rate -- see ExchangeRateToQadena.
+	ErrNoPriceForDenom = sdkerrors.Register(ModuleName, 1157, "No pricefeed price available for denomination")
 )
