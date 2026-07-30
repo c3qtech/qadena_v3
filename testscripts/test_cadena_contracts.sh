@@ -10,22 +10,18 @@
 # is essential here, not stylistic: cadena_cli.sh `full` returns 0 even when a step inside it
 # fails -- see the known defect below, which `full` reports nothing about.
 #
-# KNOWN DEFECT, deliberately NOT asserted so this suite stays green on a working chain:
+# TWO CLI DEFECTS THIS SUITE EXISTS TO CATCH, both now fixed and asserted below:
 #
-#   `disbursement-only` is broken.  The contract's ExecuteMsg::CreateDisbursement takes eleven
-#   fields (src/contract.rs), but cadena_cli.sh builds a message with five -- missing
-#   disbursement_date, description, payee, payment_method, reference_number and status.  Every run
-#   fails with:
+#   create_disbursement omitted `disbursement_date`, the one non-Option field in
+#   ExecuteMsg::CreateDisbursement, so every disbursement failed with
 #       Error parsing into type cadena::msg::ExecuteMsg: missing field `disbursement_date`
-#   which is why query-disbursements-by-dv returns an empty list and the address balance is 0.
-#   The CLI has drifted from the contract schema.  Fixing it means choosing values for six fields,
-#   so it is left as a reported defect rather than guessed at here.
+#   leaving query-disbursements-by-dv empty and the recipient balance at zero.
 #
-#   `query-disbursement-voucher` is broken the same way, in the query direction: it sends a field
-#   named `id` where QueryMsg expects `dv_id`, so it always fails with
-#       unknown field `id`, expected one of `obligation_id`, `nca_id`, `dv_id`
-#   The DV itself is created correctly -- this test proves that through query-hierarchy instead,
-#   which is a stronger check anyway because it walks the entire chain in one query.
+#   get_disbursement_voucher sent a bare `id` where QueryMsg::GetDisbursementVoucher keys on all
+#   three levels (obligation_id, nca_id, dv_id), so the DV could never be read back.
+#
+# Neither surfaced on its own because cadena_cli.sh `full` returns 0 regardless of what fails
+# inside it -- which is exactly why every assertion here is on a contract query.
 #
 # Idempotent: `clean` drops the state file and each run uploads and instantiates a FRESH contract,
 # so the hierarchy always starts empty and the counts below are absolute rather than deltas.
@@ -141,7 +137,29 @@ done
 echo "GAA -> PAP -> SARO -> NCA -> Obligation -> DV all present"
 
 echo "========================="
+echo "5. the disbursement voucher reads back through its own query"
+echo "========================="
+# Regression guard: this query used to fail outright with
+#   unknown field `id`, expected one of `obligation_id`, `nca_id`, `dv_id`
+dv=$(cadena_json query-disbursement-voucher)
+dv_id=$(echo "$dv" | jq -r '.data.id // empty')
+[ -n "$dv_id" ] || fail "query-disbursement-voucher returned no DV; the query fields have drifted again"
+echo "$dv" | jq -r '.data | {id, dv_number, amount, payee}'
+
+echo "========================="
+echo "6. a disbursement is created and recorded against the DV"
+echo "========================="
+# Regression guard: create_disbursement used to fail on the missing disbursement_date, silently,
+# because `full` swallows the error.  Asserting the RECORD rather than the exit code.
+"$cli" disbursement-only > /dev/null 2>&1 || fail "disbursement-only failed"
+
+disb=$(cadena_json query-disbursements-by-dv)
+total=$(echo "$disb" | jq -r '.data.total // 0')
+[ "${total:-0}" -ge 1 ] \
+    || fail "no disbursements recorded against $dv_id; create_disbursement is failing again"
+echo "$disb" | jq -r '.data | {total, count}'
+echo "disbursement recorded against $dv_id"
+
+echo "========================="
 echo "CADENA CONTRACT TESTS PASSED"
 echo "========================="
-echo "NOTE: disbursement creation is a known defect and is not covered -- cadena_cli.sh sends five"
-echo "      of the eleven fields ExecuteMsg::CreateDisbursement requires.  See the script header."
