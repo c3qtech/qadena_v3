@@ -10,11 +10,14 @@
 #   idempotency   prerequisites re-run, asserting it issues ZERO transactions
 #   setup         the test users                                           (--with-setup)
 #   pricefeed     oracle posting, per-market isolation, unregistered poster refused
+#   pf-expiry     a posted price stops counting toward the median once it expires
 #   transfers     transfer -> eph-wallet queue -> receive
 #   suspicious    threshold scan, opt-in, and the regulator's report
 #   dsvs          document signing hash chain
 #   wasm          store / instantiate / execute
 #   evm           deploy / read / write / overwrite
+#   cadena        cadena-smart-contracts: the GAA -> PAP -> SARO -> NCA -> Obligation -> DV chain
+#   enf           enf-smart-contracts: the ENF notarial book (ENP registry + entries)
 #   credentials   update_credentials.sh                                    (--with-credentials)
 #
 # Everything except the genesis/chain/credentials layers is IDEMPOTENT -- safe to repeat against the
@@ -285,11 +288,14 @@ else
 fi
 
 run_test "pricefeed"   "$qadenatestscripts/test_pricefeed.sh"
+run_test "pf-expiry"   "$qadenatestscripts/test_pricefeed_expiry.sh"
 run_test "transfers"   "$qadenatestscripts/test_transfers.sh"
 run_test "suspicious"  "$qadenatestscripts/test_suspicious.sh"
 run_test "dsvs"        "$qadenatestscripts/test_dsvs.sh"
 run_test "wasm"        "$qadenatestscripts/test_wasm.sh"
 run_test "evm"         "$qadenatestscripts/test_evm.sh"
+run_test "cadena"      "$qadenatestscripts/test_cadena_contracts.sh"
+run_test "enf"         "$qadenatestscripts/test_enf_contracts.sh"
 
 if [ "$with_credentials" = "true" ]; then
     # LAST, because it mutates identities the other suites read: it removes al's email credential,
