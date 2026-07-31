@@ -104,4 +104,11 @@ var (
 	// the market.  Operations that need a conversion FAIL CLOSED on this rather than proceeding with
 	// a zero rate -- see ExchangeRateToQadena.
 	ErrNoPriceForDenom = sdkerrors.Register(ModuleName, 1157, "No pricefeed price available for denomination")
+
+	// Returned when a wallet with no claimed credential tries to send.  The AML reporting threshold
+	// is chosen from the sender's residency and citizenship, so a sender with neither has no
+	// threshold to be measured against; allowing the transfer under a default would make holding no
+	// credential the cheapest way to pick your own limit.  Governed by the
+	// allow_transfer_without_ekyc param.
+	ErrNoEKYCForTransfer = sdkerrors.Register(ModuleName, 1158, "Sender has no eKYC data; residency or citizenship is required to transfer")
 )

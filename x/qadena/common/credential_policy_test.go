@@ -80,29 +80,33 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			wantField:    UpdateFieldFirstName,
 			wantHashMove: true,
 		},
+		// The next three rewrite the stored credential but do NOT move the identity, because
+		// CreateCredentialHash canonicalizes names.  They are still classified as corrections --
+		// the value on the credential really did change -- but they register no alias and do not
+		// consume the update rate limit.
 		{
-			name:         "first name case only",
+			name:         "first name case only does not move the hash",
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.FirstName = "Alberto" }),
 			wantKind:     UpdateKindCorrection,
 			wantField:    UpdateFieldFirstName,
-			wantHashMove: true,
+			wantHashMove: false,
 		},
 		{
-			name:         "first name whitespace only",
+			name:         "first name whitespace only does not move the hash",
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.FirstName = " alberto " }),
 			wantKind:     UpdateKindCorrection,
 			wantField:    UpdateFieldFirstName,
-			wantHashMove: true,
+			wantHashMove: false,
 		},
 		{
-			name:         "first name collapsed internal whitespace",
+			name:         "first name collapsed internal whitespace does not move the hash",
 			old:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.FirstName = "juan  carlos" }),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.FirstName = "juan carlos" }),
 			wantKind:     UpdateKindCorrection,
 			wantField:    UpdateFieldFirstName,
-			wantHashMove: true,
+			wantHashMove: false,
 		},
 		{
 			name:         "first name two edits within percent bound",

@@ -51,6 +51,14 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 		return nil, types.ErrCredentialExists
 	}
 
+	// Check the sealed contents before charging for them.  Only the enclave can read the details,
+	// so this is the chain's one opportunity to tell the identity provider that what it submitted
+	// cannot be claimed -- after this point the credential is stored and the mistake surfaces on
+	// some future claimant instead.
+	if err := k.EnclaveValidatePersonalInfo(ctx, msg); err != nil {
+		return nil, err
+	}
+
 	c.ContextDebug(ctx, "CreateCredential Creating Credential")
 
 	moduleParams := k.GetParams(ctx)

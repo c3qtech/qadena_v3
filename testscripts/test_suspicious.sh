@@ -2,11 +2,27 @@
 #
 # Regression test for suspicious transaction generation.
 #
-# The enclave scans every transfer (enclave.go, scanTransaction).  Two rules, both keyed on the
+# The enclave scans every transfer (enclave.go, ScanTransaction).  Two rules, both keyed on the
 # USD value of the transfer -- converted through the pricefeed, so this depends on cn:qdn:usd:
 #
-#   1. a SINGLE transfer at or above SuspiciousThreshold (x/qadena/common/common.go: "10000usd")
-#   2. the AGGREGATE of transfers from one source to one destination reaching that threshold
+#   1. a SINGLE transfer at or above the sender's reporting threshold
+#   2. the AGGREGATE of transfers from one source to one destination, within a ROLLING WINDOW
+#      (suspicious_transaction_window_seconds, 30 days), reaching that threshold
+#
+# The threshold is per-jurisdiction and is the MOST RESTRICTIVE across the sender's residency and
+# citizenship, because both are unconstrained free fields on a credential -- if the loosest won, a
+# sender could raise their own limit by editing one.  al is citizenship=US, residency=PH, so the PH
+# override (500,000php, about 8,150usd) applies to him rather than the 10,000usd chain default.
+# The amounts below clear both, so this script does not depend on which one is selected.
+#
+# A sender with NO credential cannot transfer at all unless allow_transfer_without_ekyc is set: no
+# residency and no citizenship means no jurisdiction, hence no threshold to be held to.  Case 10
+# covers that.  Note the funding here goes through `tx bank send`, which is NOT scanned at all --
+# an escape hatch this script cannot close and does not pretend to.
+#
+# NOT covered here: window EXPIRY.  30 days cannot elapse inside a test run, and shrinking the
+# window would need a governance change that would then apply to every later suite.  Pruning and
+# aggregation are unit-tested instead -- x/qadena/common/suspicious_policy_test.go.
 #
 # In both cases the behaviour is the same and is what this script pins down:
 #
@@ -30,10 +46,25 @@ set -e
 
 function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
-# 1,200,000 qdn = 12,000 usd at cn:qdn:usd 0.01, comfortably over the 10,000 usd threshold
+# 1,200,000 qdn = 12,000 usd at cn:qdn:usd 0.01, comfortably over either threshold
 large_amount="1200000"
-# what al needs on hand to make the two attempts plus fees
-required="3000000"
+
+# For the AGGREGATE rule: three transfers that are individually well under the limit but together
+# clear it.  The amounts are chosen to land on the same side of the threshold whichever one applies,
+# so the test does not silently depend on al's PH override still being configured:
+#
+#                            usd     vs PH 8,148   vs default 10,000
+#   one transfer           3,500        under            under
+#   after two              7,000        under            under
+#   after three           10,500         OVER             OVER
+#
+# The third is the one that must trip, and only because of what came before it.
+aggregate_amount="350000"
+# small enough to be invisible to either rule; used to prove a reported pair has been RESET
+tiny_amount="10000"
+
+# what al needs on hand for the two single-transfer attempts, the aggregate run, and fees
+required="5000000"
 
 fail() {
     echo "FAILED: $1"
@@ -66,7 +97,7 @@ echo "========================="
 echo "preflight"
 echo "========================="
 qadenad_alias status > /dev/null 2>&1 || fail "chain is not reachable -- start it first"
-for w in al ann-eph1 treasury; do
+for w in al ann ann-eph1 victor victor-eph1 treasury; do
     addr_of "$w" > /dev/null 2>&1 || fail "$w not in the keyring -- run testscripts/setup.sh first"
 done
 
@@ -166,6 +197,130 @@ echo "========================="
 qadenad_alias tx qadena receive-funds ann-eph1 0qdn --from ann --yes > /dev/null \
     || fail "ann could not receive the flagged transfer"
 echo "ann received the flagged transfer"
+
+echo "========================="
+echo "6. sub-threshold transfers accumulate without firing"
+echo "========================="
+# The aggregate rule, which nothing above reaches: cases 2-5 all trip the SINGLE-transfer rule, and
+# that check returns before the transfer is recorded, so they never enter the window at all.
+#
+# The destination is victor-eph1, NOT one of ann's, and that matters.  An ephemeral wallet holds a
+# queue with one entry per incoming transfer, and test_transfers.sh reads only the FIRST entry when
+# it measures a delta -- correct only while a queue holds a single transfer.  These cases queue
+# several, so pointing them at ann-eph1 or ann-eph2 would leave that suite reading a stale entry and
+# failing on a later run.  Nothing asserts on victor-eph1's balance.
+#
+# Each transfer here is far below the limit, so any firing before the third would mean the
+# single-transfer rule is reading the wrong amount.
+count_before_agg=$(suspicious_count)
+for i in 1 2; do
+    qadenad_alias tx qadena transfer-funds victor-eph1 0qdn "${aggregate_amount}qdn" \
+        --transfer-note "regression test: aggregate leg $i" --from al --yes > /dev/null \
+        || fail "sub-threshold transfer $i was refused; it is well under the limit on its own"
+done
+echo "two transfers of ${aggregate_amount}qdn accepted"
+
+count_after_two=$(suspicious_count)
+[ "$count_after_two" = "$count_before_agg" ] \
+    || fail "the aggregate fired early ($count_before_agg -> $count_after_two); two legs are still under the limit"
+echo "nothing filed yet: still $count_after_two"
+
+echo "========================="
+echo "7. the transfer that crosses the aggregate is REFUSED without --opt-in-reason"
+echo "========================="
+# This is the rule-2 rejection path, previously untested.  The amount is identical to the two that
+# just succeeded, so the only thing that can refuse it is what came before -- which is exactly the
+# rolling window doing its job.
+if qadenad_alias tx qadena transfer-funds victor-eph1 0qdn "${aggregate_amount}qdn" \
+    --transfer-note "crosses aggregate, no opt-in" --from al --yes > /dev/null 2>&1; then
+    fail "the transfer crossing the aggregate threshold was accepted with no --opt-in-reason"
+fi
+echo "rejected as expected"
+
+count_after_refusal=$(suspicious_count)
+[ "$count_after_refusal" = "$count_after_two" ] \
+    || fail "a refused aggregate still filed a report ($count_after_two -> $count_after_refusal)"
+echo "and filed nothing: still $count_after_refusal"
+
+echo "========================="
+echo "8. the same transfer WITH --opt-in-reason files an aggregate report"
+echo "========================="
+qadenad_alias tx qadena transfer-funds victor-eph1 0qdn "${aggregate_amount}qdn" \
+    --opt-in-reason "regression test: aggregate total" \
+    --transfer-note "crosses aggregate, opted in" --from al --yes > /dev/null \
+    || fail "the opted-in aggregate transfer was refused"
+
+count_after_agg=""
+for _ in {1..15}; do
+    count_after_agg=$(suspicious_count)
+    [ "$count_after_agg" != "$count_after_refusal" ] && break
+    sleep 2
+done
+echo "suspicious transactions: $count_after_refusal -> $count_after_agg"
+[ "$count_after_agg" != "$count_after_refusal" ] \
+    || fail "three transfers totalling over the threshold filed no aggregate report"
+
+echo "========================="
+echo "9. a reported pair is RESET, not left primed"
+echo "========================="
+# After firing, the enclave drops that destination's entries.  Without it every later transfer to
+# the same destination would re-report the same accumulated total forever.  A tiny transfer must
+# therefore file nothing -- if the window had been left intact, it would still be over the limit and
+# would report again immediately.
+qadenad_alias tx qadena transfer-funds victor-eph1 0qdn "${tiny_amount}qdn" \
+    --transfer-note "regression test: after reset" --from al --yes > /dev/null \
+    || fail "a tiny transfer after the aggregate fired was refused; the pair was not reset"
+
+sleep 6
+count_after_reset=$(suspicious_count)
+[ "$count_after_reset" = "$count_after_agg" ] \
+    || fail "a tiny transfer re-reported ($count_after_agg -> $count_after_reset); the pair was not reset after firing"
+echo "no further report filed: still $count_after_reset"
+
+# Best-effort tidy-up.  receive-funds drains exactly ONE queued entry per call and an eph wallet
+# holds one entry per incoming transfer, so draining fully needs a loop -- and it is deliberately
+# allowed to fail: nothing in this script or any other asserts on victor-eph1's balance, so a
+# leftover entry is untidy rather than wrong.  What DOES have to be repeatable is the window, and
+# that is reset by the report in case 8 regardless of whether the funds are collected.
+for _ in {1..6}; do
+    qadenad_alias tx qadena receive-funds victor-eph1 0qdn --from victor --yes > /dev/null 2>&1 || break
+done
+
+echo "========================="
+echo "10. a wallet with no eKYC data may not send at all"
+echo "========================="
+# The threshold is chosen from the sender's residency and citizenship, so a sender with neither has
+# no limit to be measured against.  Falling back to the chain default would make "hold no
+# credential" the cheapest way to pick your own threshold, so the transfer is refused instead --
+# governed by allow_transfer_without_ekyc, which is false here and in launch-config.yml.
+#
+# The wallet below is built exactly as a real user is (real wallet, then linked eph wallet) and is
+# funded by the create-wallet incentive; the ONLY thing it lacks is a claimed credential.  Asserting
+# the specific code matters: a bare "it failed" would also pass if the wallet simply could not
+# transfer for want of funds or an eph wallet, which would test nothing.
+noekyc_wallet="noekyc-$(date +%s | tail -c 7)"
+expect_ok_tx() {
+    "$@" > /dev/null 2>&1 || fail "setup step failed: $*"
+}
+expect_ok_tx qadenad_alias tx qadena create-wallet "$noekyc_wallet" pioneer1 create-wallet-sponsor --yes
+expect_ok_tx qadenad_alias tx qadena create-wallet "$noekyc_wallet-eph1" pioneer1 create-wallet-sponsor \
+    --link-to-real-wallet "$noekyc_wallet" --eph-account-index 1 --yes
+echo "created $noekyc_wallet with an eph wallet and no credential"
+
+# Must sit inside the create_wallet_incentive (500qdn encrypted) this wallet was funded with.  Ask
+# for more and the transfer fails on funds BEFORE the scan runs -- which is why the code is asserted
+# below rather than the mere fact of failure.
+noekyc_amount="100"
+noekyc_out=$(qadenad_alias tx qadena transfer-funds ann-eph1 0qdn "${noekyc_amount}qdn" \
+    --transfer-note "no ekyc" --from "$noekyc_wallet" --yes 2>&1) && noekyc_rc=0 || noekyc_rc=$?
+if [ "$noekyc_rc" -eq 0 ]; then
+    fail "a wallet with no credential was allowed to transfer"
+fi
+if ! echo "$noekyc_out" | grep -q "code 1158"; then
+    echo "$noekyc_out" | grep -oE "codespace qadena code [0-9]+: [A-Za-z ;]+" | tail -1
+    fail "expected qadena code 1158 (no eKYC), got the above -- the transfer must be refused for the RIGHT reason"
+fi
+echo "rejected as expected (qadena code 1158)"
 
 echo "========================="
 echo "SUSPICIOUS TRANSACTION TESTS PASSED"

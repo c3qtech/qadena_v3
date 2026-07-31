@@ -193,7 +193,8 @@ func CmdShowWallet() *cobra.Command {
 						if err != nil {
 							return err
 						}
-						fmt.Println(c.WhiteUnderlineText("Transparent")+" balance", c.GreenText(qadenaCoin.Amount.String()+qadenaCoin.Denom))
+						fmt.Println()
+						fmt.Println(c.WhiteUnderlineText("Transparent bank")+" balance", c.GreenText(qadenaCoin.Amount.String()+qadenaCoin.Denom))
 
 						continue
 					}
@@ -240,28 +241,78 @@ func CmdShowWallet() *cobra.Command {
 					// check wether the token is the primary token "aqdn"
 					if coin.Denom == types.AQadenaTokenDenom {
 
-						if _, ok := wallet.WalletAmount[types.QadenaTokenDenom]; ok {
-							displayWalletAmount(wallet.WalletAmount[types.QadenaTokenDenom], decryptAsPrivKeyHex, decryptAsPubKey)
-						}
+						// An ephemeral wallet holds NO spendable balance -- everything on it is
+						// pending receipt into the linked real wallet -- so it gets one queue
+						// listed in the order receive-funds will take them, and no "actual".
+						//
+						// walletAmount is the HEAD of that queue, not a balance: receive-funds
+						// takes it and then promotes queuedWalletAmount[0] into its place, which
+						// is why one call drains one entry.  Printing it first is therefore the
+						// receive order; printing the queue first would show the tail before the
+						// head.  A real wallet is the opposite case: transfers cannot target one
+						// at all, its queue is unused, and walletAmount really is the balance.
+						isEphemeral := wallet.EphemeralWalletAmountCount[types.QadenaTokenDenom] != types.QadenaRealWallet
+						walletAmount, hasWalletAmount := wallet.WalletAmount[types.QadenaTokenDenom]
+						queued := wallet.QueuedWalletAmount[types.QadenaTokenDenom].WalletAmounts
 
-						// if there are queued wallet amounts
-						if len(wallet.QueuedWalletAmount[types.QadenaTokenDenom].WalletAmounts) > 0 {
-							fmt.Println(c.WhiteUnderlineText("*Queued*"))
-							for _, queuedWalletAmount := range wallet.QueuedWalletAmount[types.QadenaTokenDenom].WalletAmounts {
-								displayWalletAmount(queuedWalletAmount, decryptAsPrivKeyHex, decryptAsPubKey)
+						if isEphemeral {
+							// Entries in the order receive-funds will take them: the head first,
+							// then the rest.
+							entries := make([]*types.WalletAmount, 0, len(queued)+1)
+							if hasWalletAmount {
+								entries = append(entries, walletAmount)
 							}
-						}
+							entries = append(entries, queued...)
 
-						if _, ok := wallet.WalletAmount[types.QadenaTokenDenom]; ok {
+							// ...but only this many can actually be taken.  receive-funds refuses
+							// once EphemeralWalletAmountCount hits zero, and that counter tracks
+							// TRANSFERS received -- while the list also holds the entry
+							// create-wallet seeded with the wallet's incentive, which nobody sent.
+							// So the list is normally one longer than the count, and listing it as
+							// one undifferentiated queue would imply funds are claimable that are
+							// not.  Splitting it here is what makes a stuck entry visible.
+							receivable := int(wallet.EphemeralWalletAmountCount[types.QadenaTokenDenom])
+							if receivable < 0 {
+								receivable = 0
+							}
+							if receivable > len(entries) {
+								receivable = len(entries)
+							}
+
+							if receivable > 0 {
+								fmt.Println(c.WhiteUnderlineText("*Queued*")+" (in receive order,", receivable, "claimable)")
+								for _, entry := range entries[:receivable] {
+									displayWalletAmount(entry, decryptAsPrivKeyHex, decryptAsPubKey)
+								}
+							} else {
+								fmt.Println(c.WhiteUnderlineText("*Queued*") + " (nothing claimable)")
+							}
+
+							if len(entries) > receivable {
+								fmt.Println()
+								fmt.Println(c.WhiteUnderlineText("*Held, not claimable*") + " (receive-funds will refuse these)")
+								for _, entry := range entries[receivable:] {
+									displayWalletAmount(entry, decryptAsPrivKeyHex, decryptAsPubKey)
+								}
+							}
 						} else {
-							fmt.Println(c.WhiteUnderlineText("Encrypted")+" balance", c.GreenText("0"+types.QadenaTokenDenom))
+							fmt.Println(c.WhiteUnderlineText("*Actual*"))
+							if hasWalletAmount {
+								displayWalletAmount(walletAmount, decryptAsPrivKeyHex, decryptAsPubKey)
+							} else {
+								fmt.Println(c.WhiteUnderlineText("Encrypted")+" balance", c.GreenText("0"+types.QadenaTokenDenom))
+							}
 						}
 
 						qadenaCoin, err := sdk.ConvertDecCoin(sdk.NewDecCoinFromCoin(coin), types.QadenaTokenDenom)
 						if err != nil {
 							return err
 						}
-						fmt.Println(c.WhiteUnderlineText("Transparent")+" balance", c.GreenText(qadenaCoin.Amount.String()+qadenaCoin.Denom))
+						// Set apart deliberately: this is an ordinary bank balance held by the
+						// address, not an encrypted amount and not part of the queue above.  Run
+						// together with that listing it reads as one more entry in it.
+						fmt.Println()
+						fmt.Println(c.WhiteUnderlineText("Transparent bank")+" balance", c.GreenText(qadenaCoin.Amount.String()+qadenaCoin.Denom))
 
 						continue
 					}
@@ -306,7 +357,8 @@ func CmdShowWallet() *cobra.Command {
 										return err
 									}
 
-									fmt.Println(c.WhiteUnderlineText("Transparent")+" balance", c.GreenText(coin.Amount.String()+" "+d.GetBaseDenom()+"("+coin.Denom+")"))
+									fmt.Println()
+									fmt.Println(c.WhiteUnderlineText("Transparent bank")+" balance", c.GreenText(coin.Amount.String()+" "+d.GetBaseDenom()+"("+coin.Denom+")"))
 
 									if note != "" {
 										fmt.Println(c.WhiteUnderlineText("Note")+" ", c.GreenText(note))
@@ -380,7 +432,8 @@ func CmdShowWallet() *cobra.Command {
 										return err
 									}
 
-									fmt.Println(c.WhiteUnderlineText("Transparent")+" balance", c.GreenText(otherCoin.Amount.String()+symbol+"("+otherCoin.Denom+")"))
+									fmt.Println()
+									fmt.Println(c.WhiteUnderlineText("Transparent bank")+" balance", c.GreenText(otherCoin.Amount.String()+symbol+"("+otherCoin.Denom+")"))
 
 									if note != "" {
 										fmt.Println(c.WhiteUnderlineText("Note")+" ", c.GreenText(note))
@@ -477,7 +530,8 @@ func CmdShowWallet() *cobra.Command {
 										return err
 									}
 
-									fmt.Println(c.WhiteUnderlineText("Transparent")+" balance", c.GreenText(otherCoin.Amount.String()+symbol+"("+otherCoin.Denom+")"))
+									fmt.Println()
+									fmt.Println(c.WhiteUnderlineText("Transparent bank")+" balance", c.GreenText(otherCoin.Amount.String()+symbol+"("+otherCoin.Denom+")"))
 
 									if note != "" {
 										fmt.Println(c.WhiteUnderlineText("Note")+" ", c.GreenText(note))

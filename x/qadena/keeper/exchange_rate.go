@@ -62,6 +62,92 @@ func (k Keeper) ExchangeRateToQadena(ctx sdk.Context, denom string) (cosmosmath.
 	return cp.Price, nil
 }
 
+// ResolveThresholdToAttoUSD converts a reporting threshold written in any currency -- "10000usd",
+// "500000php" -- into attoUSD, the unit the enclave aggregates in.
+//
+// This lives on the keeper because it needs the pricefeed and the enclave has none.  It is also why
+// the enclave receives thresholds pre-resolved: only the enclave can see which countries a sender
+// belongs to (they are sealed in a credential), and only the keeper can price them, so neither side
+// can do the whole job alone.
+//
+// The conversion goes through qdn, using the same cn:qdn:<denom> markets everything else here uses:
+//
+//	usd per denom = price(cn:qdn:usd) / price(cn:qdn:denom)
+//
+// No fn:<fiat>:<fiat> market is required, so a chain only has to quote its own token against each
+// currency it sets a threshold in.
+//
+// FAILS CLOSED, like ExchangeRateToQadena: an unpriceable threshold is an error, never a zero.  A
+// zero threshold would report every transfer, and skipping the entry silently would drop a
+// jurisdiction's limit back to the chain default without anything saying so.
+func (k Keeper) ResolveThresholdToAttoUSD(ctx sdk.Context, threshold string) (cosmosmath.Int, error) {
+	coin, err := sdk.ParseCoinNormalized(threshold)
+	if err != nil {
+		return cosmosmath.Int{}, errorsmod.Wrapf(types.ErrInvalidOperation,
+			"cannot parse suspicious-transaction threshold %q: %s", threshold, err.Error())
+	}
+
+	if !coin.Amount.IsPositive() {
+		return cosmosmath.Int{}, errorsmod.Wrapf(types.ErrInvalidOperation,
+			"suspicious-transaction threshold %q is not positive", threshold)
+	}
+
+	atto := cosmosmath.NewIntWithDecimal(1, 18)
+
+	switch coin.Denom {
+	case types.AttoUSDFiatDenom:
+		return coin.Amount, nil
+	case types.USDFiatDenom:
+		return coin.Amount.Mul(atto), nil
+	}
+
+	usdRate, err := k.ExchangeRateToQadena(ctx, types.USDFiatDenom)
+	if err != nil {
+		return cosmosmath.Int{}, err
+	}
+	denomRate, err := k.ExchangeRateToQadena(ctx, coin.Denom)
+	if err != nil {
+		return cosmosmath.Int{}, err
+	}
+
+	// denomRate is positive -- ExchangeRateToQadena guarantees it -- so this cannot divide by zero
+	usdPerDenom := usdRate.Quo(denomRate)
+	value := cosmosmath.LegacyNewDecFromInt(coin.Amount).Mul(usdPerDenom).MulInt(atto).RoundInt()
+
+	if !value.IsPositive() {
+		return cosmosmath.Int{}, errorsmod.Wrapf(types.ErrNoPriceForDenom,
+			"threshold %q converted to a non-positive attoUSD value", threshold)
+	}
+
+	c.ContextDebug(ctx, "threshold "+threshold+" resolved to "+value.String()+" attousd")
+	return value, nil
+}
+
+// SuspiciousThresholdTable resolves the chain default and every per-jurisdiction override into
+// attoUSD, ready to hand to the enclave.
+func (k Keeper) SuspiciousThresholdTable(ctx sdk.Context, p types.Params) (string, []*types.ScanCountryThreshold, error) {
+	defaultThreshold, err := k.ResolveThresholdToAttoUSD(ctx, c.SuspiciousThresholdFromParams(p))
+	if err != nil {
+		return "", nil, err
+	}
+
+	table := make([]*types.ScanCountryThreshold, 0, len(p.SuspiciousTransactionThresholdOverrides))
+	for _, override := range p.SuspiciousTransactionThresholdOverrides {
+		value, err := k.ResolveThresholdToAttoUSD(ctx, override.Threshold)
+		if err != nil {
+			// fail closed: a configured jurisdiction that cannot be priced must not quietly fall
+			// back to the (usually looser) chain default
+			return "", nil, errorsmod.Wrapf(err, "threshold for %s", override.Country)
+		}
+		table = append(table, &types.ScanCountryThreshold{
+			Country:          override.Country,
+			ThresholdAttoUSD: value.String(),
+		})
+	}
+
+	return defaultThreshold.String(), table, nil
+}
+
 // ConvertFeeToQadena converts a fee that may be denominated in fiat into QadenaTokenDenom.
 //
 // A fee already denominated in the chain's own token is returned unchanged, so callers do not have

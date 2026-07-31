@@ -89,6 +89,27 @@ message EncryptableCredentialIdentityHistory {
 	int64 LastUpdateHeight = 3;
 }
 
+// One recorded outgoing transfer, held in the enclave's rolling AML window.  The source wallet is
+// the store key, so it is not repeated here.
+//
+// UnixTime is the BLOCK time the transfer was scanned at, in seconds.  It must never be wall clock:
+// the scan runs inside the enclave on every validator and decides whether the transfer is rejected,
+// so a clock that differed between nodes would fork the chain.  Seconds rather than a
+// google.protobuf.Timestamp keeps this to plain scalars, matching the note on
+// EncryptableCredentialIdentityHistory above.
+message EncryptableScanTransfer {
+	int64 UnixTime = 1;
+	string DestinationWalletID = 2;
+	cosmos.base.v1beta1.Coin USDCoinAmount = 3 [(gogoproto.nullable) = false];
+	cosmos.base.v1beta1.Coin CoinAmount = 4 [(gogoproto.nullable) = false];
+}
+
+// The window itself: every transfer one wallet has sent inside the configured period.  Entries
+// older than the window are pruned lazily, the next time that wallet transfers.
+message EncryptableScanTransferHistory {
+	repeated EncryptableScanTransfer Transfers = 1;
+}
+
 message EncryptableAuthorizedSignatory {
 	string Nonce = 1;
 	repeated string WalletID = 2;

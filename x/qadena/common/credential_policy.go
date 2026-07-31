@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/c3qtech/qadena_v3/x/qadena/types"
 )
@@ -226,9 +225,10 @@ func ClassifyPersonalInfoUpdate(oldDetails, newDetails *types.EncryptablePersona
 
 	policy = policy.WithDefaults()
 
-	// Exact comparison, because that is what CreateCredentialHash sees.  A change that only
-	// normalization would hide -- "Asuncion" to "asuncion" -- really does produce a different
-	// hash and must be classified, not waved through.
+	// Exact comparison, deliberately: a case-or-spacing-only edit ("Asuncion" to "asuncion") still
+	// rewrites the stored credential, so it is a real update that must be classified and must obey
+	// the one-field rule.  It just does not MOVE the identity -- CreateCredentialHash canonicalizes
+	// names -- which is why HashChanged is derived separately below rather than from this list.
 	var changed []string
 	if oldDetails.FirstName != newDetails.FirstName {
 		changed = append(changed, UpdateFieldFirstName)
@@ -259,7 +259,15 @@ func ClassifyPersonalInfoUpdate(oldDetails, newDetails *types.EncryptablePersona
 	}
 
 	field := changed[0]
-	verdict := UpdateVerdict{Kind: UpdateKindCorrection, ChangedField: field, HashChanged: true}
+
+	// Derived from the hash itself, not assumed from "a field changed".  Canonicalization means a
+	// case-or-spacing-only edit leaves the identity exactly where it was, and claiming otherwise
+	// would trip the cross-check in enclave_update_credential.go and reject a harmless correction.
+	// Downstream this also means such an edit registers no alias and does not consume the update
+	// rate limit, both of which are right: nothing about the identity moved.
+	hashChanged := CreateCredentialHash(oldDetails) != CreateCredentialHash(newDetails)
+
+	verdict := UpdateVerdict{Kind: UpdateKindCorrection, ChangedField: field, HashChanged: hashChanged}
 
 	switch field {
 	case UpdateFieldFirstName:
@@ -401,26 +409,13 @@ func checkBirthdateCorrection(oldBirthdate, newBirthdate string, policy UpdatePo
 	return rejectf("birth year %d to %d is neither a digit error nor within %d years", oldY, newY, policy.MaxYearDelta)
 }
 
-// normalizeNameForCompare lowercases, trims, and collapses internal whitespace runs to a single
-// space.  Stdlib only, by design (see the file comment).
+// normalizeNameForCompare is CanonicalizeName (common.go).  They must be the same function: the
+// policy decides whether an identity moved, and CreateCredentialHash decides where it moved to, so
+// if the two disagreed about what "the same name" means, ClassifyPersonalInfoUpdate would report
+// HashChanged for a hash that did not move -- which enclave_update_credential.go treats as a fault
+// and refuses outright.
 func normalizeNameForCompare(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-
-	var b strings.Builder
-	b.Grow(len(s))
-	inSpace := false
-	for _, r := range s {
-		if unicode.IsSpace(r) {
-			inSpace = true
-			continue
-		}
-		if inSpace {
-			b.WriteRune(' ')
-			inSpace = false
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
+	return CanonicalizeName(s)
 }
 
 // restrictedEditDistance is the optimal string alignment distance: Levenshtein plus adjacent

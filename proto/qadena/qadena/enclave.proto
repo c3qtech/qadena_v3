@@ -106,6 +106,10 @@ service QadenaEnclave {
   rpc SetSecretSharePrivateKey (SecretSharePrivK) returns (SetSecretSharePrivateKeyReply) {}
   rpc ValidateDestinationWallet (MsgCreateWallet) returns (ValidateDestinationWalletReply) {}
   rpc ValidateCredential (MsgBindCredential) returns (ValidateCredentialReply) {}
+  // Decrypts a freshly submitted credential and checks the fields the identity hash is built from,
+  // so an identity provider is told at submission time rather than the credential silently becoming
+  // unclaimable.  The chain cannot do this itself -- the details arrive encrypted.
+  rpc ValidatePersonalInfo (MsgCreateCredential) returns (ValidatePersonalInfoReply) {}
   rpc ValidateTransferPrime (MsgTransferFunds) returns (ValidateTransferPrimeReply) {}
   rpc ValidateTransferDoublePrime (MsgReceiveFunds) returns (ValidateTransferDoublePrimeReply) {}
   rpc SyncWallets (MsgSyncWallets) returns (SyncWalletsReply) {}
@@ -265,6 +269,21 @@ message MsgScanTransactions {
   int64 height = 2;
   MsgTransferFunds msg = 3;
   string exchangerate = 4;
+  // The AML policy, read per scan rather than fixed at enclave startup, so a governance change to
+  // the window or the eKYC gate takes effect without restarting every node.
+  Params params = 5 [(gogoproto.nullable) = false];
+  // Thresholds already converted to attoUSD by the keeper.  They arrive pre-resolved because
+  // neither side can do this alone: the keeper holds the pricefeed but cannot see the sender's
+  // countries, which are sealed inside a credential, while the enclave can read the countries but
+  // has no pricefeed.  So the keeper values every configured threshold and the enclave only picks.
+  repeated ScanCountryThreshold countryThresholds = 6;
+  // Applied when none of the sender's countries is configured.  Also in attoUSD.
+  string defaultThresholdAttoUSD = 7;
+}
+
+message ScanCountryThreshold {
+  string country = 1;
+  string thresholdAttoUSD = 2;
 }
 
 message MsgSyncWallets {
@@ -423,6 +442,15 @@ message ValidateDestinationWalletReply {
 
 message ValidateCredentialReply {
   bool status = 1;
+}
+
+// Reply to ValidatePersonalInfo.  Carries a reason code rather than a message: the enclave is the
+// only party that can read the credential, and a free-text reason would put the decrypted values
+// into a public transaction error.  The keeper maps the code to a fixed sentence that names the
+// rule broken without quoting what was submitted.
+message ValidatePersonalInfoReply {
+  bool  status = 1;
+  int32 reason = 2;
 }
 
 message ValidateTransferPrimeReply {

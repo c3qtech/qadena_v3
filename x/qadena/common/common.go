@@ -29,6 +29,7 @@ import (
 	"context"
 
 	"errors"
+	"unicode"
 
 	"crypto/sha256"
 	"math/big"
@@ -100,7 +101,10 @@ func (ih *UInt64Holder) Get() uint64 {
 }
 
 var BigIntZero *big.Int = big.NewInt(0)
-var SuspiciousThreshold = "10000usd"
+
+// The AML reporting threshold used to be this one compiled-in figure.  It is now per-jurisdiction
+// and governance-tunable -- see DefaultSuspiciousThreshold and SuspiciousPolicyFromParams in
+// suspicious_policy.go.
 
 var Seed = rand.NewSource(time.Now().UnixNano())
 var Random = rand.New(Seed)
@@ -180,6 +184,11 @@ const credentialHashSeparators = ",|"
 
 var ErrCredentialHashSeparatorInField = errors.New("personal info fields may not contain ',' or '|'")
 
+// ErrCredentialHashDecomposedName rejects a name carrying combining marks -- see the check in
+// ValidatePersonalInfoDetails.  The remedy is to submit the precomposed (NFC) spelling, which is
+// what every normal input method produces.
+var ErrCredentialHashDecomposedName = errors.New("names must use precomposed characters (e.g. \"ñ\" as one character, not \"n\" plus a combining tilde)")
+
 // NormalizeBirthdateTime parses a birthdate in the canonical layout.  Case-insensitive month
 // spellings ("1970-feb-02") parse fine; it is Format, not Parse, that fixes the canonical
 // spelling, which is why NormalizeBirthdate round-trips through both.
@@ -197,37 +206,161 @@ func NormalizeBirthdate(birthdate string) (string, error) {
 	return t.Format(PersonalInfoBirthdateLayout), nil
 }
 
+// PersonalInfoReason identifies which invariant a credential broke.  It exists so the enclave can
+// tell the chain WHY a submission was refused without saying WHAT was submitted: the enclave is the
+// only party that can read the credential, and a transaction error is public, so the detailed
+// messages below must never leave the enclave's log.  A reason code names the rule, not the value.
+type PersonalInfoReason int32
+
+const (
+	PersonalInfoOK PersonalInfoReason = iota
+	PersonalInfoNilDetails
+	PersonalInfoSeparatorInField
+	PersonalInfoDecomposedName
+	PersonalInfoBirthdateFormat
+	PersonalInfoBirthdateNotCanonical
+	PersonalInfoInvalidGender
+)
+
+// Message is the sentence shown to the submitter.  Every one of these is a fixed string: none
+// interpolates a submitted value, which is what makes it safe to put in a transaction error.
+func (r PersonalInfoReason) Message() string {
+	switch r {
+	case PersonalInfoOK:
+		return ""
+	case PersonalInfoNilDetails:
+		return "personal info details are missing"
+	case PersonalInfoSeparatorInField:
+		return "personal info fields may not contain ',' or '|'"
+	case PersonalInfoDecomposedName:
+		return "names must use precomposed characters (e.g. \"ñ\" as one character, not \"n\" plus a combining tilde)"
+	case PersonalInfoBirthdateFormat:
+		return "birthdate must be formatted as " + PersonalInfoBirthdateLayout
+	case PersonalInfoBirthdateNotCanonical:
+		return "birthdate is not in its canonical spelling; use the form " + PersonalInfoBirthdateLayout
+	case PersonalInfoInvalidGender:
+		return "gender must be one of m, f, n"
+	default:
+		return "personal info is invalid"
+	}
+}
+
+// PersonalInfoReasonOf reports which invariant a credential breaks, or PersonalInfoOK.  This is the
+// form the enclave uses, because it can be returned across the enclave boundary safely.
+func PersonalInfoReasonOf(pd *types.EncryptablePersonalInfoDetails) PersonalInfoReason {
+	r, _ := validatePersonalInfoDetails(pd)
+	return r
+}
+
 // ValidatePersonalInfoDetails enforces the invariants CreateCredentialHash depends on.  Call it
 // before hashing personal info, on both the client (for a friendly error) and inside the enclave
 // (because the client cannot be trusted).
+//
+// The errors it returns may quote the submitted value, which makes them useful on the client and
+// unsafe on the chain.  Anything running inside the enclave should return PersonalInfoReasonOf's
+// code instead and log this message rather than returning it.
 func ValidatePersonalInfoDetails(pd *types.EncryptablePersonalInfoDetails) error {
+	_, err := validatePersonalInfoDetails(pd)
+	return err
+}
+
+// validatePersonalInfoDetails is the single implementation behind both forms above, so a rule can
+// never be enforced in one and missed in the other.
+func validatePersonalInfoDetails(pd *types.EncryptablePersonalInfoDetails) (PersonalInfoReason, error) {
 	if pd == nil {
-		return errors.New("personal info details are nil")
+		return PersonalInfoNilDetails, errors.New("personal info details are nil")
 	}
 
 	for _, f := range []string{pd.FirstName, pd.MiddleName, pd.LastName, pd.Birthdate, pd.Gender} {
 		if strings.ContainsAny(f, credentialHashSeparators) {
-			return ErrCredentialHashSeparatorInField
+			return PersonalInfoSeparatorInField, ErrCredentialHashSeparatorInField
+		}
+	}
+
+	// Unicode has two spellings for an accented letter: precomposed ("ñ" = U+00F1) and decomposed
+	// ("n" + U+0303).  They look identical and are the same name, but hash differently, which would
+	// let the same person hold two identities.  The usual fix is norm.NFC, but golang.org/x/text is
+	// barred here (module-versioned Unicode tables, see credential_policy.go) -- so instead of
+	// normalizing the decomposed form we reject it, which needs only the stdlib's unicode.Mn table.
+	//
+	// This is the same posture as the birthdate check below: refuse non-canonical input rather than
+	// silently rewrite it.  The cost is that scripts whose marks have no precomposed form (parts of
+	// Devanagari, Thai, Hebrew niqqud) cannot be entered; Latin script, including every Spanish and
+	// Filipino diacritic, is fully precomposable and unaffected.
+	for _, f := range []string{pd.FirstName, pd.MiddleName, pd.LastName} {
+		for _, r := range f {
+			if unicode.Is(unicode.Mn, r) {
+				return PersonalInfoDecomposedName, ErrCredentialHashDecomposedName
+			}
 		}
 	}
 
 	normalized, err := NormalizeBirthdate(pd.Birthdate)
 	if err != nil {
-		return errors.New("birthdate must be formatted as " + PersonalInfoBirthdateLayout)
+		return PersonalInfoBirthdateFormat, errors.New("birthdate must be formatted as " + PersonalInfoBirthdateLayout)
 	}
 	if normalized != pd.Birthdate {
-		return errors.New("birthdate is not canonical, expected " + normalized)
+		return PersonalInfoBirthdateNotCanonical, errors.New("birthdate is not canonical, expected " + normalized)
 	}
 
 	if !types.ValidateGender(pd.Gender) {
-		return errors.New("invalid gender " + pd.Gender)
+		return PersonalInfoInvalidGender, errors.New("invalid gender " + pd.Gender)
 	}
 
-	return nil
+	return PersonalInfoOK, nil
 }
 
+// CanonicalizeName reduces a name to the form the identity hash is computed over: lowercased,
+// trimmed, with internal whitespace runs collapsed to a single space.  The stored credential keeps
+// whatever the user typed -- this affects only hashing and comparison.
+//
+// It exists because uniqueness is an EXACT lookup on CreateCredentialHash.  Without it "SMITH",
+// "Smith" and "smith" are three unrelated identities, and the anti-squatting check that refuses a
+// second claim of an identity is defeated by the shift key.
+//
+// What it deliberately does NOT do is strip diacritics.  "Peña" and "Pena" are different surnames,
+// and folding them together would make the second person to claim collide with the first -- a false
+// collision has no recovery path, whereas a missed one is merely the status quo.  For the same
+// reason it does not strip punctuation: "O'Brien" and "OBrien" stay distinct.
+//
+// Stdlib only, for the reason given at the top of credential_policy.go: this runs inside the
+// enclave on every validator, and golang.org/x/text's Unicode tables are module-versioned, so two
+// nodes on different module versions could canonicalize differently and fork.  unicode.IsSpace
+// moves only with the toolchain.  The NFC/NFD half of the problem is handled by rejection instead
+// -- see the combining-mark check in ValidatePersonalInfoDetails.
+func CanonicalizeName(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+
+	var b strings.Builder
+	b.Grow(len(s))
+	inSpace := false
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			inSpace = true
+			continue
+		}
+		if inSpace {
+			b.WriteRune(' ')
+			inSpace = false
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// CreateCredentialHash derives the identity key that the enclave's uniqueness index is keyed on.
+//
+// The name fields are canonicalized first (see CanonicalizeName); birthdate and gender are not,
+// because ValidatePersonalInfoDetails already refuses anything but their canonical spelling.
+//
+// Changing what this function computes orphans every hash already recorded in the enclave's
+// uniqueness index, so it cannot be altered on a live chain without a migration that re-derives
+// every entry from decrypted credentials.  Note also that the client computes this hash too
+// (tx_claim_credential.go, tx_update_credential.go) and the enclave verifies its own recomputation
+// against it -- so wallet and chain must ship this function in lockstep, or every claim fails with
+// ErrGenericPedersen.
 func CreateCredentialHash(pd *types.EncryptablePersonalInfoDetails) string {
-	firstMiddleLast := pd.LastName + "," + pd.MiddleName + "," + pd.FirstName
+	firstMiddleLast := CanonicalizeName(pd.LastName) + "," + CanonicalizeName(pd.MiddleName) + "," + CanonicalizeName(pd.FirstName)
 	credentialHash := hex.EncodeToString(tmhash.Sum([]byte(firstMiddleLast + "|" + pd.Birthdate + "|" + pd.Gender)))
 	return credentialHash
 }

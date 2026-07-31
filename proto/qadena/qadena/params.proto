@@ -50,4 +50,40 @@ message Params {
   // gates so a jurisdiction can disable a transition by param rather than by fork
   bool update_credential_allow_last_name_life_event = 19;
   bool update_credential_allow_gender_change = 20;
+
+  // The AML scan in the enclave (ScanTransaction).  Two rules use these: a single transfer at or
+  // above the threshold, and the rolling-window total from one source to one destination reaching
+  // it.  Like the update-credential block above, an empty string or a zero reads as UNSET on a
+  // chain that predates these params, so SuspiciousPolicyFromParams substitutes the compiled-in
+  // defaults.  It must never interpret them literally: a zero threshold would flag every transfer
+  // and a zero window would expire the history instantly, silently disabling the aggregate rule.
+  string suspicious_transaction_threshold = 21;
+  // Length of the rolling window.  Measured against the BLOCK time supplied to the enclave, never
+  // wall clock -- the scan runs on every validator and its verdict decides whether the transfer is
+  // rejected, so a non-deterministic clock here would fork the chain.
+  int64 suspicious_transaction_window_seconds = 22;
+  // Per-jurisdiction thresholds, because the reporting limit is a legal number set locally and not
+  // a converted one: PH files at PHP 500,000, the US at USD 10,000.  Anything not listed here falls
+  // back to suspicious_transaction_threshold.
+  repeated SuspiciousThresholdOverride suspicious_transaction_threshold_overrides = 23
+      [(gogoproto.nullable) = false];
+  // Whether a wallet with no claimed credential may send at all.  Named for what it PERMITS so
+  // that proto3's zero value (false) is the ENFORCING state: an unset param must never silently
+  // switch an AML control off, and every other spelling of this flag would do exactly that on a
+  // chain whose params predate it.
+  bool allow_transfer_without_ekyc = 24;
+}
+
+// One jurisdiction's reporting threshold, in that jurisdiction's own currency.
+message SuspiciousThresholdOverride {
+  // Params sets gogoproto.equal, and its generated Equal recurses into this message, so this must
+  // generate an Equal too.
+  option (gogoproto.equal) = true;
+
+  // ISO 3166-1 alpha-2, matching the normalized Citizenship/Residency fields on a credential
+  // (tx_create_credential.go normalizes both through gountries to Alpha2).
+  string country = 1;
+  // e.g. "500000php".  The keeper converts this to a common unit through the pricefeed before the
+  // enclave sees it; the enclave has no pricefeed access of its own.
+  string threshold = 2;
 }

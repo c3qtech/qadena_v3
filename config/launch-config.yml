@@ -311,6 +311,26 @@ genesis:
         update_credential_allow_last_name_life_event: true
         update_credential_allow_gender_change: true
 
+        # AML scan.  These are LEGAL figures, so they must be confirmed against each regulator the
+        # chain reports to rather than carried over from here.  The threshold that applies to a
+        # transfer is the LOWEST among the sender's residency and citizenship, so listing a country
+        # can only tighten a sender's limit, never loosen it.
+        #
+        # Every currency named below needs a cn:qdn:<denom> market with a live price, or transfers
+        # fail closed: the keeper refuses to scan a transfer it cannot measure. Adding a
+        # jurisdiction here means adding its market and an oracle posting to it.
+        suspicious_transaction_threshold: "TODO_SUSPICIOUS_THRESHOLD"   # e.g. "10000usd"
+        suspicious_transaction_threshold_overrides:
+          # e.g. PH files at PHP 500,000 rather than a converted USD figure
+          - country: "TODO_JURISDICTION_ALPHA2"
+            threshold: "TODO_JURISDICTION_THRESHOLD"
+        # 30 days.  Shortening this narrows what counts as structuring; lengthening it grows the
+        # stored history per wallet.
+        suspicious_transaction_window_seconds: 2592000
+        # Leave false unless the chain deliberately permits un-KYC'd wallets to send.  False is the
+        # enforcing state, and is also what an un-upgraded chain reports, so it fails safe.
+        allow_transfer_without_ekyc: false
+
       # THE MOST SECURITY-CRITICAL ENTRY IN THIS FILE.
       # These are the SGX measurements the chain will trust.  The test chain ships
       # test-unique-id/test-signer-id/test-product-id, which WORK -- so this is the item most likely

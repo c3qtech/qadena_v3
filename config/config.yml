@@ -284,6 +284,22 @@ genesis:
         # marriage/divorce surname replacement
         update_credential_allow_last_name_life_event: true
         update_credential_allow_gender_change: true
+        # AML scan (ScanTransaction in the enclave).  The reporting limit is a legal figure set by
+        # each jurisdiction, not a converted one, so it is expressed in that jurisdiction's own
+        # currency; the keeper prices each one through cn:qdn:<denom> before the enclave compares.
+        # Every currency named here therefore needs a market -- php and usd both have one.
+        suspicious_transaction_threshold: "10000usd"
+        suspicious_transaction_threshold_overrides:
+          - country: "PH"
+            threshold: "500000php"
+        # 30 days, the usual structuring-detection window.  Measured on BLOCK time, so this is safe
+        # to keep at the real value in tests -- it costs no wall-clock waiting.  Expiry itself is
+        # therefore not covered end-to-end; see the unit tests in x/qadena/common.
+        suspicious_transaction_window_seconds: 2592000
+        # Whether a wallet with no claimed credential may send.  Left false (the enforcing state):
+        # the threshold is chosen from the sender's residency and citizenship, so a sender with
+        # neither has no limit to be held to.  Set true only for a chain that does not require eKYC.
+        allow_transfer_without_ekyc: false
       enclaveIdentityList:
         - uniqueID: test-unique-id
           signerID: test-signer-id

@@ -50,7 +50,10 @@ type TransferFunds struct {
 	CoinAmount    sdk.Coin
 }
 
-type Transactions []*TransferFunds
+// TransferFunds above is still the shape passed to createSuspiciousTransaction when a report is
+// filed.  The `Transactions` slice that used to accompany it is gone: the rolling window is now
+// stored as EncryptableScanTransferHistory in the enclave's KV store rather than as a Go slice in
+// process memory.
 
 type PublicKeyReq struct {
 	FriendlyName    string

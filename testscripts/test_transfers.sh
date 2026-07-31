@@ -43,6 +43,17 @@ addr_of() {
 
 # encrypted balance of a wallet, as a plain decimal string.  show-wallet colourises its output, so
 # the ANSI escapes have to come off before parsing.
+#
+# Takes the FIRST "Encrypted balance" line, which is the head of the wallet's list: the actual
+# balance for a real wallet, and for an ephemeral one the entry the next receive-funds will take.
+# Not a total -- an eph wallet's queue is several distinct pending transfers and summing them would
+# hide which one moved.
+#
+# The limitation to know: a transfer into an eph wallet that ALREADY holds something is appended
+# BEHIND the head (see the EphemeralWalletAmountCount branches in cmd/qadenad_enclave/enclave.go),
+# so this reading would not move.  Every case below starts from a drained eph wallet, which is why
+# the receive-funds calls between cases are load-bearing -- a test that leaves one undrained breaks
+# the next run rather than its own.
 enc_balance() {
     local addr
     addr=$(addr_of "$1") || { echo ""; return; }

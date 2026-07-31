@@ -794,6 +794,34 @@ func (k Keeper) EnclaveValidateCredential(sdkctx sdk.Context, msg *types.MsgBind
 	return r.Status, nil
 }
 
+// EnclaveValidatePersonalInfo asks the enclave to decrypt a freshly submitted credential and check
+// the fields the identity hash is built from.  Returns a wrapped ErrInvalidPersonalInfo naming the
+// broken rule -- the enclave sends back a code, never the offending value, because the transaction
+// error it ends up in is public.
+//
+// Unlike the other Validate* hooks this one DOES run in CheckTx.  The whole point is to reject the
+// submission where the identity provider is still the party being answered, and a check skipped in
+// CheckTx would not surface during the CLI's --gas auto simulation -- the provider would get a
+// successful-looking broadcast and discover the failure only in the block result.
+func (k Keeper) EnclaveValidatePersonalInfo(sdkctx sdk.Context, msg *types.MsgCreateCredential) error {
+	grpcctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	defer cancel()
+
+	r, err := EnclaveGRPCClient.ValidatePersonalInfo(grpcctx, msg)
+	if err != nil {
+		c.ContextError(sdkctx, "error returned by ValidatePersonalInfo on enclave "+err.Error())
+		return err
+	}
+
+	if !r.Status {
+		reason := c.PersonalInfoReason(r.Reason)
+		c.ContextError(sdkctx, "personal info rejected: "+reason.Message())
+		return errorsmod.Wrap(types.ErrInvalidPersonalInfo, reason.Message())
+	}
+
+	return nil
+}
+
 func (k Keeper) EnclaveValidateTransferPrime(sdkctx sdk.Context, msg *types.MsgTransferFunds) (bool, error) {
 	if sdkctx.IsCheckTx() {
 		c.ContextDebug(sdkctx, "ValidateTransferPrime not called in checktx")
@@ -824,11 +852,26 @@ func (k Keeper) EnclaveScanTransaction(sdkctx sdk.Context, msg *types.MsgTransfe
 	grpcctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
 	defer cancel()
 
+	// The policy travels with the scan rather than being fixed at enclave startup, so a governance
+	// change to the window, the thresholds or the eKYC gate takes effect without restarting nodes.
+	params := k.GetParams(sdkctx)
+
+	defaultThreshold, countryThresholds, err := k.SuspiciousThresholdTable(sdkctx, params)
+	if err != nil {
+		// fail closed, exactly as an unpriceable transfer does above: a transfer that cannot be
+		// measured against a threshold must not settle unmeasured
+		c.ContextError(sdkctx, "ScanTransaction: cannot resolve thresholds, refusing to scan: "+err.Error())
+		return false, err
+	}
+
 	stx := &types.MsgScanTransactions{
-		Timestamp:    currentBlockHeader.Time,
-		Height:       currentBlockHeader.Height,
-		Msg:          msg,
-		Exchangerate: conversion.String(),
+		Timestamp:               currentBlockHeader.Time,
+		Height:                  currentBlockHeader.Height,
+		Msg:                     msg,
+		Exchangerate:            conversion.String(),
+		Params:                  params,
+		CountryThresholds:       countryThresholds,
+		DefaultThresholdAttoUSD: defaultThreshold,
 	}
 	r, err := EnclaveGRPCClient.ScanTransaction(grpcctx, stx)
 	if err != nil {

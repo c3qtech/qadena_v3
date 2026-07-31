@@ -17,6 +17,13 @@
 #            at the same credential is an allowed idempotent replay
 #            (cmd/qadenad_enclave/enclave_update_credential.go)
 #
+# The comparison is an EXACT match on CreateCredentialHash, which canonicalizes the name fields
+# (lowercase, trimmed, whitespace collapsed) precisely so that the match cannot be dodged by
+# retyping the same name differently -- case 1d.  Diacritics are NOT folded: "Peña" and "Pena" stay
+# separate identities, and x/qadena/common/credential_hash_test.go covers both directions in unit
+# form.  Note the hash is computed by the CLI as well as the enclave, which recomputes and compares
+# it, so this script exercises both copies agreeing.
+#
 # Idempotent: claiming a hash reserves it PERMANENTLY, so a fixed identity would collide with the
 # previous run rather than with the thing under test.  Every identity, wallet name and claim code
 # below carries a per-run id.
@@ -50,6 +57,7 @@ birthdate="1980-Jun-15"
 
 w_owner="uniq-owner-$suffix"       # claims the original identity
 w_squatter="uniq-squat-$suffix"    # tries to claim the duplicate
+w_case="uniq-case-$suffix"         # tries to claim the same identity in a different case
 w_married="uniq-married-$suffix"   # claims the near-duplicate
 
 # clash pair for case 3: two identities one character apart in the surname
@@ -134,6 +142,18 @@ echo "========================="
 # because a second copy of it exists.
 mk_wallet "$w_squatter"
 expect_reject_code 1115 qadenad_alias tx qadena claim-credential "${suffix}12" "$bf" personal-info --from "$w_squatter" --yes
+
+echo "========================="
+echo "1d. nor may they claim it by changing the CASE"
+echo "========================="
+# CreateCredentialHash canonicalizes names (lowercase, trimmed, whitespace runs collapsed), so
+# "UNIQTEST Q ALPHA" is the same identity as "uniqtest q alpha" and hits the same index entry.
+# Before that canonicalization existed this claim SUCCEEDED, giving one person two identities and
+# defeating case 1c with nothing more than the shift key.  Extra spacing is folded in here too, so
+# one transaction covers both halves of the canonicalization.
+mk_wallet "$w_case"
+issue "${suffix}13" "${(U)base_first}" "${(U)base_middle}" "  ${(U)base_last}  "
+expect_reject_code 1115 qadenad_alias tx qadena claim-credential "${suffix}13" "$bf" personal-info --from "$w_case" --yes
 
 echo "========================="
 echo "2. a NEAR-duplicate is a different identity and may be claimed"

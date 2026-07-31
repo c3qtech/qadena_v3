@@ -134,12 +134,12 @@ type qadenaServer struct {
 	//changedEnclaveIdentities []string // uniqueid
 	changedRecoverKeys []string
 
-	// for tracking suspicious transactions
-	transactionMap map[string]c.Transactions
+	// The AML rolling window used to live here as transactionMap, an in-memory map. It now lives in
+	// the KV store under EnclaveScanTransferHistoryKeyPrefix, because as process memory it was lost
+	// on every restart, differed between validators -- which decide transfer acceptance from it --
+	// and survived the rollback of the very transfer that added to it.
 
 	newSuspiciousTransactions []types.SuspiciousTransaction
-
-	coinSuspiciousAmount sdk.Coin
 
 	HomePath    string
 	RealEnclave bool
@@ -206,6 +206,12 @@ const (
 	EnclaveRecoverOriginalWalletIDByNewWalletIDKeyPrefix = "Enclave/RecoverOriginalWalletIDByNewWalletID/value/"
 	//	EnclaveAuthorizedSignatoryKeyPrefix                  = "Enclave/AuthorizedSignatory/value/"
 	EnclaveUnvalidatedEnclaveIdentityKeyPrefix = "Enclave/UnvalidatedEnclaveIdentity/value/"
+	// The AML rolling window, keyed by source wallet.  In the KV store rather than in memory
+	// because it is consensus input: ScanTransaction runs on every validator and its verdict
+	// decides whether the transfer is rejected, so a node holding a different history would reach
+	// a different verdict.  Being in the store also means it survives restarts and, because writes
+	// go through CacheCtx, that a rolled-back transfer leaves no entry behind.
+	EnclaveScanTransferHistoryKeyPrefix = "Enclave/ScanTransferHistory/value/"
 )
 
 func EnclaveKeyKey(k string) []byte {
@@ -4415,6 +4421,28 @@ func (s *qadenaServer) getCredentialIdentityHistory(credentialID string) (histor
 	return history, true
 }
 
+func (s *qadenaServer) setScanTransferHistory(srcWalletID string, history types.EncryptableScanTransferHistory) {
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveScanTransferHistoryKeyPrefix))
+	b := s.Cdc.MustMarshal(&history)
+	store.Set(s.MustSealStable(EnclaveKeyKey(srcWalletID)), s.MustSeal(b))
+}
+
+// getScanTransferHistory returns the rolling window for one sender.  A wallet that has never sent
+// gets an empty history rather than a "not found" -- there is nothing for a caller to do
+// differently, and every call site would otherwise repeat the same branch.
+func (s *qadenaServer) getScanTransferHistory(srcWalletID string) types.EncryptableScanTransferHistory {
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveScanTransferHistoryKeyPrefix))
+
+	b := store.Get(s.MustSealStable(EnclaveKeyKey(srcWalletID)))
+	if b == nil {
+		return types.EncryptableScanTransferHistory{}
+	}
+
+	var history types.EncryptableScanTransferHistory
+	s.Cdc.MustUnmarshal(s.MustUnseal(b), &history)
+	return history
+}
+
 // addCredentialHashAlias points one more identity hash at an existing credential.  The old hash
 // is deliberately left in place: key recovery resolves hash -> credentialID -> live row, so
 // leaving the old hash mapped is exactly what lets a user recover with their pre-update name,
@@ -5527,6 +5555,58 @@ func (s *qadenaServer) ValidateDestinationWallet(ctx context.Context, msg *types
 	return &types.ValidateDestinationWalletReply{Status: types.WalletTypeUnknown}, types.ErrWalletNotExists
 }
 
+// ValidatePersonalInfo checks a credential at CREATE time, which is the only point where the
+// identity provider that submitted it is still the party being told about the result.
+//
+// Without this the chain cannot check anything: the details arrive sealed in a VShare and the
+// keeper has no key, so a malformed name is only discovered when someone tries to claim it -- at
+// which point the claimant, who never typed it, gets an unexplained rejection and the credential is
+// permanently unclaimable.  ClaimCredential still repeats the check; this one is about telling the
+// right party at the right time, not about trust.
+//
+// The reason travels back as a code, never as text.  Only the enclave can read these fields, and a
+// transaction error is public: returning "birthdate is not canonical, expected 1970-Feb-02" would
+// publish the birthdate that the VShare exists to protect.  The detailed message goes to the
+// enclave log; the keeper turns the code into a fixed sentence naming the rule.
+func (s *qadenaServer) ValidatePersonalInfo(ctx context.Context, msg *types.MsgCreateCredential) (*types.ValidatePersonalInfoReply, error) {
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "ValidatePersonalInfo")
+	} else {
+		c.LoggerDebug(logger, "ValidatePersonalInfo "+c.PrettyPrint(msg))
+	}
+
+	// Only personal-info carries the fields the identity hash is built from.  Contact credentials
+	// have no such invariants, so they pass untouched rather than being rejected for lacking them.
+	if msg.CredentialType != types.PersonalInfoCredentialType {
+		return &types.ValidatePersonalInfoReply{Status: true}, nil
+	}
+
+	unprotoCredentialInfoVShareBind := c.UnprotoizeVShareBindData(msg.CredentialInfoVShareBind)
+
+	var p types.EncryptablePersonalInfo
+	err := c.VShareBDecryptAndProtoUnmarshal(
+		s.getSSPrivK(unprotoCredentialInfoVShareBind.GetSSIntervalPubKID()),
+		s.getPubK(unprotoCredentialInfoVShareBind.GetSSIntervalPubKID()),
+		unprotoCredentialInfoVShareBind, msg.EncCredentialInfoVShare, &p)
+	if err != nil {
+		// Undecryptable is not the same as invalid: the enclave may simply not hold this interval
+		// key.  Report it as an error rather than a validation verdict, so the keeper can tell the
+		// difference between "this credential is bad" and "this node could not check it".
+		c.LoggerError(logger, "ValidatePersonalInfo couldn't decrypt credential info "+err.Error())
+		return nil, types.ErrGenericEncryption
+	}
+
+	reason := c.PersonalInfoReasonOf(p.Details)
+	if reason != c.PersonalInfoOK {
+		// the detailed message stops here, in the log
+		c.LoggerError(logger, "ValidatePersonalInfo rejected "+msg.CredentialID+": "+
+			c.ValidatePersonalInfoDetails(p.Details).Error())
+		return &types.ValidatePersonalInfoReply{Status: false, Reason: int32(reason)}, nil
+	}
+
+	return &types.ValidatePersonalInfoReply{Status: true}, nil
+}
+
 func (s *qadenaServer) ValidateCredential(ctx context.Context, msg *types.MsgBindCredential) (*types.ValidateCredentialReply, error) {
 	ephWalletID := msg.Creator
 	credentialType := msg.CredentialType
@@ -6412,79 +6492,129 @@ func (s *qadenaServer) ScanTransaction(ctx context.Context, st *types.MsgScanTra
 
 	c.LoggerDebug(logger, "time "+tf.Time.String()+" src "+tf.SourceWalletID+" dst "+tf.DestinationWalletID+" amount "+tf.CoinAmount.String())
 
-	// 1.  store each transaction map per source (appending to an array)
-	if s.transactionMap[tf.SourceWalletID] == nil {
-		t := make([]*c.TransferFunds, 0)
-		s.transactionMap[tf.SourceWalletID] = t
+	// 1.  Work out which jurisdiction's reporting limit applies to this sender.
+	policy := c.SuspiciousPolicyFromParams(st.Params)
+
+	countries, err := s.senderJurisdictions(srcWalletID)
+	if err != nil {
+		c.LoggerError(logger, "couldn't resolve sender jurisdictions "+err.Error())
+		return nil, err
 	}
 
-	c.LoggerDebug(logger, "suspicious threshold "+s.coinSuspiciousAmount.String())
+	if len(countries) == 0 && !policy.AllowTransferWithoutEKYC {
+		// No eKYC means no jurisdiction, and no jurisdiction means no reporting limit to apply.
+		// Letting the transfer through under a default limit would make "hold no credential" the
+		// cheapest way to pick your own threshold, so the transfer is refused instead.
+		c.LoggerError(logger, "refusing transfer from "+srcWalletID+": no residency or citizenship on record")
+		return nil, types.ErrNoEKYCForTransfer
+	}
 
-	// 2.  run simple logic for now
+	defaultThreshold, ok := math.NewIntFromString(st.DefaultThresholdAttoUSD)
+	if !ok || defaultThreshold.IsNil() || !defaultThreshold.IsPositive() {
+		// The keeper resolves this through the pricefeed and fails closed if it cannot, so an
+		// unusable value here means the two sides disagree about the message -- not something to
+		// paper over with a guess, since every guess is either "report everything" or "report
+		// nothing".
+		c.LoggerError(logger, "unusable default threshold from keeper: "+st.DefaultThresholdAttoUSD)
+		return nil, types.ErrGenericScan
+	}
 
-	// 2a.  Check transaction for "too large"
-	if tf.USDCoinAmount.IsGTE(s.coinSuspiciousAmount) {
+	threshold := sdk.NewCoin(types.AttoUSDFiatDenom, c.SelectThreshold(countries, st.CountryThresholds, defaultThreshold))
+
+	c.LoggerDebug(logger, "sender "+srcWalletID+" jurisdictions "+strings.Join(countries, ",")+
+		" threshold "+threshold.String()+" window "+policy.Window.String())
+
+	// 2a.  A single transfer at or above the limit.  Checked BEFORE the transfer is recorded, so a
+	// refused transfer does not enter the window.
+	if tf.USDCoinAmount.IsGTE(threshold) {
 		c.LoggerDebug(logger, "suspicious individual transaction "+tf.USDCoinAmount.String()+" "+tf.CoinAmount.String()+" "+tf.SourceWalletID+" "+tf.DestinationWalletID)
 		if optInReason != "" {
-			s.createSuspiciousTransaction(ctx, "Transaction value >= 10k", unprotoMsgTransferFundsVShareBind.GetJarID(), tf, optInReason)
+			s.createSuspiciousTransaction(ctx, "Transaction value >= reporting threshold", unprotoMsgTransferFundsVShareBind.GetJarID(), tf, optInReason)
 			return &types.ScanTransactionReply{Status: true}, nil
 		} else {
 			return nil, types.ErrGenericScan
 		}
 	}
 
-	s.transactionMap[tf.SourceWalletID] = append(s.transactionMap[tf.SourceWalletID], &tf)
+	// 2b.  The rolling-window total to a single destination.
+	//
+	// Expiry is applied lazily, here, on the one source being scanned: bounded work per transfer,
+	// where a sweep across every wallet would not be.  A dormant wallet keeps its stale rows until
+	// it next sends, which costs a little storage and changes no verdict -- they are pruned before
+	// anything is summed.
+	history := s.getScanTransferHistory(srcWalletID)
+	cutoff := st.Timestamp.Add(-policy.Window).Unix()
+	history.Transfers = c.PruneExpired(history.Transfers, cutoff)
 
-	// 2b.  Check accumulated exit for "too large"
-	//	srcWalletID := tf.SourceWalletID
+	history.Transfers = append(history.Transfers, &types.EncryptableScanTransfer{
+		UnixTime:            st.Timestamp.Unix(),
+		DestinationWalletID: tf.DestinationWalletID,
+		USDCoinAmount:       tf.USDCoinAmount,
+		CoinAmount:          tf.CoinAmount,
+	})
 
-	c.LoggerDebug(logger, "src wallet "+srcWalletID+" "+strconv.Itoa(len(s.transactionMap[srcWalletID])))
-	c.LoggerDebug(logger, "srcWalletID transactions "+c.PrettyPrint(s.transactionMap[srcWalletID]))
+	c.LoggerDebug(logger, "src wallet "+srcWalletID+" window holds "+strconv.Itoa(len(history.Transfers))+" transfers")
 
-	var usdValueMap map[string]sdk.Coin = make(map[string]sdk.Coin)
-	var valueMap map[string]sdk.Coin = make(map[string]sdk.Coin)
-
-	// NOTE THIS ALGORITHM DOES NOT HANDLE SLIDING WINDOW OF TIME (e.g. it should only check the last month of transactions)
-	for _, tmpTF := range s.transactionMap[srcWalletID] {
-		c.LoggerDebug(logger, "dst wallet "+tmpTF.DestinationWalletID+" amount "+tmpTF.USDCoinAmount.String())
-		usdv, found := usdValueMap[tmpTF.DestinationWalletID]
-		if !found {
-			usdv = sdk.NewCoin(types.AttoUSDFiatDenom, math.NewInt(0))
-		}
-		usdValueMap[tmpTF.DestinationWalletID] = usdv.Add(tmpTF.USDCoinAmount)
-
-		v, found := valueMap[tmpTF.DestinationWalletID]
-		if !found {
-			v = sdk.NewCoin(tmpTF.CoinAmount.Denom, math.NewInt(0))
-		}
-		valueMap[tmpTF.DestinationWalletID] = v.Add(tmpTF.CoinAmount)
-	}
+	usdValueMap, valueMap := c.AggregateByDestination(history.Transfers)
 
 	for dstWalletID, v := range usdValueMap {
 		c.LoggerDebug(logger, "aggregate total "+dstWalletID+" "+v.String())
-		if v.IsGTE(s.coinSuspiciousAmount) {
+		if v.IsGTE(threshold) {
 			c.LoggerDebug(logger, "suspicious aggregate total "+tf.SourceWalletID+" "+dstWalletID+" "+v.String())
-			tf := c.TransferFunds{Time: st.Timestamp, SourceWalletID: tf.SourceWalletID, DestinationWalletID: dstWalletID, USDCoinAmount: v, CoinAmount: valueMap[dstWalletID]}
+			aggregated := c.TransferFunds{Time: st.Timestamp, SourceWalletID: tf.SourceWalletID, DestinationWalletID: dstWalletID, USDCoinAmount: v, CoinAmount: valueMap[dstWalletID]}
 
 			if optInReason != "" {
-				// erase all transactions to that destination from TransactionMap
+				// Reported, so the pair starts over -- otherwise every later transfer to the same
+				// destination would re-report the same accumulated total.
+				history.Transfers = c.DropDestination(history.Transfers, dstWalletID)
 
-				newTFs := make([]*c.TransferFunds, 0)
-				for _, tmpTF := range s.transactionMap[srcWalletID] {
-					if tmpTF.DestinationWalletID != dstWalletID {
-						newTFs = append(newTFs, tmpTF)
-					}
-				}
-				s.transactionMap[srcWalletID] = newTFs
-
-				s.createSuspiciousTransaction(ctx, "Total transaction value >= 10k", unprotoMsgTransferFundsVShareBind.GetJarID(), tf, optInReason)
+				s.createSuspiciousTransaction(ctx, "Total transaction value >= reporting threshold", unprotoMsgTransferFundsVShareBind.GetJarID(), aggregated, optInReason)
 			} else {
+				// Refused.  Returning here without writing leaves the window untouched, and the
+				// rolled-back transaction would discard the write in any case.
 				return nil, types.ErrGenericScan
 			}
 		}
 	}
 
+	s.setScanTransferHistory(srcWalletID, history)
+
 	return &types.ScanTransactionReply{Status: true}, nil
+}
+
+// senderJurisdictions returns the countries the sender belongs to, by way of their credential.
+//
+// An empty result means "no eKYC data", which the caller decides what to do with; an error means
+// the lookup itself failed and the two must not be conflated -- one is a policy question, the other
+// is a fault.  Only the enclave can do this at all: residency and citizenship are sealed inside the
+// credential's VShare, which is why the keeper sends thresholds for every jurisdiction rather than
+// resolving the sender's own.
+func (s *qadenaServer) senderJurisdictions(srcWalletID string) ([]string, error) {
+	srcWallet, found := s.getWallet(srcWalletID)
+	if !found {
+		return nil, types.ErrWalletNotExists
+	}
+
+	if srcWallet.CredentialID == "" {
+		return nil, nil
+	}
+
+	srcCredential, found := s.getCredential(srcWallet.CredentialID, types.PersonalInfoCredentialType)
+	if !found {
+		return nil, nil
+	}
+
+	unprotoBind := c.UnprotoizeVShareBindData(srcCredential.CredentialInfoVShareBind)
+	var srcPI types.EncryptablePersonalInfo
+	err := c.VShareBDecryptAndProtoUnmarshal(
+		s.getSSPrivK(unprotoBind.GetSSIntervalPubKID()),
+		s.getPubK(unprotoBind.GetSSIntervalPubKID()),
+		unprotoBind, srcCredential.EncCredentialInfoVShare, &srcPI)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.CountriesFromDetails(srcPI.Details), nil
 }
 
 func (s *qadenaServer) GetStoreHash(ctx context.Context, gsh *types.MsgGetStoreHash) (*types.GetStoreHashReply, error) {
@@ -6962,13 +7092,11 @@ func main() {
 
 	cs.changedWallets = make([]string, 0)
 	cs.newSuspiciousTransactions = make([]types.SuspiciousTransaction, 0)
-	cs.transactionMap = make(map[string]c.Transactions)
 
-	cs.coinSuspiciousAmount, _ = sdk.ParseCoinNormalized(c.SuspiciousThreshold)
-	if cs.coinSuspiciousAmount.Denom == types.USDFiatDenom {
-		displayAmount := cs.coinSuspiciousAmount.Amount
-		cs.coinSuspiciousAmount = sdk.NewCoin(types.AttoUSDFiatDenom, displayAmount.Mul(math.NewIntFromBigInt(c.GetDenomAtomicFactor(18))))
-	}
+	// No suspicious-transaction threshold is computed here any more.  It is per-sender now -- the
+	// jurisdiction with the lowest limit among the sender's residency and citizenship -- and it
+	// arrives with each scan already priced by the keeper, so a governance change takes effect
+	// without restarting nodes.
 
 	if !cs.loadEnclaveParams() {
 		c.LoggerInfo(logger, "Enclave params could not be loaded, but this is ok if the enclave has not yet been initialized.")
