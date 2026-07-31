@@ -6070,7 +6070,8 @@ func (s *qadenaServer) ValidateTransferPrime(ctx context.Context, msg *types.Msg
 
 	// validate the wallet is not "full" and is an ephemeral wallet
 	if dstWallet.EphemeralWalletAmountCount[token] == 0 {
-		// store the "zero" in our queue
+		// Nothing pending, so this transfer becomes the head and the wallet's own creation
+		// commitment moves to the TAIL of the queue, where the branch below keeps it.
 		if _, ok := dstWallet.WalletAmount[token]; ok {
 			dstWallet.QueuedWalletAmount[token].WalletAmounts = append(
 				dstWallet.QueuedWalletAmount[token].WalletAmounts,
@@ -6085,28 +6086,42 @@ func (s *qadenaServer) ValidateTransferPrime(ctx context.Context, msg *types.Msg
 			mustUpdateSrcWallet = false
 		}
 
-	} else if dstWallet.EphemeralWalletAmountCount[token] == 1 {
-		dstWallet.QueuedWalletAmount[token].WalletAmounts = append(
-			dstWallet.QueuedWalletAmount[token].WalletAmounts,
-			&wa,
-		)
-
 	} else {
-		// >= 1
-		// put the new value so that it comes out last
-		queuedWalletAmounts := dstWallet.QueuedWalletAmount[token].WalletAmounts
+		// count >= 1, so the queue already holds the wallet's own creation commitment as its LAST
+		// entry -- put there by the branch above, when the first transfer displaced it from the
+		// head.  It has to stay last.  Transfers are inserted immediately before it, which gives
+		// two properties at once:
+		//
+		//   - receive-funds hands transfers back in the order they arrived, because the head is
+		//     always the oldest transfer and the queue runs oldest-to-newest ahead of the
+		//     commitment;
+		//   - the creation commitment is what remains once every transfer has been collected, so
+		//     an ephemeral wallet always holds a commitment and never becomes empty.  It is not
+		//     itself receivable -- EphemeralWalletAmountCount counts transfers only -- but it is
+		//     spendable, so its value is never out of reach.
+		//
+		// Appending to the very end instead lets the commitment drift into the middle of the
+		// queue, where a receive consumes it and delivers nothing while a real transfer is left
+		// behind that receive-funds then refuses.
+		//
+		// Built as a fresh slice rather than the tempting
+		//     append(queued[:len(queued)-1], &wa, queued[len(queued)-1])
+		// which writes through the original backing array.  That form happens to be correct, since
+		// the trailing element is evaluated as an argument before the append overwrites its slot,
+		// but it mutates the slice in place and is a trap for whoever edits it next.
+		queued := dstWallet.QueuedWalletAmount[token].WalletAmounts
 
-		/*
-			dstWallet.QueuedWalletAmount[token].WalletAmounts = append(
-				queuedWalletAmounts[:len(queuedWalletAmounts)-1],
-				&wa,
-				queuedWalletAmounts[len(queuedWalletAmounts)-1],
-			)
-		*/
-		dstWallet.QueuedWalletAmount[token].WalletAmounts = append(
-			queuedWalletAmounts,
-			&wa,
-		)
+		if len(queued) == 0 {
+			// defensive: with the invariant above this cannot happen, since count >= 1 implies the
+			// commitment was displaced into the queue
+			dstWallet.QueuedWalletAmount[token].WalletAmounts = []*types.WalletAmount{&wa}
+		} else {
+			reordered := make([]*types.WalletAmount, 0, len(queued)+1)
+			reordered = append(reordered, queued[:len(queued)-1]...)
+			reordered = append(reordered, &wa)
+			reordered = append(reordered, queued[len(queued)-1])
+			dstWallet.QueuedWalletAmount[token].WalletAmounts = reordered
+		}
 	}
 
 	c.LoggerDebug(logger, "sameWallet::", sameWallet)

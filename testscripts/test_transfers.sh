@@ -226,5 +226,183 @@ raise SystemExit(0 if -a == b else 1)
 echo "conservation holds: what al sent is exactly what ann received"
 
 echo "========================="
+echo "8. an EPHEMERAL wallet can itself be the source of a transfer"
+echo "========================="
+# Everything above sends from a primary wallet.  Nothing in the transfer path restricts the sender
+# by wallet type -- only the DESTINATION must be ephemeral (tx_transfer_funds.go rejects a real
+# dst-wallet-id, and the enclave rejects it again) -- so an eph wallet sending onward is legal, and
+# this pins that down.
+#
+# Two dedicated eph wallets, both linked to al, so the hop is self-contained: al funds the first,
+# the first pays the second, and al collects from both.  al nets zero, which is what keeps this
+# repeatable -- the cases above permanently move funds from al to ann, so a case that also drained
+# al would shorten how many times the suite can run.
+#
+# They link to al specifically because al holds a credential.  The AML scan picks the reporting
+# threshold from the sender's residency and citizenship, resolved through the sender's LINKED REAL
+# wallet, so an eph wallet whose owner has no credential is refused outright (see test_suspicious.sh
+# case 10).  That resolution is itself worth exercising: it only works if the enclave follows the
+# eph -> real link rather than looking at the eph wallet.
+eph_src="al-ephsrc"
+eph_dst="al-ephdst"
+# Kept small on purpose.  al's encrypted balance is never replenished -- cases 1-7 move funds to ann
+# permanently -- so the suite has a finite number of runs in it, and this case should not shorten
+# that.  It nets zero for al, and asking for little means it still runs when al is nearly out.
+send_to_eph="20"
+eph_hop="10"
+
+# idempotent: create only if absent.  Fixed names rather than per-run ones, so repeated runs reuse
+# the same pair instead of littering the keyring.
+for w in "$eph_src:7" "$eph_dst:8"; do
+    name="${w%%:*}"
+    idx="${w##*:}"
+    if ! addr_of "$name" > /dev/null 2>&1; then
+        qadenad_alias tx qadena create-wallet "$name" pioneer1 create-wallet-sponsor \
+            --link-to-real-wallet al --eph-account-index "$idx" --yes > /dev/null \
+            || fail "could not create $name"
+        echo "created $name"
+    fi
+done
+
+src_before=$(enc_balance "$eph_src")
+dst_before=$(enc_balance "$eph_dst")
+
+qadenad_alias tx qadena transfer-funds "$eph_src" "${send_to_eph}qdn" 0qdn \
+    --transfer-note "funding an eph source" --from al --yes > /dev/null \
+    || fail "could not fund $eph_src from al"
+
+src_funded=$(enc_balance "$eph_src")
+delta_is "$src_before" "$src_funded" "$send_to_eph" \
+    || fail "$eph_src gained $(delta_of "$src_before" "$src_funded"), expected $send_to_eph"
+echo "$eph_src funded with ${send_to_eph}qdn"
+
+echo "-------------------------"
+echo "$eph_src -> $eph_dst: the sender here is an ephemeral wallet"
+echo "-------------------------"
+qadenad_alias tx qadena transfer-funds "$eph_dst" "${eph_hop}qdn" 0qdn \
+    --transfer-note "eph wallet as source" --from "$eph_src" --yes > /dev/null \
+    || fail "an ephemeral wallet was refused as the source of a transfer"
+
+src_after=$(enc_balance "$eph_src")
+dst_after=$(enc_balance "$eph_dst")
+echo "$eph_src: $src_funded -> $src_after"
+echo "$eph_dst: $dst_before -> $dst_after"
+
+delta_is "$src_funded" "$src_after" "-$eph_hop" \
+    || fail "$eph_src released $(delta_of "$src_funded" "$src_after"), expected -$eph_hop"
+delta_is "$dst_before" "$dst_after" "$eph_hop" \
+    || fail "$eph_dst gained $(delta_of "$dst_before" "$dst_after"), expected $eph_hop"
+
+echo "-------------------------"
+echo "al collects from both, so this case leaves no residue"
+echo "-------------------------"
+# Draining matters here for the same reason as everywhere else in this file: an eph wallet left
+# holding something makes the NEXT run's transfer queue behind it instead of landing at the head,
+# and the assertions above would then read a stale entry.
+qadenad_alias tx qadena receive-funds "$eph_dst" 0qdn --from al --yes > /dev/null \
+    || fail "al could not receive from $eph_dst"
+qadenad_alias tx qadena receive-funds "$eph_src" 0qdn --from al --yes > /dev/null \
+    || fail "al could not receive from $eph_src"
+echo "both drained"
+
+echo "========================="
+echo "9. transfers come back in the order they arrived"
+echo "========================="
+# Two properties, neither of which any other case in this file reaches.
+#
+# Every case above moves ONE transfer and drains it -- the only depth at which the queue behaves
+# simply.  An ephemeral wallet keeps its pending transfers in two places (walletAmount holds the
+# head, queuedWalletAmount the rest) and pins its own creation commitment at the TAIL of the queue,
+# so transfers are inserted ahead of it.  Get that wrong and the commitment drifts into the middle,
+# where a receive consumes it and delivers nothing while a real transfer is left behind that
+# receive-funds then refuses.
+#
+# Conservation would not catch that: an ephemeral wallet can also be the SOURCE of a transfer, so a
+# leftover entry is still spendable and no value is lost.  What fails is the ORDER and the emptying,
+# which is what 9b measures directly -- distinct amounts, so each receive is identifiable.
+eph_drain="al-ephdrain"
+
+if ! addr_of "$eph_drain" > /dev/null 2>&1; then
+    qadenad_alias tx qadena create-wallet "$eph_drain" pioneer1 create-wallet-sponsor \
+        --link-to-real-wallet al --eph-account-index 9 --yes > /dev/null \
+        || fail "could not create $eph_drain"
+    echo "created $eph_drain"
+fi
+
+# Start from a known-empty wallet: anything a previous run left behind would queue ahead of these
+# and be counted as one of them.
+for _ in {1..12}; do
+    qadenad_alias tx qadena receive-funds "$eph_drain" 0qdn --from al --yes > /dev/null 2>&1 || break
+done
+
+echo "-------------------------"
+echo "9a. a single transfer still works"
+echo "-------------------------"
+# The N=1 path is the one the rest of this suite depends on, and it goes through a different branch
+# from N>1: with nothing pending, the transfer becomes the head and displaces the creation
+# commitment into the queue.  Worth asserting on its own so a change aimed at deeper queues cannot
+# quietly break the common case.
+single_amount="7"
+al_pre_single=$(enc_balance al)
+
+qadenad_alias tx qadena transfer-funds "$eph_drain" "${single_amount}qdn" 0qdn \
+    --transfer-note "single transfer" --from al --yes > /dev/null \
+    || fail "single transfer to $eph_drain failed"
+qadenad_alias tx qadena receive-funds "$eph_drain" 0qdn --from al --yes > /dev/null \
+    || fail "al could not receive a single transfer from $eph_drain"
+
+al_post_single=$(enc_balance al)
+single_left=$(enc_balance "$eph_drain")
+delta_is "$al_pre_single" "$al_post_single" "0" \
+    || fail "al is out $(delta_of "$al_pre_single" "$al_post_single") after sending and receiving ${single_amount}qdn"
+python3 -c "
+from decimal import Decimal
+raise SystemExit(0 if Decimal('$single_left') == 0 else 1)
+" || fail "$eph_drain holds ${single_left}qdn after a single transfer was received"
+echo "sent and received ${single_amount}qdn; wallet empty again"
+
+echo "-------------------------"
+echo "9b. five transfers come back in arrival order"
+echo "-------------------------"
+# Distinct amounts on purpose: identical ones would drain in any order and look correct.
+drain_amounts=(1 2 3 4 5)
+al_pre=$(enc_balance al)
+
+for amt in $drain_amounts; do
+    qadenad_alias tx qadena transfer-funds "$eph_drain" "${amt}qdn" 0qdn \
+        --transfer-note "ordered transfer ${amt}" --from al --yes > /dev/null \
+        || fail "transfer of ${amt}qdn to $eph_drain failed"
+done
+echo "sent ${#drain_amounts} transfers: ${drain_amounts} qdn"
+
+# Receive one at a time and check WHICH one arrived, by how much al gained.
+for amt in $drain_amounts; do
+    before=$(enc_balance al)
+    qadenad_alias tx qadena receive-funds "$eph_drain" 0qdn --from al --yes > /dev/null \
+        || fail "receive-funds refused while ${amt}qdn was still expected -- a transfer cannot be collected"
+    after=$(enc_balance al)
+    delta_is "$before" "$after" "$amt" \
+        || fail "expected ${amt}qdn next (arrival order) but received $(delta_of "$before" "$after")qdn -- transfers are coming back out of order"
+    echo "received ${amt}qdn"
+done
+
+remaining=$(enc_balance "$eph_drain")
+al_post=$(enc_balance al)
+echo "remaining on $eph_drain: $remaining"
+echo "al: $al_pre -> $al_post  (delta $(delta_of "$al_pre" "$al_post"))"
+
+# What is left is the wallet's own creation commitment, worth 0 under the current
+# create_ephemeral_wallet_incentive.  If that param is ever raised, the expected residual becomes
+# that amount rather than 0.
+python3 -c "
+from decimal import Decimal
+raise SystemExit(0 if Decimal('$remaining') == 0 else 1)
+" || fail "$eph_drain still holds ${remaining}qdn -- receive-funds left a transfer behind"
+
+delta_is "$al_pre" "$al_post" "0" \
+    || fail "al is out $(delta_of "$al_pre" "$al_post") after sending and reclaiming the same amount -- value was lost"
+echo "all ${#drain_amounts} transfers came back in order; nothing left behind"
+
+echo "========================="
 echo "TRANSFER / RECEIVE TESTS PASSED"
 echo "========================="
