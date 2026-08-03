@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -42,6 +43,13 @@ func (s *qadenaServer) ScanBankSend(ctx context.Context, msg *types.MsgScanBankS
 	// needs reporting after it has settled.
 	senderCountries, err := s.senderJurisdictions(msg.SrcWalletID)
 	if err != nil {
+		// A sender that is not a qadena wallet at all -- a plain key, a contract, an EVM account --
+		// reports "wallet does not exist", which is true but explains nothing here.  The reason the
+		// send is refused is that it cannot be scanned, so say that instead.
+		if errors.Is(err, types.ErrWalletNotExists) {
+			c.LoggerError(logger, "refusing bank send from "+msg.SrcWalletID+": not a wallet, cannot be scanned")
+			return nil, types.ErrBankSendNotScannable
+		}
 		c.LoggerError(logger, "ScanBankSend couldn't resolve sender jurisdictions "+err.Error())
 		return nil, err
 	}

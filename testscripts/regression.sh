@@ -13,6 +13,7 @@
 #   pf-expiry     a posted price stops counting toward the median once it expires
 #   transfers     transfer -> eph-wallet queue -> receive
 #   suspicious    threshold scan, opt-in, and the regulator's report
+#   bank-scan     direct bank sends are scanned too, and the whitelist takes individual add/remove
 #   uniqueness    identity uniqueness: duplicate issue vs duplicate claim, and update collisions
 #   dsvs          document signing hash chain
 #   wasm          store / instantiate / execute
@@ -292,6 +293,7 @@ run_test "pricefeed"   "$qadenatestscripts/test_pricefeed.sh"
 run_test "pf-expiry"   "$qadenatestscripts/test_pricefeed_expiry.sh"
 run_test "transfers"   "$qadenatestscripts/test_transfers.sh"
 run_test "suspicious"  "$qadenatestscripts/test_suspicious.sh"
+run_test "bank-scan"   "$qadenatestscripts/test_bank_restriction.sh"
 run_test "uniqueness"  "$qadenatestscripts/test_credential_uniqueness.sh"
 run_test "dsvs"        "$qadenatestscripts/test_dsvs.sh"
 run_test "wasm"        "$qadenatestscripts/test_wasm.sh"
