@@ -57,7 +57,6 @@ INIT="{\"verifier\":\"$ALICE_ADDR\", \"beneficiary\":\"$BOB_ADDR\"}"
 RESP=$(qadenad_alias --gas $gas_auto --gas-adjustment $gas_adjustment --gas-prices $minimum_gas_prices tx wasm instantiate "$CODE_ID" "$INIT" \
   --admin="$ALICE_ADDR" \
   --from alice \
-  --amount="1qdn" \
   --label "local0.1.0" \
     -y \
     -o json)

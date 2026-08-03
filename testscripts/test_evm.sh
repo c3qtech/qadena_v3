@@ -1,6 +1,20 @@
 #!/bin/zsh
 #
-# Regression test for the EVM: deploy a contract, read and write its storage over JSON-RPC.
+# Regression test for the EVM: deploy a contract, read and write its storage over JSON-RPC, and
+# pin down what the AML send restriction does and does NOT cover here.
+#
+# READ THIS BEFORE CHANGING CASES 7-9.  They assert that EVM value transfers SUCCEED while the
+# identical `tx bank send` is refused.  That is not an endorsement -- it is a known gap, recorded so
+# it cannot be forgotten and so that closing it makes a test fail loudly instead of silently.
+#
+# WHY THE GAP EXISTS.  The restriction hangs off bank's SendCoins.  The EVM never calls it for native
+# value: core.Transfer moves balances inside the in-memory StateDB, and commit writes each dirty
+# account through SetAccount -> SetBalance (x/vm/keeper/statedb.go), which MINTS the delta to the
+# receiver and BURNS it from the sender against the evm module account.  Every resulting bank call
+# therefore has a module account on one leg and is waved through by the module-leg check.
+#
+# So `cast send --value` is today what `tx bank send` was before the restriction existed: an
+# unmeasured route around the scan, the eKYC gate and the reporting threshold alike.
 #
 # REPLACES the previous version, which deployed Store.sol and printed values but asserted nothing --
 # it would have reported success with a contract that never stored anything.  The bootstrapping
@@ -37,6 +51,49 @@ fail() {
 # cast prints values like "42" or "42 [4.2e1]" depending on version -- take the first field
 cast_uint() {
     cast call "$1" "value()(uint256)" --rpc-url "$RPC_URL" 2>/dev/null | awk '{print $1}'
+}
+
+gas_flags=(--gas $gas_auto --gas-adjustment $gas_adjustment --gas-prices $minimum_gas_prices)
+
+bank_aqdn() {
+    local amt
+    amt=$(qadenad_alias query bank balances "$1" --output json 2>/dev/null \
+        | jq -r '.balances[] | select(.denom=="aqdn") | .amount' 2>/dev/null | head -1) || amt=""
+    echo "${amt:-0}"
+}
+
+hex_of()  { qadenad_alias debug addr "$1" 2>&1 | grep "Address hex:" | awk '{print $NF}'; }
+addr_of() { qadenad_alias keys show "$1" -a --keyring-backend test 2>/dev/null; }
+key_of()  { qadenad_alias keys unsafe-export-eth-key "$1" --keyring-backend test 2>/dev/null | head -1; }
+
+# bank_send <from> <to-addr> <amount> -- sets bank_code and bank_log from the ON-CHAIN result.
+#
+# The scan is skipped in CheckTx and simulation, so a refused send still broadcasts and returns a
+# hash; the verdict only exists in the block.  stdout alone, because --gas auto writes "gas estimate"
+# to stderr and folding that into the JSON makes jq fail under set -e with no message at all.
+#
+# The log matters as much as the code: every failure is code 1, so checking the code alone would let
+# a send that failed for insufficient funds pass as a send refused by the AML scan.
+bank_send() {
+    local out hash json
+    bank_code=""; bank_log=""
+    out=$(qadenad_alias tx bank send "$1" "$2" "$3" --from "$1" --yes --output json \
+        "${gas_flags[@]}" 2>/dev/null) || { bank_code="BROADCAST_REJECTED"; return 0; }
+    hash=$(echo "$out" | jq -r '.txhash' 2>/dev/null)
+    [ -n "$hash" ] && [ "$hash" != "null" ] || { bank_code="NO_TXHASH"; return 0; }
+    qadenad_alias query wait-tx "$hash" --timeout 60s > /dev/null 2>&1 || true
+    json=$(qadenad_alias query tx "$hash" --output json 2>/dev/null)
+    bank_code=$(echo "$json" | jq -r '.code // "UNKNOWN"')
+    bank_log=$(echo "$json" | jq -r '.raw_log // ""')
+}
+
+# evm_value_send <priv-key> <to-hex> <wei> -- echoes the transaction status, "1" on success
+evm_value_send() {
+    local out
+    out=$(cast send "$2" --value "$3" --rpc-url "$RPC_URL" --private-key "0x$1" 2>&1) || {
+        echo "CAST_FAILED: $(echo "$out" | head -1)"; return
+    }
+    echo "$out" | grep -E "^status" | awk '{print $2}'
 }
 
 echo "========================="
@@ -150,6 +207,124 @@ after=$(cast balance "$eth_addr" --rpc-url "$RPC_URL")
 echo "balance: $balance -> $after wei"
 python3 -c "raise SystemExit(0 if int('$after') < int('$balance') else 1)" \
     || fail "the balance did not decrease; the transactions were not paid for"
+
+echo "========================="
+echo "7. an EVM value transfer between two non-wallets SUCCEEDS"
+echo "========================="
+# The same movement by `tx bank send` is refused: neither party is a wallet, so it cannot be scanned.
+# Over the EVM it goes through untouched.  Both halves are asserted, because the pair is the finding
+# -- either one alone would look like ordinary behaviour.
+#
+# Per-run keys, so nothing here depends on what earlier runs left behind.
+run_id=$(date +%s)
+src="evmsrc-$run_id"
+dst="evmdst-$run_id"
+for k in "$src" "$dst"; do
+    qadenad_alias keys add "$k" --keyring-backend test > /dev/null 2>&1 || fail "could not create $k"
+done
+src_addr=$(addr_of "$src"); dst_addr=$(addr_of "$dst")
+src_hex=$(hex_of "$src_addr");  dst_hex=$(hex_of "$dst_addr")
+src_key=$(key_of "$src")
+[ -n "$src_key" ] || fail "could not export the eth key for $src"
+
+# treasury is whitelisted, so it may fund an ordinary key directly
+bank_send treasury "$src_addr" "20qdn"
+[ "$bank_code" = "0" ] || fail "could not fund $src from treasury (code $bank_code)"
+echo "$src funded: $(bank_aqdn "$src_addr") aqdn"
+
+echo "-------------------------"
+echo "over the bank: refused"
+echo "-------------------------"
+dst_before=$(bank_aqdn "$dst_addr")
+bank_send "$src" "$dst_addr" "1qdn"
+[ "$bank_code" != "0" ] || fail "a bank send between two non-wallets was allowed; the restriction is broken"
+echo "$bank_log" | grep -q "code 1159" \
+    || { echo "$bank_log" | head -2; fail "expected qadena code 1159 (not scannable), got the above"; }
+[ "$(bank_aqdn "$dst_addr")" = "$dst_before" ] || fail "a refused bank send still moved funds"
+echo "tx bank send refused (qadena code 1159), nothing moved"
+
+echo "-------------------------"
+echo "over the EVM: allowed -- THIS IS THE GAP"
+echo "-------------------------"
+tx_status=$(evm_value_send "$src_key" "$dst_hex" "1000000000000000000")
+if [ "$tx_status" != "1" ]; then
+    fail "the EVM value transfer did not succeed (status '$tx_status').
+      If the EVM gap has been CLOSED deliberately, this test is now wrong and must be rewritten to
+      assert a refusal -- see the header.  Do not simply delete the case."
+fi
+dst_after=$(bank_aqdn "$dst_addr")
+[ "$dst_after" != "$dst_before" ] \
+    || fail "the EVM transfer reported success but no funds moved; the assertion below is meaningless"
+python3 -c "
+raise SystemExit(0 if int('$dst_after') - int('$dst_before') == 10**18 else 1)
+" || fail "expected exactly 1qdn to arrive, got $(python3 -c "print(int('$dst_after')-int('$dst_before'))") aqdn"
+echo "cast send --value moved 1qdn that the bank refused to move"
+
+echo "========================="
+echo "8. the EVM also bypasses the reporting THRESHOLD"
+echo "========================="
+# Worse than case 7, and the reason this is worth a test rather than a comment.  In case 7 the
+# parties could not be scanned at all.  Here both hold personal-info credentials, the sender has a
+# jurisdiction and therefore a threshold, and the amount is comfortably over it -- the bank refuses
+# it as a reportable transfer with no opt-in available.  The identical amount goes through the EVM.
+addr_of ann > /dev/null 2>&1 || fail "ann not in the keyring -- run testscripts/setup.sh first"
+ann_addr=$(addr_of ann)
+ann_hex=$(hex_of "$ann_addr")
+
+# the threshold is evaluated in USD through the pricefeed, so without a price this case proves nothing
+qdn_usd=$(qadenad_alias query pricefeed price cn:qdn:usd --output json 2>/dev/null | jq -r '.price.price')
+[ -n "$qdn_usd" ] && [ "$qdn_usd" != "null" ] \
+    || fail "cn:qdn:usd has no price -- the threshold cannot be reached and this case is meaningless"
+
+# 1,200,000 qdn = 12,000 usd at cn:qdn:usd 0.01.  Chosen to clear the most restrictive jurisdiction
+# either way, so this does not depend on which of the sender's countries is selected -- the same
+# constant test_suspicious.sh uses.
+large_qdn=1200000
+large_wei="${large_qdn}000000000000000000"
+echo "moving ${large_qdn}qdn = $(python3 -c "print($large_qdn*int('$qdn_usd')/10**18)") usd"
+
+# top up only if short, so repeated runs do not inflate al without bound
+have=$(bank_aqdn "$bech32")
+python3 -c "raise SystemExit(0 if int('$have') >= ${large_qdn}*10**18 + 10**19 else 1)" || {
+    echo "funding $account from treasury"
+    bank_send treasury "$bech32" "$((large_qdn + 100))qdn"
+    [ "$bank_code" = "0" ] || fail "could not top up $account (code $bank_code)"
+}
+
+echo "-------------------------"
+echo "over the bank: refused, over threshold"
+echo "-------------------------"
+ann_before=$(bank_aqdn "$ann_addr")
+bank_send "$account" "$ann_addr" "${large_qdn}qdn"
+[ "$bank_code" != "0" ] \
+    || fail "an over-threshold bank send was allowed; the AML threshold is not being applied"
+# 1125 is the scan refusing a reportable amount -- NOT 1159, which would mean the parties could not
+# be scanned at all and would make this case a duplicate of case 7
+echo "$bank_log" | grep -q "code 1125" \
+    || { echo "$bank_log" | head -2; fail "expected qadena code 1125 (over threshold), got the above"; }
+[ "$(bank_aqdn "$ann_addr")" = "$ann_before" ] || fail "a refused bank send still moved funds"
+echo "tx bank send refused (qadena code 1125, over threshold), nothing moved"
+
+echo "-------------------------"
+echo "over the EVM: allowed -- unscanned and unmeasured"
+echo "-------------------------"
+tx_status=$(evm_value_send "$private_key" "$ann_hex" "$large_wei")
+if [ "$tx_status" != "1" ]; then
+    fail "the over-threshold EVM transfer did not succeed (status '$tx_status').
+      If the EVM gap has been CLOSED deliberately, rewrite this case to assert a refusal."
+fi
+ann_after=$(bank_aqdn "$ann_addr")
+python3 -c "
+raise SystemExit(0 if int('$ann_after') - int('$ann_before') == ${large_qdn}*10**18 else 1)
+" || fail "expected ${large_qdn}qdn to arrive, got $(python3 -c "print((int('$ann_after')-int('$ann_before'))/10**18)")qdn"
+echo "cast send --value moved ${large_qdn}qdn ($(python3 -c "print($large_qdn*int('$qdn_usd')/10**18)") usd) with no scan"
+
+# send it back, so the suite leaves balances where it found them and can be re-run
+ann_key=$(key_of ann)
+[ -n "$ann_key" ] || fail "could not export the eth key for ann to return the funds"
+tx_status=$(evm_value_send "$ann_key" "$eth_addr" "$large_wei")
+[ "$tx_status" = "1" ] || fail "could not return the ${large_qdn}qdn to $account (status '$tx_status')"
+echo "returned ${large_qdn}qdn to $account"
 
 echo "========================="
 echo "EVM TESTS PASSED"
