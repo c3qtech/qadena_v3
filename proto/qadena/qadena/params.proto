@@ -72,6 +72,11 @@ message Params {
   // switch an AML control off, and every other spelling of this flag would do exactly that on a
   // chain whose params predate it.
   bool allow_transfer_without_ekyc = 24;
+
+  // NOTE: the bank-send whitelist is deliberately NOT a param.  Params are replaced wholesale by
+  // MsgUpdateParams, so adding one address would mean restating every other one, and a mistake
+  // there silently drops exemptions.  It lives in its own keyed state with add/remove messages --
+  // see BankSendWhitelist in genesis.proto and tx.proto.
 }
 
 // One jurisdiction's reporting threshold, in that jurisdiction's own currency.

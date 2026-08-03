@@ -52,6 +52,8 @@ service Msg {
   rpc AddServiceProvider                    (MsgAddServiceProvider                   ) returns (MsgAddServiceProviderResponse                   );
   rpc DeactivateServiceProvider             (MsgDeactivateServiceProvider            ) returns (MsgDeactivateServiceProviderResponse            );
   rpc UpdateEnclaveIdentity                 (MsgUpdateEnclaveIdentity                ) returns (MsgUpdateEnclaveIdentityResponse                );
+  rpc AddBankSendWhitelist                  (MsgAddBankSendWhitelist                 ) returns (MsgAddBankSendWhitelistResponse                 );
+  rpc RemoveBankSendWhitelist               (MsgRemoveBankSendWhitelist              ) returns (MsgRemoveBankSendWhitelistResponse              );
 
   // AUTHORIZATION:
   // make sure that the creator *IS* a Pioneer via enclave
@@ -172,6 +174,29 @@ message MsgDeactivateServiceProvider {
 }
 
 message MsgDeactivateServiceProviderResponse {}
+
+// Add one account to the bank-send whitelist.  One entry at a time, deliberately: a whole-list
+// update would mean every deployment restating every other deployment's exemptions, and an
+// omission would silently remove one.
+message MsgAddBankSendWhitelist {
+  option (cosmos.msg.v1.signer) =                       "authority";
+  // authority is the address that controls the module (defaults to x/gov unless overwritten).
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string address   = 2 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  // why this account is exempt from AML scanning; stored with the entry for later review
+  string reason    = 3;
+}
+
+message MsgAddBankSendWhitelistResponse {}
+
+message MsgRemoveBankSendWhitelist {
+  option (cosmos.msg.v1.signer) =                       "authority";
+  // authority is the address that controls the module (defaults to x/gov unless overwritten).
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string address   = 2 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+}
+
+message MsgRemoveBankSendWhitelistResponse {}
 
 message MsgUpdateEnclaveIdentity {
   option (cosmos.msg.v1.signer) = "authority";

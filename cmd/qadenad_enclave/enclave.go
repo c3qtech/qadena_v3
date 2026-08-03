@@ -6570,13 +6570,15 @@ func (s *qadenaServer) ScanTransaction(ctx context.Context, st *types.MsgScanTra
 
 	c.LoggerDebug(logger, "src wallet "+srcWalletID+" window holds "+strconv.Itoa(len(history.Transfers))+" transfers")
 
-	usdValueMap, valueMap := c.AggregateByDestination(history.Transfers)
+	usdValueMap := c.AggregateByDestination(history.Transfers)
 
 	for dstWalletID, v := range usdValueMap {
 		c.LoggerDebug(logger, "aggregate total "+dstWalletID+" "+v.String())
 		if v.IsGTE(threshold) {
 			c.LoggerDebug(logger, "suspicious aggregate total "+tf.SourceWalletID+" "+dstWalletID+" "+v.String())
-			aggregated := c.TransferFunds{Time: st.Timestamp, SourceWalletID: tf.SourceWalletID, DestinationWalletID: dstWalletID, USDCoinAmount: v, CoinAmount: valueMap[dstWalletID]}
+			// USD is the aggregate; the token amount is this transfer's, because a window can hold
+			// several denominations and there is no meaningful sum across them
+			aggregated := c.TransferFunds{Time: st.Timestamp, SourceWalletID: tf.SourceWalletID, DestinationWalletID: dstWalletID, USDCoinAmount: v, CoinAmount: tf.CoinAmount}
 
 			if optInReason != "" {
 				// Reported, so the pair starts over -- otherwise every later transfer to the same

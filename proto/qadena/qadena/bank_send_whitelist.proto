@@ -1,0 +1,25 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "github.com/c3qtech/qadena_v3/x/qadena/types";
+
+// An account allowed to move coins with a direct bank send without being scanned.
+//
+// Everyone else sending account-to-account goes through the same enclave AML scan as
+// MsgTransferFunds: eKYC gate, per-jurisdiction threshold, rolling window.  Transfers with a MODULE
+// account on either side never reach that check at all -- fees, staking, governance and the qadena
+// escrow all move coins that way and none of them are user-to-user.
+//
+// This list is for accounts that must send directly and CANNOT be scanned, because they are not
+// user wallets and hold no credential to draw a jurisdiction from.  In practice that means the
+// funding treasuries.
+//
+// It is deliberately NOT a param: MsgUpdateParams replaces the whole Params struct, so adding one
+// address would mean restating every other one, and an omission would silently drop an exemption.
+// Entries are added and removed individually by governance.
+message BankSendWhitelist {
+  string address = 1;
+  // why this account is exempt.  Required in practice: an address on its own gives a reviewer no
+  // way to judge, later, whether the exemption is still warranted.
+  string reason = 2;
+}

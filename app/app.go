@@ -48,6 +48,7 @@ import (
 	_ "github.com/cosmos/cosmos-sdk/x/authz/module" // import for side-effects
 	_ "github.com/cosmos/cosmos-sdk/x/bank"         // import for side-effects
 	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	_ "github.com/cosmos/cosmos-sdk/x/consensus" // import for side-effects
 	consensuskeeper "github.com/cosmos/cosmos-sdk/x/consensus/keeper"
 	_ "github.com/cosmos/cosmos-sdk/x/distribution" // import for side-effects
@@ -525,6 +526,12 @@ func New(
 		blockedAddrs[addr] = true
 	}
 
+	// Every account-to-account movement of value goes through the AML scan, whichever module moves
+	// it.  Without this the scan only covers MsgTransferFunds and `tx bank send` is an unmeasured
+	// second route around it -- including around the eKYC gate, so a wallet refused a transfer for
+	// having no residency could send the same funds anyway.
+	app.BankKeeper.AppendSendRestriction(app.qadenaBankSendRestriction())
+
 	/*
 		newBlockedAddrs := app.BankKeeper.GetBlockedAddresses()
 		for addr := range newBlockedAddrs {
@@ -707,6 +714,50 @@ func GetMaccPerms() map[string][]string {
 		dup[perms.Account] = perms.Permissions
 	}
 	return dup
+}
+
+// qadenaBankSendRestriction refuses any account-to-account transfer that has not been AML-scanned.
+//
+// Registered on the bank keeper, so it sits under SendCoins and per-output under InputOutputCoins.
+// That means it covers MsgSend, MsgMultiSend, authz-wrapped sends and EVM value transfers alike,
+// rather than only the message a user typed.
+//
+// The order of checks is deliberate, broadest and cheapest first:
+//
+//  1. a MODULE account on either side.  Fee collection, staking, governance deposits and the qadena
+//     module's own transfer escrow all move coins this way, and none of them are one person paying
+//     another.  Checked against a precomputed set, so the common case costs no store read.
+//  2. a WHITELISTED sender.  For accounts that must move funds directly and cannot be scanned at
+//     all, because they are not user wallets and hold no credential to draw a jurisdiction from --
+//     in practice the funding treasuries.  Every entry is unscanned by construction, which is why
+//     it is governance-gated and carries a recorded reason.
+//  3. everything else is SCANNED, and refused if the scan refuses.
+//
+// A send that cannot be scanned is refused rather than waved through: permitting it would leave
+// open exactly the gap this exists to close.
+func (app *App) qadenaBankSendRestriction() banktypes.SendRestrictionFn {
+	moduleAddrs := make(map[string]bool)
+	for acc := range GetMaccPerms() {
+		moduleAddrs[authtypes.NewModuleAddress(acc).String()] = true
+	}
+
+	return func(ctx context.Context, fromAddr, toAddr sdk.AccAddress, amt sdk.Coins) (sdk.AccAddress, error) {
+		if moduleAddrs[fromAddr.String()] || moduleAddrs[toAddr.String()] {
+			return toAddr, nil
+		}
+
+		sdkctx := sdk.UnwrapSDKContext(ctx)
+
+		if app.QadenaKeeper.IsBankSendWhitelisted(sdkctx, fromAddr.String()) {
+			return toAddr, nil
+		}
+
+		if err := app.QadenaKeeper.ScanBankSend(sdkctx, fromAddr, toAddr, amt); err != nil {
+			return toAddr, err
+		}
+
+		return toAddr, nil
+	}
 }
 
 // BlockedAddresses returns all the app's blocked account addresses.

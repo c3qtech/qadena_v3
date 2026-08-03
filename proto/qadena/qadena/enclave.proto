@@ -110,6 +110,7 @@ service QadenaEnclave {
   // so an identity provider is told at submission time rather than the credential silently becoming
   // unclaimable.  The chain cannot do this itself -- the details arrive encrypted.
   rpc ValidatePersonalInfo (MsgCreateCredential) returns (ValidatePersonalInfoReply) {}
+  rpc ScanBankSend (MsgScanBankSend) returns (ScanBankSendReply) {}
   rpc ValidateTransferPrime (MsgTransferFunds) returns (ValidateTransferPrimeReply) {}
   rpc ValidateTransferDoublePrime (MsgReceiveFunds) returns (ValidateTransferDoublePrimeReply) {}
   rpc SyncWallets (MsgSyncWallets) returns (SyncWalletsReply) {}
@@ -284,6 +285,45 @@ message MsgScanTransactions {
 message ScanCountryThreshold {
   string country = 1;
   string thresholdAttoUSD = 2;
+}
+
+// A direct bank send, put through the same AML scan as MsgTransferFunds.
+//
+// Separate from MsgScanTransactions because almost none of that message applies here: a transfer's
+// amount is spread across Pedersen commitments and VShares that the enclave has to decrypt, whereas
+// a bank send's amount is public and arrives as a plain integer.  What the two share -- the window,
+// the jurisdiction lookup, the threshold table -- is shared as code inside the enclave rather than
+// by forcing one message to carry both shapes.
+message MsgScanBankSend {
+  google.protobuf.Timestamp timestamp = 1 [
+    (gogoproto.stdtime) = true,
+    (gogoproto.nullable) = false
+  ];
+  int64 height = 2;
+  string srcWalletID = 3;
+  string dstWalletID = 4;
+  // One per denomination in the send.  bank SendCoins carries sdk.Coins, so a single message can
+  // move several denominations at once and each needs its own market and its own fail-closed
+  // pricing check.
+  repeated ScanBankSendCoin coins = 5;
+  Params params = 6 [(gogoproto.nullable) = false];
+  repeated ScanCountryThreshold countryThresholds = 7;
+  string defaultThresholdAttoUSD = 8;
+  string jarID = 9;
+}
+
+// NOTE: no exchange rate.  MsgScanTransactions has to carry one because the enclave decrypts the
+// amount out of a Pedersen commitment and does the multiplication itself.  A bank send's amount is
+// public, so the keeper -- which holds the pricefeed -- values it directly and sends the result.
+// That also keeps the multi-denomination case in the one place that can price each denomination.
+message ScanBankSendCoin {
+  string denom = 1;
+  string amount = 2;
+  string usdAmountAttoUSD = 3;
+}
+
+message ScanBankSendReply {
+  bool status = 1;
 }
 
 message MsgSyncWallets {

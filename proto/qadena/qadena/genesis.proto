@@ -15,6 +15,7 @@ import "qadena/qadena/suspicious_transaction.proto";
 import "qadena/qadena/protect_key.proto";
 import "qadena/qadena/recover_key.proto";
 import "qadena/qadena/enclave_identity.proto";
+import "qadena/qadena/bank_send_whitelist.proto";
 
 option go_package = "github.com/c3qtech/qadena_v3/x/qadena/types";
 
@@ -34,5 +35,9 @@ message GenesisState {
   repeated ProtectKey            protectKeyList             = 10 [(gogoproto.nullable) = false] ;
   repeated RecoverKey            recoverKeyList             = 11 [(gogoproto.nullable) = false] ;
   repeated EnclaveIdentity       enclaveIdentityList        = 12 [(gogoproto.nullable) = false] ;
+  // Seeding at least the bootstrap treasury here is required, not optional: setup_prerequisites.sh
+  // funds accounts with a direct bank send before any governance proposal can run, so an empty
+  // list makes the chain un-bootstrappable.
+  repeated BankSendWhitelist     bankSendWhitelistList      = 13 [(gogoproto.nullable) = false] ;
 }
 

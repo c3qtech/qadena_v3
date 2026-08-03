@@ -161,15 +161,22 @@ func PruneExpired(transfers []*types.EncryptableScanTransfer, cutoffUnix int64) 
 	return kept
 }
 
-// AggregateByDestination sums a window's transfers per destination wallet.
+// AggregateByDestination sums a window's transfers per destination wallet, in attoUSD.
 //
-// The USD totals are what the threshold is compared against; the token totals ride along so the
-// report filed for a tripped aggregate can state the amount in the denomination actually sent.
+// USD is the only unit that can be summed here.  A window may hold entries in several
+// denominations -- transfer-funds accepts erc20 denominations, and a bank send carries sdk.Coins,
+// which can move more than one at once -- and sdk.Coin.Add PANICS when the denominations differ.
+// An earlier version of this function also returned a per-destination token total and would panic
+// the moment a wallet sent two denominations to the same destination inside one window.
+//
+// Nothing is lost by dropping it: the threshold is denominated in USD, so the decision only ever
+// used the USD figure, and a token total across mixed denominations is not a meaningful number to
+// report anyway.  A report that needs to state a token amount uses the transfer that triggered it.
+//
 // Each entry contributes the fiat value computed at the rate in force when it was scanned, which is
-// why the value is stored rather than recomputed.
-func AggregateByDestination(transfers []*types.EncryptableScanTransfer) (usd map[string]sdk.Coin, coin map[string]sdk.Coin) {
-	usd = make(map[string]sdk.Coin)
-	coin = make(map[string]sdk.Coin)
+// why that value is stored rather than recomputed.
+func AggregateByDestination(transfers []*types.EncryptableScanTransfer) map[string]sdk.Coin {
+	usd := make(map[string]sdk.Coin)
 
 	for _, tf := range transfers {
 		if tf == nil {
@@ -181,15 +188,9 @@ func AggregateByDestination(transfers []*types.EncryptableScanTransfer) (usd map
 			running = sdk.NewCoin(types.AttoUSDFiatDenom, cosmosmath.NewInt(0))
 		}
 		usd[tf.DestinationWalletID] = running.Add(tf.USDCoinAmount)
-
-		runningCoin, seen := coin[tf.DestinationWalletID]
-		if !seen {
-			runningCoin = sdk.NewCoin(tf.CoinAmount.Denom, cosmosmath.NewInt(0))
-		}
-		coin[tf.DestinationWalletID] = runningCoin.Add(tf.CoinAmount)
 	}
 
-	return usd, coin
+	return usd
 }
 
 // DropDestination removes every entry for one destination, used after a tripped aggregate has been

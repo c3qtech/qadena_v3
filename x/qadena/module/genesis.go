@@ -52,6 +52,12 @@ func InitGenesis(ctx sdk.Context, k keeper.Keeper, genState types.GenesisState) 
 	for _, elem := range genState.EnclaveIdentityList {
 		k.SetEnclaveIdentity(ctx, elem)
 	}
+	// Seeding at least the bootstrap treasury is required: the setup scripts fund accounts with a
+	// direct bank send before any governance proposal can run, and an unwhitelisted, unscannable
+	// sender is refused -- so an empty list here leaves the chain unable to fund anything.
+	for _, elem := range genState.BankSendWhitelistList {
+		k.SetBankSendWhitelist(ctx, elem)
+	}
 	// this line is used by starport scaffolding # genesis/module/init
 	if err := k.SetParams(ctx, genState.Params); err != nil {
 		panic(err)
@@ -74,6 +80,7 @@ func ExportGenesis(ctx sdk.Context, k keeper.Keeper) *types.GenesisState {
 	genesis.ProtectKeyList = k.GetAllProtectKey(ctx)
 	genesis.RecoverKeyList = k.GetAllRecoverKey(ctx)
 	genesis.EnclaveIdentityList = k.GetAllEnclaveIdentity(ctx)
+	genesis.BankSendWhitelistList = k.GetAllBankSendWhitelist(ctx)
 	// this line is used by starport scaffolding # genesis/module/export
 
 	return genesis

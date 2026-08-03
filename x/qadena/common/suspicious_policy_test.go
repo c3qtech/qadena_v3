@@ -101,7 +101,7 @@ func TestPruneExpiredDoesNotMutateInput(t *testing.T) {
 }
 
 func TestAggregateByDestination(t *testing.T) {
-	usd, coin := AggregateByDestination([]*types.EncryptableScanTransfer{
+	usd := AggregateByDestination([]*types.EncryptableScanTransfer{
 		transferAt(1, "alice", 100),
 		transferAt(2, "bob", 30),
 		transferAt(3, "alice", 50),
@@ -114,13 +114,41 @@ func TestAggregateByDestination(t *testing.T) {
 	if got := usd["bob"]; !got.Amount.Equal(cosmosmath.NewInt(30)) {
 		t.Errorf("bob usd total = %s, want 30", got.Amount)
 	}
-	if got := coin["alice"]; !got.Amount.Equal(cosmosmath.NewInt(150)) {
-		t.Errorf("alice coin total = %s, want 150", got.Amount)
-	}
-
 	// destinations must not be pooled -- the rule is per source/destination PAIR
 	if usd["alice"].Amount.Equal(usd["bob"].Amount) {
 		t.Error("totals for different destinations collapsed together")
+	}
+}
+
+// A window can hold several denominations for one destination: transfer-funds accepts erc20
+// denominations, and a bank send carries sdk.Coins.  Aggregation must survive that.  It previously
+// did not -- a per-destination token total was summed with sdk.Coin.Add, which panics when the
+// denominations differ, so the second denomination to any destination brought the enclave down.
+func TestAggregateByDestinationMixedDenoms(t *testing.T) {
+	mixed := []*types.EncryptableScanTransfer{
+		{
+			UnixTime:            1,
+			DestinationWalletID: "alice",
+			USDCoinAmount:       attoUSD(100),
+			CoinAmount:          sdk.NewCoin("qdn", cosmosmath.NewInt(100)),
+		},
+		{
+			UnixTime:            2,
+			DestinationWalletID: "alice",
+			USDCoinAmount:       attoUSD(50),
+			CoinAmount:          sdk.NewCoin("erc20/abc", cosmosmath.NewInt(7)),
+		},
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("mixed denominations panicked: %v", r)
+		}
+	}()
+
+	usd := AggregateByDestination(mixed)
+	if got := usd["alice"]; !got.Amount.Equal(cosmosmath.NewInt(150)) {
+		t.Errorf("alice usd total = %s, want 150 (USD is summable across denominations)", got.Amount)
 	}
 }
 

@@ -111,4 +111,13 @@ var (
 	// credential the cheapest way to pick your own limit.  Governed by the
 	// allow_transfer_without_ekyc param.
 	ErrNoEKYCForTransfer = sdkerrors.Register(ModuleName, 1158, "Sender has no eKYC data; residency or citizenship is required to transfer")
+
+	// A direct bank send that could not be scanned.  Every account-to-account transfer is put
+	// through the same AML scan as MsgTransferFunds; a send that cannot be scanned -- because one
+	// side is not a credentialed wallet -- is refused rather than allowed through unmeasured, since
+	// letting it pass would make the scan on the other path pointless.
+	ErrBankSendNotScannable = sdkerrors.Register(ModuleName, 1159, "This transfer cannot be AML-scanned; both parties must be wallets with eKYC data")
+
+	ErrBankSendWhitelistExists   = sdkerrors.Register(ModuleName, 1160, "Address is already on the bank send whitelist")
+	ErrBankSendWhitelistNotFound = sdkerrors.Register(ModuleName, 1161, "Address is not on the bank send whitelist")
 )
