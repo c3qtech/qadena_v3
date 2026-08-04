@@ -135,11 +135,18 @@ next_signer="$saved_signer"
 next_version=$(increment_version "$version_file")
 echo "next enclave: $next_version / $next_unique / $next_signer (signer deliberately unchanged)"
 
-"$qadenatestscripts/test_update_enclave_identity.sh" "$next_unique" "$next_signer" unvalidated > /dev/null 2>&1 \
+# Output kept, not discarded: when registration fails the interesting evidence is which of the
+# three transactions (submit, deposit, vote) went wrong, and that only exists here.
+"$qadenatestscripts/test_update_enclave_identity.sh" "$next_unique" "$next_signer" unvalidated \
     || fail "could not submit the enclave identity proposal for $next_unique"
 
+# The wait budget must cover the REGULAR voting period, not the expedited one.  The proposal is
+# submitted expedited (30s in the test config), but gov v1 CONVERTS an expedited proposal that
+# misses its expedited tally into a regular proposal with the full voting period (300s here) --
+# votes carry over, so it still passes, just later.  A single slow transaction inside the 30s
+# window is enough to trigger the conversion, which made a 120s wait a coin-flip.
 registered=false
-for _ in {1..40}; do
+for _ in {1..130}; do
     if qadenad_alias query qadena show-enclave-identity "$next_unique" > /dev/null 2>&1; then
         registered=true
         break
@@ -147,7 +154,7 @@ for _ in {1..40}; do
     sleep 3
 done
 [ "$registered" = "true" ] \
-    || fail "$next_unique was never registered on chain; the proposal did not pass"
+    || fail "$next_unique was never registered on chain; the proposal did not pass even a regular voting period"
 echo "$next_unique registered: $(qadenad_alias query qadena show-enclave-identity "$next_unique" --output json 2>/dev/null | jq -r '.enclaveIdentity.status')"
 
 echo "========================="
