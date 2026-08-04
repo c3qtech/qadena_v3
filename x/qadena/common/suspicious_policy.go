@@ -40,6 +40,36 @@ type SuspiciousPolicy struct {
 	// AllowTransferWithoutEKYC mirrors the param of the same name.  False -- the proto3 zero, and
 	// so also the value an un-upgraded chain reports -- is the ENFORCING state.
 	AllowTransferWithoutEKYC bool
+
+	// BlockTransferWithoutOptInReason decides what happens to a reportable transfer whose sender
+	// supplied no --opt-in-reason.
+	//
+	// False (the default, and the proto3 zero): REPORT IT ANYWAY, with DefaultOptInReason standing
+	// in for the missing text, and let the transfer proceed.  A report the regulator receives is
+	// worth more than a transfer that silently did not happen, and refusing produced neither.
+	//
+	// True: refuse instead, which is what this chain did before the flag existed -- every report
+	// was self-selected, so a sender unwilling to be named simply stayed under the limit and the
+	// regulator saw nothing at all.
+	//
+	// Note the direction: here false is the MORE INFORMATIVE state, not merely the laxer one, so
+	// the usual "an unset AML param must not switch a control off" reading does not apply.  An
+	// un-upgraded chain gets more reports than before, never fewer.
+	BlockTransferWithoutOptInReason bool
+}
+
+// DefaultOptInReason stands in when a reportable transfer carries no reason.  It is deliberately
+// bland and fixed: it is written into a regulator-encrypted report, so it must never echo anything
+// the sender supplied.
+const DefaultOptInReason = "No reason provided"
+
+// OptInReasonOrDefault keeps the substitution in one place, so no call site can file a report with
+// an empty reason field.
+func OptInReasonOrDefault(reason string) string {
+	if strings.TrimSpace(reason) == "" {
+		return DefaultOptInReason
+	}
+	return reason
 }
 
 // SuspiciousPolicyFromParams reads the policy, substituting compiled-in defaults for anything unset.
@@ -50,8 +80,9 @@ type SuspiciousPolicy struct {
 // window would expire every entry immediately and silently disable the aggregate rule.
 func SuspiciousPolicyFromParams(p types.Params) SuspiciousPolicy {
 	policy := SuspiciousPolicy{
-		Window:                   time.Duration(p.SuspiciousTransactionWindowSeconds) * time.Second,
-		AllowTransferWithoutEKYC: p.AllowTransferWithoutEkyc,
+		Window:                          time.Duration(p.SuspiciousTransactionWindowSeconds) * time.Second,
+		AllowTransferWithoutEKYC:        p.AllowTransferWithoutEkyc,
+		BlockTransferWithoutOptInReason: p.BlockTransferWithoutOptInReason,
 	}
 	if policy.Window <= 0 {
 		policy.Window = DefaultSuspiciousWindow

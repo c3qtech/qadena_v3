@@ -42,6 +42,8 @@ func GetQueryCmd() *cobra.Command {
 	cmd.AddCommand(CmdShowPioneerJar())
 	cmd.AddCommand(CmdListJarRegulator())
 	cmd.AddCommand(CmdShowJarRegulator())
+	cmd.AddCommand(CmdListScannedContractWhitelist())
+	cmd.AddCommand(CmdShowScannedContractWhitelist())
 
 	cmd.AddCommand(CmdTreasury())
 

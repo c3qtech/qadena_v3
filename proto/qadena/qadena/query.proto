@@ -12,6 +12,7 @@ import "qadena/qadena/public_key.proto";
 import "qadena/qadena/wallet.proto";
 import "qadena/qadena/interval_public_key_i_d.proto";
 import "qadena/qadena/pioneer_jar.proto";
+import "qadena/qadena/scanned_contract_whitelist.proto";
 import "qadena/qadena/jar_regulator.proto";
 import "qadena/qadena/suspicious_transaction.proto";
 import "qadena/qadena/protect_key.proto";
@@ -176,7 +177,22 @@ service Query {
   }
   rpc EnclaveIdentityAll (QueryAllEnclaveIdentityRequest) returns (QueryAllEnclaveIdentityResponse) {
     option (google.api.http).get = "/qadena/qadena/enclave_identity";
-  
+
+  }
+
+  // Queries the scanned-contract whitelist.
+  //
+  // Needed operationally, not just for inspection: adding an entry is a governance proposal, and
+  // the scripts that submit one have to be able to tell "already listed" from "not listed yet" --
+  // MsgAddScannedContractWhitelist rejects duplicates, so a re-run without this check would fail a
+  // proposal against an already-correct chain.
+  rpc ScannedContractWhitelist    (QueryGetScannedContractWhitelistRequest) returns (QueryGetScannedContractWhitelistResponse) {
+    option (google.api.http).get = "/qadena/qadena/scanned_contract_whitelist/{address}";
+
+  }
+  rpc ScannedContractWhitelistAll (QueryAllScannedContractWhitelistRequest) returns (QueryAllScannedContractWhitelistResponse) {
+    option (google.api.http).get = "/qadena/qadena/scanned_contract_whitelist";
+
   }
 }
 // QueryParamsRequest is request type for the Query/Params RPC method.
@@ -448,5 +464,22 @@ message QueryAllEnclaveIdentityRequest {
 message QueryAllEnclaveIdentityResponse {
   repeated EnclaveIdentity                        enclaveIdentity = 1 [(gogoproto.nullable) = false];
            cosmos.base.query.v1beta1.PageResponse pagination      = 2;
+}
+
+message QueryGetScannedContractWhitelistRequest {
+  string address = 1;
+}
+
+message QueryGetScannedContractWhitelistResponse {
+  ScannedContractWhitelist scannedContractWhitelist = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllScannedContractWhitelistRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllScannedContractWhitelistResponse {
+  repeated ScannedContractWhitelist               scannedContractWhitelist = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination               = 2;
 }
 

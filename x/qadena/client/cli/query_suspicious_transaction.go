@@ -64,24 +64,25 @@ func CmdListSuspiciousTransaction() *cobra.Command {
 				privKey := args[0]
 				for _, st := range res.GetSuspiciousTransaction() {
 					fmt.Println("-------------- Suspicious Transaction " + strconv.Itoa(int(st.Id+1)) + " --------------------")
-					var srcPI types.EncryptablePersonalInfo
-					_, err := c.BDecryptAndProtoUnmarshal(privKey, st.EncSourcePersonalInfoRegulatorPubK, &srcPI)
+
+					srcLines, err := describeReportParty(privKey, st.SourceKind,
+						st.EncSourcePersonalInfoRegulatorPubK, st.EncSourceContractInfoRegulatorPubK)
 					if err != nil {
-						fmt.Println("couldn't get decrypt source credential")
+						fmt.Println("couldn't decrypt the source party")
 						return err
 					}
 
-					var dstPI types.EncryptablePersonalInfo
-					_, err = c.BDecryptAndProtoUnmarshal(privKey, st.EncDestinationPersonalInfoRegulatorPubK, &dstPI)
+					dstLines, err := describeReportParty(privKey, st.DestinationKind,
+						st.EncDestinationPersonalInfoRegulatorPubK, st.EncDestinationContractInfoRegulatorPubK)
 					if err != nil {
-						fmt.Println("couldn't get decrypt destination credential")
+						fmt.Println("couldn't decrypt the destination party")
 						return err
 					}
 
 					var eAmount types.EncryptableESuspiciousAmount
 					_, err = c.BDecryptAndProtoUnmarshal(privKey, st.EncEAmountRegulatorPubK, &eAmount)
 					if err != nil {
-						fmt.Println("couldn't get decrypt destination credential")
+						fmt.Println("couldn't decrypt the amount")
 						return err
 					}
 					if eAmount.CoinAmount.Denom != "" {
@@ -96,22 +97,14 @@ func CmdListSuspiciousTransaction() *cobra.Command {
 							fmt.Println("Reason", c.RedText(st.Reason))
 							fmt.Println("USDAmount", c.RedText(usdCoin.String()))
 							fmt.Println("Amount", c.RedText(qadenaCoin.String()))
-							fmt.Println("Source Personal Info")
-							fmt.Println("  First Name", c.RedText(srcPI.Details.FirstName))
-							fmt.Println("  Middle Name", c.RedText(srcPI.Details.MiddleName))
-							fmt.Println("  Last Name", c.RedText(srcPI.Details.LastName))
-							fmt.Println("  Birthdate", c.RedText(srcPI.Details.Birthdate))
-							fmt.Println("  Citizenship", c.RedText(srcPI.Details.Citizenship))
-							fmt.Println("  Residency", c.RedText(srcPI.Details.Residency))
-							fmt.Println("  Gender", c.RedText(srcPI.Details.Gender))
-							fmt.Println("Destination Personal Info")
-							fmt.Println("  First Name", c.RedText(dstPI.Details.FirstName))
-							fmt.Println("  Middle Name", c.RedText(dstPI.Details.MiddleName))
-							fmt.Println("  Last Name", c.RedText(dstPI.Details.LastName))
-							fmt.Println("  Birthdate", c.RedText(dstPI.Details.Birthdate))
-							fmt.Println("  Citizenship", c.RedText(dstPI.Details.Citizenship))
-							fmt.Println("  Residency", c.RedText(dstPI.Details.Residency))
-							fmt.Println("  Gender", c.RedText(dstPI.Details.Gender))
+							fmt.Println("Source")
+							for _, line := range srcLines {
+								fmt.Println(line)
+							}
+							fmt.Println("Destination")
+							for _, line := range dstLines {
+								fmt.Println(line)
+							}
 						}
 					}
 					fmt.Println()
@@ -128,6 +121,65 @@ func CmdListSuspiciousTransaction() *cobra.Command {
 	flags.AddQueryFlagsToCmd(cmd)
 
 	return cmd
+}
+
+// describeReportParty decrypts whichever descriptor one side of a report actually carries, and
+// renders it for the regulator.
+//
+// A report names a WALLET by identity and everything else by address, and SourceKind/DestinationKind
+// say which.  Reading the personal-info blob unconditionally -- as this used to -- fails with
+// "invalid length of message" the moment a treasury or a contract appears in a report, because the
+// field it reaches for is empty.  That was unreachable while non-wallet parties were exempt from
+// scanning and could never be reported; it became reachable the moment they were not.
+//
+// WALLET is the zero value, so a report written before party kinds existed still decodes as a pair
+// of wallets, which is what it was.
+func describeReportParty(privKey string, kind types.SuspiciousPartyKind, encPI, encCI []byte) ([]string, error) {
+	if kind == types.SuspiciousPartyKind_SUSPICIOUS_PARTY_KIND_WALLET {
+		var pi types.EncryptablePersonalInfo
+		if _, err := c.BDecryptAndProtoUnmarshal(privKey, encPI, &pi); err != nil {
+			return nil, err
+		}
+		if pi.Details == nil {
+			return []string{"  " + c.RedText("(no personal info in the report)")}, nil
+		}
+		return []string{
+			"  First Name " + c.RedText(pi.Details.FirstName),
+			"  Middle Name " + c.RedText(pi.Details.MiddleName),
+			"  Last Name " + c.RedText(pi.Details.LastName),
+			"  Birthdate " + c.RedText(pi.Details.Birthdate),
+			"  Citizenship " + c.RedText(pi.Details.Citizenship),
+			"  Residency " + c.RedText(pi.Details.Residency),
+			"  Gender " + c.RedText(pi.Details.Gender),
+		}, nil
+	}
+
+	var ci types.EncryptableContractInfo
+	if _, err := c.BDecryptAndProtoUnmarshal(privKey, encCI, &ci); err != nil {
+		return nil, err
+	}
+
+	// The two non-wallet kinds are told apart deliberately.  A CONTRACT was approved by governance
+	// and carries a reason a reviewer wrote; an ADDRESS_ONLY party was never approved and has none,
+	// so presenting them the same way would imply a scrutiny that never happened.
+	if kind == types.SuspiciousPartyKind_SUSPICIOUS_PARTY_KIND_ADDRESS_ONLY {
+		return []string{
+			"  " + c.RedText("(no identity on record -- named by address)"),
+			"  Address " + c.RedText(ci.Address),
+		}, nil
+	}
+
+	lines := []string{
+		"  " + c.RedText("(whitelisted non-wallet party)"),
+		"  Address " + c.RedText(ci.Address),
+	}
+	if ci.CodeID != 0 {
+		lines = append(lines, "  Wasm Code ID "+c.RedText(strconv.FormatUint(ci.CodeID, 10)))
+	}
+	if ci.Reason != "" {
+		lines = append(lines, "  Whitelisted Because "+c.RedText(ci.Reason))
+	}
+	return lines, nil
 }
 
 func CmdShowSuspiciousTransaction() *cobra.Command {
@@ -164,17 +216,17 @@ func CmdShowSuspiciousTransaction() *cobra.Command {
 				privKey := args[1]
 				st := res.GetSuspiciousTransaction()
 				fmt.Println("-------------- Suspicious Transaction --------------------")
-				var srcPI types.EncryptablePersonalInfo
-				_, err := c.BDecryptAndProtoUnmarshal(privKey, st.EncSourcePersonalInfoRegulatorPubK, &srcPI)
+				srcLines, err := describeReportParty(privKey, st.SourceKind,
+					st.EncSourcePersonalInfoRegulatorPubK, st.EncSourceContractInfoRegulatorPubK)
 				if err != nil {
-					fmt.Println("couldn't decrypt source credential")
+					fmt.Println("couldn't decrypt the source party")
 					return err
 				}
 
-				var dstPI types.EncryptablePersonalInfo
-				_, err = c.BDecryptAndProtoUnmarshal(privKey, st.EncDestinationPersonalInfoRegulatorPubK, &dstPI)
+				dstLines, err := describeReportParty(privKey, st.DestinationKind,
+					st.EncDestinationPersonalInfoRegulatorPubK, st.EncDestinationContractInfoRegulatorPubK)
 				if err != nil {
-					fmt.Println("couldn't decrypt destination credential")
+					fmt.Println("couldn't decrypt the destination party")
 					return err
 				}
 
@@ -195,22 +247,14 @@ func CmdShowSuspiciousTransaction() *cobra.Command {
 						fmt.Println("Reason", c.RedText(st.Reason))
 						fmt.Println("USDAmount", c.RedText(usdCoin.String()))
 						fmt.Println("Amount", c.RedText(qadenaCoin.String()))
-						fmt.Println("Source Personal Info")
-						fmt.Println("  First Name", c.RedText(srcPI.Details.FirstName))
-						fmt.Println("  Middle Name", c.RedText(srcPI.Details.MiddleName))
-						fmt.Println("  Last Name", c.RedText(srcPI.Details.LastName))
-						fmt.Println("  Birthdate", c.RedText(srcPI.Details.Birthdate))
-						fmt.Println("  Citizenship", c.RedText(srcPI.Details.Citizenship))
-						fmt.Println("  Residency", c.RedText(srcPI.Details.Residency))
-						fmt.Println("  Gender", c.RedText(srcPI.Details.Gender))
-						fmt.Println("Destination Personal Info")
-						fmt.Println("  First Name", c.RedText(dstPI.Details.FirstName))
-						fmt.Println("  Middle Name", c.RedText(dstPI.Details.MiddleName))
-						fmt.Println("  Last Name", c.RedText(dstPI.Details.LastName))
-						fmt.Println("  Birthdate", c.RedText(dstPI.Details.Birthdate))
-						fmt.Println("  Citizenship", c.RedText(dstPI.Details.Citizenship))
-						fmt.Println("  Residency", c.RedText(dstPI.Details.Residency))
-						fmt.Println("  Gender", c.RedText(dstPI.Details.Gender))
+						fmt.Println("Source")
+						for _, line := range srcLines {
+							fmt.Println(line)
+						}
+						fmt.Println("Destination")
+						for _, line := range dstLines {
+							fmt.Println(line)
+						}
 					}
 				}
 				fmt.Println()

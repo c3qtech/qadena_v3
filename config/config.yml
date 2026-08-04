@@ -266,7 +266,11 @@ genesis:
         update_credential_fee: "30php"
         # bump whenever the policy engine's behaviour changes, so a divergence between enclave
         # builds is visible on chain instead of silent
-        update_credential_policy_version: 1
+        # 2: the one-identity-field-at-a-time rule became
+        # update_credential_max_changed_identity_fields, and the verdict now reports every changed
+        # field rather than one.  The default is still a single field, so behaviour is unchanged on
+        # a chain that does not set the cap -- the bump records that the ENGINE moved.
+        update_credential_policy_version: 2
         # the alias list holds the original identity plus one hash per hash-changing update, so 4
         # aliases is a lifetime budget of 3 such updates
         update_credential_max_identity_aliases: 4
@@ -284,6 +288,12 @@ genesis:
         # marriage/divorce surname replacement
         update_credential_allow_last_name_life_event: true
         update_credential_allow_gender_change: true
+        # How many identity fields (first/middle/last name, birthdate, gender) may move in one
+        # update.  ONE IS THE SAFE VALUE: two simultaneous changes are hard to tell apart from
+        # substituting one person for another, which is why this was a compiled-in constant before
+        # it was a param.  Raising it also weakens the surname life-event rule, which is only safe
+        # because the remaining fields still pin the identity while the surname is replaced.
+        update_credential_max_changed_identity_fields: 1
         # AML scan (ScanTransaction in the enclave).  The reporting limit is a legal figure set by
         # each jurisdiction, not a converted one, so it is expressed in that jurisdiction's own
         # currency; the keeper prices each one through cn:qdn:<denom> before the enclave compares.
@@ -300,23 +310,34 @@ genesis:
         # the threshold is chosen from the sender's residency and citizenship, so a sender with
         # neither has no limit to be held to.  Set true only for a chain that does not require eKYC.
         allow_transfer_without_ekyc: false
-      # Accounts allowed to move coins with a direct bank send without being AML-scanned.  Everyone
-      # else sending account-to-account goes through the same enclave scan as transfer-funds.
+      # Non-wallet parties allowed to take part in a direct bank send.  They are STILL AML-scanned --
+      # nothing on this chain moves account-to-account without being scanned.  Listing an address
+      # here says only that it may participate while holding no credential, and that reports naming
+      # it carry an address and a reason instead of a person.
+      #
+      # This replaced a bank-send whitelist that switched scanning OFF for its entries.  That
+      # exemption existed only because a report could not name a party without a personal-info
+      # credential; now that it can, the exemption has no justification and is gone.
       #
       # Only the bootstrap treasury is seeded, and it has to be: setup_prerequisites.sh funds
       # accounts with a bank send before any governance proposal can run, so an empty list here
-      # leaves the chain unable to fund anything.  It also cannot be scanned -- it is not a user
-      # wallet and holds no credential to draw a jurisdiction from.
+      # leaves the chain unable to fund anything -- an unlisted sender with no credential is refused
+      # as unscannable.
+      #
+      # codeID is 0 because the treasury is a plain account, not a wasm contract.  A wasm contract
+      # MUST be pinned to its code ID: its admin can migrate it, and an unpinned entry would carry
+      # the approval over to code governance never reviewed.  The chain rejects either mismatch.
       #
       # Per-deployment treasuries (ekycph-treasury, enf-treasury, sec-treasury) are NOT here.  They
       # are created at runtime and add themselves by governance during onboarding, which is why the
-      # whitelist takes individual add/remove messages rather than living in Params.
+      # list takes individual add/remove messages rather than living in Params.
       #
       # treasuryPubKID is substituted with the treasury's address by
       # buildscripts/setPubKAndPubKID.sh, which init.sh already runs for this account -- so the
       # entry follows the mnemonic automatically instead of going stale if it changes.
-      bankSendWhitelistList:
+      scannedContractWhitelistList:
         - address: treasuryPubKID
+          codeID: 0
           reason: "bootstrap treasury: funds every other account, including the treasuries that fund deployments"
       enclaveIdentityList:
         - uniqueID: test-unique-id

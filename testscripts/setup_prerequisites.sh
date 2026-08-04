@@ -220,7 +220,34 @@ qadenad_alias status > /dev/null 2>&1 || fail "chain is not reachable -- start i
 key_exists "$treasury" || fail "treasury key '$treasury' not found in the keyring"
 key_exists "$pioneer" || fail "pioneer key '$pioneer' not found in the keyring"
 
-echo "chain up, '$treasury' and '$pioneer' present"
+# A REACHABLE CHAIN IS NOT A READY ONE.
+#
+# The first thing this script does is fund accounts by direct bank send, and every such send is now
+# AML-scanned in the enclave.  The enclave is initialised by delayed_init_enclave.sh, which waits for
+# block height 4 -- so for the first few blocks the chain answers `status` perfectly well while every
+# scanned send is refused, and the funding fails with nothing to say why.
+#
+# This did not matter while the treasuries were exempt from scanning: their sends never reached the
+# enclave, so it did not have to be up.  Removing that exemption made chain readiness depend on
+# enclave readiness, and this is the place that discovers it first.
+#
+# A jar regulator is the signal because it is created BY InitEnclave -- the enclave registers its
+# regulator identity as part of coming up -- and it is queryable from the chain.  It is also exactly
+# what a report needs, so waiting for it means the scan can both measure and report.
+echo "waiting for the enclave to finish initialising..."
+enclave_ready=false
+for _ in $(seq 1 90); do
+    if [ "$(qadenad_alias query qadena list-jar-regulator --output json 2>/dev/null \
+            | jq -r '.jarRegulator | length' 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+        enclave_ready=true
+        break
+    fi
+    sleep 2
+done
+[ "$enclave_ready" = "true" ] \
+    || fail "the enclave did not initialise within 180s -- no jar regulator on chain, so every scanned bank send would be refused"
+
+echo "chain up, enclave initialised, '$treasury' and '$pioneer' present"
 
 echo "========================="
 echo "create-wallet sponsor: $sponsorname"

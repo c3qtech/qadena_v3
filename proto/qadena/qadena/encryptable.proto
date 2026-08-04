@@ -19,6 +19,7 @@ import "qadena/qadena/secret_share_priv_k.proto";
 import "qadena/qadena/recover_share.proto";
 import "qadena/qadena/bulk_credential.proto";
 import "qadena/qadena/bigint.proto";
+import "qadena/qadena/scanned_contract_whitelist.proto";
 
 import "google/protobuf/timestamp.proto";
 
@@ -102,6 +103,15 @@ message EncryptableScanTransfer {
 	string DestinationWalletID = 2;
 	cosmos.base.v1beta1.Coin USDCoinAmount = 3 [(gogoproto.nullable) = false];
 	cosmos.base.v1beta1.Coin CoinAmount = 4 [(gogoproto.nullable) = false];
+
+	// How this destination should be described if the rolling aggregate to it is ever reported.
+	// Set only when the destination is on the scanned-contract whitelist; nil for a wallet.
+	//
+	// Held per ENTRY rather than taken from the send being scanned, because the aggregate rule
+	// reports whichever destination crosses the threshold -- which is very often not the one in the
+	// current message.  A treasury that pays a contract and then pays a wallet has both in its
+	// window, and reading the current message's descriptor would describe the wrong party.
+	ScannedContractWhitelist DestinationContract = 5;
 }
 
 // The window itself: every transfer one wallet has sent inside the configured period.  Entries
@@ -146,6 +156,24 @@ message EncryptablePersonalInfo {
     string Nonce = 1;
     string PIN = 2;
     EncryptablePersonalInfoDetails Details = 3; 
+}
+
+// What a report names in place of a person, when the party is not a wallet.
+//
+// Deliberately NOT an EncryptablePersonalInfo with invented fields: a regulator reading a report
+// has to be able to tell a real identity from a contract, and a fake person is indistinguishable
+// from a real one once encrypted.  SuspiciousTransaction carries a party kind alongside this so the
+// reader knows which of the two descriptors to decrypt.
+message EncryptableContractInfo {
+    // Stands in for EncryptablePersonalInfo.Nonce when building the report's amount nonce.  The
+    // address is public and stable, which is all that nonce needs to be.
+    string Nonce = 1;
+    string Address = 2;
+    // 0 for a party that is not a wasm contract.  Recorded so a report says which code was running
+    // at the time -- a later migration cannot retroactively change what was reported.
+    uint64 CodeID = 3;
+    // the governance-recorded justification from the whitelist entry
+    string Reason = 4;
 }
 
 message EncryptableSingleContactInfoDetails {

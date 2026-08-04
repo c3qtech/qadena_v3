@@ -58,8 +58,15 @@ func (k UpdateKind) String() string {
 
 type UpdateVerdict struct {
 	Kind UpdateKind
-	// the single hash-contributing field that changed, or "" for UpdateKindFreeFieldsOnly
-	ChangedField string
+	// EVERY hash-contributing field that changed, in the fixed order first/middle/last name,
+	// birthdate, gender.  Empty for UpdateKindFreeFieldsOnly.
+	//
+	// This is a list rather than the single field it used to be because the one-field rule is now
+	// UpdatePolicy.MaxChangedIdentityFields.  A caller that looked at only the first entry would
+	// under-enforce on a chain that raised the cap -- validateSubUpdates in particular, where a
+	// missed field means a name sub-credential left attesting to a name that is no longer in the
+	// identity hash.
+	ChangedFields []string
 	// whether CreateCredentialHash(old) != CreateCredentialHash(new), i.e. whether the caller
 	// must record a new identity alias
 	HashChanged bool
@@ -79,6 +86,20 @@ type UpdatePolicy struct {
 	AllowLastNameLifeEvent bool
 	// whether Gender may change at all; a jurisdiction can disable it by param rather than by fork
 	AllowGenderChange bool
+	// how many identity-bearing fields may change in one update.  1 is the safe value and the
+	// default; see the param comment in params.proto for why raising it costs more than it looks.
+	MaxChangedIdentityFields int
+}
+
+// UpdateIdentityFields is every hash-contributing field, in the order ClassifyPersonalInfoUpdate
+// reports them.  Its length is also the ceiling on MaxChangedIdentityFields: a larger cap cannot
+// permit anything a cap of len() does not already permit.
+var UpdateIdentityFields = []string{
+	UpdateFieldFirstName,
+	UpdateFieldMiddleName,
+	UpdateFieldLastName,
+	UpdateFieldBirthdate,
+	UpdateFieldGender,
 }
 
 // Compiled-in defaults.  DefaultParams() returns an empty Params{} and this codebase has no param
@@ -88,16 +109,21 @@ const (
 	DefaultUpdateNameMaxEditDistance        = 2
 	DefaultUpdateNameMaxEditDistancePercent = 34
 	DefaultUpdateBirthdateMaxYearDelta      = 1
+	// One field at a time was a compiled-in constant before it was a param, and it stays the
+	// default: an operator has to choose to weaken it, and a chain that never sets the param is
+	// unaffected by its existence.
+	DefaultUpdateCredentialMaxChangedIdentityFields = 1
 )
 
 // DefaultUpdatePolicy is the policy a chain gets when it sets none of the params.
 func DefaultUpdatePolicy() UpdatePolicy {
 	return UpdatePolicy{
-		MaxEditDistance:        DefaultUpdateNameMaxEditDistance,
-		MaxEditDistancePercent: DefaultUpdateNameMaxEditDistancePercent,
-		MaxYearDelta:           DefaultUpdateBirthdateMaxYearDelta,
-		AllowLastNameLifeEvent: true,
-		AllowGenderChange:      true,
+		MaxEditDistance:          DefaultUpdateNameMaxEditDistance,
+		MaxEditDistancePercent:   DefaultUpdateNameMaxEditDistancePercent,
+		MaxYearDelta:             DefaultUpdateBirthdateMaxYearDelta,
+		AllowLastNameLifeEvent:   true,
+		AllowGenderChange:        true,
+		MaxChangedIdentityFields: DefaultUpdateCredentialMaxChangedIdentityFields,
 	}
 }
 
@@ -114,6 +140,16 @@ func (p UpdatePolicy) WithDefaults() UpdatePolicy {
 	}
 	if p.MaxYearDelta == 0 {
 		p.MaxYearDelta = d.MaxYearDelta
+	}
+	// A negative value can only come from a caller building the struct by hand; treating it as
+	// unset rather than as "reject everything" keeps the failure mode consistent with the others.
+	if p.MaxChangedIdentityFields <= 0 {
+		p.MaxChangedIdentityFields = d.MaxChangedIdentityFields
+	}
+	// Clamping rather than rejecting: a cap above the number of identity fields permits nothing
+	// extra, so it is a harmless misconfiguration and not worth halting an enclave over.
+	if p.MaxChangedIdentityFields > len(UpdateIdentityFields) {
+		p.MaxChangedIdentityFields = len(UpdateIdentityFields)
 	}
 	return p
 }
@@ -145,11 +181,12 @@ const (
 // must set them explicitly for a chain that wants those transitions.
 func UpdatePolicyFromParams(p types.Params) UpdatePolicy {
 	return UpdatePolicy{
-		MaxEditDistance:        int(p.UpdateNameMaxEditDistance),
-		MaxEditDistancePercent: int(p.UpdateNameMaxEditDistancePercent),
-		MaxYearDelta:           int(p.UpdateBirthdateMaxYearDelta),
-		AllowLastNameLifeEvent: p.UpdateCredentialAllowLastNameLifeEvent,
-		AllowGenderChange:      p.UpdateCredentialAllowGenderChange,
+		MaxEditDistance:          int(p.UpdateNameMaxEditDistance),
+		MaxEditDistancePercent:   int(p.UpdateNameMaxEditDistancePercent),
+		MaxYearDelta:             int(p.UpdateBirthdateMaxYearDelta),
+		AllowLastNameLifeEvent:   p.UpdateCredentialAllowLastNameLifeEvent,
+		AllowGenderChange:        p.UpdateCredentialAllowGenderChange,
+		MaxChangedIdentityFields: int(p.UpdateCredentialMaxChangedIdentityFields),
 	}.WithDefaults()
 }
 
@@ -246,19 +283,16 @@ func ClassifyPersonalInfoUpdate(oldDetails, newDetails *types.EncryptablePersona
 		changed = append(changed, UpdateFieldGender)
 	}
 
-	switch len(changed) {
-	case 0:
+	if len(changed) == 0 {
 		// Citizenship and/or Residency may still have moved.  They are outside the hash but
 		// inside credentialPedersenCommit, so this is a real update -- just an unconstrained one.
 		return UpdateVerdict{Kind: UpdateKindFreeFieldsOnly}, nil
-	case 1:
-		// handled below
-	default:
-		return UpdateVerdict{}, rejectf("at most one identity field may change per update, got %d (%s)",
-			len(changed), strings.Join(changed, ", "))
 	}
 
-	field := changed[0]
+	if len(changed) > policy.MaxChangedIdentityFields {
+		return UpdateVerdict{}, rejectf("at most %d identity field(s) may change per update, got %d (%s)",
+			policy.MaxChangedIdentityFields, len(changed), strings.Join(changed, ", "))
+	}
 
 	// Derived from the hash itself, not assumed from "a field changed".  Canonicalization means a
 	// case-or-spacing-only edit leaves the identity exactly where it was, and claiming otherwise
@@ -267,43 +301,52 @@ func ClassifyPersonalInfoUpdate(oldDetails, newDetails *types.EncryptablePersona
 	// rate limit, both of which are right: nothing about the identity moved.
 	hashChanged := CreateCredentialHash(oldDetails) != CreateCredentialHash(newDetails)
 
-	verdict := UpdateVerdict{Kind: UpdateKindCorrection, ChangedField: field, HashChanged: hashChanged}
+	verdict := UpdateVerdict{Kind: UpdateKindCorrection, ChangedFields: changed, HashChanged: hashChanged}
 
-	switch field {
-	case UpdateFieldFirstName:
-		if !isNameCorrection(oldDetails.FirstName, newDetails.FirstName, false, policy) {
-			return UpdateVerdict{}, rejectf("first name %q to %q is not a correction", oldDetails.FirstName, newDetails.FirstName)
-		}
-	case UpdateFieldMiddleName:
-		if !isNameCorrection(oldDetails.MiddleName, newDetails.MiddleName, true, policy) {
-			return UpdateVerdict{}, rejectf("middle name %q to %q is not a correction", oldDetails.MiddleName, newDetails.MiddleName)
-		}
-	case UpdateFieldLastName:
-		// A surname legitimately changes wholesale on marriage or divorce, and no distance
-		// bound models that.  It is safe only because the one-field rule still holds: the given
-		// names and the birthdate continue to pin the identity, and the corrected data can only
-		// originate from an authenticated IdentityServiceProvider.
-		if isNameCorrection(oldDetails.LastName, newDetails.LastName, false, policy) {
-			break
-		}
-		if !policy.AllowLastNameLifeEvent {
-			return UpdateVerdict{}, rejectf("last name %q to %q is not a correction and life events are disabled",
-				oldDetails.LastName, newDetails.LastName)
-		}
-		if strings.TrimSpace(newDetails.LastName) == "" {
-			return UpdateVerdict{}, rejectf("last name may not be cleared")
-		}
-		verdict.Kind = UpdateKindLifeEvent
-	case UpdateFieldBirthdate:
-		if err := checkBirthdateCorrection(oldDetails.Birthdate, newDetails.Birthdate, policy); err != nil {
-			return UpdateVerdict{}, err
-		}
-	case UpdateFieldGender:
-		// The value space is {m, f, n} and ValidatePersonalInfoDetails has already enforced it,
-		// so gender cannot be used to substitute an identity; the one-field rule and the rate
-		// limit are the only constraints that matter.
-		if !policy.AllowGenderChange {
-			return UpdateVerdict{}, rejectf("gender changes are disabled")
+	// Every changed field is checked against its own rule, and one failure rejects the whole
+	// update.  There is no notion of a partially accepted update: the caller writes one new
+	// credential row, so the verdict has to cover all of it.
+	for _, field := range changed {
+		switch field {
+		case UpdateFieldFirstName:
+			if !isNameCorrection(oldDetails.FirstName, newDetails.FirstName, false, policy) {
+				return UpdateVerdict{}, rejectf("first name %q to %q is not a correction", oldDetails.FirstName, newDetails.FirstName)
+			}
+		case UpdateFieldMiddleName:
+			if !isNameCorrection(oldDetails.MiddleName, newDetails.MiddleName, true, policy) {
+				return UpdateVerdict{}, rejectf("middle name %q to %q is not a correction", oldDetails.MiddleName, newDetails.MiddleName)
+			}
+		case UpdateFieldLastName:
+			// A surname legitimately changes wholesale on marriage or divorce, and no distance
+			// bound models that.  It is safe only because the OTHER identity fields still pin the
+			// identity while it happens, and because the corrected data can only originate from an
+			// authenticated IdentityServiceProvider.  A chain that raises
+			// MaxChangedIdentityFields above 1 lets a life event travel with another edit and
+			// gives up part of that anchor -- which is the cost the param comment warns about.
+			if isNameCorrection(oldDetails.LastName, newDetails.LastName, false, policy) {
+				break
+			}
+			if !policy.AllowLastNameLifeEvent {
+				return UpdateVerdict{}, rejectf("last name %q to %q is not a correction and life events are disabled",
+					oldDetails.LastName, newDetails.LastName)
+			}
+			if strings.TrimSpace(newDetails.LastName) == "" {
+				return UpdateVerdict{}, rejectf("last name may not be cleared")
+			}
+			// A life event anywhere in the set makes the whole update one: it is the strongest
+			// claim being made, and it is what the MaxLifeEvents budget must be charged for.
+			verdict.Kind = UpdateKindLifeEvent
+		case UpdateFieldBirthdate:
+			if err := checkBirthdateCorrection(oldDetails.Birthdate, newDetails.Birthdate, policy); err != nil {
+				return UpdateVerdict{}, err
+			}
+		case UpdateFieldGender:
+			// The value space is {m, f, n} and ValidatePersonalInfoDetails has already enforced it,
+			// so gender cannot be used to substitute an identity; the field cap and the rate limit
+			// are the only constraints that matter.
+			if !policy.AllowGenderChange {
+				return UpdateVerdict{}, rejectf("gender changes are disabled")
+			}
 		}
 	}
 

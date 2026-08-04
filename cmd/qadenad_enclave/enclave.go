@@ -6302,90 +6302,188 @@ func (s *qadenaServer) ValidateTransferDoublePrime(ctx context.Context, msg *typ
 	return &types.ValidateTransferDoublePrimeReply{UpdateDestinationWallet: mustUpdateDstWallet}, nil
 }
 
-func (s *qadenaServer) createSuspiciousTransaction(ctx context.Context, reason string, jarID string, tf c.TransferFunds, optInReason string) {
+// reportParty is one side of a report, resolved to whatever descriptor that side actually has.
+//
+// Exactly one of pi and ci is non-nil.  A wallet contributes decrypted personal info; a whitelisted
+// non-wallet contributes an address, its pinned code ID and the governance-recorded reason.  Keeping
+// them as distinct fields rather than filling a personal-info struct with invented values is what
+// lets a regulator tell a real identity from a contract after decryption.
+type reportParty struct {
+	pi *types.EncryptablePersonalInfo
+	ci *types.EncryptableContractInfo
+	// set when ci describes a party with no identity at all rather than a whitelisted one; both use
+	// the same descriptor, and this is what the reader's party kind is built from
+	addressOnly bool
+}
+
+func (p reportParty) kind() types.SuspiciousPartyKind {
+	switch {
+	case p.addressOnly:
+		return types.SuspiciousPartyKind_SUSPICIOUS_PARTY_KIND_ADDRESS_ONLY
+	case p.ci != nil:
+		return types.SuspiciousPartyKind_SUSPICIOUS_PARTY_KIND_CONTRACT
+	default:
+		return types.SuspiciousPartyKind_SUSPICIOUS_PARTY_KIND_WALLET
+	}
+}
+
+// nonce is this party's contribution to the report's amount nonce.
+//
+// For a wallet that is the credential nonce, as it always was.  For a contract there is no secret to
+// draw one from, so the address stands in: public and stable, which is all this needs to be -- its
+// job is to make the amount nonce unique per pair, not to hide either party.
+func (p reportParty) nonce() string {
+	if p.ci != nil {
+		return p.ci.Nonce
+	}
+	return p.pi.Nonce
+}
+
+// resolveReportParty produces the descriptor for one side of a report.
+//
+// contract is non-nil only when the keeper found this address on the scanned-contract whitelist and
+// re-verified its pinned code ID; the enclave takes that as given, since it holds no wasm state.
+//
+// allowAddressOnly permits falling back to naming the party by address when it has no wallet or no
+// credential.  Passed true ONLY for the destination of a send from a whitelisted party -- the
+// onboarding case, where a treasury funds a key that does not have an identity yet and acquires one
+// afterwards.  Everywhere else it is false, so an unidentifiable party still fails the report and
+// therefore refuses the transfer.
+func (s *qadenaServer) resolveReportParty(walletID string, contract *types.ScannedContractWhitelist, side string, allowAddressOnly bool) (reportParty, error) {
+	if contract != nil {
+		return reportParty{ci: &types.EncryptableContractInfo{
+			Nonce:   contract.Address,
+			Address: contract.Address,
+			CodeID:  contract.CodeID,
+			Reason:  contract.Reason,
+		}}, nil
+	}
+
+	// Named by address alone: no codeID, no governance reason, because there is no entry behind it.
+	addressOnlyParty := reportParty{
+		addressOnly: true,
+		ci: &types.EncryptableContractInfo{
+			Nonce:   walletID,
+			Address: walletID,
+		},
+	}
+
+	wallet, found := s.getWallet(walletID)
+	if !found {
+		if allowAddressOnly {
+			c.LoggerDebug(logger, side+" "+walletID+" has no wallet yet; naming it by address")
+			return addressOnlyParty, nil
+		}
+		c.LoggerError(logger, "couldn't find "+side+" wallet "+walletID)
+		return reportParty{}, types.ErrGenericScan
+	}
+
+	credential, found := s.getCredential(wallet.CredentialID, types.PersonalInfoCredentialType)
+	if !found {
+		if allowAddressOnly {
+			c.LoggerDebug(logger, side+" "+walletID+" holds no credential yet; naming it by address")
+			return addressOnlyParty, nil
+		}
+		c.LoggerError(logger, "couldn't find "+side+" credential "+wallet.CredentialID)
+		return reportParty{}, types.ErrGenericScan
+	}
+
+	unprotoCredentialInfoVShareBind := c.UnprotoizeVShareBindData(credential.CredentialInfoVShareBind)
+	var pi types.EncryptablePersonalInfo
+	err := c.VShareBDecryptAndProtoUnmarshal(s.getSSPrivK(unprotoCredentialInfoVShareBind.GetSSIntervalPubKID()), s.getPubK(unprotoCredentialInfoVShareBind.GetSSIntervalPubKID()), unprotoCredentialInfoVShareBind, credential.EncCredentialInfoVShare, &pi)
+	if err != nil {
+		c.LoggerError(logger, "couldn't decrypt "+side+" credential "+wallet.CredentialID)
+		return reportParty{}, types.ErrGenericScan
+	}
+
+	c.LoggerDebug(logger, side+" personal info "+c.PrettyPrint(pi))
+
+	return reportParty{pi: &pi}, nil
+}
+
+// createSuspiciousTransaction files one report with the regulator.
+//
+// RETURNS AN ERROR, and every caller must act on it.  It used to return nothing and simply log on
+// any missing piece, which meant a transfer that crossed a threshold could be allowed through with
+// no report ever filed -- silently, and indistinguishably from one that was reported.  That was
+// tolerable only while reports were rare; now that the bank path reports too, and the treasuries
+// moved onto the scanned-contract whitelist rather than out of scanning altogether, a report that
+// cannot be built has to refuse the transfer instead of vanishing.
+//
+// srcContract and dstContract come from the keeper: non-nil for a whitelisted non-wallet party, nil
+// for an ordinary wallet.  Both nil on the transfer-funds path, which only ever moves value between
+// credentialed wallets.
+//
+// allowAddressOnlyDst permits the destination to be named by address when it has no identity yet.
+// True only on the bank path and only when the SOURCE is whitelisted -- a treasury onboarding a
+// fresh key.  The source itself is never address-only: it is either a wallet or a listed party, or
+// the send was refused before reaching here.
+func (s *qadenaServer) createSuspiciousTransaction(ctx context.Context, reason string, jarID string, tf c.TransferFunds, optInReason string, srcContract, dstContract *types.ScannedContractWhitelist, allowAddressOnlyDst bool) error {
 	regulatorID, found := s.getJarRegulator(jarID)
 
 	if !found {
-		c.LoggerError(logger, "BAD!  Couldn't find regulator ID for jar", jarID)
-		return
+		// Reachable only before the enclave has finished InitEnclave, which is what creates the
+		// regulator identity in the first place -- so in practice, only in the first few blocks of
+		// a brand new chain, before anything can transact.
+		c.LoggerError(logger, "couldn't find regulator ID for jar", jarID)
+		return types.ErrGenericScan
 	}
 
 	regulatorPubKID, _, found := s.getIntervalPublicKeyId(regulatorID, types.RegulatorNodeType)
 	if !found {
-		c.LoggerError(logger, "BAD!  Couldn't find regulator pubkid for regulator ID", regulatorID)
-		return
+		c.LoggerError(logger, "couldn't find regulator pubkid for regulator ID", regulatorID)
+		return types.ErrGenericScan
 	}
 
 	regulatorPubK, found := s.getPublicKey(regulatorPubKID, types.CredentialPubKType)
 	if !found {
-		c.LoggerError(logger, "BAD!  Couldn't find regulator pubk for regulator pubKID", regulatorPubKID)
-		return
+		c.LoggerError(logger, "couldn't find regulator pubk for regulator pubKID", regulatorPubKID)
+		return types.ErrGenericScan
 	}
 
 	c.LoggerDebug(logger, "regulatorPubK", regulatorPubK)
 
 	// no secret sharing for now, decode the credentials
 
-	srcWallet, found := s.getWallet(tf.SourceWalletID)
-	if !found {
-		c.LoggerError(logger, "BAD!  Couldn't find source wallet"+tf.SourceWalletID)
-		return
-	}
-	dstWallet, found := s.getWallet(tf.DestinationWalletID)
-	if !found {
-		c.LoggerError(logger, "BAD!  Couldn't find destination wallet"+tf.DestinationWalletID)
-		return
-	}
-
-	srcCredential, found := s.getCredential(srcWallet.CredentialID, types.PersonalInfoCredentialType)
-	if !found {
-		c.LoggerError(logger, "BAD!  Couldn't find source credential"+srcWallet.CredentialID)
-		return
-	}
-
-	dstCredential, found := s.getCredential(dstWallet.CredentialID, types.PersonalInfoCredentialType)
-	if !found {
-		c.LoggerError(logger, "BAD!  Couldn't find destination credential"+dstWallet.CredentialID)
-		return
-	}
-
-	unprotoCredentialInfoVShareBind := c.UnprotoizeVShareBindData(srcCredential.CredentialInfoVShareBind)
-	var srcPI types.EncryptablePersonalInfo
-	err := c.VShareBDecryptAndProtoUnmarshal(s.getSSPrivK(unprotoCredentialInfoVShareBind.GetSSIntervalPubKID()), s.getPubK(unprotoCredentialInfoVShareBind.GetSSIntervalPubKID()), unprotoCredentialInfoVShareBind, srcCredential.EncCredentialInfoVShare, &srcPI)
+	src, err := s.resolveReportParty(tf.SourceWalletID, srcContract, "source", false)
 	if err != nil {
-		c.LoggerError(logger, "couldn't get decrypt source credential", srcWallet.CredentialID)
-		return
+		return err
 	}
-
-	unprotoCredentialInfoVShareBind = c.UnprotoizeVShareBindData(dstCredential.CredentialInfoVShareBind)
-	var dstPI types.EncryptablePersonalInfo
-	err = c.VShareBDecryptAndProtoUnmarshal(s.getSSPrivK(unprotoCredentialInfoVShareBind.GetSSIntervalPubKID()), s.getPubK(unprotoCredentialInfoVShareBind.GetSSIntervalPubKID()), unprotoCredentialInfoVShareBind, dstCredential.EncCredentialInfoVShare, &dstPI)
+	dst, err := s.resolveReportParty(tf.DestinationWalletID, dstContract, "destination", allowAddressOnlyDst)
 	if err != nil {
-		c.LoggerError(logger, "couldn't get decrypt destination credential", dstWallet.CredentialID)
-		return
+		return err
 	}
-
-	//	srcPI.PIN = ""
-	//	dstPI.PIN = ""
-
-	c.LoggerDebug(logger, "src personal info "+c.PrettyPrint(srcPI))
-	c.LoggerDebug(logger, "dst personal info "+c.PrettyPrint(dstPI))
 
 	var eSuspiciousAmount types.EncryptableESuspiciousAmount
-	eSuspiciousAmount.Nonce = srcPI.Nonce + "/" + dstPI.Nonce
+	eSuspiciousAmount.Nonce = src.nonce() + "/" + dst.nonce()
 	eSuspiciousAmount.USDCoinAmount = &tf.USDCoinAmount
 	eSuspiciousAmount.CoinAmount = &tf.CoinAmount
 
 	var st = types.SuspiciousTransaction{JarID: jarID,
-		RegulatorPubKID:                         regulatorPubKID,
-		Reason:                                  reason,
-		Time:                                    tf.Time,
-		EncSourcePersonalInfoRegulatorPubK:      c.ProtoMarshalAndBEncrypt(regulatorPubK, &srcPI),
-		EncDestinationPersonalInfoRegulatorPubK: c.ProtoMarshalAndBEncrypt(regulatorPubK, &dstPI),
-		EncEAmountRegulatorPubK:                 c.ProtoMarshalAndBEncrypt(regulatorPubK, &eSuspiciousAmount),
-		EncOptInReasonRegulatorPubK:             c.MarshalAndBEncrypt(regulatorPubK, optInReason),
+		RegulatorPubKID:             regulatorPubKID,
+		Reason:                      reason,
+		Time:                        tf.Time,
+		SourceKind:                  src.kind(),
+		DestinationKind:             dst.kind(),
+		EncEAmountRegulatorPubK:     c.ProtoMarshalAndBEncrypt(regulatorPubK, &eSuspiciousAmount),
+		EncOptInReasonRegulatorPubK: c.MarshalAndBEncrypt(regulatorPubK, optInReason),
 	}
+
+	// Only the descriptor that side actually has is encrypted into the report; the other stays
+	// empty, which is what SourceKind/DestinationKind tell the reader to expect.
+	if src.pi != nil {
+		st.EncSourcePersonalInfoRegulatorPubK = c.ProtoMarshalAndBEncrypt(regulatorPubK, src.pi)
+	} else {
+		st.EncSourceContractInfoRegulatorPubK = c.ProtoMarshalAndBEncrypt(regulatorPubK, src.ci)
+	}
+	if dst.pi != nil {
+		st.EncDestinationPersonalInfoRegulatorPubK = c.ProtoMarshalAndBEncrypt(regulatorPubK, dst.pi)
+	} else {
+		st.EncDestinationContractInfoRegulatorPubK = c.ProtoMarshalAndBEncrypt(regulatorPubK, dst.ci)
+	}
+
 	s.newSuspiciousTransactions = append(s.newSuspiciousTransactions, st)
+	return nil
 }
 
 func (s *qadenaServer) ScanTransaction(ctx context.Context, st *types.MsgScanTransactions) (*types.ScanTransactionReply, error) {
@@ -6543,12 +6641,26 @@ func (s *qadenaServer) ScanTransaction(ctx context.Context, st *types.MsgScanTra
 	// refused transfer does not enter the window.
 	if tf.USDCoinAmount.IsGTE(threshold) {
 		c.LoggerDebug(logger, "suspicious individual transaction "+tf.USDCoinAmount.String()+" "+tf.CoinAmount.String()+" "+tf.SourceWalletID+" "+tf.DestinationWalletID)
-		if optInReason != "" {
-			s.createSuspiciousTransaction(ctx, "Transaction value >= reporting threshold", unprotoMsgTransferFundsVShareBind.GetJarID(), tf, optInReason)
-			return &types.ScanTransactionReply{Status: true}, nil
-		} else {
+		if optInReason == "" && policy.BlockTransferWithoutOptInReason {
+			// The chain has chosen refusal over reporting.  Nothing is filed, so the regulator
+			// learns nothing about this attempt -- which is the cost of this setting.
 			return nil, types.ErrGenericScan
 		}
+		// Both parties are credentialed wallets on this path -- transfer-funds moves value between
+		// qadena wallets and nothing else -- so neither side takes a contract descriptor.
+		if err := s.createSuspiciousTransaction(ctx, "Transaction value >= reporting threshold", unprotoMsgTransferFundsVShareBind.GetJarID(), tf, c.OptInReasonOrDefault(optInReason), nil, nil, false); err != nil {
+			// Refuse rather than proceed unreported.  This used to be unreachable by construction:
+			// the function logged and returned, so a transfer whose report could not be built was
+			// allowed through and the regulator simply never heard about it.
+			return nil, err
+		}
+		// Returning here means the transfer is NOT appended to the window, and that is deliberate:
+		// its whole value has just been reported, so leaving it in would let the aggregate rule
+		// report the same money a second time.  Earlier sub-threshold transfers to this
+		// destination stay exactly where they are -- they have not been reported, so they must
+		// still be able to accumulate.  The invariant across both rules is: what goes into a
+		// report leaves the window, what does not, stays.
+		return &types.ScanTransactionReply{Status: true}, nil
 	}
 
 	// 2b.  The rolling-window total to a single destination.
@@ -6580,17 +6692,23 @@ func (s *qadenaServer) ScanTransaction(ctx context.Context, st *types.MsgScanTra
 			// several denominations and there is no meaningful sum across them
 			aggregated := c.TransferFunds{Time: st.Timestamp, SourceWalletID: tf.SourceWalletID, DestinationWalletID: dstWalletID, USDCoinAmount: v, CoinAmount: tf.CoinAmount}
 
-			if optInReason != "" {
-				// Reported, so the pair starts over -- otherwise every later transfer to the same
-				// destination would re-report the same accumulated total.
-				history.Transfers = c.DropDestination(history.Transfers, dstWalletID)
-
-				s.createSuspiciousTransaction(ctx, "Total transaction value >= reporting threshold", unprotoMsgTransferFundsVShareBind.GetJarID(), aggregated, optInReason)
-			} else {
+			if optInReason == "" && policy.BlockTransferWithoutOptInReason {
 				// Refused.  Returning here without writing leaves the window untouched, and the
 				// rolled-back transaction would discard the write in any case.
 				return nil, types.ErrGenericScan
 			}
+			// Filed BEFORE the window is reset, so a report that cannot be built leaves the window
+			// intact.  Resetting first and then failing would drop the accumulated history on the
+			// floor while refusing the transfer -- the money would have to accumulate all over
+			// again, and the totals a regulator eventually sees would understate what happened.
+			if err := s.createSuspiciousTransaction(ctx, "Total transaction value >= reporting threshold", unprotoMsgTransferFundsVShareBind.GetJarID(), aggregated, c.OptInReasonOrDefault(optInReason), nil, nil, false); err != nil {
+				return nil, err
+			}
+
+			// Reported, so the pair starts over -- the whole accumulated total went into the
+			// report, and without the reset every later transfer to the same destination would
+			// report that same money again.
+			history.Transfers = c.DropDestination(history.Transfers, dstWalletID)
 		}
 	}
 

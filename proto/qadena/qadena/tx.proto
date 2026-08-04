@@ -52,8 +52,8 @@ service Msg {
   rpc AddServiceProvider                    (MsgAddServiceProvider                   ) returns (MsgAddServiceProviderResponse                   );
   rpc DeactivateServiceProvider             (MsgDeactivateServiceProvider            ) returns (MsgDeactivateServiceProviderResponse            );
   rpc UpdateEnclaveIdentity                 (MsgUpdateEnclaveIdentity                ) returns (MsgUpdateEnclaveIdentityResponse                );
-  rpc AddBankSendWhitelist                  (MsgAddBankSendWhitelist                 ) returns (MsgAddBankSendWhitelistResponse                 );
-  rpc RemoveBankSendWhitelist               (MsgRemoveBankSendWhitelist              ) returns (MsgRemoveBankSendWhitelistResponse              );
+  rpc AddScannedContractWhitelist           (MsgAddScannedContractWhitelist          ) returns (MsgAddScannedContractWhitelistResponse          );
+  rpc RemoveScannedContractWhitelist        (MsgRemoveScannedContractWhitelist       ) returns (MsgRemoveScannedContractWhitelistResponse       );
 
   // AUTHORIZATION:
   // make sure that the creator *IS* a Pioneer via enclave
@@ -175,28 +175,37 @@ message MsgDeactivateServiceProvider {
 
 message MsgDeactivateServiceProviderResponse {}
 
-// Add one account to the bank-send whitelist.  One entry at a time, deliberately: a whole-list
-// update would mean every deployment restating every other deployment's exemptions, and an
-// omission would silently remove one.
-message MsgAddBankSendWhitelist {
+// Add one non-wallet party to the scanned-contract whitelist.  One entry at a time, deliberately: a
+// whole-list update would mean every deployment restating every other deployment's entries, and an
+// omission would silently drop one.
+//
+// This does NOT exempt the address from AML scanning -- nothing does.  It permits the address to
+// take part in a bank send despite holding no credential, and makes its reports carry a contract
+// descriptor instead of a person.
+message MsgAddScannedContractWhitelist {
   option (cosmos.msg.v1.signer) =                       "authority";
   // authority is the address that controls the module (defaults to x/gov unless overwritten).
   string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
   string address   = 2 [(cosmos_proto.scalar) = "cosmos.AddressString"];
-  // why this account is exempt from AML scanning; stored with the entry for later review
-  string reason    = 3;
+  // The wasm code ID to pin the entry to; 0 if the address is not a wasm contract.  Validated
+  // against the live contract at submission AND re-checked on every send, so migrating the contract
+  // revokes the entry instead of carrying it over to the new code.
+  uint64 codeID    = 3;
+  // why this party may move funds without being a wallet; stored with the entry and surfaced to the
+  // regulator in any report that names it
+  string reason    = 4;
 }
 
-message MsgAddBankSendWhitelistResponse {}
+message MsgAddScannedContractWhitelistResponse {}
 
-message MsgRemoveBankSendWhitelist {
+message MsgRemoveScannedContractWhitelist {
   option (cosmos.msg.v1.signer) =                       "authority";
   // authority is the address that controls the module (defaults to x/gov unless overwritten).
   string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
   string address   = 2 [(cosmos_proto.scalar) = "cosmos.AddressString"];
 }
 
-message MsgRemoveBankSendWhitelistResponse {}
+message MsgRemoveScannedContractWhitelistResponse {}
 
 message MsgUpdateEnclaveIdentity {
   option (cosmos.msg.v1.signer) = "authority";

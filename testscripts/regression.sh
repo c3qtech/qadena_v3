@@ -207,19 +207,47 @@ PY
 start_chain() {
     "$qadenascripts/start_qadena.sh" || return 1
     local i=0
+    local started=false
     while [ $i -lt 60 ]; do
         if curl -s http://localhost:26657/status 2>/dev/null | grep -q latest_block_height; then
             local h
             h=$(curl -s http://localhost:26657/status | jq -r '.result.sync_info.latest_block_height')
             if [ "${h:-0}" -gt 0 ] 2>/dev/null; then
                 echo "chain producing blocks, height $h"
-                return 0
+                started=true
+                break
             fi
         fi
         sleep 2
         i=$((i + 1))
     done
-    echo "chain did not produce a block within 120s"
+    if [ "$started" != "true" ]; then
+        echo "chain did not produce a block within 120s"
+        return 1
+    fi
+
+    # PRODUCING BLOCKS IS NOT THE SAME AS BEING READY.
+    #
+    # This used to return here, at height 1 or 2, and the suites that follow started transacting
+    # immediately.  That worked only because the funding treasuries were exempt from AML scanning, so
+    # the very first transactions never touched the enclave.  Now every account-to-account send is
+    # scanned, and the enclave does not exist yet: delayed_init_enclave.sh waits for height 4 before
+    # running InitEnclave.  Returning early therefore handed the next suite a chain that answers
+    # every query and refuses every send.
+    #
+    # The jar regulator is created by InitEnclave, so its presence on chain is the readiness signal --
+    # and it is also precisely what a report needs, so once it exists the scan can measure AND report.
+    local j=0
+    while [ $j -lt 90 ]; do
+        if [ "$(qadenad_alias query qadena list-jar-regulator --output json 2>/dev/null \
+                | jq -r '.jarRegulator | length' 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+            echo "enclave initialised (jar regulator registered)"
+            return 0
+        fi
+        sleep 2
+        j=$((j + 1))
+    done
+    echo "the enclave did not initialise within 180s -- scanned bank sends would all be refused"
     return 1
 }
 

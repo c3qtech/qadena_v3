@@ -18,6 +18,7 @@ package qadena.qadena;
 import "qadena/qadena/wallet.proto";
 import "qadena/qadena/tx.proto";
 import "qadena/qadena/params.proto";
+import "qadena/qadena/scanned_contract_whitelist.proto";
 import "qadena/qadena/credential.proto";
 import "qadena/qadena/suspicious_transaction.proto";
 import "qadena/qadena/public_key.proto";
@@ -310,6 +311,14 @@ message MsgScanBankSend {
   repeated ScanCountryThreshold countryThresholds = 7;
   string defaultThresholdAttoUSD = 8;
   string jarID = 9;
+  // Set when the corresponding side is on the scanned-contract whitelist, nil otherwise.
+  //
+  // The KEEPER resolves this, not the enclave.  Whitelist membership and the pinned-code-ID check
+  // are chain state the enclave does not hold, and the enclave has no way to ask whether an address
+  // is a contract.  Passing the resolved entry keeps the enclave deciding only what it is for --
+  // whether the value is reportable -- and keeps contract detection on the side that can do it.
+  ScannedContractWhitelist srcContract = 10;
+  ScannedContractWhitelist dstContract = 11;
 }
 
 // NOTE: no exchange rate.  MsgScanTransactions has to carry one because the enclave decrypts the

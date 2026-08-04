@@ -32,9 +32,8 @@ message Params {
   // MsgUpdateCredential.  Every numeric here reads as zero on a chain that predates these
   // params, so the policy loader substitutes the compiled-in defaults in
   // x/qadena/common/credential_policy.go rather than rejecting every correction.  The
-  // one-identity-field-at-a-time rule and the birthdate month/day-swap exception are
-  // deliberately NOT params: they are the security core, and making them tunable invites
-  // setting the limit to 5.
+  // birthdate month/day-swap exception is deliberately NOT a param: it is part of what the
+  // birthdate rule MEANS, not a quantity to tune.
   string update_credential_fee = 11;
   // bumped whenever the policy engine's behaviour changes, so a divergence between enclave
   // builds is visible on chain instead of silent
@@ -72,6 +71,30 @@ message Params {
   // switch an AML control off, and every other spelling of this flag would do exactly that on a
   // chain whose params predate it.
   bool allow_transfer_without_ekyc = 24;
+  // What to do with a reportable transfer whose sender gave no --opt-in-reason.
+  //
+  // FALSE (default): file the report anyway, substituting "No reason provided", and let the
+  // transfer through.  TRUE: refuse it and file nothing, which is what this chain did before the
+  // flag existed.
+  //
+  // The old behaviour made every report self-selected: a sender unwilling to be named was blocked
+  // rather than reported, so the regulator saw only volunteered transfers and never the refusals.
+  // Defaulting to false means an un-upgraded chain starts producing MORE reports, never fewer,
+  // which is why the proto3 zero is safe here even though it reads as "do not block".
+  bool block_transfer_without_opt_in_reason = 26;
+
+  // How many identity-bearing fields (first/middle/last name, birthdate, gender) may change in a
+  // single MsgUpdateCredential.
+  //
+  // ONE IS THE SAFE VALUE AND THE DEFAULT.  Two simultaneous changes are hard to distinguish from
+  // substituting one person for another, which is why this was a compiled-in constant until it
+  // became a param.  A zero here reads as UNSET and yields 1, so a chain whose params predate this
+  // keeps exactly the behaviour it had.
+  //
+  // Raising it also weakens the surname life-event rule, which is only safe because the remaining
+  // identity fields still pin the identity while the surname is replaced wholesale.  A chain that
+  // allows a life event AND another edit in one update has given up that anchor.
+  uint32 update_credential_max_changed_identity_fields = 25;
 
   // NOTE: the bank-send whitelist is deliberately NOT a param.  Params are replaced wholesale by
   // MsgUpdateParams, so adding one address would mean restating every other one, and a mistake

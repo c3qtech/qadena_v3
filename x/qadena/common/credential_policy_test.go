@@ -2,6 +2,7 @@ package common
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/c3qtech/qadena_v3/x/qadena/types"
@@ -37,7 +38,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 		new          *types.EncryptablePersonalInfoDetails
 		wantErr      bool
 		wantKind     UpdateKind
-		wantField    string
+		wantFields   string // comma-joined, so a multi-field case reads "FirstName,MiddleName"
 		wantHashMove bool
 	}{
 		// ---- nothing hash-contributing changed ----
@@ -69,7 +70,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.MiddleName = "asunicon" }),
 			new:          baseDetails(),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldMiddleName,
+			wantFields:   UpdateFieldMiddleName,
 			wantHashMove: true,
 		},
 		{
@@ -77,7 +78,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.FirstName = "alberta" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldFirstName,
+			wantFields:   UpdateFieldFirstName,
 			wantHashMove: true,
 		},
 		// The next three rewrite the stored credential but do NOT move the identity, because
@@ -89,7 +90,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.FirstName = "Alberto" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldFirstName,
+			wantFields:   UpdateFieldFirstName,
 			wantHashMove: false,
 		},
 		{
@@ -97,7 +98,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.FirstName = " alberto " }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldFirstName,
+			wantFields:   UpdateFieldFirstName,
 			wantHashMove: false,
 		},
 		{
@@ -105,7 +106,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.FirstName = "juan  carlos" }),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.FirstName = "juan carlos" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldFirstName,
+			wantFields:   UpdateFieldFirstName,
 			wantHashMove: false,
 		},
 		{
@@ -113,7 +114,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.FirstName = "albertos" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldFirstName,
+			wantFields:   UpdateFieldFirstName,
 			wantHashMove: true,
 		},
 		{
@@ -147,7 +148,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.MiddleName = "a" }),
 			new:          baseDetails(),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldMiddleName,
+			wantFields:   UpdateFieldMiddleName,
 			wantHashMove: true,
 		},
 		{
@@ -155,7 +156,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.MiddleName = "a" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldMiddleName,
+			wantFields:   UpdateFieldMiddleName,
 			wantHashMove: true,
 		},
 		{
@@ -169,7 +170,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.MiddleName = "" }),
 			new:          baseDetails(),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldMiddleName,
+			wantFields:   UpdateFieldMiddleName,
 			wantHashMove: true,
 		},
 		{
@@ -177,7 +178,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.MiddleName = "" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldMiddleName,
+			wantFields:   UpdateFieldMiddleName,
 			wantHashMove: true,
 		},
 		{
@@ -193,7 +194,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.LastName = "quimba" }),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.LastName = "quimbo" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldLastName,
+			wantFields:   UpdateFieldLastName,
 			wantHashMove: true,
 		},
 		{
@@ -201,7 +202,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.LastName = "quimba" }),
 			new:          baseDetails(),
 			wantKind:     UpdateKindLifeEvent,
-			wantField:    UpdateFieldLastName,
+			wantFields:   UpdateFieldLastName,
 			wantHashMove: true,
 		},
 		{
@@ -224,7 +225,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.Birthdate = "1970-Feb-03" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldBirthdate,
+			wantFields:   UpdateFieldBirthdate,
 			wantHashMove: true,
 		},
 		{
@@ -232,7 +233,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.Birthdate = "1970-Nov-02" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldBirthdate,
+			wantFields:   UpdateFieldBirthdate,
 			wantHashMove: true,
 		},
 		{
@@ -240,7 +241,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.Birthdate = "1970-Feb-03" }),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.Birthdate = "1970-Mar-02" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldBirthdate,
+			wantFields:   UpdateFieldBirthdate,
 			wantHashMove: true,
 		},
 		{
@@ -248,7 +249,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.Birthdate = "1907-Feb-02" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldBirthdate,
+			wantFields:   UpdateFieldBirthdate,
 			wantHashMove: true,
 		},
 		{
@@ -256,7 +257,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.Birthdate = "1979-Feb-02" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldBirthdate,
+			wantFields:   UpdateFieldBirthdate,
 			wantHashMove: true,
 		},
 		{
@@ -264,7 +265,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.Birthdate = "1971-Feb-02" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldBirthdate,
+			wantFields:   UpdateFieldBirthdate,
 			wantHashMove: true,
 		},
 		{
@@ -304,7 +305,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.Gender = types.GenderF }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldGender,
+			wantFields:   UpdateFieldGender,
 			wantHashMove: true,
 		},
 		{
@@ -312,7 +313,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          baseDetails(),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.Gender = types.GenderN }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldGender,
+			wantFields:   UpdateFieldGender,
 			wantHashMove: true,
 		},
 		{
@@ -368,7 +369,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 				pd.Residency = "US"
 			}),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldLastName,
+			wantFields:   UpdateFieldLastName,
 			wantHashMove: true,
 		},
 
@@ -378,7 +379,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.LastName = "muñoz" }),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.LastName = "munoz" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldLastName,
+			wantFields:   UpdateFieldLastName,
 			wantHashMove: true,
 		},
 		{
@@ -386,7 +387,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.FirstName = "jose maria" }),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.FirstName = "josé maria" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldFirstName,
+			wantFields:   UpdateFieldFirstName,
 			wantHashMove: true,
 		},
 		{
@@ -394,7 +395,7 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			old:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.LastName = "田中一郎" }),
 			new:          mutate(func(pd *types.EncryptablePersonalInfoDetails) { pd.LastName = "田中二郎" }),
 			wantKind:     UpdateKindCorrection,
-			wantField:    UpdateFieldLastName,
+			wantFields:   UpdateFieldLastName,
 			wantHashMove: true,
 		},
 		{
@@ -451,8 +452,8 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 			if verdict.Kind != tt.wantKind {
 				t.Errorf("kind = %v, want %v", verdict.Kind, tt.wantKind)
 			}
-			if verdict.ChangedField != tt.wantField {
-				t.Errorf("changed field = %q, want %q", verdict.ChangedField, tt.wantField)
+			if got := strings.Join(verdict.ChangedFields, ","); got != tt.wantFields {
+				t.Errorf("changed fields = %q, want %q", got, tt.wantFields)
 			}
 			if verdict.HashChanged != tt.wantHashMove {
 				t.Errorf("hash changed = %v, want %v", verdict.HashChanged, tt.wantHashMove)
@@ -463,6 +464,152 @@ func TestClassifyPersonalInfoUpdate(t *testing.T) {
 				t.Errorf("HashChanged = %v but CreateCredentialHash moved = %v", verdict.HashChanged, gotHashMove)
 			}
 		})
+	}
+}
+
+// The field cap is the security core, so it gets its own table rather than riding along in the
+// classification cases.  What matters is that the DEFAULT is still one field -- a chain that never
+// sets the param must behave exactly as it did when the rule was compiled in.
+func TestMaxChangedIdentityFields(t *testing.T) {
+	// two names, each individually a legitimate one-edit correction
+	twoNames := mutate(func(pd *types.EncryptablePersonalInfoDetails) {
+		pd.FirstName = "alverto"
+		pd.MiddleName = "asunicon"
+	})
+	// a surname life event travelling with a correction
+	lifeEventPlusName := mutate(func(pd *types.EncryptablePersonalInfoDetails) {
+		pd.FirstName = "alverto"
+		pd.LastName = "reyes"
+	})
+	threeNames := mutate(func(pd *types.EncryptablePersonalInfoDetails) {
+		pd.FirstName = "alverto"
+		pd.MiddleName = "asunicon"
+		pd.LastName = "villarrica"
+	})
+
+	policyWithCap := func(n int) UpdatePolicy {
+		p := DefaultUpdatePolicy()
+		p.MaxChangedIdentityFields = n
+		return p
+	}
+
+	tests := []struct {
+		name       string
+		policy     UpdatePolicy
+		new        *types.EncryptablePersonalInfoDetails
+		wantErr    bool
+		wantKind   UpdateKind
+		wantFields string
+	}{
+		{
+			name:    "default policy still rejects two fields",
+			policy:  DefaultUpdatePolicy(),
+			new:     twoNames,
+			wantErr: true,
+		},
+		{
+			name:       "cap of two accepts two fields",
+			policy:     policyWithCap(2),
+			new:        twoNames,
+			wantKind:   UpdateKindCorrection,
+			wantFields: "FirstName,MiddleName",
+		},
+		{
+			name:    "cap of two still rejects three",
+			policy:  policyWithCap(2),
+			new:     threeNames,
+			wantErr: true,
+		},
+		{
+			// the strongest claim in the set decides the kind, because that is what the
+			// MaxLifeEvents budget has to be charged for
+			name:       "a life event anywhere makes the whole update a life event",
+			policy:     policyWithCap(2),
+			new:        lifeEventPlusName,
+			wantKind:   UpdateKindLifeEvent,
+			wantFields: "FirstName,LastName",
+		},
+		{
+			// raising the cap must not turn off the per-field rules
+			name:   "cap of two does not excuse a field that fails its own rule",
+			policy: policyWithCap(2),
+			new: mutate(func(pd *types.EncryptablePersonalInfoDetails) {
+				pd.FirstName = "alverto"
+				pd.Birthdate = "1999-Dec-25" // nothing like a data-entry fix
+			}),
+			wantErr: true,
+		},
+		{
+			name:   "a disabled gender gate still holds under a raised cap",
+			policy: func() UpdatePolicy { p := policyWithCap(2); p.AllowGenderChange = false; return p }(),
+			new: mutate(func(pd *types.EncryptablePersonalInfoDetails) {
+				pd.FirstName = "alverto"
+				pd.Gender = types.GenderF
+			}),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			verdict, err := ClassifyPersonalInfoUpdate(baseDetails(), tt.new, tt.policy)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected rejection, got verdict %+v", verdict)
+				}
+				if !errors.Is(err, ErrUpdateRejected) {
+					t.Fatalf("err = %v, want it to wrap ErrUpdateRejected", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected acceptance, got %v", err)
+			}
+			if verdict.Kind != tt.wantKind {
+				t.Errorf("kind = %v, want %v", verdict.Kind, tt.wantKind)
+			}
+			if got := strings.Join(verdict.ChangedFields, ","); got != tt.wantFields {
+				t.Errorf("changed fields = %q, want %q", got, tt.wantFields)
+			}
+			// the enclave cross-checks this against its own recomputed hashes and refuses the
+			// update outright if the two disagree
+			gotHashMove := CreateCredentialHash(baseDetails()) != CreateCredentialHash(tt.new)
+			if gotHashMove != verdict.HashChanged {
+				t.Errorf("HashChanged = %v but CreateCredentialHash moved = %v", verdict.HashChanged, gotHashMove)
+			}
+		})
+	}
+}
+
+// The cap comes from a param, and a chain that predates it reads zero.  Zero must mean "one field",
+// never "no fields" (which would reject every identity correction) and never "unlimited".
+func TestMaxChangedIdentityFieldsDefaulting(t *testing.T) {
+	if got := (UpdatePolicy{}).WithDefaults().MaxChangedIdentityFields; got != 1 {
+		t.Fatalf("unset cap = %d, want 1", got)
+	}
+	if got := (UpdatePolicy{MaxChangedIdentityFields: -3}).WithDefaults().MaxChangedIdentityFields; got != 1 {
+		t.Fatalf("negative cap = %d, want 1", got)
+	}
+	// a cap above the number of identity fields permits nothing extra, so it is clamped rather
+	// than rejected
+	if got := (UpdatePolicy{MaxChangedIdentityFields: 99}).WithDefaults().MaxChangedIdentityFields; got != len(UpdateIdentityFields) {
+		t.Fatalf("oversized cap = %d, want %d", got, len(UpdateIdentityFields))
+	}
+	if got := (UpdatePolicy{MaxChangedIdentityFields: 2}).WithDefaults().MaxChangedIdentityFields; got != 2 {
+		t.Fatalf("explicit cap was overwritten: %d", got)
+	}
+}
+
+// The param has to actually reach the policy; a loader that dropped it would leave the cap at its
+// default and silently ignore what the chain was configured to allow.
+func TestUpdatePolicyFromParamsCarriesTheCap(t *testing.T) {
+	p := types.Params{UpdateCredentialMaxChangedIdentityFields: 3}
+	if got := UpdatePolicyFromParams(p).MaxChangedIdentityFields; got != 3 {
+		t.Fatalf("cap from params = %d, want 3", got)
+	}
+	// unset on an older chain
+	if got := UpdatePolicyFromParams(types.Params{}).MaxChangedIdentityFields; got != 1 {
+		t.Fatalf("cap from empty params = %d, want 1", got)
 	}
 }
 

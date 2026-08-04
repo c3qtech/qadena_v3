@@ -1,0 +1,41 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "github.com/c3qtech/qadena_v3/x/qadena/types";
+
+// A non-wallet party that MAY take part in a bank send, and is still AML-scanned when it does.
+//
+// This replaces the old bank-send whitelist, which exempted such accounts from scanning outright.
+// That exemption existed only because a report could not be built for a party with no credential:
+// createSuspiciousTransaction decoded a personal-info credential for both sides and gave up without
+// one.  SuspiciousTransaction now carries a party KIND and a contract-shaped descriptor, so the
+// premise is gone -- and with it the reason to have a list that turns scanning off.
+//
+// The distinction matters: an entry here means "scanned, but reported differently", NOT "exempt".
+// A send involving one of these accounts still runs the eKYC gate on the wallet side, still takes a
+// threshold, still accumulates in the rolling window, and still files a report when it crosses.
+//
+// Membership does not decide whether the send is scanned -- everything account-to-account is
+// scanned.  It decides whether the party is allowed to be a non-wallet at all: an unlisted address
+// with no credential is refused as unscannable, exactly as before.
+message ScannedContractWhitelist {
+  string address = 1;
+
+  // The wasm code ID this entry is pinned to, and 0 for an address that is not a wasm contract --
+  // a funding treasury, say.
+  //
+  // PINNING IS THE POINT.  A wasmd contract's admin can migrate it to new code, so whitelisting a
+  // bare address whitelists whatever that address runs in future: get a benign escrow approved,
+  // then migrate it into something that drains.  The send restriction re-checks the live code ID
+  // against this value on every send and refuses on a mismatch, so a migration revokes the entry
+  // rather than inheriting it.
+  //
+  // The two directions are both errors and both caught: a contract listed with codeID 0, and a
+  // non-contract listed with a codeID.
+  uint64 codeID = 2;
+
+  // Why this party may move funds without being a wallet.  Required in practice -- an address on
+  // its own gives a reviewer no way to judge later whether the entry is still warranted -- and it
+  // is the text a regulator sees in the report, since there is no person to name.
+  string reason = 3;
+}

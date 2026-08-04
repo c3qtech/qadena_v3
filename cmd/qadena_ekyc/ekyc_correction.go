@@ -20,6 +20,7 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -57,8 +58,8 @@ type SubmitCorrectionKYCRequest struct {
 type SubmitCorrectionKYCResponse struct {
 	// how the policy engine classified the change, so a UI can say "correction" or "life event"
 	Kind string `json:"kind"`
-	// which identity field moved, empty if only citizenship/residency did
-	ChangedField string `json:"changed-field"`
+	// which identity fields moved, empty if only citizenship/residency did
+	ChangedFields []string `json:"changed-fields"`
 	// whether the user's identity hash will change, i.e. whether an alias will be recorded
 	IdentityHashChanges bool `json:"identity-hash-changes"`
 }
@@ -116,16 +117,19 @@ func (s *EKycServer) submitCorrectionKYC(context *gin.Context) {
 		return
 	}
 
-	// The same code the enclave will run, so a rejection here is a rejection there.  The reverse
-	// does not hold: the chain's params may be stricter than these defaults, and the chain also
-	// applies rate limits that need state this server cannot see.
+	// The same code the enclave will run, but against the COMPILED-IN defaults rather than the
+	// chain's params, so neither direction is a guarantee.  The chain may be stricter (rate limits
+	// need state this server cannot see) and, since the one-field rule became
+	// update_credential_max_changed_identity_fields, it may also be more PERMISSIVE -- a chain that
+	// raised the cap will accept a two-field correction this pre-check refuses.  Reading the live
+	// params through UpdatePolicyFromParams is what closes that gap.
 	verdict, err := c.ClassifyPersonalInfoUpdate(&onFile, corrected.Details, c.DefaultUpdatePolicy())
 	if err != nil {
 		context.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.LoggerDebug(logger, "correction classified as "+verdict.Kind.String()+" field "+verdict.ChangedField)
+	c.LoggerDebug(logger, "correction classified as "+verdict.Kind.String()+" fields "+strings.Join(verdict.ChangedFields, ","))
 
 	compressed, err := hex.DecodeString(request.UserFindCredentialPedersenCommmit)
 	if err != nil {
@@ -153,7 +157,7 @@ func (s *EKycServer) submitCorrectionKYC(context *gin.Context) {
 
 	context.JSON(http.StatusOK, SubmitCorrectionKYCResponse{
 		Kind:                verdict.Kind.String(),
-		ChangedField:        verdict.ChangedField,
+		ChangedFields:       verdict.ChangedFields,
 		IdentityHashChanges: verdict.HashChanged,
 	})
 }

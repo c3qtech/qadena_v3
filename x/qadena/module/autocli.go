@@ -171,6 +171,11 @@ func (am AppModule) AutoCLIOptions() *autocliv1.ModuleOptions {
 					Short:          "Shows a Enclave_Identity",
 					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "uniqueID"}},
 				},
+				// NOTE: entries here do NOT reach `qadenad query qadena`.  This module supplies its
+				// own GetQueryCmd (x/qadena/client/cli/query.go), which replaces the autocli command
+				// tree for the module -- so a query added only here compiles, reads correctly, and
+				// then reports "unknown command" at the CLI.  Add the cobra command there instead;
+				// the scanned-contract whitelist queries are registered that way.
 				// this line is used by ignite scaffolding # autocli/query
 			},
 		},

@@ -114,10 +114,25 @@ var (
 
 	// A direct bank send that could not be scanned.  Every account-to-account transfer is put
 	// through the same AML scan as MsgTransferFunds; a send that cannot be scanned -- because one
-	// side is not a credentialed wallet -- is refused rather than allowed through unmeasured, since
-	// letting it pass would make the scan on the other path pointless.
-	ErrBankSendNotScannable = sdkerrors.Register(ModuleName, 1159, "This transfer cannot be AML-scanned; both parties must be wallets with eKYC data")
+	// side is neither a credentialed wallet nor a party on the scanned-contract whitelist -- is
+	// refused rather than allowed through unmeasured, since letting it pass would make the scan on
+	// the other path pointless.
+	ErrBankSendNotScannable = sdkerrors.Register(ModuleName, 1159, "This transfer cannot be AML-scanned; each party must be a wallet with eKYC data or on the scanned-contract whitelist")
 
-	ErrBankSendWhitelistExists   = sdkerrors.Register(ModuleName, 1160, "Address is already on the bank send whitelist")
-	ErrBankSendWhitelistNotFound = sdkerrors.Register(ModuleName, 1161, "Address is not on the bank send whitelist")
+	ErrScannedContractExists   = sdkerrors.Register(ModuleName, 1160, "Address is already on the scanned-contract whitelist")
+	ErrScannedContractNotFound = sdkerrors.Register(ModuleName, 1161, "Address is not on the scanned-contract whitelist")
+
+	// The pinned code ID no longer matches the code the address is running.
+	//
+	// Kept distinct from ErrBankSendNotScannable because it means something quite different and
+	// needs a different response: the party IS approved, but the code it runs was migrated since
+	// approval, so the entry no longer describes what governance reviewed.  Treating a migration as
+	// "unknown address" would hide the one case this pinning exists to catch -- a benign contract
+	// approved and then migrated into something else.
+	ErrScannedContractCodeMismatch = sdkerrors.Register(ModuleName, 1162, "Contract code has changed since it was whitelisted; the whitelist entry no longer applies")
+
+	// A whitelist entry that does not describe the address it names: a wasm contract listed with no
+	// pinned code ID, or a non-contract listed with one.  Rejected at proposal time so the mistake
+	// surfaces in review rather than as an unexplained refusal later.
+	ErrScannedContractCodeIDMismatch = sdkerrors.Register(ModuleName, 1163, "Whitelist codeID does not match the address; use the contract's current code ID, or 0 for a non-contract")
 )

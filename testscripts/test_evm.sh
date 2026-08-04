@@ -3,9 +3,15 @@
 # Regression test for the EVM: deploy a contract, read and write its storage over JSON-RPC, and
 # pin down what the AML send restriction does and does NOT cover here.
 #
-# READ THIS BEFORE CHANGING CASES 7-9.  They assert that EVM value transfers SUCCEED while the
-# identical `tx bank send` is refused.  That is not an endorsement -- it is a known gap, recorded so
-# it cannot be forgotten and so that closing it makes a test fail loudly instead of silently.
+# READ THIS BEFORE CHANGING CASES 7-9.  They assert that an EVM value transfer moves funds with NO
+# report filed, while the identical `tx bank send` is scanned and files one.  That is not an
+# endorsement -- it is a known gap, recorded so it cannot be forgotten and so that closing it makes a
+# test fail loudly instead of silently.
+#
+# The bank leg used to be REFUSED rather than reported, and the contrast was refused-vs-allowed.  It
+# became reported-vs-unreported when block_transfer_without_opt_in_reason (default false) made an
+# over-threshold send report instead of fail.  The gap itself did not move: the EVM path is still not
+# scanned at all, which is a different and worse thing than being scanned and allowed.
 #
 # WHY THE GAP EXISTS.  The restriction hangs off bank's SendCoins.  The EVM never calls it for native
 # value: core.Transfer moves balances inside the in-memory StateDB, and commit writes each dirty
@@ -227,7 +233,9 @@ src_hex=$(hex_of "$src_addr");  dst_hex=$(hex_of "$dst_addr")
 src_key=$(key_of "$src")
 [ -n "$src_key" ] || fail "could not export the eth key for $src"
 
-# treasury is whitelisted, so it may fund an ordinary key directly
+# treasury is on the scanned-contract whitelist, so it may fund a key that has no identity yet.  It
+# is not exempt from the scan -- this send is measured like any other, and simply falls under the
+# threshold.
 bank_send treasury "$src_addr" "20qdn"
 [ "$bank_code" = "0" ] || fail "could not fund $src from treasury (code $bank_code)"
 echo "$src funded: $(bank_aqdn "$src_addr") aqdn"
@@ -283,27 +291,60 @@ large_qdn=1200000
 large_wei="${large_qdn}000000000000000000"
 echo "moving ${large_qdn}qdn = $(python3 -c "print($large_qdn*int('$qdn_usd')/10**18)") usd"
 
-# top up only if short, so repeated runs do not inflate al without bound
+# TWICE the amount, plus fees.  This case moves ${large_qdn}qdn over the bank AND the same again over
+# the EVM, and the bank leg now SETTLES rather than being refused -- so the funds it moves are really
+# gone by the time the EVM leg runs.  Budgeting for one leg was correct only while the bank refused
+# and the balance came back; with reporting it leaves the EVM transfer short, which surfaces as
+# "insufficient funds" and looks nothing like the accounting change that caused it.
 have=$(bank_aqdn "$bech32")
-python3 -c "raise SystemExit(0 if int('$have') >= ${large_qdn}*10**18 + 10**19 else 1)" || {
+python3 -c "raise SystemExit(0 if int('$have') >= 2*${large_qdn}*10**18 + 10**19 else 1)" || {
     echo "funding $account from treasury"
-    bank_send treasury "$bech32" "$((large_qdn + 100))qdn"
+    # enough for both legs, matching the check above -- topping up for one would re-fail here on the
+    # very next run rather than fixing anything
+    bank_send treasury "$bech32" "$((2 * large_qdn + 100))qdn"
     [ "$bank_code" = "0" ] || fail "could not top up $account (code $bank_code)"
 }
 
 echo "-------------------------"
-echo "over the bank: refused, over threshold"
+echo "over the bank: reported, over threshold"
 echo "-------------------------"
+# INVERTED DELIBERATELY, for the same reason as test_suspicious.sh case 2.
+#
+# MsgSend has no --opt-in-reason and nowhere to put one, so every reportable bank send reaches the
+# enclave with an empty reason.  While a reason was mandatory that meant this path could only ever
+# refuse; with block_transfer_without_opt_in_reason false (the default) it files a report carrying
+# the default reason and lets the send through.
+#
+# The threshold is still what decides -- it now decides whether to REPORT rather than whether to
+# REFUSE -- so the assertion moved to the report count below.
+susp_before=$(qadenad_alias query qadena list-suspicious-transaction --output json 2>/dev/null \
+    | jq -r '.SuspiciousTransaction | length')
 ann_before=$(bank_aqdn "$ann_addr")
 bank_send "$account" "$ann_addr" "${large_qdn}qdn"
-[ "$bank_code" != "0" ] \
-    || fail "an over-threshold bank send was allowed; the AML threshold is not being applied"
-# 1125 is the scan refusing a reportable amount -- NOT 1159, which would mean the parties could not
-# be scanned at all and would make this case a duplicate of case 7
-echo "$bank_log" | grep -q "code 1125" \
-    || { echo "$bank_log" | head -2; fail "expected qadena code 1125 (over threshold), got the above"; }
-[ "$(bank_aqdn "$ann_addr")" = "$ann_before" ] || fail "a refused bank send still moved funds"
-echo "tx bank send refused (qadena code 1125, over threshold), nothing moved"
+[ "$bank_code" = "0" ] \
+    || fail "an over-threshold bank send should be reported and allowed, not refused (code $bank_code)"
+
+susp_after=""
+i=0
+while [ $i -lt 15 ]; do
+    susp_after=$(qadenad_alias query qadena list-suspicious-transaction --output json 2>/dev/null \
+        | jq -r '.SuspiciousTransaction | length')
+    [ "$susp_after" -gt "$susp_before" ] 2>/dev/null && break
+    sleep 2
+    i=$((i + 1))
+done
+[ "$susp_after" -gt "$susp_before" ] 2>/dev/null \
+    || fail "an over-threshold bank send filed NO report ($susp_before -> $susp_after); the AML threshold is not being applied"
+echo "reported as expected: $susp_before -> $susp_after"
+
+# The funds MOVED.  This used to assert the opposite -- code 1125 and an unchanged balance -- because
+# an over-threshold send was refused outright.  Reporting replaced refusing, so the balance check
+# inverts with it: the value a regulator was told about is value that actually changed hands, which
+# is the whole point of reporting rather than blocking.
+ann_after_bank=$(bank_aqdn "$ann_addr")
+[ "$ann_after_bank" != "$ann_before" ] \
+    || fail "the bank send was reported but moved nothing"
+echo "tx bank send scanned, reported and settled"
 
 echo "-------------------------"
 echo "over the EVM: allowed -- unscanned and unmeasured"
@@ -313,10 +354,14 @@ if [ "$tx_status" != "1" ]; then
     fail "the over-threshold EVM transfer did not succeed (status '$tx_status').
       If the EVM gap has been CLOSED deliberately, rewrite this case to assert a refusal."
 fi
+# Measured from AFTER the bank leg, not from before it.  The bank leg used to be refused and move
+# nothing, so one baseline served both; now it settles, and measuring from the original baseline
+# sees both legs and reports twice the expected arrival -- which reads as an EVM bug rather than as
+# the bank send having succeeded.
 ann_after=$(bank_aqdn "$ann_addr")
 python3 -c "
-raise SystemExit(0 if int('$ann_after') - int('$ann_before') == ${large_qdn}*10**18 else 1)
-" || fail "expected ${large_qdn}qdn to arrive, got $(python3 -c "print((int('$ann_after')-int('$ann_before'))/10**18)")qdn"
+raise SystemExit(0 if int('$ann_after') - int('$ann_after_bank') == ${large_qdn}*10**18 else 1)
+" || fail "expected ${large_qdn}qdn to arrive over the EVM, got $(python3 -c "print((int('$ann_after')-int('$ann_after_bank'))/10**18)")qdn"
 echo "cast send --value moved ${large_qdn}qdn ($(python3 -c "print($large_qdn*int('$qdn_usd')/10**18)") usd) with no scan"
 
 # send it back, so the suite leaves balances where it found them and can be re-run

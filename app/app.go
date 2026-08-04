@@ -722,16 +722,20 @@ func GetMaccPerms() map[string][]string {
 // That means it covers MsgSend, MsgMultiSend, authz-wrapped sends and EVM value transfers alike,
 // rather than only the message a user typed.
 //
-// The order of checks is deliberate, broadest and cheapest first:
+// Only two cases, and only one of them skips the scan:
 //
 //  1. a MODULE account on either side.  Fee collection, staking, governance deposits and the qadena
 //     module's own transfer escrow all move coins this way, and none of them are one person paying
 //     another.  Checked against a precomputed set, so the common case costs no store read.
-//  2. a WHITELISTED sender.  For accounts that must move funds directly and cannot be scanned at
-//     all, because they are not user wallets and hold no credential to draw a jurisdiction from --
-//     in practice the funding treasuries.  Every entry is unscanned by construction, which is why
-//     it is governance-gated and carries a recorded reason.
-//  3. everything else is SCANNED, and refused if the scan refuses.
+//  2. everything else is SCANNED, and refused if the scan refuses.
+//
+// There used to be a third case between them: a whitelist of senders exempt from scanning, holding
+// the funding treasuries.  It existed only because a report could not name a party without a
+// personal-info credential, so an account that had none could not be scanned at all.  Reports now
+// carry a party kind and a contract descriptor, so such an account CAN be scanned and reported --
+// and the exemption, having lost its justification, is gone.  The treasuries moved to the
+// scanned-contract whitelist, which permits them to take part without a credential while leaving
+// every send they make measured and reportable.
 //
 // A send that cannot be scanned is refused rather than waved through: permitting it would leave
 // open exactly the gap this exists to close.
@@ -748,16 +752,30 @@ func (app *App) qadenaBankSendRestriction() banktypes.SendRestrictionFn {
 
 		sdkctx := sdk.UnwrapSDKContext(ctx)
 
-		if app.QadenaKeeper.IsBankSendWhitelisted(sdkctx, fromAddr.String()) {
-			return toAddr, nil
-		}
-
 		if err := app.QadenaKeeper.ScanBankSend(sdkctx, fromAddr, toAddr, amt); err != nil {
 			return toAddr, err
 		}
 
 		return toAddr, nil
 	}
+}
+
+// wasmContractInfoSource lets x/qadena ask about wasm state without importing wasmd.
+//
+// The scanned-contract whitelist pins each entry to a code ID, and that pin has to be re-verified on
+// every send -- otherwise migrating a whitelisted contract would carry its approval over to code
+// governance never reviewed.  Answering "what code is this address running" needs wasmd's keeper,
+// which lives here, so the dependency points this way rather than into the module.
+type wasmContractInfoSource struct {
+	wasm *wasmkeeper.Keeper
+}
+
+func (s wasmContractInfoSource) ContractCodeID(ctx sdk.Context, addr sdk.AccAddress) (uint64, bool) {
+	info := s.wasm.GetContractInfo(ctx, addr)
+	if info == nil {
+		return 0, false
+	}
+	return info.CodeID, true
 }
 
 // BlockedAddresses returns all the app's blocked account addresses.

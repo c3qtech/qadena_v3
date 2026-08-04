@@ -7,18 +7,50 @@ import "google/protobuf/timestamp.proto";
 import "gogoproto/gogo.proto";
 
 
+// What kind of party a report names on one side.
+//
+// A report used to assume both sides were credentialed people, which is why a party without a
+// credential could not be reported at all and had to be exempted from scanning instead.  Naming the
+// kind explicitly is what lets a contract or a treasury appear in a report honestly, rather than as
+// a person with invented details.
+enum SuspiciousPartyKind {
+  // a wallet holding a personal-info credential; read encSource/DestinationPersonalInfoRegulatorPubK
+  SUSPICIOUS_PARTY_KIND_WALLET = 0;
+  // a whitelisted non-wallet; read encSource/DestinationContractInfoRegulatorPubK instead
+  SUSPICIOUS_PARTY_KIND_CONTRACT = 1;
+  // A party with no identity on record at all, named by address only.  Also read from the
+  // ContractInfo descriptor, which then carries an address with codeID 0 and no reason.
+  //
+  // Reachable ONLY as the destination of a send from a whitelisted party.  That is the account
+  // being onboarded: a treasury funds a fresh key, and the key acquires a wallet and a credential
+  // afterwards, so at the moment of the send there is genuinely nothing to name it by.  A send
+  // between two ordinary parties still requires both to be identifiable, which is why this is not
+  // simply "anyone we could not resolve".
+  SUSPICIOUS_PARTY_KIND_ADDRESS_ONLY = 2;
+}
+
 message SuspiciousTransaction {
   uint64 id = 1;
-  string jarID = 2; 
-  string regulatorPubKID = 3; 
-  string reason = 4; 
+  string jarID = 2;
+  string regulatorPubKID = 3;
+  string reason = 4;
   google.protobuf.Timestamp  time   = 5 [
     (gogoproto.stdtime) = true,
     (gogoproto.nullable) = false
   ];
-  bytes encSourcePersonalInfoRegulatorPubK = 6; 
-  bytes encDestinationPersonalInfoRegulatorPubK = 7; 
-  bytes encEAmountRegulatorPubK = 8; 
-  bytes encOptInReasonRegulatorPubK = 9; 
+  // Set only when the corresponding kind is WALLET; empty otherwise.  Exactly one of the two
+  // descriptors per side is populated.
+  bytes encSourcePersonalInfoRegulatorPubK = 6;
+  bytes encDestinationPersonalInfoRegulatorPubK = 7;
+  bytes encEAmountRegulatorPubK = 8;
+  bytes encOptInReasonRegulatorPubK = 9;
   string creator = 10;
+
+  // WALLET on both sides for every report the transfer-funds path files, so existing readers that
+  // ignore these fields still read those reports correctly -- WALLET is the zero value by design.
+  SuspiciousPartyKind sourceKind      = 11;
+  SuspiciousPartyKind destinationKind = 12;
+  // EncryptableContractInfo, set only when the corresponding kind is CONTRACT
+  bytes encSourceContractInfoRegulatorPubK      = 13;
+  bytes encDestinationContractInfoRegulatorPubK = 14;
 }

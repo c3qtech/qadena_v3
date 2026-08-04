@@ -156,6 +156,19 @@ func (k Keeper) ScanBankSend(sdkctx sdk.Context, fromAddr, toAddr sdk.AccAddress
 		})
 	}
 
+	// Resolve each side against the scanned-contract whitelist BEFORE consulting the enclave.  The
+	// enclave holds no wasm state and cannot tell a contract from a plain account, so this is the
+	// only place the pinned code ID can be re-checked -- and it has to be re-checked on every send,
+	// not just at proposal time, or a migration would silently inherit the approval.
+	srcContract, err := k.resolveScannedParty(sdkctx, fromAddr)
+	if err != nil {
+		return err
+	}
+	dstContract, err := k.resolveScannedParty(sdkctx, toAddr)
+	if err != nil {
+		return err
+	}
+
 	grpcctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
 	defer cancel()
 
@@ -169,6 +182,8 @@ func (k Keeper) ScanBankSend(sdkctx sdk.Context, fromAddr, toAddr sdk.AccAddress
 		CountryThresholds:       countryThresholds,
 		DefaultThresholdAttoUSD: defaultThreshold,
 		JarID:                   "",
+		SrcContract:             srcContract,
+		DstContract:             dstContract,
 	})
 	if err != nil {
 		c.ContextError(sdkctx, "error returned by ScanBankSend on enclave "+err.Error())

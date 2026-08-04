@@ -91,6 +91,15 @@ echo "Granting 2M qdn from treasury to ekycph-treasury"
 echo "-------------------------"
 $qadenatestscripts/grant_from_treasury.sh $treasuryname 2000000qdn
 
+# step_3.sh funds providers and users with `tx bank send` FROM $treasuryname.  Those sends are
+# AML-scanned like any other, and a treasury is not a wallet, so without an exemption every one of
+# them is refused.  Must land before step_3.sh runs.
+echo "-------------------------"
+echo "Whitelisting $treasuryname for direct bank sends"
+echo "-------------------------"
+$qadenatestscripts/whitelist_bank_send.sh $treasuryname \
+    "ekycph deployment treasury: funds providers and users by direct bank send"
+
 $veritasscripts/step_2.sh
 
 # read proposal id from ekycphidentity.proposal_id
