@@ -21,6 +21,7 @@
 #   cadena        cadena-smart-contracts: the GAA -> PAP -> SARO -> NCA -> Obligation -> DV chain
 #   enf           enf-smart-contracts: the ENF notarial book (ENP registry + entries)
 #   credentials   update_credentials.sh                                    (--with-credentials)
+#   enclave-upgrade  a new enclave measurement takes over the sealed state (--with-enclave-upgrade)
 #
 # Everything except the genesis/chain/credentials layers is IDEMPOTENT -- safe to repeat against the
 # same chain.  They achieve that in different ways depending on what the module allows: delta
@@ -37,12 +38,25 @@
 #                    cases 1/2/5 consume rate-limit windows, so it cannot repeat against the same
 #                    chain without editing the codes at the top of it.  Implied by --from-genesis,
 #                    which produces a chain that has never run it.
+#   --with-enclave-upgrade  registers a new enclave identity on chain PERMANENTLY, then stops the
+#                    node, swaps the enclave binary and restarts.  Runs last, after credentials,
+#                    because nothing after it would be measuring the same process -- and because it
+#                    needs reports already on record to prove the migrated keys still read them.
+#                    NOT implied by --from-genesis: it is slow and leaves the chain on a new enclave.
+#                    It restores the tracked version files on exit, so it leaves no diff behind.
+#
+# WHY THE ENCLAVE UPGRADE SUITE EXISTS.  check_upgrade_enclave.sh silently did nothing for a long
+# time: its guard used a glob inside [[ ]], which zsh does not expand, so it exited 0 on every run
+# and no upgrade was ever performed.  A new enclave would have come up with FRESH sealed keys and the
+# chain would have looked perfectly healthy -- while every suspicious transaction report ever filed
+# became permanently undecryptable, because the regulator private key exists nowhere else.
 #
 # Usage:
 #   regression.sh                     the repeatable suite against a running chain
 #   regression.sh --from-genesis      wipe, rebuild, and run everything (implies the two below)
 #   regression.sh --with-setup        run setup.sh first (slow; needed on a fresh chain)
 #   regression.sh --with-credentials  also run the single-shot update_credentials.sh, last
+#   regression.sh --with-enclave-upgrade  also upgrade the enclave to a new measurement, last
 #   regression.sh --stop-on-fail      stop at the first failure
 
 # get script dir
@@ -58,6 +72,7 @@ function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 from_genesis=false
 with_setup=false
 with_credentials=false
+with_enclave_upgrade=false
 stop_on_fail=false
 advertise_ip=""
 
@@ -66,6 +81,7 @@ while [[ $# -gt 0 ]]; do
         --from-genesis)     from_genesis=true; shift ;;
         --with-setup)       with_setup=true; shift ;;
         --with-credentials) with_credentials=true; shift ;;
+        --with-enclave-upgrade) with_enclave_upgrade=true; shift ;;
         --stop-on-fail)     stop_on_fail=true; shift ;;
         --advertise-ip-address) advertise_ip="$2"; shift 2 ;;
         --help)
@@ -333,6 +349,13 @@ if [ "$with_credentials" = "true" ]; then
     # LAST, because it mutates identities the other suites read: it removes al's email credential,
     # renames jill, and puts al/jill/dory inside their update cool-down windows.
     run_test "credentials" "$qadenatestscripts/update_credentials.sh"
+fi
+
+if [ "$with_enclave_upgrade" = "true" ]; then
+    # LAST OF ALL, and after credentials.  It stops the node, swaps the enclave binary and restarts,
+    # so anything after it would be measuring a different process; and it needs reports already on
+    # record, which the suites above produce.
+    run_test "enclave-upgrade" "$qadenatestscripts/test_enclave_upgrade.sh"
 fi
 
 summarize
