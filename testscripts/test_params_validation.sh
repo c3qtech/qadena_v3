@@ -36,8 +36,12 @@ set -e
 
 function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
+# STDERR, not stdout.  Several helpers below are called inside $( ), which captures stdout -- a
+# failure message written there disappears into the variable and set -e then kills the script with
+# nothing printed at all.  That is exactly how the first version of this suite failed: one second,
+# no output, no clue.
 fail() {
-    echo "FAILED: $1"
+    echo "FAILED: $1" >&2
     exit 1
 }
 
@@ -45,14 +49,9 @@ live_params() {
     qadenad_alias query qadena params --output json 2>/dev/null | jq -S '.params'
 }
 
-# submit_params_proposal <params-json> <title> -- echoes the proposal's FINAL status.
-#
-# Reports rather than asserts: a proposal that passes its vote and then FAILS to execute is the
-# expected outcome for the first case here, so each caller says which status it expects.
-submit_params_proposal() {
-    local params_json="$1" title="$2" file result tx_hash proposal_id prop_status i
-
-    file="/tmp/qadena-params-proposal.json"
+# write_proposal <params-json> <title> -- builds the proposal file, echoes its path.
+write_proposal() {
+    local params_json="$1" title="$2" file="/tmp/qadena-params-proposal.json"
     jq -n --arg authority "$authority" --arg title "$title" --argjson params "$params_json" '{
         messages: [ {
             "@type": "/qadena.qadena.MsgUpdateParams",
@@ -65,12 +64,64 @@ submit_params_proposal() {
         summary: $title,
         expedited: true
     }' > "$file" || fail "could not write $file"
+    echo "$file"
+}
 
+# submit_expecting_rejection <params-json> <title> <expected-text>
+#
+# INVALID PARAMS ARE REFUSED AT SUBMISSION, NOT AT EXECUTION, and that is worth knowing precisely.
+# MsgUpdateParams.ValidateBasic() calls Params.Validate(), and gov's SubmitProposal runs
+# ValidateBasic on every message before it creates the proposal, so a bad param never becomes a
+# proposal at all: no deposit is taken, no voting period elapses, and the submitting transaction
+# fails immediately carrying the validation message.
+#
+# The first version of this suite expected PROPOSAL_STATUS_FAILED, i.e. a proposal that passes its
+# vote and then fails to execute.  That is what would happen if the ONLY check were the one in the
+# msg server handler -- which is where this fix was first aimed before the ValidateBasic path was
+# traced.  Asserting the real behaviour also pins it: if ValidateBasic ever stopped calling
+# Validate(), this case fails rather than quietly degrading to the slower, deposit-burning path.
+submit_expecting_rejection() {
+    local params_json="$1" title="$2" expected="$3" file out
+
+    file=$(write_proposal "$params_json" "$title")
+
+    # 2>&1 because the rejection arrives as an rpc error on stderr, not as a tx result
+    out=$(qadenad_alias tx gov submit-proposal "$file" --from treasury -y --output json \
+        --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment 2>&1) && {
+        # It was accepted.  If it also produced a tx that succeeded, validation did nothing at all.
+        if [ "$(echo "$out" | jq -r '.code' 2>/dev/null)" = "0" ]; then
+            fail "$title was ACCEPTED; invalid params must be refused"
+        fi
+    }
+
+    echo "$out" | grep -q "$expected" \
+        || { echo "$out" | head -3 >&2
+             fail "$title was refused, but not for the expected reason (wanted text matching: $expected)"; }
+}
+
+# submit_expecting_pass <params-json> <title> -- submits, votes, and requires the proposal to PASS.
+submit_expecting_pass() {
+    local params_json="$1" title="$2" file result tx_hash proposal_id prop_status i
+
+    file=$(write_proposal "$params_json" "$title")
+
+    # STDOUT AND STDERR SEPARATED, never 2>&1.  --gas auto writes "gas estimate: N" to stderr, and
+    # folding that into the captured output puts a non-JSON line in front of the response, so
+    # `jq -r .code` fails on a transaction that actually SUCCEEDED -- reporting a broken submit and
+    # a broken validator when neither is true.  The rejection helper above can use 2>&1 precisely
+    # because it greps text rather than parsing JSON.
+    local errfile
+    errfile=$(mktemp)
     result=$(qadenad_alias tx gov submit-proposal "$file" --from treasury -y --output json \
-        --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment 2>/dev/null) \
-        || fail "could not submit: $title"
-    [ "$(echo "$result" | jq -r .code)" = "0" ] \
-        || fail "$title proposal tx failed: $(echo "$result" | jq -r .raw_log)"
+        --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment 2>"$errfile") \
+        || { head -3 "$errfile" >&2; rm -f "$errfile"; fail "could not submit: $title"; }
+    if [ "$(echo "$result" | jq -r .code 2>/dev/null)" != "0" ]; then
+        echo "$result" | head -3 >&2
+        head -3 "$errfile" >&2
+        rm -f "$errfile"
+        fail "$title proposal tx failed"
+    fi
+    rm -f "$errfile"
 
     tx_hash=$(echo "$result" | jq -r .txhash)
     qadenad_alias query wait-tx "$tx_hash" --timeout 30s > /dev/null || fail "$title tx did not land"
@@ -94,7 +145,8 @@ submit_params_proposal() {
         sleep 3
         i=$((i + 1))
     done
-    echo "$prop_status"
+    [ "$prop_status" = "PROPOSAL_STATUS_PASSED" ] \
+        || fail "$title must PASS, got $prop_status -- validation is rejecting legitimate input"
 }
 
 echo "========================="
@@ -118,15 +170,19 @@ echo "========================="
 # The whole point.  A negative here does not tighten or loosen the credential update rate limit --
 # it removes it, because the comparison it feeds can never be true.  Before Params.Validate() was
 # implemented AND wired into MsgUpdateParams, this proposal passed and took effect in silence.
+#
+# int64 params are proto-JSON encoded as STRINGS ("10000"), so the replacement is "-1", not -1.
+# Writing a bare number produces a params object the message cannot unmarshal, which would fail this
+# case for an entirely unrelated reason and look like a validation success.
 bad_params=$(echo "$original_params" | jq '.update_credential_min_blocks_between_updates = "-1"')
 
-prop_status=$(submit_params_proposal "$bad_params" "regression test: negative credential update cool-down")
-[ "$prop_status" = "PROPOSAL_STATUS_FAILED" ] \
-    || fail "a negative cool-down must FAIL execution, got $prop_status -- param validation is not wired into MsgUpdateParams"
-echo "rejected at execution as expected"
+submit_expecting_rejection "$bad_params" \
+    "regression test: negative credential update cool-down" \
+    "update_credential_min_blocks_between_updates must not be negative"
+echo "refused at submission, naming the offending param"
 
-# A failed proposal must not have written anything.  Checked rather than assumed: the failure could
-# in principle come after SetParams rather than before it.
+# Nothing was written.  Checked rather than assumed: a refusal that still mutated state would be a
+# worse bug than the one this suite is about.
 after_bad=$(live_params)
 [ "$after_bad" = "$original_params" ] \
     || fail "the refused proposal still changed the params"
@@ -140,10 +196,10 @@ echo "========================="
 # that jurisdiction with nothing pointing back at the proposal that caused it.
 bad_params=$(echo "$original_params" | jq '.suspicious_transaction_threshold = "not-a-coin"')
 
-prop_status=$(submit_params_proposal "$bad_params" "regression test: unparseable suspicious threshold")
-[ "$prop_status" = "PROPOSAL_STATUS_FAILED" ] \
-    || fail "an unparseable threshold must FAIL execution, got $prop_status"
-echo "rejected at execution as expected"
+submit_expecting_rejection "$bad_params" \
+    "regression test: unparseable suspicious threshold" \
+    "suspicious_transaction_threshold"
+echo "refused at submission, naming the offending param"
 
 [ "$(live_params)" = "$original_params" ] || fail "the refused proposal still changed the params"
 echo "params unchanged"
@@ -154,10 +210,8 @@ echo "========================="
 # The other half, and the one that catches over-strict validation.  Cases 1 and 2 would both pass
 # just as well if Validate() rejected everything -- which would brick governance's ability to change
 # any param at all.  Submitting the live params back verbatim proves the gate opens for good input.
-prop_status=$(submit_params_proposal "$original_params" "regression test: unchanged params must still be accepted")
-[ "$prop_status" = "PROPOSAL_STATUS_PASSED" ] \
-    || fail "a valid params update must PASS, got $prop_status -- validation is rejecting legitimate input"
-echo "accepted as expected"
+submit_expecting_pass "$original_params" "regression test: unchanged params must still be accepted"
+echo "accepted and passed as expected"
 
 # ... and it wrote back exactly what was there.  This is also what makes the suite idempotent.
 final_params=$(live_params)

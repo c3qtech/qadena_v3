@@ -277,9 +277,28 @@ scan_probe=$(qadenad_alias tx bank send treasury "$(qadenad_alias keys show ann 
     1qdn --from treasury --yes --output json \
     --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment 2>/dev/null) \
     || fail "could not broadcast a probe send after the upgrade"
-probe_hash=$(echo "$scan_probe" | jq -r '.txhash')
-qadenad_alias query wait-tx "$probe_hash" --timeout 60s > /dev/null 2>&1 || true
-probe_code=$(qadenad_alias query tx "$probe_hash" --output json 2>/dev/null | jq -r '.code // "UNKNOWN"')
+
+probe_hash=$(echo "$scan_probe" | jq -r '.txhash' 2>/dev/null)
+[ -n "$probe_hash" ] && [ "$probe_hash" != "null" ] \
+    || fail "the probe send produced no txhash; the chain was not accepting transactions after the restart"
+
+# POLLED, and "not resolvable yet" is kept DISTINCT from "the scan refused it".
+#
+# The node has just restarted, so the first query can easily land before the transaction is indexed
+# and return nothing at all.  An earlier version compared that empty result straight against "0" and
+# reported "a scanned send failed with code " -- blaming the enclave for losing its sealed keys when
+# the upgrade had in fact worked perfectly and the transaction simply had not been indexed yet.  A
+# test that accuses the wrong component is worse than one that just fails.
+probe_code=""
+for _ in {1..30}; do
+    qadenad_alias query wait-tx "$probe_hash" --timeout 10s > /dev/null 2>&1 || true
+    probe_code=$(qadenad_alias query tx "$probe_hash" --output json 2>/dev/null | jq -r '.code // empty' 2>/dev/null)
+    [ -n "$probe_code" ] && break
+    sleep 2
+done
+
+[ -n "$probe_code" ] \
+    || fail "the probe send $probe_hash never resolved, so whether the sealed store survived is UNKNOWN -- this is not itself evidence of unsealing failure"
 [ "$probe_code" = "0" ] \
     || fail "a scanned send failed with code $probe_code after the upgrade; the enclave cannot unseal what the old one wrote (check the log for 'unrecognized prefix')"
 echo "a scanned send still works, so the sealed store survived"
