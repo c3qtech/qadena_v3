@@ -30,13 +30,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 
-# if REAL_ENCLAVE, check if running as root
-if [[ $REAL_ENCLAVE -eq 1 ]]; then
-    if [[ $(id -u) -ne 0 ]]; then
-        echo "restart_qadena.sh:  Error: Qadena must be run as root (real SGX detected).  Try running with 'sudo'."
-        exit 1
-    fi
-fi
+# Root only when an ego enclave will actually run: SGX hardware AND a signed binary.
+needs_root_if_real_enclave "restart_qadena.sh" "$qadenabin/qadenad_enclave"
 
 if [[ $skip_stop -eq 0 ]]; then
     if is_qadena_running; then

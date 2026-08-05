@@ -28,7 +28,7 @@ nodeparamsfile="$qadenaconfig/node_params.json"
 #enclave_path="$(pwd)/cmd/qadenad_enclave"
 
 ADVERTISE_IP_ADDRESS=""
-build_reproducible_flag=""
+build_sgx_flag=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -41,12 +41,12 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ;;
-    --build-reproducible)
-      build_reproducible_flag="--build-reproducible"
+    --build-sgx|--build-reproducible)
+      build_sgx_flag="--build-sgx"
       shift
       ;;
     --help)
-      echo "Usage: init.sh [--advertise-ip-address <ip>] [--build-reproducible]"
+      echo "Usage: init.sh [--advertise-ip-address <ip>] [--build-sgx]"
       exit 0
       ;;      
     *)
@@ -200,7 +200,7 @@ $qadenascripts/setPioneerID.sh pioneer1 $nodeparamsfile
 #fi
 
 echo "Calling build.sh"
-$qadenabuildscripts/build.sh --title "FINAL BUILD" $build_reproducible_flag
+$qadenabuildscripts/build.sh --title "FINAL BUILD" $build_sgx_flag
 
 $qadenabuildscripts/install.sh --scripts
 

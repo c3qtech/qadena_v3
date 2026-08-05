@@ -3,6 +3,14 @@
 # get script dir
 SCRIPT_DIR="${0:A:h}"
 
+# SGX RUNS ONLY UNDER LINUX (in practice Ubuntu, which is what the ego toolchain targets), so this
+# probe is Linux-only by construction: /proc/cpuinfo does not exist on macOS and the grep simply
+# fails there, leaving REAL_ENCLAVE=0.  That is correct, not a fallback.
+#
+# This detects the CPU and NOTHING ELSE.  It does not know how the enclave binary was built --
+# buildscripts/build_enclave.sh gates the ego build on --build-sgx and never reads this
+# variable.  Runtime scripts must therefore branch on use_real_enclave <binary> (below), never on
+# REAL_ENCLAVE alone.
 if grep sgx /proc/cpuinfo > /dev/null 2> /dev/null ; then
     # echo to stderr
     echo "SGX detected" >&2
@@ -59,12 +67,64 @@ echo "Qadena home: $QADENAHOME" >&2
 echo "Qadena bin: $qadenabin" >&2
 echo "Qadena scripts: $qadenascripts" >&2
 
+# is_sgx_binary <path> -- true only for an ego-SIGNED SGX executable.
+#
+# `ego uniqueid` reads the enclave measurement out of the binary's Open Enclave section, so it
+# succeeds on a signed binary and fails on one produced by a plain `go build`.  That is precisely the
+# question being asked, and it needs no new tooling: run.sh already calls `ego uniqueid` on this very
+# path to build the --enclave-unique-id flag.
+is_sgx_binary() {
+  local bin="$1"
+  [[ -n "$bin" && -x "$bin" ]] || return 1
+  command -v ego > /dev/null 2>&1 || return 1
+  ego uniqueid "$bin" > /dev/null 2>&1
+}
+
+# use_real_enclave <path> -- the condition every runtime script should branch on.
+#
+# BOTH halves are required, and that is the whole point of this helper.
+#
+# REAL_ENCLAVE says only that the CPU reports SGX support (setup_env.sh greps /proc/cpuinfo).  It
+# says NOTHING about how <path> was built -- buildscripts/build_enclave.sh gates the ego-go/ego sign
+# build on --build-sgx and never consults REAL_ENCLAVE at all.  So on SGX hardware carrying
+# a debug-built binary, branching on REAL_ENCLAVE alone sends a plain Go executable down the
+# `ego run` path: the launch fails, `ego uniqueid` yields nothing, and run.sh interpolates an empty
+# --enclave-unique-id.  Nothing in that failure names either cause.
+#
+# Ordered so the cheap CPU test short-circuits first: on a non-SGX host `ego` is never invoked, which
+# matters because it usually is not installed there.
+use_real_enclave() {
+  [[ $REAL_ENCLAVE -eq 1 ]] || return 1
+  is_sgx_binary "$1"
+}
+
+# warn_if_sgx_binary_missing <name> <path> -- say so, once, when the hardware and the binary disagree.
+#
+# Falling back to the debug path silently would be its own trap: an operator who asked for a real
+# enclave would get a simulated one and no indication of it.
+warn_if_sgx_binary_missing() {
+  local name="$1" bin="$2"
+  if [[ $REAL_ENCLAVE -eq 1 ]] && ! is_sgx_binary "$bin"; then
+      echo "$name:  WARNING: SGX hardware detected, but $bin is not an ego-signed enclave." >&2
+      echo "$name:           Running in DEBUG (simulated) mode.  To build a real enclave:" >&2
+      echo "$name:           buildscripts/build.sh --build-sgx" >&2
+  fi
+}
+
+# needs_root_if_real_enclave <name> [binary]
+#
+# Root is required because `ego run` needs the SGX device -- so it must be decided by the SAME
+# predicate that decides whether ego is used at all.  Gating on REAL_ENCLAVE alone demanded sudo for
+# a debug run on SGX hardware, which never needed it.
+#
+# The binary argument is optional so existing callers keep working; without it the check falls back
+# to the chain enclave, which is what every runtime script is ultimately gating on.
 needs_root_if_real_enclave() {
   name="$1"
-  # if REAL_ENCLAVE, check if running as root
-  if [[ $REAL_ENCLAVE -eq 1 ]]; then
+  bin="${2:-$qadenabin/qadenad_enclave}"
+  if use_real_enclave "$bin"; then
       if [[ $(id -u) -ne 0 ]]; then
-          echo "$name:  Error: Qadena must be run as root (real SGX detected).  Try running with 'sudo'."
+          echo "$name:  Error: Qadena must be run as root (real SGX enclave).  Try running with 'sudo'."
           exit 1
       fi
   fi

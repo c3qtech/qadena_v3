@@ -18,13 +18,8 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh" 2> /dev/null
 
-# if REAL_ENCLAVE, check if running as root
-if [[ $REAL_ENCLAVE -eq 1 ]]; then
-    if [[ $(id -u) -ne 0 ]]; then
-        echo "add_full_node.sh:  Error: Qadena must be run as root (real SGX detected).  Try running with 'sudo'."
-        exit 1
-    fi
-fi
+# Root only when an ego enclave will actually run: SGX hardware AND a signed binary.
+needs_root_if_real_enclave "add_full_node.sh" "$qadenabin/qadenad_enclave"
 
 
 
@@ -403,7 +398,7 @@ fi
 
 echo "DEBUG $DEBUG"
 
-if [[ $REAL_ENCLAVE == 1 ]] ; then
+if use_real_enclave "$qadenabin/qadenad_enclave" ; then
 	$qadenascripts/run_realenclave.sh &
 	sleep 10
 else

@@ -6,13 +6,8 @@ SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 
-# if REAL_ENCLAVE, check if running as root
-if [[ $REAL_ENCLAVE -eq 1 ]]; then
-    if [[ $(id -u) -ne 0 ]]; then
-        echo "stop_qadena.sh:  Error: Qadena must be run as root (real SGX detected).  Try running with 'sudo'."
-        exit 1
-    fi
-fi
+# Root only when an ego enclave is actually in play: SGX hardware AND a signed binary.
+needs_root_if_real_enclave "stop_qadena.sh" "$qadenabin/qadenad_enclave"
 
 if ! is_qadena_running; then
     echo "stop_qadena.sh: Good!  Qadena is no longer running."
@@ -90,12 +85,15 @@ fi
 
 if [[ $stop_enclave -eq 1 ]] ; then
     echo "stop_qadena.sh: Stopping Qadena Enclave"
-    if [[ $REAL_ENCLAVE -eq 1 ]] ; then
+    # BOTH forms are attempted, deliberately.  Which one is running depends on how the enclave was
+    # STARTED, not on what is installed now -- a rebuild between start and stop would otherwise
+    # strand a live enclave that this script believes it killed.  pkill on an absent pattern is a
+    # harmless no-op, so trying both is strictly safer than choosing.
+    if use_real_enclave "$qadenabin/qadenad_enclave" ; then
       pkill -INT -f "ego-host.*qadenad_enclave"
-    else  
-      pkill -KILL -f "run_enclave.sh"
-      pkill -INT -f "qadenad_enclave"
     fi
+    pkill -KILL -f "run_enclave.sh"
+    pkill -INT -f "qadenad_enclave"
 fi
 
 if [[ $stop_init_enclave -eq 1 ]] ; then
@@ -105,12 +103,12 @@ fi
 
 if [[ $stop_signer_enclave -eq 1 ]] ; then
     echo "stop_qadena.sh: Stopping Qadena Signer Enclave"
-    if [[ $REAL_ENCLAVE -eq 1 ]] ; then
+    # same reasoning as above; gated on the signer binary, which is built independently
+    if use_real_enclave "$qadenabin/signer_enclave" ; then
       pkill -KILL -f "ego-host.*signer_enclave"
-    else
-      pkill -KILL -f "run_signerenclave.sh"
-      pkill -INT -f "signer_enclave"
     fi
+    pkill -KILL -f "run_signerenclave.sh"
+    pkill -INT -f "signer_enclave"
 fi
 
 # stop rotatelogs

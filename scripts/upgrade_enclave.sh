@@ -35,10 +35,18 @@ if [[ -z "$FROM_ENCLAVE_UNIQUE_ID" ]] ; then
 fi
 
 # run the old enclave
-if [[ $REAL_ENCLAVE -eq 1 ]] ; then
+# The OLD and NEW enclaves are judged SEPARATELY, because they are separate binaries and can
+# legitimately disagree mid-upgrade -- the old one signed and the new one debug, or the reverse.
+#
+# old_is_sgx is recorded rather than re-evaluated later: the kill at the end of this script must
+# match whichever way this branch actually went.  Re-testing there could pick the other arm (the
+# binary can be replaced underneath us) and leave the old enclave running.
+if use_real_enclave "$qadenabin/qadenad_enclave.$FROM_ENCLAVE_UNIQUE_ID" ; then
+    old_is_sgx=1
     ego run $qadenabin/qadenad_enclave.$FROM_ENCLAVE_UNIQUE_ID --realenclave --home=$QADENAHOME --chain-id=$CHAINID --upgrade-mode &
     pid=$!
 else
+    old_is_sgx=0
     $qadenabin/qadenad_enclave.$FROM_ENCLAVE_UNIQUE_ID --home=$QADENAHOME --chain-id=$CHAINID --upgrade-mode &
     pid=$!
 fi
@@ -68,7 +76,7 @@ if [ $IS_UP -ne 1 ] ; then
     exit 1
 fi
 
-if [[ $REAL_ENCLAVE -eq 1 ]] ; then
+if use_real_enclave "$qadenabin/qadenad_enclave" ; then
   ego run $qadenabin/qadenad_enclave --realenclave --home=$QADENAHOME --chain-id=$CHAINID --upgrade-from-enclave-unique-id=$FROM_ENCLAVE_UNIQUE_ID
 else
   $qadenabin/qadenad_enclave --home=$QADENAHOME --chain-id=$CHAINID --upgrade-from-enclave-unique-id=$FROM_ENCLAVE_UNIQUE_ID
@@ -77,7 +85,8 @@ fi
 RES=$?
 
 # kill the old enclave
-if [[ $REAL_ENCLAVE -eq 1 ]] ; then
+# Matches how the old enclave was actually STARTED above, not how it would be judged now.
+if [[ $old_is_sgx -eq 1 ]] ; then
     pkill -INT -f "/opt/ego/bin/ego-host"
 else
     pkill -INT -f "qadenad_enclave.$FROM_ENCLAVE_UNIQUE_ID"
