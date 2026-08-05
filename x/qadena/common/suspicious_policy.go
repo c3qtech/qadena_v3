@@ -11,6 +11,7 @@ package common
 
 import (
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -192,7 +193,37 @@ func PruneExpired(transfers []*types.EncryptableScanTransfer, cutoffUnix int64) 
 	return kept
 }
 
-// AggregateByDestination sums a window's transfers per destination wallet, in attoUSD.
+// DestinationTotal is one destination's accumulated value within a window.
+//
+// A SLICE OF THESE, NOT A MAP, and that is a consensus decision rather than a stylistic one.
+//
+// This function used to return map[string]sdk.Coin and both callers ranged it directly.  Go
+// randomizes map iteration order per process, so two validators visited destinations in different
+// orders.  Harmless while at most one destination could cross the threshold in a single scan, and
+// chain-halting the moment two could:
+//
+//   - each crossing appends a report to newSuspiciousTransactions, and AppendSuspiciousTransaction
+//     assigns sequential IDs from that slice at EndBlock.  Two honest nodes then commit different
+//     (id -> report) mappings for the same block and the app hash diverges.
+//   - if building one report fails part way through the loop, iteration order also decides WHICH
+//     reports were already appended, so nodes can disagree about the report SET, not merely its
+//     numbering.
+//
+// Two destinations crossing at once is reachable in ordinary operation: the bank path takes its
+// threshold from the CURRENT recipient's jurisdiction, so a whitelisted sender that accumulated a
+// window against a loose limit has all of it re-judged against a tighter one as soon as it pays
+// into a stricter jurisdiction.
+//
+// Returning an ordered slice fixes it by construction instead of by remembering to sort at each
+// call site: there is no longer a map for a caller to range.  Sorting by wallet ID is arbitrary but
+// total and stable, which is all determinism needs.
+type DestinationTotal struct {
+	DestinationWalletID string
+	USDCoinAmount       sdk.Coin
+}
+
+// AggregateByDestination sums a window's transfers per destination wallet, in attoUSD, and returns
+// them ordered by destination wallet ID.
 //
 // USD is the only unit that can be summed here.  A window may hold entries in several
 // denominations -- transfer-funds accepts erc20 denominations, and a bank send carries sdk.Coins,
@@ -206,7 +237,7 @@ func PruneExpired(transfers []*types.EncryptableScanTransfer, cutoffUnix int64) 
 //
 // Each entry contributes the fiat value computed at the rate in force when it was scanned, which is
 // why that value is stored rather than recomputed.
-func AggregateByDestination(transfers []*types.EncryptableScanTransfer) map[string]sdk.Coin {
+func AggregateByDestination(transfers []*types.EncryptableScanTransfer) []DestinationTotal {
 	usd := make(map[string]sdk.Coin)
 
 	for _, tf := range transfers {
@@ -221,7 +252,15 @@ func AggregateByDestination(transfers []*types.EncryptableScanTransfer) map[stri
 		usd[tf.DestinationWalletID] = running.Add(tf.USDCoinAmount)
 	}
 
-	return usd
+	totals := make([]DestinationTotal, 0, len(usd))
+	for dst, amount := range usd {
+		totals = append(totals, DestinationTotal{DestinationWalletID: dst, USDCoinAmount: amount})
+	}
+	sort.Slice(totals, func(i, j int) bool {
+		return totals[i].DestinationWalletID < totals[j].DestinationWalletID
+	})
+
+	return totals
 }
 
 // DropDestination removes every entry for one destination, used after a tripped aggregate has been

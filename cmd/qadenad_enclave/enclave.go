@@ -139,6 +139,17 @@ type qadenaServer struct {
 	// on every restart, differed between validators -- which decide transfer acceptance from it --
 	// and survived the rollback of the very transfer that added to it.
 
+	// Reports filed by the transaction currently executing, held back until it is known to have
+	// SUCCEEDED.  TransactionComplete promotes them into newSuspiciousTransactions on success and
+	// discards them on failure, mirroring exactly what it already does with the KV cache.
+	//
+	// Without this a report outlives the transaction that produced it: a bank send that crosses the
+	// threshold files its report inside the send restriction and can then still fail in SendCoins --
+	// on insufficient funds, say -- leaving the regulator with a report asserting a movement of value
+	// that never happened.  It also makes the report SET depend on where a mid-loop failure landed,
+	// which is a consensus hazard and not merely bad evidence.
+	pendingSuspiciousTransactions []types.SuspiciousTransaction
+
 	newSuspiciousTransactions []types.SuspiciousTransaction
 
 	HomePath    string
@@ -6482,7 +6493,9 @@ func (s *qadenaServer) createSuspiciousTransaction(ctx context.Context, reason s
 		st.EncDestinationContractInfoRegulatorPubK = c.ProtoMarshalAndBEncrypt(regulatorPubK, dst.ci)
 	}
 
-	s.newSuspiciousTransactions = append(s.newSuspiciousTransactions, st)
+	// PENDING, not committed.  TransactionComplete moves this into newSuspiciousTransactions only if
+	// the transaction succeeds -- a report must never outlive the movement of value it describes.
+	s.pendingSuspiciousTransactions = append(s.pendingSuspiciousTransactions, st)
 	return nil
 }
 
@@ -6682,9 +6695,12 @@ func (s *qadenaServer) ScanTransaction(ctx context.Context, st *types.MsgScanTra
 
 	c.LoggerDebug(logger, "src wallet "+srcWalletID+" window holds "+strconv.Itoa(len(history.Transfers))+" transfers")
 
-	usdValueMap := c.AggregateByDestination(history.Transfers)
-
-	for dstWalletID, v := range usdValueMap {
+	// Ordered by destination, not a map range: report order decides the IDs
+	// AppendSuspiciousTransaction hands out at EndBlock, so a per-process iteration order would
+	// fork the chain the first time two destinations cross in one scan.  See DestinationTotal.
+	for _, agg := range c.AggregateByDestination(history.Transfers) {
+		dstWalletID := agg.DestinationWalletID
+		v := agg.USDCoinAmount
 		c.LoggerDebug(logger, "aggregate total "+dstWalletID+" "+v.String())
 		if v.IsGTE(threshold) {
 			c.LoggerDebug(logger, "suspicious aggregate total "+tf.SourceWalletID+" "+dstWalletID+" "+v.String())
@@ -6780,10 +6796,23 @@ func (s *qadenaServer) TransactionComplete(ctx context.Context, tc *types.MsgTra
 	if tc.Success {
 		c.LoggerDebug(logger, "CacheCtx.Write")
 		s.CacheCtxWrite()
+		// Reports become real at exactly the moment the transaction's state writes do.  Appended
+		// only here, so a report can never describe value that did not move.
+		if len(s.pendingSuspiciousTransactions) > 0 {
+			c.LoggerDebug(logger, "committing "+strconv.Itoa(len(s.pendingSuspiciousTransactions))+" suspicious transaction(s)")
+			s.newSuspiciousTransactions = append(s.newSuspiciousTransactions, s.pendingSuspiciousTransactions...)
+		}
 	} else {
 		c.LoggerDebug(logger, "Rollback CacheContext")
 		s.CacheCtx, s.CacheCtxWrite = s.ServerCtx.CacheContext()
+		if len(s.pendingSuspiciousTransactions) > 0 {
+			c.LoggerDebug(logger, "discarding "+strconv.Itoa(len(s.pendingSuspiciousTransactions))+" suspicious transaction(s) from a failed transaction")
+		}
 	}
+
+	// Cleared on BOTH paths.  PostHandle calls this for every non-simulate, non-CheckTx delivery, so
+	// leaving a stale entry here would attach it to whichever transaction happened to run next.
+	s.pendingSuspiciousTransactions = nil
 
 	return &types.TransactionCompleteReply{Status: true}, nil
 }
@@ -7227,6 +7256,7 @@ func main() {
 
 	cs.changedWallets = make([]string, 0)
 	cs.newSuspiciousTransactions = make([]types.SuspiciousTransaction, 0)
+	cs.pendingSuspiciousTransactions = make([]types.SuspiciousTransaction, 0)
 
 	// No suspicious-transaction threshold is computed here any more.  It is per-sender now -- the
 	// jurisdiction with the lowest limit among the sender's residency and citizenship -- and it

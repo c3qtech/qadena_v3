@@ -202,10 +202,20 @@ func UpdateLimitsFromParams(p types.Params) UpdateLimits {
 	if limits.MaxLifeEvents == 0 {
 		limits.MaxLifeEvents = DefaultUpdateCredentialMaxLifeEvents
 	}
-	// zero is a legitimate "no cool-down", but it is also what an unset param reads as; treat it
-	// as unset, because a chain that wants no cool-down can express that by allowing the update
-	// policy to reject nothing else
-	if limits.MinBlocksBetweenUpdates == 0 {
+	// Zero is a legitimate "no cool-down", but it is also what an unset param reads as; treat it as
+	// unset, because a chain that wants no cool-down can express that by allowing the update policy
+	// to reject nothing else.
+	//
+	// NEGATIVE is folded in here too, and that matters more than it looks.  This is one of only two
+	// signed params, and checkUpdateLimits asks
+	//
+	//	blockHeight - LastUpdateHeight < MinBlocksBetweenUpdates
+	//
+	// which is never true for a negative bound -- so a negative value does not shorten the
+	// cool-down, it removes it, permanently and without a word in the log.  Params.Validate now
+	// refuses one at the gate, but a chain that stored a bad value BEFORE that check existed would
+	// never be re-validated, so the loader has to be safe on its own.
+	if limits.MinBlocksBetweenUpdates <= 0 {
 		limits.MinBlocksBetweenUpdates = DefaultUpdateCredentialMinBlocksBetweenUpdates
 	}
 	return limits

@@ -157,7 +157,13 @@ func (s *qadenaServer) ScanBankSend(ctx context.Context, msg *types.MsgScanBankS
 	history.Transfers = c.PruneExpired(history.Transfers, cutoff)
 	history.Transfers = append(history.Transfers, entries...)
 
-	for dstWalletID, v := range c.AggregateByDestination(history.Transfers) {
+	// Ordered by destination -- same consensus reason as ScanTransaction, and this is the path where
+	// two destinations crossing at once is most reachable: the threshold comes from the CURRENT
+	// recipient's jurisdiction, so a window accumulated under a loose limit is re-judged against a
+	// tighter one as soon as the sender pays into a stricter jurisdiction.
+	for _, agg := range c.AggregateByDestination(history.Transfers) {
+		dstWalletID := agg.DestinationWalletID
+		v := agg.USDCoinAmount
 		if v.IsGTE(threshold) {
 			if policy.BlockTransferWithoutOptInReason {
 				c.LoggerError(logger, "refusing bank send: aggregate to "+dstWalletID+" is "+v.String()+
