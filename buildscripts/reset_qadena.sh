@@ -5,13 +5,8 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
-# if REAL_ENCLAVE, check if running as root
-if [[ $REAL_ENCLAVE -eq 1 ]]; then
-    if [[ $(id -u) -ne 0 ]]; then
-        echo "reset_qadena.sh:  Error: Qadena must be run as root (real SGX detected).  Try running with 'sudo'."
-        exit 1
-    fi
-fi
+# Root only when an ego enclave will actually run: SGX hardware AND a signed binary.
+needs_root_if_real_enclave "reset_qadena.sh" "$qadenabin/qadenad_enclave"
 
 
 # get advertise ip address

@@ -6,7 +6,7 @@ SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 update_test_unique_id_flag=""
-build_reproducible_flag=""
+build_sgx_flag=""
 update_build_number=0
 TITLE="FINAL"
 skip_enclave=0
@@ -25,8 +25,8 @@ while [[ $# -gt 0 ]]; do
       skip_enclave=1
       shift
       ;;
-    --build-reproducible)
-      build_reproducible_flag="--build-reproducible"
+    --build-sgx|--build-reproducible)
+      build_sgx_flag="--build-sgx"
       shift
       ;;
     --title)
@@ -39,7 +39,7 @@ while [[ $# -gt 0 ]]; do
       fi
       ;;
     --help)
-      echo "Usage: build.sh [--update-test-unique-id] [--update-build-number] [--skip-enclave] [--build-reproducible] [--title <title>]"
+      echo "Usage: build.sh [--update-test-unique-id] [--update-build-number] [--skip-enclave] [--build-sgx] [--title <title>]"
       exit 0
       ;;      
     *)
@@ -75,8 +75,16 @@ chain_path="$qadenabuild/cmd/qadenad"
 
 cd $qadenabuild
 
-# if build_reproducible is set, build for real enclave
-if [[ $build_reproducible_flag == "--build-reproducible" ]]; then
+# --build-sgx (was --build-reproducible; the old name still works)
+#
+# The rename names the PURPOSE rather than the means.  It is the only thing that produces an
+# ego-signed SGX enclave -- REAL_ENCLAVE is auto-detected from the CPU and is never consulted here.
+#
+# The build must still be reproducible, and that is not incidental: the enclave's unique id
+# (MRENCLAVE) IS a hash of the built binary, so a non-deterministic SGX build would measure
+# differently on every machine and nothing could attest to it or whitelist it.  Reproducibility is a
+# requirement of the SGX build, not a separate option -- which is why one flag drives both.
+if [[ $build_sgx_flag == "--build-sgx" ]]; then
   if [[ "$DOCKER_BUILD" = "1" ]]; then
     echo "------------------------------------------------------------------"
     echo "$TITLE BUILDING QADENAD WITHIN DOCKER FOR SGX (REPRODUCIBLE BUILD)"
@@ -122,7 +130,7 @@ fi
 $qadenabuildscripts/install.sh --chain
 
 if [[ $skip_enclave == 0 ]] ; then
-    $qadenabuildscripts/build_enclave.sh --title $TITLE $update_test_unique_id_flag $build_reproducible_flag
+    $qadenabuildscripts/build_enclave.sh --title $TITLE $update_test_unique_id_flag $build_sgx_flag
     if [ $? -ne 0 ] ; then
         echo "************"
         echo "   $TITLE ERROR"
@@ -130,7 +138,7 @@ if [[ $skip_enclave == 0 ]] ; then
         exit 1
     fi
 
-    $qadenabuildscripts/build_signer_enclave.sh --title $TITLE $update_test_unique_id_flag $build_reproducible_flag
+    $qadenabuildscripts/build_signer_enclave.sh --title $TITLE $update_test_unique_id_flag $build_sgx_flag
     if [ $? -ne 0 ] ; then
         echo "************"
         echo "   $TITLE ERROR"

@@ -43,7 +43,7 @@ if [[ $EXT_ADDR == "" ]] ; then
     exit 1
 fi
 
-if [[ $REAL_ENCLAVE == 1 ]] ; then
+if use_real_enclave "$qadenabin/qadenad_enclave" ; then
     echo "init_enclave.sh: Real enclave detected"
     SIGNER_ID=`ego signerid $QADENAHOME/config/public.pem`
     echo "init_enclave.sh: Extracted signer id from $QADENAHOME/config/public.pem: $SIGNER_ID"

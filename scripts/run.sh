@@ -5,13 +5,11 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
-# if REAL_ENCLAVE, check if running as root
-if [[ $REAL_ENCLAVE -eq 1 ]]; then
-    if [[ $(id -u) -ne 0 ]]; then
-        echo "run.sh:  Error: Qadena must be run as root (real SGX detected).  Try running with 'sudo'."
-        exit 1
-    fi
-fi
+# Root is needed only when we will actually run an ego enclave -- i.e. SGX hardware AND a signed
+# binary.  See use_real_enclave in setup_env.sh: REAL_ENCLAVE alone only says the CPU supports SGX,
+# not that this binary was built for it.
+warn_if_sgx_binary_missing "run.sh" "$qadenabin/qadenad_enclave"
+needs_root_if_real_enclave "run.sh" "$qadenabin/qadenad_enclave"
 
 # get argument "--sync-with-pioneer X"
 SYNC_WITH_PIONEER=""
@@ -64,7 +62,7 @@ PIDS=()
 declare -A PROC_NAMES
 
 if [[ $DEBUG != "no_qadenad_enclave" ]] ; then
-        if [[ $REAL_ENCLAVE == 1 ]] ; then
+        if use_real_enclave "$qadenabin/qadenad_enclave" ; then
             $qadenascripts/run_realenclave.sh &
             PIDS+=$!
             PROC_NAMES[$!]="run_realenclave.sh"
@@ -96,7 +94,9 @@ if [ $IS_UP -ne 1 ] ; then
 fi
 
 if [[ $DEBUG != "no_signer_enclave" ]] ; then
-        if [[ $REAL_ENCLAVE == 1 ]] ; then
+        # gated on signer_enclave, not qadenad_enclave: they are separate binaries and can be built
+        # differently, so one being signed says nothing about the other
+        if use_real_enclave "$qadenabin/signer_enclave" ; then
             $qadenascripts/run_realsignerenclave.sh &
             PIDS+=$!
             PROC_NAMES[$!]="run_realsignerenclave.sh"
@@ -152,7 +152,7 @@ else
 fi
 
 
-if [[ $REAL_ENCLAVE == 1 ]] ; then
+if use_real_enclave "$qadenabin/qadenad_enclave" ; then
     qadenad_alias start --json-rpc.api eth,txpool,personal,net,debug,web3 --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --enclave-addr localhost:50051 --enclave-signer-id `ego signerid $QADENAHOME/config/public.pem` --enclave-unique-id `ego uniqueid $qadenabin/qadenad_enclave` --home=$QADENAHOME --log-level $log_level &
     PIDS+=$!
     PROC_NAMES[$!]="qadenad (real enclave)"

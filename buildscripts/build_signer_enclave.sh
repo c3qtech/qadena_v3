@@ -6,7 +6,7 @@ SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 update_test_unique_id=0
-build_reproducible=0
+build_sgx=0
 TITLE=""
 
 while [[ $# -gt 0 ]]; do
@@ -15,8 +15,8 @@ while [[ $# -gt 0 ]]; do
       update_test_unique_id=1
       shift
       ;;
-    --build-reproducible)
-      build_reproducible=1
+    --build-sgx|--build-reproducible)
+      build_sgx=1
       shift
       ;;
     --title)
@@ -29,7 +29,7 @@ while [[ $# -gt 0 ]]; do
       fi
       ;;
     --help)
-      echo "Usage: build_signer_enclave.sh [--update-test-unique-id] [--build-reproducible] [--title <title>]"
+      echo "Usage: build_signer_enclave.sh [--update-test-unique-id] [--build-sgx] [--title <title>]"
       exit 0
       ;;      
     *)
@@ -50,7 +50,16 @@ rm -f $signer_enclave_path/reproducible_build_unique_id.txt
 
 cd $qadenabuild
 
-if [[ $build_reproducible == 1 ]] ; then
+# --build-sgx (was --build-reproducible; the old name still works)
+#
+# The rename names the PURPOSE rather than the means.  It is the only thing that produces an
+# ego-signed SGX enclave -- REAL_ENCLAVE is auto-detected from the CPU and is never consulted here.
+#
+# The build must still be reproducible, and that is not incidental: the enclave's unique id
+# (MRENCLAVE) IS a hash of the built binary, so a non-deterministic SGX build would measure
+# differently on every machine and nothing could attest to it or whitelist it.  Reproducibility is a
+# requirement of the SGX build, not a separate option -- which is why one flag drives both.
+if [[ $build_sgx == 1 ]] ; then
   if [[ "$DOCKER_BUILD" = "1" ]]; then
     echo "-------------------------------------------------------------------------"
     echo "$TITLE BUILDING SIGNER_ENCLAVE WITHIN DOCKER FOR SGX (REPRODUCIBLE BUILD)"
