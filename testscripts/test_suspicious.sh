@@ -26,11 +26,18 @@
 #
 # In both cases the behaviour is the same and is what this script pins down:
 #
-#   without --opt-in-reason  ->  the transfer is REJECTED outright (ErrGenericScan)
-#   with    --opt-in-reason  ->  the transfer succeeds AND a suspicious transaction is recorded,
+#   without --opt-in-reason  ->  the transfer succeeds AND a report is filed carrying the default
+#                                reason, "No reason provided"
+#   with    --opt-in-reason  ->  the transfer succeeds AND a report is filed carrying that reason,
 #                                encrypted to the regulator registered for the jar
 #
-# That second half is the point: opting in does not suppress the report, it files one.
+# Opting in does not suppress the report, it only supplies the reason text.  Refusal is no longer
+# the no-reason behaviour: block_transfer_without_opt_in_reason (param 26, default false) restores
+# it per chain, and is unit-tested in x/qadena/common/suspicious_policy_test.go rather than here,
+# since flipping it mid-suite would need a governance proposal.
+#
+# The earlier contract -- refuse when no reason is given -- filed nothing in exactly the case worth
+# reporting, which is why it changed.
 #
 # At cn:qdn:usd = 0.01 the threshold is 1,000,000 qdn, so the amounts here are large.  al is topped
 # up from the treasury when short, which is what makes the script re-runnable.
@@ -144,20 +151,47 @@ else
 fi
 
 echo "========================="
-echo "2. a transfer over the threshold WITHOUT --opt-in-reason is refused"
+echo "2. a transfer over the threshold WITHOUT --opt-in-reason is REPORTED, not refused"
 echo "========================="
-# --gas auto makes the CLI simulate first, and the scan runs during execution, so ErrGenericScan
-# surfaces as a non-zero exit before the tx is broadcast.
-if qadenad_alias tx qadena transfer-funds ann-eph1 0qdn "${large_amount}qdn" \
-    --transfer-note "over threshold, no opt-in" --from al --yes > /dev/null 2>&1; then
-    fail "a ${large_amount}qdn transfer was accepted with no --opt-in-reason"
-fi
-echo "rejected as expected"
+# THIS ASSERTION WAS INVERTED, and deliberately so.
+#
+# It used to require refusal, which is what the chain did when a reason was mandatory.  A missing
+# reason then meant the transfer was blocked and the regulator was told NOTHING -- the transaction
+# most worth reporting produced the least evidence.  block_transfer_without_opt_in_reason (param 26,
+# default false) changed that: the transfer proceeds and a report is filed carrying the default
+# reason, so refusing is now opt-in per chain rather than the only behaviour.
+#
+# Setting the param to true restores refusal on both this path and the bank path; that branch is
+# covered by unit tests in x/qadena/common/suspicious_policy_test.go rather than here, because
+# flipping a chain param mid-suite would need a governance proposal and would leave the rest of the
+# run measuring a different chain.
+# RE-BASELINE HERE, not at preflight.  Case 1 tops al up with 5,000,000qdn from the treasury, which
+# is itself a $50,000 bank send and now files its OWN report -- it did not before, because the
+# treasury was exempt from scanning.  Measuring from the preflight count would let that top-up
+# satisfy the assertion below, so this case would pass even if the transfer reported nothing.
+before_count=$(suspicious_count)
+[ -n "$before_count" ] || fail "could not re-read the suspicious transaction count"
+echo "baseline after the top-up: $before_count"
 
-mid_count=$(suspicious_count)
-[ "$mid_count" = "$before_count" ] \
-    || fail "a refused transfer still filed a suspicious transaction ($before_count -> $mid_count)"
-echo "and filed nothing: still $mid_count"
+qadenad_alias tx qadena transfer-funds ann-eph1 0qdn "${large_amount}qdn" \
+    --transfer-note "over threshold, no opt-in" --from al --yes > /dev/null 2>&1 \
+    || fail "a ${large_amount}qdn transfer with no --opt-in-reason should be reported and allowed, not refused"
+echo "accepted as expected"
+
+# ... and it filed a report.  Without this the case above would pass just as well if the threshold
+# had stopped being applied at all, which is the failure mode that matters most here.
+mid_count=""
+i=0
+while [ $i -lt 15 ]; do
+    mid_count=$(suspicious_count)
+    [ "$mid_count" -gt "$before_count" ] 2>/dev/null && break
+    sleep 2
+    i=$((i + 1))
+done
+[ "$mid_count" -gt "$before_count" ] 2>/dev/null \
+    || fail "an over-threshold transfer with no reason filed NO report ($before_count -> $mid_count)"
+echo "and filed a report: $before_count -> $mid_count"
+before_count="$mid_count"
 
 echo "========================="
 echo "3. the same transfer WITH --opt-in-reason succeeds"
@@ -226,25 +260,54 @@ count_after_two=$(suspicious_count)
 echo "nothing filed yet: still $count_after_two"
 
 echo "========================="
-echo "7. the transfer that crosses the aggregate is REFUSED without --opt-in-reason"
+echo "7. the transfer that crosses the aggregate is REPORTED without --opt-in-reason"
 echo "========================="
-# This is the rule-2 rejection path, previously untested.  The amount is identical to the two that
-# just succeeded, so the only thing that can refuse it is what came before -- which is exactly the
-# rolling window doing its job.
-if qadenad_alias tx qadena transfer-funds victor-eph1 0qdn "${aggregate_amount}qdn" \
-    --transfer-note "crosses aggregate, no opt-in" --from al --yes > /dev/null 2>&1; then
-    fail "the transfer crossing the aggregate threshold was accepted with no --opt-in-reason"
-fi
-echo "rejected as expected"
+# The rule-2 path, inverted for the same reason as case 2: with
+# block_transfer_without_opt_in_reason false, crossing the aggregate reports rather than refuses.
+#
+# The amount is identical to the two that just succeeded and neither of those reported anything, so
+# the only thing that can make this one report is what came before it -- which is exactly the
+# rolling window doing its job.  That is what makes this a test of the window rather than of the
+# single-transfer rule.
+qadenad_alias tx qadena transfer-funds victor-eph1 0qdn "${aggregate_amount}qdn" \
+    --transfer-note "crosses aggregate, no opt-in" --from al --yes > /dev/null 2>&1 \
+    || fail "the transfer crossing the aggregate threshold should be reported and allowed, not refused"
+echo "accepted as expected"
 
-count_after_refusal=$(suspicious_count)
-[ "$count_after_refusal" = "$count_after_two" ] \
-    || fail "a refused aggregate still filed a report ($count_after_two -> $count_after_refusal)"
-echo "and filed nothing: still $count_after_refusal"
+count_after_agg_noreason=""
+i=0
+while [ $i -lt 15 ]; do
+    count_after_agg_noreason=$(suspicious_count)
+    [ "$count_after_agg_noreason" -gt "$count_after_two" ] 2>/dev/null && break
+    sleep 2
+    i=$((i + 1))
+done
+[ "$count_after_agg_noreason" -gt "$count_after_two" ] 2>/dev/null \
+    || fail "crossing the aggregate threshold filed NO report ($count_after_two -> $count_after_agg_noreason)"
+echo "and filed an aggregate report: $count_after_two -> $count_after_agg_noreason"
 
 echo "========================="
-echo "8. the same transfer WITH --opt-in-reason files an aggregate report"
+echo "8. the aggregate rule again, this time WITH --opt-in-reason"
 echo "========================="
+# THE WINDOW HAS TO BE REBUILT FIRST, and that is the whole reason this case looks the way it does.
+#
+# It used to send a single transfer here, because case 7 REFUSED its transfer and a refusal leaves
+# the window untouched -- so the accumulated total was still sitting there, one transfer short of
+# crossing.  Case 7 now REPORTS instead, and a report drops that destination's entries, so the
+# window is empty at this point and a lone transfer cannot cross anything.  Sending one and
+# expecting a report would be testing nothing at all.
+#
+# So: two sub-threshold transfers to re-accumulate, then a third carrying the reason.
+for i in 1 2; do
+    qadenad_alias tx qadena transfer-funds victor-eph1 0qdn "${aggregate_amount}qdn" \
+        --transfer-note "rebuilding the window $i" --from al --yes > /dev/null \
+        || fail "sub-threshold transfer $i (rebuilding the window) was refused"
+done
+
+count_rebuilt=$(suspicious_count)
+[ "$count_rebuilt" = "$count_after_agg_noreason" ] \
+    || fail "rebuilding the window filed a report early ($count_after_agg_noreason -> $count_rebuilt); the reset in case 7 did not clear it"
+
 qadenad_alias tx qadena transfer-funds victor-eph1 0qdn "${aggregate_amount}qdn" \
     --opt-in-reason "regression test: aggregate total" \
     --transfer-note "crosses aggregate, opted in" --from al --yes > /dev/null \
@@ -253,11 +316,11 @@ qadenad_alias tx qadena transfer-funds victor-eph1 0qdn "${aggregate_amount}qdn"
 count_after_agg=""
 for _ in {1..15}; do
     count_after_agg=$(suspicious_count)
-    [ "$count_after_agg" != "$count_after_refusal" ] && break
+    [ "$count_after_agg" != "$count_rebuilt" ] && break
     sleep 2
 done
-echo "suspicious transactions: $count_after_refusal -> $count_after_agg"
-[ "$count_after_agg" != "$count_after_refusal" ] \
+echo "suspicious transactions: $count_rebuilt -> $count_after_agg"
+[ "$count_after_agg" != "$count_rebuilt" ] \
     || fail "three transfers totalling over the threshold filed no aggregate report"
 
 echo "========================="

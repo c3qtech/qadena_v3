@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"math/big"
 	"strconv"
+	"strings"
 
 	"github.com/cometbft/cometbft/crypto/tmhash"
 	"github.com/cosmos/gogoproto/proto"
@@ -187,7 +188,7 @@ func (s *qadenaServer) UpdateCredential(ctx context.Context, in *types.EnclaveUp
 		return nil, types.ErrCredentialUpdateRejected
 	}
 
-	c.LoggerDebug(logger, "update verdict kind="+verdict.Kind.String()+" field="+verdict.ChangedField)
+	c.LoggerDebug(logger, "update verdict kind="+verdict.Kind.String()+" fields="+strings.Join(verdict.ChangedFields, ","))
 
 	oldCredentialHash := c.CreateCredentialHash(oldPI.Details)
 
@@ -628,10 +629,19 @@ func (s *qadenaServer) validateSubUpdates(subUpdates []*types.EncryptableUpdateS
 
 	// A name that moved without its sub-credential moving would leave the transfer-time name
 	// proof (which reads the sub-credential's commitment) attesting to a name that is not in the
-	// identity hash.
-	if subType, ok := nameSubCredentialTypeByField[verdict.ChangedField]; ok && !seen[subType] {
-		c.LoggerError(logger, "missing sub-update for changed field "+verdict.ChangedField)
-		return nil, types.ErrCredentialUpdateRejected
+	// identity hash.  EVERY changed name must be covered, not just the first: with
+	// MaxChangedIdentityFields above 1 a client could otherwise move two names and supply one
+	// sub-update, leaving the other sub-credential stale.
+	for _, field := range verdict.ChangedFields {
+		subType, ok := nameSubCredentialTypeByField[field]
+		if !ok {
+			// birthdate and gender have no sub-credential
+			continue
+		}
+		if !seen[subType] {
+			c.LoggerError(logger, "missing sub-update for changed field "+field)
+			return nil, types.ErrCredentialUpdateRejected
+		}
 	}
 
 	return credentials, nil

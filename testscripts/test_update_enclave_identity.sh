@@ -34,7 +34,7 @@ jq --arg uniqueid "$uniqueid" \
 
 
 # submit json_proposal
-submit_hash=$(qadenad_alias tx gov submit-proposal "test_data/$json_proposal.gen.json" --from pioneer1 -y --output json | jq -r '.txhash')
+submit_hash=$(qadenad_alias tx gov submit-proposal "test_data/$json_proposal.gen.json" --from pioneer1 -y --output json --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment | jq -r '.txhash')
 echo $submit_hash
 
 # wait for the proposal to be submitted
@@ -45,14 +45,14 @@ proposal_id=$(qadenad_alias query tx $submit_hash --output json | jq -r '.events
 echo $proposal_id
 
 # deposit into the proposal
-deposit_hash=$(qadenad_alias tx gov deposit $proposal_id 1000qdn --from pioneer1 -y --output json | jq -r '.txhash')
+deposit_hash=$(qadenad_alias tx gov deposit $proposal_id 1000qdn --from pioneer1 -y --output json --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment | jq -r '.txhash')
 echo $deposit_hash
 
 # wait for the deposit to be submitted
 qadenad_alias query wait-tx $deposit_hash --timeout 30s
 
 # vote yes on the proposal
-vote_hash=$(qadenad_alias tx gov vote $proposal_id yes --from pioneer1 -y --output json | jq -r '.txhash')
+vote_hash=$(qadenad_alias tx gov vote $proposal_id yes --from pioneer1 -y --output json --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment | jq -r '.txhash')
 echo $vote_hash
 
 # wait for the vote to be submitted

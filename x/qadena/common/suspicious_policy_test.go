@@ -100,27 +100,114 @@ func TestPruneExpiredDoesNotMutateInput(t *testing.T) {
 	}
 }
 
+// totalFor is a test-only lookup.  Production code must NOT index aggregates like this -- it walks
+// them in the order they are returned, which is the whole point of returning a slice.
+func totalFor(totals []DestinationTotal, dst string) cosmosmath.Int {
+	for _, t := range totals {
+		if t.DestinationWalletID == dst {
+			return t.USDCoinAmount.Amount
+		}
+	}
+	return cosmosmath.NewInt(-1)
+}
+
 func TestAggregateByDestination(t *testing.T) {
-	usd, coin := AggregateByDestination([]*types.EncryptableScanTransfer{
+	usd := AggregateByDestination([]*types.EncryptableScanTransfer{
 		transferAt(1, "alice", 100),
 		transferAt(2, "bob", 30),
 		transferAt(3, "alice", 50),
 		nil,
 	})
 
-	if got := usd["alice"]; !got.Amount.Equal(cosmosmath.NewInt(150)) {
-		t.Errorf("alice usd total = %s, want 150", got.Amount)
+	if got := totalFor(usd, "alice"); !got.Equal(cosmosmath.NewInt(150)) {
+		t.Errorf("alice usd total = %s, want 150", got)
 	}
-	if got := usd["bob"]; !got.Amount.Equal(cosmosmath.NewInt(30)) {
-		t.Errorf("bob usd total = %s, want 30", got.Amount)
+	if got := totalFor(usd, "bob"); !got.Equal(cosmosmath.NewInt(30)) {
+		t.Errorf("bob usd total = %s, want 30", got)
 	}
-	if got := coin["alice"]; !got.Amount.Equal(cosmosmath.NewInt(150)) {
-		t.Errorf("alice coin total = %s, want 150", got.Amount)
+	// destinations must not be pooled -- the rule is per source/destination PAIR
+	if totalFor(usd, "alice").Equal(totalFor(usd, "bob")) {
+		t.Error("totals for different destinations collapsed together")
+	}
+}
+
+// CONSENSUS.  The order aggregates come back in decides the order reports are filed, which decides
+// the IDs AppendSuspiciousTransaction assigns at EndBlock.  If it varied between validators -- as it
+// did while this returned a map, because Go randomizes map iteration per process -- two honest nodes
+// would commit different (id -> report) mappings and the app hash would diverge.
+//
+// Enough destinations that a map-backed implementation could not pass by luck: with 8 keys the
+// chance of two independent map walks agreeing is about 1 in 40,000, and the stability loop below
+// drives it to nil.
+func TestAggregateByDestinationIsDeterministicallyOrdered(t *testing.T) {
+	transfers := []*types.EncryptableScanTransfer{
+		transferAt(1, "hotel", 10),
+		transferAt(2, "alpha", 20),
+		transferAt(3, "golf", 30),
+		transferAt(4, "charlie", 40),
+		transferAt(5, "echo", 50),
+		transferAt(6, "bravo", 60),
+		transferAt(7, "foxtrot", 70),
+		transferAt(8, "delta", 80),
 	}
 
-	// destinations must not be pooled -- the rule is per source/destination PAIR
-	if usd["alice"].Amount.Equal(usd["bob"].Amount) {
-		t.Error("totals for different destinations collapsed together")
+	want := []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"}
+
+	first := AggregateByDestination(transfers)
+	got := make([]string, 0, len(first))
+	for _, agg := range first {
+		got = append(got, agg.DestinationWalletID)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d destinations, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("aggregates are not in destination order: got %v, want %v", got, want)
+		}
+	}
+
+	// Repeat: a map-backed implementation reshuffles between calls even within one process, so this
+	// catches a regression to map iteration even if the first walk happened to come out sorted.
+	for i := 0; i < 200; i++ {
+		again := AggregateByDestination(transfers)
+		for j := range again {
+			if again[j].DestinationWalletID != want[j] {
+				t.Fatalf("order changed between calls on iteration %d: %v", i, again)
+			}
+		}
+	}
+}
+
+// A window can hold several denominations for one destination: transfer-funds accepts erc20
+// denominations, and a bank send carries sdk.Coins.  Aggregation must survive that.  It previously
+// did not -- a per-destination token total was summed with sdk.Coin.Add, which panics when the
+// denominations differ, so the second denomination to any destination brought the enclave down.
+func TestAggregateByDestinationMixedDenoms(t *testing.T) {
+	mixed := []*types.EncryptableScanTransfer{
+		{
+			UnixTime:            1,
+			DestinationWalletID: "alice",
+			USDCoinAmount:       attoUSD(100),
+			CoinAmount:          sdk.NewCoin("qdn", cosmosmath.NewInt(100)),
+		},
+		{
+			UnixTime:            2,
+			DestinationWalletID: "alice",
+			USDCoinAmount:       attoUSD(50),
+			CoinAmount:          sdk.NewCoin("erc20/abc", cosmosmath.NewInt(7)),
+		},
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("mixed denominations panicked: %v", r)
+		}
+	}()
+
+	usd := AggregateByDestination(mixed)
+	if got := totalFor(usd, "alice"); !got.Equal(cosmosmath.NewInt(150)) {
+		t.Errorf("alice usd total = %s, want 150 (USD is summable across denominations)", got)
 	}
 }
 

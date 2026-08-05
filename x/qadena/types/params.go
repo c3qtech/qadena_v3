@@ -26,7 +26,5 @@ func (p *Params) ParamSetPairs() paramtypes.ParamSetPairs {
 	return paramtypes.ParamSetPairs{}
 }
 
-// Validate validates the set of params
-func (p Params) Validate() error {
-	return nil
-}
+// Validate lives in params_validate.go.  It used to return nil from here, which meant genesis
+// validated nothing and MsgUpdateParams did not even call it.

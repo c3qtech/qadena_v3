@@ -161,8 +161,12 @@ cmd_instantiate() {
   local code_id=$(load_state "code_id")
   [[ -n "$code_id" ]] || { echo "No code_id — run upload first"; exit 1; }
   local admin=$(qadenad_alias keys show $FROM --address)
+  # No --amount.  Funding a contract at instantiate goes through bank's SendCoins and is AML-scanned
+  # like any other transfer; a contract address is neither a module account nor a credentialed
+  # wallet, so the deposit is refused and takes the whole instantiate with it.  The notarial book
+  # keeps records and never held or paid out funds, so the deposit was doing nothing to begin with.
   local resp=$(qadenad_alias --node $QADENA_NODE --gas $gas_auto --gas-adjustment $gas_adjustment --gas-prices $minimum_gas_prices tx wasm instantiate "$code_id" '{}' \
-    --admin="$admin" --from $FROM --amount="1qdn" --label "enf-notarial-book-v1" -y -o json)
+    --admin="$admin" --from $FROM --label "enf-notarial-book-v1" -y -o json)
   qadenad_alias --node $QADENA_NODE query wait-tx $(echo "$resp" | jq -r '.txhash') --timeout 30s > /dev/null
   local addr=$(qadenad_alias --node $QADENA_NODE query wasm list-contract-by-code "$code_id" -o json | jq -r '.contracts[-1]')
   save_state "contract_address" "$addr"

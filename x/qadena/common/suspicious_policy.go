@@ -11,6 +11,7 @@ package common
 
 import (
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,6 +41,36 @@ type SuspiciousPolicy struct {
 	// AllowTransferWithoutEKYC mirrors the param of the same name.  False -- the proto3 zero, and
 	// so also the value an un-upgraded chain reports -- is the ENFORCING state.
 	AllowTransferWithoutEKYC bool
+
+	// BlockTransferWithoutOptInReason decides what happens to a reportable transfer whose sender
+	// supplied no --opt-in-reason.
+	//
+	// False (the default, and the proto3 zero): REPORT IT ANYWAY, with DefaultOptInReason standing
+	// in for the missing text, and let the transfer proceed.  A report the regulator receives is
+	// worth more than a transfer that silently did not happen, and refusing produced neither.
+	//
+	// True: refuse instead, which is what this chain did before the flag existed -- every report
+	// was self-selected, so a sender unwilling to be named simply stayed under the limit and the
+	// regulator saw nothing at all.
+	//
+	// Note the direction: here false is the MORE INFORMATIVE state, not merely the laxer one, so
+	// the usual "an unset AML param must not switch a control off" reading does not apply.  An
+	// un-upgraded chain gets more reports than before, never fewer.
+	BlockTransferWithoutOptInReason bool
+}
+
+// DefaultOptInReason stands in when a reportable transfer carries no reason.  It is deliberately
+// bland and fixed: it is written into a regulator-encrypted report, so it must never echo anything
+// the sender supplied.
+const DefaultOptInReason = "No reason provided"
+
+// OptInReasonOrDefault keeps the substitution in one place, so no call site can file a report with
+// an empty reason field.
+func OptInReasonOrDefault(reason string) string {
+	if strings.TrimSpace(reason) == "" {
+		return DefaultOptInReason
+	}
+	return reason
 }
 
 // SuspiciousPolicyFromParams reads the policy, substituting compiled-in defaults for anything unset.
@@ -50,8 +81,9 @@ type SuspiciousPolicy struct {
 // window would expire every entry immediately and silently disable the aggregate rule.
 func SuspiciousPolicyFromParams(p types.Params) SuspiciousPolicy {
 	policy := SuspiciousPolicy{
-		Window:                   time.Duration(p.SuspiciousTransactionWindowSeconds) * time.Second,
-		AllowTransferWithoutEKYC: p.AllowTransferWithoutEkyc,
+		Window:                          time.Duration(p.SuspiciousTransactionWindowSeconds) * time.Second,
+		AllowTransferWithoutEKYC:        p.AllowTransferWithoutEkyc,
+		BlockTransferWithoutOptInReason: p.BlockTransferWithoutOptInReason,
 	}
 	if policy.Window <= 0 {
 		policy.Window = DefaultSuspiciousWindow
@@ -161,15 +193,52 @@ func PruneExpired(transfers []*types.EncryptableScanTransfer, cutoffUnix int64) 
 	return kept
 }
 
-// AggregateByDestination sums a window's transfers per destination wallet.
+// DestinationTotal is one destination's accumulated value within a window.
 //
-// The USD totals are what the threshold is compared against; the token totals ride along so the
-// report filed for a tripped aggregate can state the amount in the denomination actually sent.
+// A SLICE OF THESE, NOT A MAP, and that is a consensus decision rather than a stylistic one.
+//
+// This function used to return map[string]sdk.Coin and both callers ranged it directly.  Go
+// randomizes map iteration order per process, so two validators visited destinations in different
+// orders.  Harmless while at most one destination could cross the threshold in a single scan, and
+// chain-halting the moment two could:
+//
+//   - each crossing appends a report to newSuspiciousTransactions, and AppendSuspiciousTransaction
+//     assigns sequential IDs from that slice at EndBlock.  Two honest nodes then commit different
+//     (id -> report) mappings for the same block and the app hash diverges.
+//   - if building one report fails part way through the loop, iteration order also decides WHICH
+//     reports were already appended, so nodes can disagree about the report SET, not merely its
+//     numbering.
+//
+// Two destinations crossing at once is reachable in ordinary operation: the bank path takes its
+// threshold from the CURRENT recipient's jurisdiction, so a whitelisted sender that accumulated a
+// window against a loose limit has all of it re-judged against a tighter one as soon as it pays
+// into a stricter jurisdiction.
+//
+// Returning an ordered slice fixes it by construction instead of by remembering to sort at each
+// call site: there is no longer a map for a caller to range.  Sorting by wallet ID is arbitrary but
+// total and stable, which is all determinism needs.
+type DestinationTotal struct {
+	DestinationWalletID string
+	USDCoinAmount       sdk.Coin
+}
+
+// AggregateByDestination sums a window's transfers per destination wallet, in attoUSD, and returns
+// them ordered by destination wallet ID.
+//
+// USD is the only unit that can be summed here.  A window may hold entries in several
+// denominations -- transfer-funds accepts erc20 denominations, and a bank send carries sdk.Coins,
+// which can move more than one at once -- and sdk.Coin.Add PANICS when the denominations differ.
+// An earlier version of this function also returned a per-destination token total and would panic
+// the moment a wallet sent two denominations to the same destination inside one window.
+//
+// Nothing is lost by dropping it: the threshold is denominated in USD, so the decision only ever
+// used the USD figure, and a token total across mixed denominations is not a meaningful number to
+// report anyway.  A report that needs to state a token amount uses the transfer that triggered it.
+//
 // Each entry contributes the fiat value computed at the rate in force when it was scanned, which is
-// why the value is stored rather than recomputed.
-func AggregateByDestination(transfers []*types.EncryptableScanTransfer) (usd map[string]sdk.Coin, coin map[string]sdk.Coin) {
-	usd = make(map[string]sdk.Coin)
-	coin = make(map[string]sdk.Coin)
+// why that value is stored rather than recomputed.
+func AggregateByDestination(transfers []*types.EncryptableScanTransfer) []DestinationTotal {
+	usd := make(map[string]sdk.Coin)
 
 	for _, tf := range transfers {
 		if tf == nil {
@@ -181,15 +250,17 @@ func AggregateByDestination(transfers []*types.EncryptableScanTransfer) (usd map
 			running = sdk.NewCoin(types.AttoUSDFiatDenom, cosmosmath.NewInt(0))
 		}
 		usd[tf.DestinationWalletID] = running.Add(tf.USDCoinAmount)
-
-		runningCoin, seen := coin[tf.DestinationWalletID]
-		if !seen {
-			runningCoin = sdk.NewCoin(tf.CoinAmount.Denom, cosmosmath.NewInt(0))
-		}
-		coin[tf.DestinationWalletID] = runningCoin.Add(tf.CoinAmount)
 	}
 
-	return usd, coin
+	totals := make([]DestinationTotal, 0, len(usd))
+	for dst, amount := range usd {
+		totals = append(totals, DestinationTotal{DestinationWalletID: dst, USDCoinAmount: amount})
+	}
+	sort.Slice(totals, func(i, j int) bool {
+		return totals[i].DestinationWalletID < totals[j].DestinationWalletID
+	})
+
+	return totals
 }
 
 // DropDestination removes every entry for one destination, used after a tripped aggregate has been

@@ -369,10 +369,14 @@ instantiate_contract() {
     # Define init parameters for the budget hierarchy contract
     INIT="{\"count\":0}"
 
+    # No --amount.  Funding a contract at instantiate goes through bank's SendCoins and is
+    # AML-scanned like any other transfer; a contract address is neither a module account nor a
+    # credentialed wallet, so the deposit is refused and takes the whole instantiate with it.  The
+    # budget hierarchy records allocations and never custodied funds, so the deposit was doing
+    # nothing to begin with.
     RESP=$(qadenad_alias --node $QADENA_NODE --gas $gas_auto --gas-adjustment $gas_adjustment --gas-prices $minimum_gas_prices tx wasm instantiate "$CODE_ID" "$INIT" \
       --admin="$dbm_qadena_addr" \
       --from DBM \
-      --amount="1qdn" \
       --label "budget-hierarchy-v1.0.0" \
         -y \
         -o json)

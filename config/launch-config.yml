@@ -331,6 +331,25 @@ genesis:
         # enforcing state, and is also what an un-upgraded chain reports, so it fails safe.
         allow_transfer_without_ekyc: false
 
+      # Accounts allowed to move coins with a direct bank send WITHOUT being AML-scanned.  Every
+      # other account-to-account transfer, by any module, goes through the same enclave scan as
+      # transfer-funds: eKYC gate, per-jurisdiction threshold, rolling window.
+      #
+      # EVERY ENTRY HERE IS AN AML EXEMPTION.  Keep the list to accounts that genuinely cannot be
+      # scanned -- ones that are not user wallets and hold no credential to draw a jurisdiction
+      # from.  In practice that means the bootstrap treasury and nothing else at genesis.
+      #
+      # Per-deployment treasuries are deliberately NOT listed: they are created at runtime and add
+      # themselves by governance when that deployment is onboarded, so a deployment that never
+      # launches never gets an exemption.  The `reason` is stored on chain and is what a later
+      # reviewer has to judge the entry by, so write it for them.
+      # treasuryPubKID is substituted with the treasury's derived address by
+      # buildscripts/setPubKAndPubKID.sh during init, so it needs no TODO -- but review whether this
+      # account should be exempt at all before launch, and delete the entry if it should not.
+      bankSendWhitelistList:
+        - address: treasuryPubKID
+          reason: "TODO: state why this account cannot be AML-scanned"
+
       # THE MOST SECURITY-CRITICAL ENTRY IN THIS FILE.
       # These are the SGX measurements the chain will trust.  The test chain ships
       # test-unique-id/test-signer-id/test-product-id, which WORK -- so this is the item most likely

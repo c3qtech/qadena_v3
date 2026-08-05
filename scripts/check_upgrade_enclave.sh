@@ -12,7 +12,21 @@ if [[ ! -d "$QADENAHOME/enclave_config" ]] ; then
 fi
 
 # check if there are no files
-if [[ ! -f "$QADENAHOME/enclave_config/enclave_params_*.json" ]] ; then
+#
+# THIS GUARD USED TO DISABLE THE WHOLE SCRIPT.  It was written as
+#
+#     [[ ! -f "$QADENAHOME/enclave_config/enclave_params_*.json" ]] && exit 0
+#
+# but zsh does NOT perform filename generation inside [[ ]] -- quoted or not -- so -f tested a
+# literal filename containing an asterisk, which never exists.  The negation was therefore always
+# true and the script exited 0 on every single run, reporting "no upgrade" without ever comparing a
+# version.  Every enclave upgrade was silently skipped, and run.sh saw a clean exit and started the
+# new enclave with no migration.
+#
+# The (N) qualifier expands the glob properly and yields an empty array rather than an error when
+# nothing matches.
+params_files=("$QADENAHOME"/enclave_config/enclave_params_*.json(N))
+if (( ${#params_files} == 0 )) ; then
     echo "$QADENAHOME/enclave_config does not contain any enclave config files, no upgrade."
     exit 0
 fi
@@ -95,7 +109,10 @@ if [[ -n "$latest_version" ]] ; then
         if compare_versions "$main_version" "$latest_version"; then
             echo "Main enclave version ($main_version) is higher than latest enclave type version ($latest_version)"
             echo "Initiating upgrade from enclave type: $latest_type"
-            ./upgrade_enclave.sh --from-enclave-unique-id "$latest_type"
+            # absolute, not ./upgrade_enclave.sh -- run.sh invokes this script by full path from
+            # whatever directory it was started in, so the relative form only resolved when the
+            # caller happened to be sitting in scripts/
+            "$qadenascripts/upgrade_enclave.sh" --from-enclave-unique-id "$latest_type"
             RES=$?
             if [ $RES -ne 0 ] ; then
                 echo "Error: Upgrade failed"
@@ -107,7 +124,6 @@ if [[ -n "$latest_version" ]] ; then
         else
             echo "No upgrade needed. Main version ($main_version) is not higher than latest enclave type version ($latest_version)"
             exit 0
-        fi
         fi
     else
         echo "Error: Main enclave executable not found at $main_executable"

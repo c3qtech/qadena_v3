@@ -31,6 +31,7 @@ type (
 		bankKeeper           types.BankKeeper
 		accountKeeper        types.AccountKeeper
 		pricefeedKeeper      types.PricefeedKeeper
+		contractInfo         *types.ContractInfoHolder
 		cachedCreator        *c.StringHolder
 		cachedGasPriceInAQDN *c.UInt64Holder
 		headerService        header.Service
@@ -84,7 +85,8 @@ func NewKeeper(
 		bankKeeper:           bank, // need to make sure our Keeper is initialized properly or SendCoinsFromAccountToModule will not work
 		accountKeeper:        ak,
 		pricefeedKeeper:      pfk,
-		cachedCreator:        &c.StringHolder{}, //
+		contractInfo:         &types.ContractInfoHolder{}, // filled in by app wiring once wasmd exists
+		cachedCreator:        &c.StringHolder{},           //
 		cachedGasPriceInAQDN: &c.UInt64Holder{}, //
 		headerService:        headerService,
 		cometService:         cometService,
@@ -94,6 +96,24 @@ func NewKeeper(
 // GetAuthority returns the module's authority.
 func (k Keeper) GetAuthority() string {
 	return k.authority
+}
+
+// SetContractInfoSource wires in wasm state lookup, once app wiring has built wasmd's keeper.
+func (k Keeper) SetContractInfoSource(src types.ContractInfoSource) {
+	k.contractInfo.Source = src
+}
+
+// contractCodeID reports the live code ID for an address, and whether it is a wasm contract at all.
+//
+// A missing source is treated as "not a contract" rather than panicking: unit tests and simulations
+// build the keeper without app wiring, and there the question never has a wasm answer.  Every caller
+// that could be fooled by that verifies membership in the scanned-contract whitelist FIRST, so a
+// nil source cannot turn an unlisted contract into a permitted one.
+func (k Keeper) contractCodeID(ctx sdk.Context, addr sdk.AccAddress) (uint64, bool) {
+	if k.contractInfo == nil || k.contractInfo.Source == nil {
+		return 0, false
+	}
+	return k.contractInfo.Source.ContractCodeID(ctx, addr)
 }
 
 // Logger returns a module-specific logger.

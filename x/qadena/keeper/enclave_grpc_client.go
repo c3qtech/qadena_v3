@@ -70,43 +70,130 @@ func (k Keeper) ValidateTransferDoublePrime(sdkctx sdk.Context, msg *types.MsgRe
 	return k.EnclaveValidateTransferDoublePrime(sdkctx, msg)
 }
 
-// this is called during "transfer" funds
-func (k Keeper) ScanTransaction(sdkctx sdk.Context, msg *types.MsgTransferFunds) (bool, error) {
+// usdRateFor returns the qdn->usd rate for one denomination, and FAILS CLOSED.
+//
+// Shared by both scan paths.  The rate decides a transfer's USD value, and that value is what the
+// suspicious-transaction threshold is compared against.  Earlier code substituted zero when no
+// price was available, which made every transfer evaluate as 0 USD -- so the threshold never fired
+// and arbitrarily large transfers passed unscanned, with nothing logged to say the control had been
+// switched off.  Refusing is correct: a missing price is temporary and self-correcting, and a
+// transfer that cannot be measured must not settle.
+func (k Keeper) usdRateFor(sdkctx sdk.Context, denom string) (math.LegacyDec, error) {
 	marketPrefix := "cn"
-	token := msg.TokenDenom
+	token := denom
 	if token == types.AQadenaTokenDenom {
 		token = types.QadenaTokenDenom
 	} else if strings.HasPrefix(token, "erc20/") {
 		marketPrefix = "cw"
-		meta, _ := k.bankKeeper.GetDenomMetaData(sdkctx, msg.TokenDenom)
+		meta, _ := k.bankKeeper.GetDenomMetaData(sdkctx, denom)
 		token = meta.Symbol
 	}
 
 	marketID := marketPrefix + ":" + strings.ToLower(token) + ":usd"
 	cp, err := k.pricefeedKeeper.GetCurrentPrice(sdkctx, marketID)
-
-	// FAIL CLOSED.  This rate is what the enclave multiplies the transfer by to get its USD value
-	// (usdCoinAmount = amount * rate), and that USD value is what the suspicious-transaction
-	// threshold is compared against.  The previous code substituted zero when no price was
-	// available, which made every transfer evaluate as 0 USD -- so the threshold never fired and
-	// arbitrarily large transfers passed unscanned, with nothing logged to say the control had been
-	// disabled.  Refusing the transfer is the correct response: a missing price is temporary, and a
-	// transfer that cannot be scanned must not be settled.
 	if err != nil {
-		c.ContextError(sdkctx, "ScanTransaction: no price for "+marketID+", refusing to scan: "+err.Error())
-		return false, errorsmod.Wrapf(types.ErrNoPriceForDenom,
+		c.ContextError(sdkctx, "no price for "+marketID+", refusing to scan: "+err.Error())
+		return math.LegacyDec{}, errorsmod.Wrapf(types.ErrNoPriceForDenom,
 			"cannot scan transfer: market %s: %s", marketID, err.Error())
 	}
 	if cp.Price.IsNil() || !cp.Price.IsPositive() {
-		c.ContextError(sdkctx, "ScanTransaction: non-positive price for "+marketID+", refusing to scan")
-		return false, errorsmod.Wrapf(types.ErrNoPriceForDenom,
+		c.ContextError(sdkctx, "non-positive price for "+marketID+", refusing to scan")
+		return math.LegacyDec{}, errorsmod.Wrapf(types.ErrNoPriceForDenom,
 			"cannot scan transfer: market %s reported a non-positive price", marketID)
 	}
 
-	basePrice := cp.Price
-	c.LoggerDebug(k.logger, "ScanTransaction: marketID: "+marketID+" cp: "+cp.String())
+	c.LoggerDebug(k.logger, "marketID: "+marketID+" cp: "+cp.String())
+	return cp.Price, nil
+}
+
+func (k Keeper) ScanTransaction(sdkctx sdk.Context, msg *types.MsgTransferFunds) (bool, error) {
+	basePrice, err := k.usdRateFor(sdkctx, msg.TokenDenom)
+	if err != nil {
+		return false, err
+	}
 
 	return k.EnclaveScanTransaction(sdkctx, msg, basePrice)
+}
+
+// ScanBankSend puts a direct bank send through the same AML scan as a transfer.
+//
+// Unlike the transfer path, the amount is public, so the keeper prices it here rather than handing
+// the enclave a rate to multiply -- which is also what lets a multi-denomination send be valued
+// correctly, each denomination against its own market and failing closed on any it cannot price.
+func (k Keeper) ScanBankSend(sdkctx sdk.Context, fromAddr, toAddr sdk.AccAddress, amt sdk.Coins) error {
+	// Skipped for the same reason EnclaveScanTransaction skips it: the enclave's window write is
+	// committed by the PostHandler, which does not run in CheckTx, so scanning here would measure
+	// transfers that never happen and reject on a window that was never persisted.
+	if sdkctx.IsCheckTx() {
+		c.ContextDebug(sdkctx, "ScanBankSend not called in checktx")
+		return nil
+	}
+
+	params := k.GetParams(sdkctx)
+
+	defaultThreshold, countryThresholds, err := k.SuspiciousThresholdTable(sdkctx, params)
+	if err != nil {
+		c.ContextError(sdkctx, "ScanBankSend: cannot resolve thresholds, refusing to scan: "+err.Error())
+		return err
+	}
+
+	coins := make([]*types.ScanBankSendCoin, 0, len(amt))
+
+	for _, coin := range amt {
+		rate, err := k.usdRateFor(sdkctx, coin.Denom)
+		if err != nil {
+			return err
+		}
+
+		// the smallest unit of the token times (usd per token) lands in attoUSD, matching how the
+		// enclave values a transfer
+		usd := math.LegacyNewDecFromInt(coin.Amount).Mul(rate).RoundInt()
+
+		coins = append(coins, &types.ScanBankSendCoin{
+			Denom:            coin.Denom,
+			Amount:           coin.Amount.String(),
+			UsdAmountAttoUSD: usd.String(),
+		})
+	}
+
+	// Resolve each side against the scanned-contract whitelist BEFORE consulting the enclave.  The
+	// enclave holds no wasm state and cannot tell a contract from a plain account, so this is the
+	// only place the pinned code ID can be re-checked -- and it has to be re-checked on every send,
+	// not just at proposal time, or a migration would silently inherit the approval.
+	srcContract, err := k.resolveScannedParty(sdkctx, fromAddr)
+	if err != nil {
+		return err
+	}
+	dstContract, err := k.resolveScannedParty(sdkctx, toAddr)
+	if err != nil {
+		return err
+	}
+
+	grpcctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	defer cancel()
+
+	r, err := EnclaveGRPCClient.ScanBankSend(grpcctx, &types.MsgScanBankSend{
+		Timestamp:               currentBlockHeader.Time,
+		Height:                  currentBlockHeader.Height,
+		SrcWalletID:             fromAddr.String(),
+		DstWalletID:             toAddr.String(),
+		Coins:                   coins,
+		Params:                  params,
+		CountryThresholds:       countryThresholds,
+		DefaultThresholdAttoUSD: defaultThreshold,
+		JarID:                   "",
+		SrcContract:             srcContract,
+		DstContract:             dstContract,
+	})
+	if err != nil {
+		c.ContextError(sdkctx, "error returned by ScanBankSend on enclave "+err.Error())
+		return err
+	}
+	if !r.Status {
+		return types.ErrGenericScan
+	}
+
+	return nil
 }
 
 /*

@@ -364,6 +364,12 @@ func (app *App) registerNonDependencyInjectModules(appOpts servertypes.AppOption
 		wasmOpts...,
 	)
 
+	// The scanned-contract whitelist pins each entry to a code ID and re-verifies it on every bank
+	// send, so x/qadena needs to know what code an address is running.  Wired here rather than at
+	// construction because depinject builds the qadena keeper long before wasmd's exists; the
+	// keeper holds the source behind a pointer so every copy of it sees this.
+	app.QadenaKeeper.SetContractInfoSource(wasmContractInfoSource{wasm: &app.WasmKeeper})
+
 	// Create fee enabled wasm ibc Stack
 	//	wasmStackIBCHandler := wasm.NewIBCHandler(app.WasmKeeper, app.IBCKeeper.ChannelKeeper, app.IBCKeeper.ChannelKeeper)
 

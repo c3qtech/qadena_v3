@@ -48,6 +48,7 @@ import (
 	_ "github.com/cosmos/cosmos-sdk/x/authz/module" // import for side-effects
 	_ "github.com/cosmos/cosmos-sdk/x/bank"         // import for side-effects
 	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	_ "github.com/cosmos/cosmos-sdk/x/consensus" // import for side-effects
 	consensuskeeper "github.com/cosmos/cosmos-sdk/x/consensus/keeper"
 	_ "github.com/cosmos/cosmos-sdk/x/distribution" // import for side-effects
@@ -525,6 +526,12 @@ func New(
 		blockedAddrs[addr] = true
 	}
 
+	// Every account-to-account movement of value goes through the AML scan, whichever module moves
+	// it.  Without this the scan only covers MsgTransferFunds and `tx bank send` is an unmeasured
+	// second route around it -- including around the eKYC gate, so a wallet refused a transfer for
+	// having no residency could send the same funds anyway.
+	app.BankKeeper.AppendSendRestriction(app.qadenaBankSendRestriction())
+
 	/*
 		newBlockedAddrs := app.BankKeeper.GetBlockedAddresses()
 		for addr := range newBlockedAddrs {
@@ -707,6 +714,68 @@ func GetMaccPerms() map[string][]string {
 		dup[perms.Account] = perms.Permissions
 	}
 	return dup
+}
+
+// qadenaBankSendRestriction refuses any account-to-account transfer that has not been AML-scanned.
+//
+// Registered on the bank keeper, so it sits under SendCoins and per-output under InputOutputCoins.
+// That means it covers MsgSend, MsgMultiSend, authz-wrapped sends and EVM value transfers alike,
+// rather than only the message a user typed.
+//
+// Only two cases, and only one of them skips the scan:
+//
+//  1. a MODULE account on either side.  Fee collection, staking, governance deposits and the qadena
+//     module's own transfer escrow all move coins this way, and none of them are one person paying
+//     another.  Checked against a precomputed set, so the common case costs no store read.
+//  2. everything else is SCANNED, and refused if the scan refuses.
+//
+// There used to be a third case between them: a whitelist of senders exempt from scanning, holding
+// the funding treasuries.  It existed only because a report could not name a party without a
+// personal-info credential, so an account that had none could not be scanned at all.  Reports now
+// carry a party kind and a contract descriptor, so such an account CAN be scanned and reported --
+// and the exemption, having lost its justification, is gone.  The treasuries moved to the
+// scanned-contract whitelist, which permits them to take part without a credential while leaving
+// every send they make measured and reportable.
+//
+// A send that cannot be scanned is refused rather than waved through: permitting it would leave
+// open exactly the gap this exists to close.
+func (app *App) qadenaBankSendRestriction() banktypes.SendRestrictionFn {
+	moduleAddrs := make(map[string]bool)
+	for acc := range GetMaccPerms() {
+		moduleAddrs[authtypes.NewModuleAddress(acc).String()] = true
+	}
+
+	return func(ctx context.Context, fromAddr, toAddr sdk.AccAddress, amt sdk.Coins) (sdk.AccAddress, error) {
+		if moduleAddrs[fromAddr.String()] || moduleAddrs[toAddr.String()] {
+			return toAddr, nil
+		}
+
+		sdkctx := sdk.UnwrapSDKContext(ctx)
+
+		if err := app.QadenaKeeper.ScanBankSend(sdkctx, fromAddr, toAddr, amt); err != nil {
+			return toAddr, err
+		}
+
+		return toAddr, nil
+	}
+}
+
+// wasmContractInfoSource lets x/qadena ask about wasm state without importing wasmd.
+//
+// The scanned-contract whitelist pins each entry to a code ID, and that pin has to be re-verified on
+// every send -- otherwise migrating a whitelisted contract would carry its approval over to code
+// governance never reviewed.  Answering "what code is this address running" needs wasmd's keeper,
+// which lives here, so the dependency points this way rather than into the module.
+type wasmContractInfoSource struct {
+	wasm *wasmkeeper.Keeper
+}
+
+func (s wasmContractInfoSource) ContractCodeID(ctx sdk.Context, addr sdk.AccAddress) (uint64, bool) {
+	info := s.wasm.GetContractInfo(ctx, addr)
+	if info == nil {
+		return 0, false
+	}
+	return info.CodeID, true
 }
 
 // BlockedAddresses returns all the app's blocked account addresses.
