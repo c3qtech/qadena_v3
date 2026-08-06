@@ -90,7 +90,11 @@ echo "========================="
 flow_out=$("$cli" full 2>&1) || { echo "$flow_out" | tail -20; fail "cadena_cli.sh full did not run to completion"; }
 
 if echo "$flow_out" | grep -q "UNCONFIRMED"; then
-    echo "$flow_out" | grep -A4 "UNCONFIRMED" | head -20
+    # THE WHOLE TAIL, not just the marker's context.  The explanation is what the CLI wrote to
+    # STDERR *before* wait_for_tx ran -- grepping around UNCONFIRMED discards exactly that, which is
+    # how a failure that had already been captured still could not be read.
+    echo "--- last 40 lines of the flow output (stderr included) ---"
+    echo "$flow_out" | tail -40
     fail "a transaction in the budget hierarchy flow was never confirmed; the records queried below would be stale or absent"
 fi
 echo "flow completed, all transactions confirmed"
@@ -180,7 +184,8 @@ disb_out=$("$cli" disbursement-only 2>&1) || {
 # the step that stalled.  Asserting the record without it lets an unconfirmed write pass, because a
 # record left by an earlier attempt looks identical to one written just now.
 if echo "$disb_out" | grep -q "UNCONFIRMED"; then
-    echo "$disb_out" | grep -A4 "UNCONFIRMED" | head -20
+    echo "--- full disbursement-only output (stderr included) ---"
+    echo "$disb_out"
     fail "the disbursement transaction was never confirmed; the record asserted below cannot be attributed to this run"
 fi
 
