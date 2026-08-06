@@ -157,7 +157,32 @@ run_test() {
     fi
 }
 
+# Hand the build tree back to the user who invoked sudo.
+#
+# Under sudo every suite writes as root, so a run leaves root-owned files across the tree -- and,
+# because the enclave-upgrade suite makes a temporary commit, inside .git itself.  The next plain
+# `git pull` then fails with
+#
+#     fatal: failed to write object / unpack-objects failed
+#
+# which reads like disk or corruption and is neither.  run_init already chowns before building, so
+# --from-genesis recovered on its own; everything else -- a git pull, an editor, a non-sudo suite --
+# was left broken until someone worked out why.
+#
+# Called from summarize(), which every exit path goes through.
+restore_tree_ownership() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    [ -n "$SUDO_USER" ] || return 0
+    [ -d "$qadenabuild/.git" ] || return 0
+    if chown -R "$SUDO_USER" "$qadenabuild" 2>/dev/null; then
+        echo "build tree returned to $SUDO_USER"
+    else
+        echo "WARNING: could not return $qadenabuild to $SUDO_USER; 'git pull' may fail until you chown it"
+    fi
+}
+
 summarize() {
+    restore_tree_ownership
     echo ""
     echo "======================================================================"
     echo "REGRESSION SUMMARY"
