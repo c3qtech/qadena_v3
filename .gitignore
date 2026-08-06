@@ -31,6 +31,17 @@ cmd/qadenad_enclave/reproducible_build_unique_id.txt
 cmd/qadenad_enclave/qadenad_enclave
 cmd/qadenad_enclave/qadenad_enclave.unsigned
 cmd/qadenad_enclave/enclave_params.json
+# The signer enclave's generated files, which were missed when it was added -- the qadenad_enclave
+# equivalents above have been ignored all along.  Not cosmetic: an SGX build WRITES these, so
+# leaving them tracked made the working tree permanently dirty on any SGX machine, and
+# build_enclave.sh --build-sgx reacts to a dirty tree by running `git checkout -f && git clean -fd`.
+# Every reproducible build therefore discarded whatever uncommitted work happened to be present,
+# announcing it only as "WARNING!!! Untracked or modified files detected, removing them."
+/docker_build_signer_enclave/output/
+cmd/signer_enclave/reproducible_build_signer_id.txt
+cmd/signer_enclave/reproducible_build_unique_id.txt
+cmd/signer_enclave/signer_enclave
+cmd/signer_enclave/signer_enclave.unsigned
 cmd/qadenad/qadenad
 *~
 testkey
