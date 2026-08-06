@@ -181,6 +181,41 @@ summarize() {
 # suite bodies that are not standalone scripts
 # ---------------------------------------------------------------------------------------------
 
+# init.sh REFUSES to run as root; the SGX runtime scripts REQUIRE it.  Both are deliberate, and
+# together they make a --from-genesis run on real SGX impossible in a single identity: as root,
+# init.sh aborts ("init.sh must not be run as root"); as the user, run.sh aborts ("must be run as
+# root (real SGX enclave)").  Nobody had hit this because nobody had run --from-genesis on SGX
+# hardware with signed binaries before.
+#
+# So the runner drops privileges for exactly this one step.  That is safe because init.sh only builds
+# and installs -- it starts no node and invokes nothing that wants root.
+#
+# THE NESTED sudo NEEDS ITS ENVIRONMENT CORRECTED, and getting this wrong is silent rather than
+# loud: inside `sudo -u alvillarica`, SUDO_USER is set to *root*, so setup_env.sh would resolve
+# QADENAHOME to /root/qadena and init.sh would build a perfectly good genesis into a directory
+# nothing else ever looks at.  Unsetting SUDO_USER and supplying HOME sends setup_env.sh down its
+# plain `cd ~` branch instead, and the result is asserted against what this process computed.
+run_init() {
+    if [ "$(id -u)" -ne 0 ] || [ -z "$SUDO_USER" ]; then
+        "$qadenabuildscripts/init.sh" "$@"
+        return $?
+    fi
+
+    local user_home
+    user_home=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)
+    [ -n "$user_home" ] || { echo "could not resolve the home directory of $SUDO_USER"; return 1; }
+
+    # If these disagree, everything after init.sh would look at a different chain than the one just
+    # built -- the failure would surface much later as "chain is not reachable".
+    if [ "$user_home/qadena" != "$QADENAHOME" ]; then
+        echo "refusing to run init.sh as $SUDO_USER: it would use $user_home/qadena but this run expects $QADENAHOME"
+        return 1
+    fi
+
+    echo "running init.sh as $SUDO_USER (it refuses to run as root), home $user_home"
+    sudo -u "$SUDO_USER" env -u SUDO_USER "HOME=$user_home" "$qadenabuildscripts/init.sh" "$@"
+}
+
 # init.sh only proves ignite accepted the file; these are the properties we actually care about
 check_genesis() {
     local g="$QADENAHOME/config/genesis.json"
@@ -317,10 +352,24 @@ if [ "$from_genesis" = "true" ]; then
     # would be refused by the very chain this run just created, for an identity mismatch that looks
     # nothing like a build problem.  One flag, so the two cannot drift apart.
     if [ "$with_sgx" = "true" ]; then
-        run_test "genesis-init" "$qadenabuildscripts/init.sh" --advertise-ip-address "$advertise_ip" --build-sgx
+        run_test "genesis-init" run_init --advertise-ip-address "$advertise_ip" --build-sgx
     else
-        run_test "genesis-init" "$qadenabuildscripts/init.sh" --advertise-ip-address "$advertise_ip"
+        run_test "genesis-init" run_init --advertise-ip-address "$advertise_ip"
     fi
+
+    # STOP HERE IF IT FAILED, regardless of --stop-on-fail.  init.sh deletes $QADENAHOME as its first
+    # act, so a failure BEFORE that point leaves the previous chain fully intact -- and everything
+    # downstream then runs against it and passes.  That is worse than a failure: genesis-check
+    # validates the OLD genesis and reports PASS, and the summary ends up showing one red line above
+    # a wall of green that describes a chain this run never built.
+    if [ "${results[-1]}" = "FAIL" ]; then
+        echo ""
+        echo "genesis-init FAILED and \$QADENAHOME still holds the PREVIOUS chain."
+        echo "Everything after this would test that older chain and pass, so the run stops here."
+        summarize
+        exit 1
+    fi
+
     run_test "genesis-check" check_genesis
     run_test "chain-start" start_chain
 fi
