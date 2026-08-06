@@ -54,12 +54,40 @@ addr_of() {
 # so this reading would not move.  Every case below starts from a drained eph wallet, which is why
 # the receive-funds calls between cases are load-bearing -- a test that leaves one undrained breaks
 # the next run rather than its own.
+# SUMS every encrypted balance the wallet shows, rather than reading the first one.
+#
+# An ephemeral wallet prints one "Encrypted balance" line PER QUEUED TRANSFER, in receive order:
+#
+#     *Queued* (in receive order, 3 claimable)
+#     Encrypted balance 100.000000000000000000qdn      <- this run's transfer
+#     Encrypted balance 1200000.000000000000000000qdn  <- left by test_suspicious
+#     Encrypted balance 1200000.000000000000000000qdn  <- left by test_suspicious
+#
+# This used to end in `head -1`, so it reported ONE arbitrary queue entry as though it were the
+# wallet's balance.  That is right only while the queue holds a single entry, which is true on a
+# fresh chain where transfers runs before suspicious -- and false on any re-run, where suspicious has
+# already left entries behind.  The suite then reported
+#
+#     ann-eph1 gained 0E-18, expected exactly 100
+#
+# on a transfer that had worked perfectly: the 100 was sitting first in the queue, while `head -1`
+# returned an unchanged 1200000 both before and after.  It reads as money leaving the sender and
+# never arriving, which is the most alarming shape a failure can take, and it was purely an artefact
+# of how the balance was read.
+#
+# A primary wallet prints exactly one such line, so summing is correct for both kinds.
 enc_balance() {
     local addr
     addr=$(addr_of "$1") || { echo ""; return; }
     qadenad_alias query qadena show-wallet "$addr" --decrypt-as "$addr" 2>/dev/null \
         | perl -pe 's/\e\[[0-9;]*m//g' \
-        | sed -n 's/^Encrypted balance \([0-9.]*\)qdn.*/\1/p' | head -1
+        | sed -n 's/^Encrypted balance \([0-9.]*\)qdn.*/\1/p' \
+        | python3 -c "
+import sys
+from decimal import Decimal
+total = sum((Decimal(l.strip()) for l in sys.stdin if l.strip()), Decimal(0))
+print(total)
+"
 }
 
 wallet_type() {
