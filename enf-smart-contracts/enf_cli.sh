@@ -167,7 +167,7 @@ cmd_instantiate() {
   # keeps records and never held or paid out funds, so the deposit was doing nothing to begin with.
   local resp=$(qadenad_alias --node $QADENA_NODE --gas $gas_auto --gas-adjustment $gas_adjustment --gas-prices $minimum_gas_prices tx wasm instantiate "$code_id" '{}' \
     --admin="$admin" --from $FROM --label "enf-notarial-book-v1" -y -o json)
-  qadenad_alias --node $QADENA_NODE query wait-tx $(echo "$resp" | jq -r '.txhash') --timeout 30s > /dev/null
+  wait_for_tx "$resp"
   local addr=$(qadenad_alias --node $QADENA_NODE query wasm list-contract-by-code "$code_id" -o json | jq -r '.contracts[-1]')
   save_state "contract_address" "$addr"
   echo "Contract address: $addr"

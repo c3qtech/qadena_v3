@@ -151,7 +151,15 @@ echo "6. a disbursement is created and recorded against the DV"
 echo "========================="
 # Regression guard: create_disbursement used to fail on the missing disbursement_date, silently,
 # because `full` swallows the error.  Asserting the RECORD rather than the exit code.
-"$cli" disbursement-only > /dev/null 2>&1 || fail "disbursement-only failed"
+#
+# OUTPUT IS KEPT, not discarded.  `> /dev/null 2>&1` here threw away the only description of what
+# went wrong, and when the disbursement stopped being broadcast the suite reported nothing at all --
+# it simply stopped, because the CLI then waited on an empty transaction hash forever.  Diagnosing
+# it needed the chain, the process table and a manual replay.  The text was there all along.
+disb_out=$("$cli" disbursement-only 2>&1) || {
+    echo "$disb_out" | tail -20
+    fail "disbursement-only failed"
+}
 
 disb=$(cadena_json query-disbursements-by-dv)
 total=$(echo "$disb" | jq -r '.data.total // 0')

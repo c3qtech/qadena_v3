@@ -130,6 +130,44 @@ needs_root_if_real_enclave() {
   fi
 }
 
+# wait_for_tx <broadcast-json> [label] -- check the broadcast BEFORE waiting for the transaction.
+#
+# THIS EXISTS BECAUSE THE OBVIOUS FORM HANGS FOREVER.  Every call site used to be
+#
+#     qadenad_alias ... query wait-tx $(echo "$RESP" | jq -r '.txhash') --timeout 30s
+#
+# and when the transaction was not broadcast at all -- a failed `--gas auto` simulation, most often
+# -- $RESP is not JSON, `.txhash` is EMPTY, and that becomes `query wait-tx --timeout 30s` with no
+# hash argument, which blocks indefinitely.  --timeout does not bound it.  A disbursement failure
+# sat on that line for over seven minutes and stalled an entire regression run, and the error
+# explaining it had already been printed and discarded.
+#
+# A hash is also returned for transactions REJECTED at CheckTx, which are never included in a block
+# and so can never be found by waiting.  The code has to be read before the wait, not after it.
+wait_for_tx() {
+    local resp="$1" label="${2:-transaction}"
+
+    local hash code
+    hash=$(echo "$resp" | jq -r '.txhash // empty' 2>/dev/null)
+    code=$(echo "$resp" | jq -r '.code // empty' 2>/dev/null)
+
+    if [[ -z "$hash" ]]; then
+        echo "wait_for_tx: $label was never broadcast -- no txhash in the response."
+        echo "wait_for_tx: this is usually a failed gas simulation.  Response was:"
+        echo "$resp" | head -5
+        return 1
+    fi
+
+    if [[ -n "$code" && "$code" != "0" ]]; then
+        echo "wait_for_tx: $label was REJECTED at CheckTx with code $code"
+        echo "wait_for_tx: $(echo "$resp" | jq -r '.raw_log // empty' 2>/dev/null)"
+        echo "wait_for_tx: it will never be included in a block, so it is not waited for."
+        return 1
+    fi
+
+    qadenad_alias --node $QADENA_NODE query wait-tx "$hash" --timeout 30s
+}
+
 is_zero() {
   val="$1"
 

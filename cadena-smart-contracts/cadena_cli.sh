@@ -382,7 +382,7 @@ instantiate_contract() {
         -o json)
 
     # wait for result
-    qadenad_alias --node $QADENA_NODE query wait-tx $(echo "$RESP"| jq -r '.txhash') --timeout 30s
+    wait_for_tx "$RESP"
 
     CONTRACT=$(qadenad_alias --node $QADENA_NODE query wasm list-contract-by-code "$CODE_ID" -o json )
     echo "-------------------------"
@@ -465,7 +465,7 @@ create_gaa() {
         -y \
         -o json)
 
-    qadenad_alias --node $QADENA_NODE query wait-tx $(echo "$RESP"| jq -r '.txhash') --timeout 30s
+    wait_for_tx "$RESP"
 
     # Query the created GAA
     echo "Querying GAA..."
@@ -642,7 +642,7 @@ create_pap() {
         -y \
         -o json)
 
-    qadenad_alias --node $QADENA_NODE query wait-tx $(echo "$RESP"| jq -r '.txhash') --timeout 30s
+    wait_for_tx "$RESP"
 
     # Query PAPs by GAA
     echo "Querying PAPs by GAA..."
@@ -691,7 +691,7 @@ create_paps() {
             -y \
             -o json)
 
-        qadenad_alias --node $QADENA_NODE query wait-tx $(echo "$RESP"| jq -r '.txhash') --timeout 30s
+        wait_for_tx "$RESP"
         
         echo "✓ PAP $i created: $PAP_ID"
         sleep 1
@@ -735,7 +735,7 @@ create_saro() {
         -y \
         -o json)
 
-    qadenad_alias --node $QADENA_NODE query wait-tx $(echo "$RESP"| jq -r '.txhash') --timeout 30s
+    wait_for_tx "$RESP"
 
     # Query SAROs by PAP
     echo "Querying SAROs by PAP..."
@@ -771,7 +771,7 @@ create_obligation() {
         -y \
         -o json)
 
-    qadenad_alias --node $QADENA_NODE query wait-tx $(echo "$RESP"| jq -r '.txhash') --timeout 30s
+    wait_for_tx "$RESP"
 
     # Query Obligations by SARO
     echo "Querying Obligations by SARO..."
@@ -807,7 +807,7 @@ create_nca() {
         -y \
         -o json)
 
-    qadenad_alias --node $QADENA_NODE query wait-tx $(echo "$RESP"| jq -r '.txhash') --timeout 30s
+    wait_for_tx "$RESP"
 
     # Query NCAs by SARO
     echo "Querying NCAs by SARO..."
@@ -849,7 +849,7 @@ create_disbursement_voucher() {
         -y \
         -o json)
 
-    qadenad_alias --node $QADENA_NODE query wait-tx $(echo "$RESP"| jq -r '.txhash') --timeout 30s
+    wait_for_tx "$RESP"
 
     # Query DVs by Obligation
     echo "Querying DVs by Obligation..."
@@ -1164,7 +1164,7 @@ create_disbursement() {
         -y \
         -o json)
 
-    qadenad_alias --node $QADENA_NODE query wait-tx $(echo "$RESP"| jq -r '.txhash') --timeout 30s
+    wait_for_tx "$RESP"
     
     echo "Disbursement created successfully!"
     echo "Transferred amount: $AMOUNT"
@@ -1313,7 +1313,7 @@ create_philgeps_contract() {
         -y \
         -o json)
 
-    qadenad_alias --node $QADENA_NODE query wait-tx $(echo "$RESP"| jq -r '.txhash') --timeout 30s
+    wait_for_tx "$RESP"
     
     save_state "philgeps_contract_id" "$CONTRACT_ID"
     echo "PhilGEPS contract created successfully!"
@@ -1695,7 +1695,7 @@ create_dpwh_contract() {
         -y \
         -o json)
 
-    qadenad_alias --node $QADENA_NODE query wait-tx $(echo "$RESP"| jq -r '.txhash') --timeout 30s
+    wait_for_tx "$RESP"
     
     save_state "dpwh_contract_id" "$DPWH_CONTRACT_ID"
     echo "DPWH contract created successfully!"
