@@ -10,12 +10,15 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/edgelesssys/ego/attestation"
+	"github.com/edgelesssys/ego/attestation/tcbstatus"
 	"github.com/edgelesssys/ego/eclient"
 )
 
@@ -27,6 +30,7 @@ func main() {
 	wantUnique := flag.String("unique-id", "", "required MRENCLAVE (hex)")
 	wantSigner := flag.String("signer-id", "", "required MRSIGNER (hex)")
 	requireProd := flag.Bool("require-production", false, "fail if the enclave was signed in debug mode")
+	requireUpToDate := flag.Bool("require-tcb-uptodate", false, "fail unless the attested platform's TCB is UpToDate")
 	flag.Parse()
 
 	if *newNonce {
@@ -66,6 +70,12 @@ func main() {
 
 	fmt.Println("1. verify the quote (independently, on this machine)")
 	report, err := eclient.VerifyRemoteReport(raw)
+	// ErrTCBLevelInvalid is NOT a verification failure: the quote is genuine and the attested
+	// platform's TCB is simply not UpToDate.  Treating it as fatal would exit before printing the
+	// identity and the advisories -- discarding exactly the evidence needed to judge it.
+	if errors.Is(err, attestation.ErrTCBLevelInvalid) {
+		err = nil
+	}
 	if err != nil {
 		fmt.Printf("  FAIL  verification failed: %v\n\n", err)
 		fmt.Println("        This is quote VERIFICATION, so the problem is on THIS machine --")
@@ -99,6 +109,24 @@ func main() {
 	fmt.Printf("        product id: %d   security version: %d   debug: %v\n",
 		productID(report.ProductID), report.SecurityVersion, report.Debug)
 	fmt.Printf("        TCB status: %v\n", report.TCBStatus)
+	// The advisories name WHY the status is not UpToDate -- e.g. INTEL-SA-00334 (LVI).  Without them
+	// "SWHardeningNeeded" is a verdict with no evidence, and the operator cannot tell whether it
+	// matters for their threat model or which mitigation is missing.
+	if len(report.TCBAdvisories) > 0 {
+		fmt.Printf("        Intel advisories: %s\n", strings.Join(report.TCBAdvisories, ", "))
+	} else if report.TCBAdvisoriesErr != nil {
+		fmt.Printf("        (advisory list unavailable: %v)\n", report.TCBAdvisoriesErr)
+	}
+	// THE TCB STATUS DESCRIBES THE MACHINE THAT PRODUCED THE QUOTE, not this one.  Worth stating,
+	// because the natural reading of a verifier printing a warning is that the warning is about the
+	// verifier.
+	if report.TCBStatus != tcbstatus.UpToDate {
+		if *requireUpToDate {
+			fail("TCB status is %v, not UpToDate -- this describes the ATTESTED machine, not this one", report.TCBStatus)
+		} else {
+			fmt.Printf("  warn  TCB is %v on the ATTESTED machine (pass --require-tcb-uptodate to fail on this)\n", report.TCBStatus)
+		}
+	}
 
 	if *wantUnique != "" {
 		if strings.EqualFold(hex.EncodeToString(report.UniqueID), *wantUnique) {

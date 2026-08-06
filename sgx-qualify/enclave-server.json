@@ -1,6 +1,6 @@
 {
     "exe": "net/server/server",
-    "key": "private.pem",
+    "key": "signing-key.pem",
     "debug": false,
     "heapSize": 256,
     "productID": 1,

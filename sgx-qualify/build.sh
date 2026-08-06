@@ -41,11 +41,18 @@ if [ -n "$ego_have" ] && [ "$ego_have" != "$EGO_VERSION" ]; then
 fi
 echo
 
-# One signing key for both enclaves, so they share a MRSIGNER.  Generated on first build and kept:
-# regenerating it changes MRSIGNER and invalidates any --signer-id you have written down.
-if [ ! -f private.pem ]; then
-    echo "generating a signing key (private.pem) -- keep it if you pin --signer-id"
-    openssl genrsa -out private.pem -3 3072 2>/dev/null
+# A COMMITTED signing key, so MRSIGNER is the same on every machine.
+#
+# Generating one per machine -- which this used to do -- makes MRSIGNER differ everywhere, so a
+# fleet cannot be checked against one --signer-id and two machines building identical source produce
+# unrelated identities.  For a qualification tool that is the wrong trade.
+#
+# THIS KEY IS NOT A SECRET AND MUST NEVER SIGN A PRODUCTION ENCLAVE.  It is in the repository so the
+# measurements are predictable; anyone can sign an enclave with it.  Qadena's real enclave key is a
+# separate, deliberately committed key for the same reason (cmd/qadenad_enclave/private.pem).
+if [ ! -f signing-key.pem ]; then
+    echo "signing-key.pem is missing -- it is committed to the repo; restore it or measurements will not match other machines"
+    exit 1
 fi
 
 # DEPENDENCIES ARE VENDORED, so this builds with no network at all.  That is not tidiness: the
@@ -53,6 +60,18 @@ fi
 # the tool that tests them would defeat it.  -mod=vendor is explicit so a stray GOFLAGS cannot
 # quietly send the build to the network instead.
 MOD="-mod=vendor"
+
+# REPRODUCIBILITY FLAGS, so the same source measures the same on every machine.  Without them the
+# binary embeds the build path (/home/alvillarica/... vs /home/azureuser/...) and VCS state, and
+# MRENCLAVE differs between machines that built identical code -- which defeats pinning --unique-id
+# across a fleet.  These mirror what buildscripts/build_enclave.sh does for the chain enclave.
+#
+# Reproducibility still requires the SAME Go and EGo versions on both machines; the toolchain is an
+# input to the measurement.  build.sh checks EGo above and prints Go, so a mismatch is visible.
+export SOURCE_DATE_EPOCH=1710000000
+export CFLAGS="-Wdate-time -D__DATE__=\"fixed\" -D__TIME__=\"fixed\""
+BUILDFLAGS="-trimpath -buildvcs=false"
+LDFLAGS="-s -w"
 
 # THE VERIFIER HALVES NEED OPEN ENCLAVE'S HOST HEADERS.  eclient wraps liboehostverify via cgo, and
 # a plain `go build` cannot find them:
@@ -65,14 +84,14 @@ OE_CFLAGS="-I/opt/ego/include"
 OE_LDFLAGS="-L/opt/ego/lib"
 
 echo "building the networked pair..."
-ego-go build $MOD -o net/server/server ./net/server
+ego-go build $MOD $BUILDFLAGS -ldflags="$LDFLAGS" -o net/server/server ./net/server
 ego sign enclave-server.json
-CGO_CFLAGS="$OE_CFLAGS" CGO_LDFLAGS="$OE_LDFLAGS" go build $MOD -o net/client/client ./net/client
+CGO_CFLAGS="$OE_CFLAGS" CGO_LDFLAGS="$OE_LDFLAGS" go build $MOD $BUILDFLAGS -ldflags="$LDFLAGS" -o net/client/client ./net/client
 
 echo "building the offline pair..."
-ego-go build $MOD -o offline/attest/attest ./offline/attest
+ego-go build $MOD $BUILDFLAGS -ldflags="$LDFLAGS" -o offline/attest/attest ./offline/attest
 ego sign enclave-attest.json
-CGO_CFLAGS="$OE_CFLAGS" CGO_LDFLAGS="$OE_LDFLAGS" go build $MOD -o offline/verify/verify ./offline/verify
+CGO_CFLAGS="$OE_CFLAGS" CGO_LDFLAGS="$OE_LDFLAGS" go build $MOD $BUILDFLAGS -ldflags="$LDFLAGS" -o offline/verify/verify ./offline/verify
 
 echo
 echo "enclave measurements (record these; verifiers pin them):"
