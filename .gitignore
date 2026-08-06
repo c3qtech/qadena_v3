@@ -25,7 +25,13 @@ ekyc_project/wso2am-4.2.0/repository/logs
 /logs
 /docker_build_enclave/output/
 /docker_build_chain/output/
-docs/static/openapi.yml
+# docs/static/openapi.yml is COMMITTED, deliberately.  app/app.go embeds it via docs/docs.go's
+# `//go:embed static`, so its CONTENTS end up in the qadenad binary -- and a reproducible build must
+# depend only on committed inputs.  While it was ignored, a clean checkout could not build at all
+# (`pattern static: no matching files found`), and two machines that happened to hold different
+# copies would have produced different binaries with nothing to point at why.
+# Regenerate with `ignite generate openapi`; the output is deterministic (verified byte-identical
+# across three machines).
 cmd/qadenad_enclave/reproducible_build_signer_id.txt
 cmd/qadenad_enclave/reproducible_build_unique_id.txt
 cmd/qadenad_enclave/qadenad_enclave
