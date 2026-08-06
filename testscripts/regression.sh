@@ -212,8 +212,31 @@ run_init() {
         return 1
     fi
 
-    echo "running init.sh as $SUDO_USER (it refuses to run as root), home $user_home"
-    sudo -u "$SUDO_USER" env -u SUDO_USER "HOME=$user_home" "$qadenabuildscripts/init.sh" "$@"
+    # CLEAR $QADENAHOME WHILE STILL ROOT.  A previous run under sudo leaves root-owned chain data, and
+    # init.sh -- now running as the user -- cannot delete it.  Its fallback is a nested `sudo rm`,
+    # which stops to ask for a password again partway through a two-hour run.  Deleting it here is
+    # not extra destruction: --from-genesis has already announced this directory is going, and
+    # init.sh's own first act is to remove it.
+    #
+    # Guarded rather than trusted.  $QADENAHOME is assembled from a home directory and could in
+    # principle come back as "/" or empty if getent misbehaved, and this runs as root.
+    case "$QADENAHOME" in
+        /*/qadena) rm -rf "$QADENAHOME" 2>/dev/null ;;
+        *) echo "refusing to remove \$QADENAHOME=$QADENAHOME: not an absolute path ending in /qadena"; return 1 ;;
+    esac
+
+    # -i RUNS A LOGIN SHELL, which is what makes the toolchain visible.  sudo replaces PATH with
+    # secure_path, so a plain `sudo -u` leaves ignite unable to find Go and it reports
+    #
+    #     Please, check that Go language is installed correctly in $PATH
+    #
+    # naming an installation that is present and working.  A login shell sources the user's profile
+    # and restores their real PATH, and it sets HOME as a side effect.
+    #
+    # SUDO_USER must still be unset: inside the inner sudo it would be set to *root*, and
+    # setup_env.sh keys QADENAHOME off it -- so init.sh would build into /root/qadena.
+    echo "running init.sh as $SUDO_USER via a login shell (it refuses to run as root), home $user_home"
+    sudo -u "$SUDO_USER" -i -- env -u SUDO_USER "$qadenabuildscripts/init.sh" "$@"
 }
 
 # init.sh only proves ignite accepted the file; these are the properties we actually care about
