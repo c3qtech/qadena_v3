@@ -144,6 +144,13 @@ needs_root_if_real_enclave() {
 #
 # A hash is also returned for transactions REJECTED at CheckTx, which are never included in a block
 # and so can never be found by waiting.  The code has to be read before the wait, not after it.
+# EVERY FAILURE PATH PRINTS THE WORD "UNCONFIRMED", and that is a contract callers depend on.
+# cadena_cli.sh `full` returns 0 no matter what fails inside it, so its exit code cannot be used to
+# tell whether the transactions actually landed -- a suite could only assert on state afterwards and
+# INFER success.  That inference is what let a stalled disbursement report PASS: the transaction had
+# long since landed while the flow sat blocked on a wait that could never finish, so the state check
+# found its record and saw nothing wrong.  A single grep for UNCONFIRMED gives suites the fact they
+# could not otherwise get.
 wait_for_tx() {
     local resp="$1" label="${2:-transaction}"
 
@@ -152,20 +159,29 @@ wait_for_tx() {
     code=$(echo "$resp" | jq -r '.code // empty' 2>/dev/null)
 
     if [[ -z "$hash" ]]; then
-        echo "wait_for_tx: $label was never broadcast -- no txhash in the response."
-        echo "wait_for_tx: this is usually a failed gas simulation.  Response was:"
+        echo "wait_for_tx: UNCONFIRMED -- $label was never broadcast, no txhash in the response."
+        echo "wait_for_tx: this is usually a failed gas simulation, whose error goes to STDERR"
+        echo "wait_for_tx: while only stdout is captured -- so run the caller with 2>&1 to see it."
+        echo "wait_for_tx: response was:"
         echo "$resp" | head -5
         return 1
     fi
 
     if [[ -n "$code" && "$code" != "0" ]]; then
-        echo "wait_for_tx: $label was REJECTED at CheckTx with code $code"
+        echo "wait_for_tx: UNCONFIRMED -- $label was REJECTED at CheckTx with code $code"
         echo "wait_for_tx: $(echo "$resp" | jq -r '.raw_log // empty' 2>/dev/null)"
         echo "wait_for_tx: it will never be included in a block, so it is not waited for."
         return 1
     fi
 
-    qadenad_alias --node $QADENA_NODE query wait-tx "$hash" --timeout 30s
+    # The WAIT ITSELF CAN FAIL, and that was previously swallowed too: a timeout, or a transaction
+    # that failed in DeliverTx, left the flow continuing as though the write had happened.
+    if ! qadenad_alias --node $QADENA_NODE query wait-tx "$hash" --timeout 30s; then
+        echo "wait_for_tx: UNCONFIRMED -- $label ($hash) was not confirmed within 30s."
+        echo "wait_for_tx: it was accepted at CheckTx, so it may still land later; nothing that"
+        echo "wait_for_tx: depends on it has happened yet."
+        return 1
+    fi
 }
 
 is_zero() {

@@ -77,8 +77,23 @@ echo "========================="
 
 # NOTE: the exit code here is nearly meaningless -- see the header.  It is checked only to catch a
 # total failure to run; the real verdict is the queries that follow.
-"$cli" full > /dev/null 2>&1 || fail "cadena_cli.sh full did not run to completion"
-echo "flow completed"
+#
+# OUTPUT IS CAPTURED, WITH STDERR, for two reasons.  The queries below can only show that a record
+# EXISTS, never that the write which produced it was confirmed -- and those are different claims.  A
+# disbursement once stalled on a wait that could never complete while its transaction landed anyway,
+# so every state assertion passed and the suite reported PASS after 110 minutes of doing nothing.
+# wait_for_tx prints UNCONFIRMED on every path where a transaction was not confirmed, which is the
+# fact these queries cannot supply.
+#
+# stderr matters specifically: a failed `--gas auto` simulation writes its explanation there and
+# nothing to stdout, which is exactly the case that produced an empty response and the stall.
+flow_out=$("$cli" full 2>&1) || { echo "$flow_out" | tail -20; fail "cadena_cli.sh full did not run to completion"; }
+
+if echo "$flow_out" | grep -q "UNCONFIRMED"; then
+    echo "$flow_out" | grep -A4 "UNCONFIRMED" | head -20
+    fail "a transaction in the budget hierarchy flow was never confirmed; the records queried below would be stale or absent"
+fi
+echo "flow completed, all transactions confirmed"
 
 echo "========================="
 echo "2. the GAA exists and is the root of the hierarchy"
@@ -160,6 +175,14 @@ disb_out=$("$cli" disbursement-only 2>&1) || {
     echo "$disb_out" | tail -20
     fail "disbursement-only failed"
 }
+
+# The same confirmation check as the flow above, and the reason this suite has one at all: THIS is
+# the step that stalled.  Asserting the record without it lets an unconfirmed write pass, because a
+# record left by an earlier attempt looks identical to one written just now.
+if echo "$disb_out" | grep -q "UNCONFIRMED"; then
+    echo "$disb_out" | grep -A4 "UNCONFIRMED" | head -20
+    fail "the disbursement transaction was never confirmed; the record asserted below cannot be attributed to this run"
+fi
 
 disb=$(cadena_json query-disbursements-by-dv)
 total=$(echo "$disb" | jq -r '.data.total // 0')
