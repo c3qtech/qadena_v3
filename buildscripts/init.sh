@@ -29,6 +29,7 @@ nodeparamsfile="$qadenaconfig/node_params.json"
 
 ADVERTISE_IP_ADDRESS=""
 build_sgx_flag=""
+skip_build=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -45,8 +46,12 @@ while [[ $# -gt 0 ]]; do
       build_sgx_flag="--build-sgx"
       shift
       ;;
+    --skip-build)
+      skip_build=1
+      shift
+      ;;
     --help)
-      echo "Usage: init.sh [--advertise-ip-address <ip>] [--build-sgx]"
+      echo "Usage: init.sh [--advertise-ip-address <ip>] [--build-sgx] [--skip-build]"
       exit 0
       ;;      
     *)
@@ -198,6 +203,73 @@ $qadenascripts/setPioneerID.sh pioneer1 $nodeparamsfile
 #    ./create_enclave_dirs.sh
 #else    
 #fi
+
+# --skip-build: reset the CHAIN without rebuilding the BINARIES.
+#
+# Everything above -- ignite chain init, the genesis fixups, the config.toml edits -- is quick.  The
+# expensive part is build.sh, which on --build-sgx runs three reproducible docker builds and takes
+# roughly twenty minutes.  When only the chain state needs resetting and the code has not changed,
+# that work is pure waste.
+#
+# The catch is that build_enclave.sh is what normally writes the enclave identity into genesis.
+# Skipping the build means doing it here instead, from the binary that will actually run -- otherwise
+# genesis keeps config.yml's literal test-unique-id and the chain refuses its own enclave at startup.
+if [[ $skip_build -eq 1 ]] ; then
+    echo "--skip-build: reusing the binaries already built in this repo"
+
+    enclave_src="$qadenabuild/cmd/qadenad_enclave/qadenad_enclave"
+    chain_src="$qadenabuild/cmd/qadenad/qadenad"
+    for f in "$chain_src" "$enclave_src" ; do
+        if [[ ! -x "$f" ]] ; then
+            echo "************************"
+            echo "   INIT FAILED: --skip-build needs $f, which does not exist."
+            echo "   Run init.sh once WITHOUT --skip-build (add --build-sgx on SGX hardware)."
+            echo "************************"
+            exit 1
+        fi
+    done
+
+    # Read from the BINARY, not from a text file, so the identity written into genesis is the one the
+    # chain will actually measure.  A signed enclave carries its measurement; a debug one is
+    # described by the *.txt files embedded in it.
+    if use_real_enclave "$enclave_src" ; then
+        unique_id=`ego uniqueid "$enclave_src"`
+        signer_id=`ego signerid "$enclave_src"`
+        echo "SGX enclave identity from the binary"
+    else
+        unique_id=`cat $qadenabuild/cmd/qadenad_enclave/test_unique_id.txt`
+        signer_id=`cat $qadenabuild/cmd/qadenad_enclave/test_signer_id.txt`
+        echo "debug enclave identity from cmd/qadenad_enclave/*.txt"
+    fi
+    if [[ -z "$unique_id" || -z "$signer_id" ]] ; then
+        echo "   INIT FAILED: could not determine the enclave identity of $enclave_src"
+        exit 1
+    fi
+    echo "Enclave identity: $unique_id / $signer_id"
+
+    if ! jq --arg uniqueid "$unique_id" --arg signerid "$signer_id" \
+         '.app_state.qadena.enclaveIdentityList |= map(.uniqueID = $uniqueid | .signerID = $signerid)' \
+         $genesisfile > $genesisfile.tmp ; then
+        echo "   INIT FAILED: could not write the enclave identity into $genesisfile"
+        exit 1
+    fi
+    mv $genesisfile.tmp $genesisfile
+
+    $qadenabuildscripts/install.sh --chain --enclave --signer-enclave
+    if [ $? -ne 0 ] ; then
+        echo "   INIT FAILED: install.sh failed"
+        exit 1
+    fi
+
+    $qadenabuildscripts/install.sh --scripts
+    if [ $? -ne 0 ] ; then
+        echo "   INIT FAILED: install.sh --scripts failed"
+        exit 1
+    fi
+
+    echo "Init done (binaries reused; no rebuild)."
+    exit 0
+fi
 
 echo "Calling build.sh"
 # THE EXIT STATUS MUST BE CHECKED.  build.sh already exits 1 on a failed build and prints a banner,
