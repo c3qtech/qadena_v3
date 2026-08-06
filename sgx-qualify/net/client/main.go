@@ -94,7 +94,7 @@ func main() {
 	fmt.Printf("        MRENCLAVE (unique id): %s\n", hex.EncodeToString(report.UniqueID))
 	fmt.Printf("        MRSIGNER  (signer id): %s\n", hex.EncodeToString(report.SignerID))
 	fmt.Printf("        product id: %d   security version: %d   debug: %v\n",
-		report.ProductID, report.SecurityVersion, report.Debug)
+		productID(report.ProductID), report.SecurityVersion, report.Debug)
 	fmt.Printf("        TCB status: %v\n", report.TCBStatus)
 
 	if *wantUnique != "" && !strings.EqualFold(hex.EncodeToString(report.UniqueID), *wantUnique) {
@@ -108,7 +108,7 @@ func main() {
 		ok("MRSIGNER matches")
 	}
 	if *wantProduct >= 0 {
-		if len(report.ProductID) == 0 || int(report.ProductID[0]) != *wantProduct {
+		if productID(report.ProductID) != uint64(*wantProduct) {
 			fail("product id is not %d", *wantProduct)
 		} else {
 			ok("product id matches")
@@ -146,6 +146,16 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println("QUALIFICATION PASSED")
+}
+
+// productID renders the 16-byte ISVPRODID field as the number you put in enclave.json.  Printed raw
+// it comes out as "[1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]", which is accurate and unreadable.
+func productID(b []byte) uint64 {
+	var v uint64
+	for i := 0; i < len(b) && i < 8; i++ {
+		v |= uint64(b[i]) << (8 * i)
+	}
+	return v
 }
 
 func fetchBundle(url string) (*bundle, error) {

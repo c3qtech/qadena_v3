@@ -97,7 +97,7 @@ func main() {
 	fmt.Printf("        MRENCLAVE (unique id): %s\n", hex.EncodeToString(report.UniqueID))
 	fmt.Printf("        MRSIGNER  (signer id): %s\n", hex.EncodeToString(report.SignerID))
 	fmt.Printf("        product id: %d   security version: %d   debug: %v\n",
-		report.ProductID, report.SecurityVersion, report.Debug)
+		productID(report.ProductID), report.SecurityVersion, report.Debug)
 	fmt.Printf("        TCB status: %v\n", report.TCBStatus)
 
 	if *wantUnique != "" {
@@ -130,8 +130,31 @@ func main() {
 	fmt.Println("QUALIFICATION PASSED")
 }
 
+// productID renders the 16-byte ISVPRODID field as the number you put in enclave.json.  Printed raw
+// it comes out as "[1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]", which is accurate and unreadable.
+func productID(b []byte) uint64 {
+	var v uint64
+	for i := 0; i < len(b) && i < 8; i++ {
+		v |= uint64(b[i]) << (8 * i)
+	}
+	return v
+}
+
 // readQuote accepts the marker-wrapped output of attest, or bare base64, from a file or stdin --
 // whichever survived being pasted through a terminal.
+//
+// THE MARKERS ARE LOAD-BEARING, not decoration.  `ego run` writes its loader chatter to STDOUT:
+//
+//	[erthost] loading enclave ...
+//	[erthost] entering enclave ...
+//	[ego] starting application ...
+//
+// so redirecting attest to a file captures those lines above the quote.  An earlier version skipped
+// only blank lines and marker lines, concatenated the rest, and failed with "illegal base64 data at
+// input byte 0" -- which points at the data rather than at the preamble that is actually there.
+//
+// So when a BEGIN marker is present, take strictly what lies between the markers.  Without one, fall
+// back to keeping only lines that could be base64, which handles a bare paste.
 func readQuote(path string) ([]byte, error) {
 	var r io.Reader = os.Stdin
 	if path != "" {
@@ -143,23 +166,56 @@ func readQuote(path string) ([]byte, error) {
 		r = f
 	}
 
-	var sb strings.Builder
+	var lines []string
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "-----") {
-			continue
-		}
-		sb.WriteString(line)
+		lines = append(lines, strings.TrimSpace(sc.Text()))
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
+
+	var sb strings.Builder
+	inBlock := false
+	sawMarker := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "-----BEGIN") {
+			inBlock, sawMarker = true, true
+			continue
+		}
+		if strings.HasPrefix(line, "-----END") {
+			inBlock = false
+			continue
+		}
+		if inBlock {
+			sb.WriteString(line)
+		}
+	}
+
+	if !sawMarker {
+		for _, line := range lines {
+			if line != "" && isBase64(line) {
+				sb.WriteString(line)
+			}
+		}
+	}
+
 	if sb.Len() == 0 {
-		return nil, fmt.Errorf("no quote data found")
+		return nil, fmt.Errorf("no quote data found (expected a -----BEGIN SGX QUOTE----- block)")
 	}
 	return base64.StdEncoding.DecodeString(sb.String())
+}
+
+func isBase64(s string) bool {
+	for _, c := range s {
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '+', c == '/', c == '=':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func equal(a, b []byte) bool {
