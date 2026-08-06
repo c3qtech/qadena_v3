@@ -200,8 +200,29 @@ $qadenascripts/setPioneerID.sh pioneer1 $nodeparamsfile
 #fi
 
 echo "Calling build.sh"
+# THE EXIT STATUS MUST BE CHECKED.  build.sh already exits 1 on a failed build and prints a banner,
+# but init.sh used to run straight on to install.sh and then exit with ITS status -- so a chain that
+# never compiled produced a successful init.
+#
+# That is not a theoretical ordering nit.  A --build-sgx run whose docker export failed on a
+# permissions error reported "FINAL BUILD ERROR", installed the scripts, exited 0, and left
+# $QADENAHOME with no enclave binary at all and genesis still carrying the unsubstituted
+# test-unique-id placeholder.  The first thing to actually complain was the node failing to start two
+# minutes later, naming neither the build nor the reason.
 $qadenabuildscripts/build.sh --title "FINAL BUILD" $build_sgx_flag
+if [ $? -ne 0 ] ; then
+    echo "************************"
+    echo "   INIT FAILED: the build did not succeed, so nothing was installed"
+    echo "************************"
+    exit 1
+fi
 
 $qadenabuildscripts/install.sh --scripts
+if [ $? -ne 0 ] ; then
+    echo "************************"
+    echo "   INIT FAILED: install.sh failed"
+    echo "************************"
+    exit 1
+fi
 
     
