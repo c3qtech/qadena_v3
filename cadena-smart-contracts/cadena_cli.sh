@@ -50,7 +50,7 @@ show_usage() {
     echo "  query-paps-num-idx [gaa_id] [limit] [start_idx]  Query PAPs by GAA with pagination by numeric index"
     echo "  query-pap-by-composite-key <hash>  Query PAP by composite key hash"
     echo "  query-disbursement-voucher  Query existing disbursement voucher only"
-    echo "  disbursement-only      Create disbursement [recipient] [amount]"
+    echo "  disbursement-only      Create disbursement [recipient] [amount] [disbursement_id]"
     echo "  query-disbursement  Query disbursement by ID [disbursement_id]"
     echo "  query-disbursements-by-dv  Query disbursements by DV ID"
     echo "  query-address    Query address balance [address] [gaa_id]"
@@ -1135,7 +1135,11 @@ create_disbursement() {
     CONTRACT_ADDR=$(get_contract_addr)
     DV_ID=$(load_state "dv_id")
 
-    DISB_ID="disb_001"
+    # Third argument, defaulting to the historical value.  The id has to be settable because `full`
+    # ALREADY calls create_disbursement, so a later `disbursement-only` against the same contract was
+    # re-using this id and failing with "Disbursement already exists" -- during gas simulation, which
+    # means nothing was broadcast and the response came back empty.
+    DISB_ID="${3:-disb_001}"
     
     if [[ -z "$CONTRACT_ADDR" ]]; then
         echo "Error: No contract address found. Please instantiate contract first."
@@ -2131,7 +2135,7 @@ case $OPERATION in
         ;;
     disbursement-only)
         setup_dbm
-        create_disbursement  "$2" "$3"
+        create_disbursement  "$2" "$3" "$4"
         ;;
     query-hierarchy)
         query_hierarchy "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"

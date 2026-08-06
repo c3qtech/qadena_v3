@@ -171,11 +171,23 @@ echo "========================="
 # Regression guard: create_disbursement used to fail on the missing disbursement_date, silently,
 # because `full` swallows the error.  Asserting the RECORD rather than the exit code.
 #
+# A DISTINCT ID, and this is the whole point of the step.  `full` above ALREADY calls
+# create_disbursement with the default id, so re-running disbursement-only against the same contract
+# was attempting a duplicate and failing with
+#
+#     failed to execute message; message index: 0: Disbursement already exists
+#
+# during GAS SIMULATION -- so nothing was broadcast, the response came back empty, and the CLI then
+# waited on an empty transaction hash forever.  It had failed this way since it was written, and was
+# invisible because the assertion only required a record to EXIST and `full` had already made one.
+# With its own id the step creates a real second disbursement, so the count below must actually rise.
+#
 # OUTPUT IS KEPT, not discarded.  `> /dev/null 2>&1` here threw away the only description of what
-# went wrong, and when the disbursement stopped being broadcast the suite reported nothing at all --
-# it simply stopped, because the CLI then waited on an empty transaction hash forever.  Diagnosing
-# it needed the chain, the process table and a manual replay.  The text was there all along.
-disb_out=$("$cli" disbursement-only 2>&1) || {
+# went wrong.  Diagnosing it needed the chain, the process table and a manual replay.  The text was
+# there all along.
+before=$(cadena_json query-disbursements-by-dv | jq -r '.data.total // 0')
+
+disb_out=$("$cli" disbursement-only "" "" "disb_regression_002" 2>&1) || {
     echo "$disb_out" | tail -20
     fail "disbursement-only failed"
 }
@@ -189,12 +201,15 @@ if echo "$disb_out" | grep -q "UNCONFIRMED"; then
     fail "the disbursement transaction was never confirmed; the record asserted below cannot be attributed to this run"
 fi
 
+# A DELTA, not a floor.  `>= 1` was satisfied by the record `full` had already written, so the step
+# passed no matter what disbursement-only did -- which is how a permanently failing call went
+# unnoticed.  Requiring the count to RISE ties the assertion to this call.
 disb=$(cadena_json query-disbursements-by-dv)
 total=$(echo "$disb" | jq -r '.data.total // 0')
-[ "${total:-0}" -ge 1 ] \
-    || fail "no disbursements recorded against $dv_id; create_disbursement is failing again"
 echo "$disb" | jq -r '.data | {total, count}'
-echo "disbursement recorded against $dv_id"
+[ "${total:-0}" -eq $(( before + 1 )) ] \
+    || fail "disbursements against $dv_id went $before -> $total, expected $(( before + 1 )); create_disbursement did not record this one"
+echo "disbursement recorded against $dv_id ($before -> $total)"
 
 echo "========================="
 echo "CADENA CONTRACT TESTS PASSED"
