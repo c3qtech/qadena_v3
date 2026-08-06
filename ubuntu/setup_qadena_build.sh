@@ -168,7 +168,19 @@ if [ "$(uname -m)" = "x86_64" ]; then
 
     # check if running in Azure using "curl -H Metadata:true "http://169.254.169.254/metadata/instance?api-version=2021-02-01""
     if curl -m 4 -H Metadata:true "http://169.254.169.254/metadata/instance?api-version=2021-02-01" > /dev/null 2>&1 ; then
-        echo "Running in Azure, installing a default sgx_default_qcnl.conf that points to Azure PCCS"
+        # pccs_url and local_pck_url point at Azure (THIM via IMDS) because that is how an Azure VM
+        # gets its OWN platform certificates.  collateral_service deliberately does NOT: it points at
+        # Intel's PCS.
+        #
+        # A cloud cache only holds collateral for that cloud's own machines.  With collateral_service
+        # left on global.acccache.azure.net, this VM can verify quotes from other Azure machines and
+        # FAILS on anything from on-prem -- OE_QUOTE_PROVIDER_CALL_ERROR, while the cache is
+        # perfectly reachable, so it reads like a network fault and is not one.  In a chain whose
+        # nodes span Azure and on-prem, every node must be able to verify every other node's enclave.
+        #
+        # Verified on a live Azure SGX VM: with this change it verifies on-prem quotes, and its own
+        # quote generation is unaffected because that path uses local_pck_url.
+        echo "Running in Azure: installing sgx_default_qcnl.conf (Azure PCCS for our own certs, Intel PCS for verifying others)"
         cp ubuntu/azure_sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf
         installed_sgx_default_qcnl_conf=true
     else
