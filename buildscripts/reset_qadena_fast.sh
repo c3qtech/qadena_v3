@@ -18,7 +18,12 @@
 # leaves config.yml's literal test-unique-id in genesis, and the chain then refuses its own enclave
 # with an error naming neither.
 #
-#   ./buildscripts/reset_qadena_fast.sh --advertise-ip-address <ip> [--with-setup]
+# ONE CAVEAT.  `ignite chain init` stamps the CURRENT git commit into genesis as app_version, while
+# the installed binaries are whatever was built earlier.  If you have committed since the last build,
+# genesis will name a commit newer than the code actually running.  Harmless for a test reset and
+# worth knowing before reading anything into that field -- if it matters, rebuild instead.
+#
+#   ./buildscripts/reset_qadena_fast.sh --advertise-ip-address <ip> [--with-setup] [--no-start]
 #
 # --with-setup additionally provisions the secdsvs user, matching reset_qadena.sh.
 
@@ -27,6 +32,7 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 ADVERTISE_IP_ADDRESS=""
 with_setup=0
+no_start=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -38,8 +44,9 @@ while [[ $# -gt 0 ]]; do
       fi
       ;;
     --with-setup) with_setup=1; shift ;;
+    --no-start)   no_start=1; shift ;;
     --help)
-      echo "Usage: reset_qadena_fast.sh --advertise-ip-address <ip> [--with-setup]"
+      echo "Usage: reset_qadena_fast.sh --advertise-ip-address <ip> [--with-setup] [--no-start]"
       echo ""
       echo "Resets the chain to a fresh genesis WITHOUT rebuilding.  Use reset_qadena.sh if the"
       echo "code changed and the binaries need rebuilding."
@@ -116,13 +123,22 @@ if ! run_init ; then
     exit 1
 fi
 
-echo "Starting the chain..."
-if ! "$qadenascripts/start_qadena.sh" ; then
-    echo "start_qadena.sh failed"
-    exit 1
+# --no-start leaves the node down.  Useful for comparing the result against a full init: a running
+# chain immediately creates enclave_config, enclave_data, wasm/ and addrbook.json, so a freshly
+# started node never looks like a freshly initialised one no matter how correct the reset was.
+if [[ $no_start -eq 1 ]] ; then
+    echo "--no-start: leaving the node stopped"
+else
+    echo "Starting the chain..."
+    if ! "$qadenascripts/start_qadena.sh" ; then
+        echo "start_qadena.sh failed"
+        exit 1
+    fi
 fi
 
-if [[ $with_setup -eq 1 ]] ; then
+if [[ $with_setup -eq 1 && $no_start -eq 1 ]] ; then
+    echo "--with-setup ignored: the node was not started (--no-start)"
+elif [[ $with_setup -eq 1 ]] ; then
     echo "Waiting for the chain to produce blocks before provisioning secdsvs..."
     for i in {1..45} ; do
         "$qadenabin/qadenad" --home "$QADENAHOME" status > /dev/null 2>&1 && break
