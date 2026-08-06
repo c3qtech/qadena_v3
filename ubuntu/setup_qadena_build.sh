@@ -124,6 +124,46 @@ if [ "$(uname -m)" = "x86_64" ]; then
     rm -f /etc/sgx_default_qcnl.conf
     apt install -y libsgx-dcap-default-qpl
 
+    # DEVICE ACCESS FOR THE BUILD USER -- this is what makes running the node as root unnecessary.
+    #
+    # /dev/sgx_enclave is mode 660 root:sgx, and /dev/sgx_provision is root:sgx_prv -- a DIFFERENT
+    # group, which is the part that catches people out.  Missing the first, an enclave cannot be
+    # created at all.  Missing only the second, the node starts and runs perfectly and then fails
+    # REMOTE ATTESTATION, far from anything that names a permission.
+    #
+    # The group is read from the device when it exists, rather than assumed, because the names are
+    # set by whichever driver package created it.
+    if [ -n "$SUDO_USER" ]; then
+        sgx_groups=""
+        for dev in /dev/sgx_enclave /dev/sgx_provision; do
+            if [ -e "$dev" ]; then
+                sgx_groups="$sgx_groups $(stat -c %G "$dev" 2>/dev/null)"
+            fi
+        done
+        # No devices yet (driver not loaded, or a machine without SGX): fall back to the standard
+        # names so a later reboot finds the user already in them.
+        # This script is /bin/sh, so no ${var// /} and no ${=var} -- unquoted $var word-splits here.
+        if [ -z "$(echo "$sgx_groups" | tr -d ' ')" ]; then
+            sgx_groups="sgx sgx_prv"
+        fi
+
+        for grp in $sgx_groups; do
+            [ -n "$grp" ] || continue
+            if ! getent group "$grp" > /dev/null 2>&1; then
+                echo "Group $grp does not exist yet; it is created with the SGX driver -- re-run this script after a reboot"
+                continue
+            fi
+            if id -nG "$SUDO_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$grp"; then
+                echo "$SUDO_USER is already in group $grp"
+            else
+                echo "Adding $SUDO_USER to group $grp (needed to use the SGX device without root)"
+                usermod -aG "$grp" "$SUDO_USER"
+            fi
+        done
+    else
+        echo "SUDO_USER is not set, so no user was added to the SGX groups; the node will need root"
+    fi
+
     installed_sgx_default_qcnl_conf=false
 
     # check if running in Azure using "curl -H Metadata:true "http://169.254.169.254/metadata/instance?api-version=2021-02-01""
@@ -243,6 +283,46 @@ else
     echo "jq already installed"
 fi
 
+# check if bc installed
+# Used by setup_env.sh to compute gas prices, so its absence breaks every transaction rather than
+# one suite.  Present on a desktop Ubuntu and absent on the minimal/cloud images.
+if ! command -v bc > /dev/null 2>&1; then
+    apt-get install -y bc
+else
+    echo "bc already installed"
+fi
+
+# check if python3 installed
+# Several test suites do their arithmetic in python3 rather than bc, because the amounts are
+# 18-decimal integers that overflow shell arithmetic.
+if ! command -v python3 > /dev/null 2>&1; then
+    apt-get install -y python3
+else
+    echo "python3 already installed"
+fi
+
+# check if cast (foundry) installed -- required by testscripts/test_evm.sh
+#
+# INSTALLED AS THE USER, NOT AS ROOT.  foundry is a per-user install under ~/.foundry, so running
+# the installer as root puts it in /root/.foundry where nothing else can see it.  A regression run
+# then reports "cast (foundry) not found" on a machine where foundry is, in a sense, installed.
+# -i gives a login shell, which the installer needs in order to update the user's profile.
+if [ -n "$SUDO_USER" ]; then
+    if sudo -u "$SUDO_USER" -i command -v cast > /dev/null 2>&1; then
+        echo "cast (foundry) already installed"
+    else
+        echo "Installing foundry (cast, forge) for $SUDO_USER"
+        if sudo -u "$SUDO_USER" -i sh -c 'curl -sL https://foundry.paradigm.xyz | bash' \
+           && sudo -u "$SUDO_USER" -i sh -c '"$HOME/.foundry/bin/foundryup"'; then
+            echo "foundry installed"
+        else
+            echo "WARNING: foundry install failed; testscripts/test_evm.sh will not be able to run"
+        fi
+    fi
+else
+    echo "SUDO_USER is not set, so foundry was not installed; testscripts/test_evm.sh needs it"
+fi
+
 # check if ifconfig installed
 if ! command -v ifconfig > /dev/null 2>&1; then
     apt-get install -y net-tools
@@ -346,6 +426,12 @@ rm -rf installers
 echo "Now you need to:"
 echo "  exit"
 echo "...then log back in..."
+echo ""
+echo "  The log out and back in is REQUIRED, not tidiness: group membership is fixed when a"
+echo "  session starts, so the sgx / sgx_prv groups added above do not apply to this one.  Until"
+echo "  you do, the SGX device stays inaccessible and the node has to be run with sudo."
+echo "  Check with:  id -nG   (expect sgx and sgx_prv)"
+echo ""
 echo "  cd qadena_v3"
 echo "  buildscripts/init.sh   OR   buildscripts/build.sh"
 echo "...then when done..."
