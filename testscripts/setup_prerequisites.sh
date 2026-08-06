@@ -195,7 +195,7 @@ import_and_fund() {
         || fail "bank send to $name failed"
 
     tx_hash=$(echo "$result" | jq -r .txhash)
-    qadenad_alias query wait-tx "$tx_hash" --timeout 30s > /dev/null \
+    confirm_tx "$tx_hash" 30 \
         || fail "funding tx $tx_hash for $name did not land"
 
     # prove the funds actually arrived rather than trusting the tx receipt
@@ -334,7 +334,7 @@ else
     [ "$(echo "$result" | jq -r .code)" = "0" ] || fail "oracle proposal tx failed: $(echo "$result" | jq -r .raw_log)"
 
     tx_hash=$(echo "$result" | jq -r .txhash)
-    qadenad_alias query wait-tx "$tx_hash" --timeout 30s > /dev/null \
+    confirm_tx "$tx_hash" 30 \
         || fail "oracle proposal tx $tx_hash did not land"
 
     proposal_id=$(qadenad_alias query tx "$tx_hash" --output json \

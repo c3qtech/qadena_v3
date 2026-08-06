@@ -38,7 +38,11 @@ submit_hash=$(qadenad_alias tx gov submit-proposal "test_data/$json_proposal.gen
 echo $submit_hash
 
 # wait for the proposal to be submitted
-qadenad_alias query wait-tx $submit_hash --timeout 30s
+#
+# confirm_tx, not a bare wait-tx: that subscribes to an event and reports failure for a transaction
+# already included before the subscription existed.  This runs right after a chain restart in the
+# enclave upgrade suite, which is exactly when that happens.
+confirm_tx "$submit_hash" 30 || { echo "proposal submission $submit_hash did not land"; exit 1; }
 
 # Get the proposal ID
 proposal_id=$(qadenad_alias query tx $submit_hash --output json | jq -r '.events[] | select(.type=="submit_proposal") | .attributes[] | select(.key=="proposal_id") | .value')
@@ -49,11 +53,11 @@ deposit_hash=$(qadenad_alias tx gov deposit $proposal_id 1000qdn --from pioneer1
 echo $deposit_hash
 
 # wait for the deposit to be submitted
-qadenad_alias query wait-tx $deposit_hash --timeout 30s
+confirm_tx "$deposit_hash" 30 || { echo "deposit $deposit_hash did not land"; exit 1; }
 
 # vote yes on the proposal
 vote_hash=$(qadenad_alias tx gov vote $proposal_id yes --from pioneer1 -y --output json --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment | jq -r '.txhash')
 echo $vote_hash
 
 # wait for the vote to be submitted
-qadenad_alias query wait-tx $vote_hash --timeout 30s
+confirm_tx "$vote_hash" 30 || { echo "vote $vote_hash did not land"; exit 1; }

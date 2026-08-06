@@ -61,7 +61,8 @@ if [ $(echo $result | jq -r .code) -ne 0 ]; then
     exit 1
 fi
 # wait for result
-result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
+confirm_tx "$tx_hash" 30 || { echo "tx $tx_hash did not land"; exit 1; }
+result=$(qadenad_alias query tx $tx_hash --output json)
 echo "Result: $result"
 if [ $(echo $result | jq -r .code) -ne 0 ]; then
     echo "ERROR ERROR ERROR"

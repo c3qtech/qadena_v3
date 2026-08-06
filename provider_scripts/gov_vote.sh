@@ -60,11 +60,14 @@ if [ $(echo $result | jq -r .code) -ne 0 ]; then
     exit 1
 fi
 # wait for result
-result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
-echo "Result: $result"
-if [ $(echo $result | jq -r .code) -ne 0 ]; then
+#
+# confirm_tx rather than a bare `wait-tx`: that subscribes to an event, so a vote already included
+# before the subscription was established times out and reports failure for a transaction that
+# succeeded.  On a freshly started chain that is common, and it failed a regression run here while
+# the proposal had actually PASSED.
+if ! confirm_tx "$tx_hash" 30 ; then
     echo "ERROR ERROR ERROR"
-    echo "Error: $result"
+    echo "Error: the vote transaction $tx_hash did not land"
     exit 1
 fi
 

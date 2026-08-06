@@ -130,6 +130,46 @@ needs_root_if_real_enclave() {
   fi
 }
 
+# confirm_tx <hash> [seconds] -- did this transaction land, and did it succeed?
+#
+# `query wait-tx` alone is NOT a reliable answer.  It SUBSCRIBES to a websocket event, so a
+# transaction that was already included before the subscription was established never produces one
+# and the command times out -- reporting failure for a transaction that succeeded.  A freshly started
+# node makes that likely, because the first transactions are committed while the client is still
+# connecting.
+#
+# That is not hypothetical: it failed setup_prerequisites.sh with "could not vote on proposal 2"
+# while the proposal had in fact PASSED, and took the idempotency suite down with it on the re-run.
+#
+# So the event is treated as a fast path and the CHAIN as the authority: if waiting does not answer,
+# ask what actually happened.
+confirm_tx() {
+    local hash="$1" secs="${2:-30}"
+
+    [ -n "$hash" ] && [ "$hash" != "null" ] || { echo "confirm_tx: no transaction hash"; return 1; }
+
+    qadenad_alias query wait-tx "$hash" --timeout "${secs}s" > /dev/null 2>&1
+
+    # Poll regardless of how the wait turned out -- it may have missed the event, and it may also
+    # have returned before the transaction was indexed.
+    local code i
+    for i in $(seq 1 "$secs"); do
+        code=$(qadenad_alias query tx "$hash" --output json 2>/dev/null | jq -r '.code // empty' 2>/dev/null)
+        [ -n "$code" ] && break
+        sleep 1
+    done
+
+    if [ -z "$code" ]; then
+        echo "confirm_tx: $hash never appeared on chain within ${secs}s"
+        return 1
+    fi
+    if [ "$code" != "0" ]; then
+        echo "confirm_tx: $hash failed with code $code: $(qadenad_alias query tx "$hash" --output json 2>/dev/null | jq -r '.raw_log // empty' 2>/dev/null)"
+        return 1
+    fi
+    return 0
+}
+
 # wait_for_tx <broadcast-json> [label] -- check the broadcast BEFORE waiting for the transaction.
 #
 # THIS EXISTS BECAUSE THE OBVIOUS FORM HANGS FOREVER.  Every call site used to be
