@@ -1,0 +1,16 @@
+# github.com/edgelesssys/ego v1.8.1
+## explicit; go 1.21
+github.com/edgelesssys/ego/attestation
+github.com/edgelesssys/ego/attestation/tcbstatus
+github.com/edgelesssys/ego/eclient
+github.com/edgelesssys/ego/enclave
+github.com/edgelesssys/ego/internal/attestation
+# github.com/go-jose/go-jose/v4 v4.0.5
+## explicit; go 1.21
+github.com/go-jose/go-jose/v4
+github.com/go-jose/go-jose/v4/cipher
+github.com/go-jose/go-jose/v4/json
+github.com/go-jose/go-jose/v4/jwt
+# golang.org/x/crypto v0.33.0
+## explicit; go 1.20
+golang.org/x/crypto/pbkdf2
