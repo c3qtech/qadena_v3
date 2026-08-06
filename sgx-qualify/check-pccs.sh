@@ -33,12 +33,14 @@ UBUNTU_DIR="$(cd "$(dirname "$0")/../ubuntu" 2>/dev/null && pwd)"
 
 install_auto=0
 install_url=""
+use_intel_collateral=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --install)       install_auto=1; shift ;;
         --install-azure) install_auto=1; shift ;;
         --install-url)   install_url="$2"; shift 2 ;;
+        --use-intel-collateral) use_intel_collateral=1; shift ;;
         --help|-h)
             sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
@@ -132,6 +134,24 @@ if [ $install_auto -eq 1 ]; then
     esac
     exit 0
 fi
+# A CLOUD PCCS ONLY HOLDS ITS OWN FLEET'S COLLATERAL.  Azure's cache answers about Azure machines;
+# asked about an on-prem CPU it has nothing and does not go to Intel, so verification fails with
+# OE_QUOTE_PROVIDER_CALL_ERROR while the cache is perfectly reachable.  Generation is unaffected --
+# that uses pccs_url and, on Azure, local_pck_url (THIM) -- so ONLY collateral_service moves.
+if [ $use_intel_collateral -eq 1 ]; then
+    [ "$(id -u)" -eq 0 ] || { echo "writing $CONF needs root -- re-run with sudo"; exit 1; }
+    [ -f "$CONF" ] || { echo "$CONF does not exist"; exit 1; }
+    cp "$CONF" "$CONF.bak.$$" && echo "backed up to $CONF.bak.$$"
+    if grep -q '"collateral_service"' "$CONF"; then
+        sed -i 's|"collateral_service":[[:space:]]*"[^"]*"|"collateral_service": "'"$INTEL_PCS"'"|' "$CONF"
+    else
+        sed -i 's|\("pccs_url":[[:space:]]*"[^"]*"\)|\1\n  ,"collateral_service": "'"$INTEL_PCS"'"|' "$CONF"
+    fi
+    echo "collateral_service -> $INTEL_PCS"
+    echo "pccs_url and local_pck_url are unchanged, so this machine still generates its own quotes."
+    exit 0
+fi
+
 if [ -n "$install_url" ]; then
     case "$install_url" in */) ;; *) install_url="$install_url/" ;; esac
     # use_secure_cert:false because a PCCS you run yourself almost always has a self-signed
@@ -166,6 +186,21 @@ if ! reachable "$pccs"; then status=1; fi
 
 printf "  collateral reachable ....... "
 reachable "$collateral" > /dev/null 2>&1 && echo reachable || echo "no response (verification may still work from cache)"
+
+# Reachability is not the whole story for VERIFICATION.  A cloud cache answers only about its own
+# fleet, so a machine configured this way can generate quotes and verify its neighbours while being
+# unable to verify anything from outside the cloud -- an asymmetry that shows up only when tried.
+case "$collateral" in
+    *acccache.azure.net*|*aliyuncs.com*)
+        echo
+        echo "  NOTE: collateral_service is a CLOUD cache.  It holds collateral for that cloud's own"
+        echo "  machines only, so this host can verify quotes from inside the cloud but NOT from"
+        echo "  on-prem or other providers -- that fails with OE_QUOTE_PROVIDER_CALL_ERROR even"
+        echo "  though the cache is reachable.  If this machine must verify outside quotes:"
+        echo "      sudo $0 --use-intel-collateral"
+        echo "  Quote GENERATION is unaffected either way."
+        ;;
+esac
 
 echo
 if [ $status -eq 0 ]; then
