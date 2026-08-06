@@ -6,6 +6,7 @@
 #
 #   genesis       buildscripts/init.sh, and the genesis it produces        (--from-genesis only)
 #   chain         start the node and wait for blocks                       (--from-genesis only)
+#   sgx-build     the SGX build is signed and REPRODUCIBLE                (--with-sgx)
 #   prerequisites providers, oracles and the create-wallet sponsor, onboarded at runtime
 #   idempotency   prerequisites re-run, asserting it issues ZERO transactions
 #   setup         the test users                                           (--with-setup)
@@ -45,6 +46,14 @@
 #                    needs reports already on record to prove the migrated keys still read them.
 #                    NOT implied by --from-genesis: it is slow and leaves the chain on a new enclave.
 #                    It restores the tracked version files on exit, so it leaves no diff behind.
+#   --with-sgx       REQUIRES REAL SGX HARDWARE (Ubuntu), ego and docker, and FAILS if they are
+#                    absent rather than skipping.  Builds the enclave twice with --build-sgx and
+#                    requires both builds to measure identically, which is the one property the
+#                    whole attestation scheme rests on and which no other suite touches -- every
+#                    other suite runs against a debug enclave whose identity is just a text file.
+#                    Slow (two reproducible docker builds) and needs a CLEAN working tree, because
+#                    --build-sgx runs `git clean -fd` before building.  Runs before every other
+#                    functional suite.
 #
 # WHY THE ENCLAVE UPGRADE SUITE EXISTS.  check_upgrade_enclave.sh silently did nothing for a long
 # time: its guard used a glob inside [[ ]], which zsh does not expand, so it exited 0 on every run
@@ -58,6 +67,7 @@
 #   regression.sh --with-setup        run setup.sh first (slow; needed on a fresh chain)
 #   regression.sh --with-credentials  also run the single-shot update_credentials.sh, last
 #   regression.sh --with-enclave-upgrade  also upgrade the enclave to a new measurement, last
+#   regression.sh --with-sgx          also verify the SGX build is signed and reproducible (SGX hw only)
 #   regression.sh --stop-on-fail      stop at the first failure
 
 # get script dir
@@ -74,6 +84,7 @@ from_genesis=false
 with_setup=false
 with_credentials=false
 with_enclave_upgrade=false
+with_sgx=false
 stop_on_fail=false
 advertise_ip=""
 
@@ -83,6 +94,7 @@ while [[ $# -gt 0 ]]; do
         --with-setup)       with_setup=true; shift ;;
         --with-credentials) with_credentials=true; shift ;;
         --with-enclave-upgrade) with_enclave_upgrade=true; shift ;;
+        --with-sgx)         with_sgx=true; shift ;;
         --stop-on-fail)     stop_on_fail=true; shift ;;
         --advertise-ip-address) advertise_ip="$2"; shift 2 ;;
         --help)
@@ -300,7 +312,15 @@ if [ "$from_genesis" = "true" ]; then
     "$qadenascripts/stop_qadena.sh" > /dev/null 2>&1
     sleep 2
 
-    run_test "genesis-init" "$qadenabuildscripts/init.sh" --advertise-ip-address "$advertise_ip"
+    # --with-sgx MUST propagate to init.sh.  genesis.json is written with the enclave ids produced by
+    # the build, so a debug-built genesis names debug ids -- and the SGX enclave installed later
+    # would be refused by the very chain this run just created, for an identity mismatch that looks
+    # nothing like a build problem.  One flag, so the two cannot drift apart.
+    if [ "$with_sgx" = "true" ]; then
+        run_test "genesis-init" "$qadenabuildscripts/init.sh" --advertise-ip-address "$advertise_ip" --build-sgx
+    else
+        run_test "genesis-init" "$qadenabuildscripts/init.sh" --advertise-ip-address "$advertise_ip"
+    fi
     run_test "genesis-check" check_genesis
     run_test "chain-start" start_chain
 fi
@@ -337,6 +357,15 @@ fi
 run_test "pricefeed"   "$qadenatestscripts/test_pricefeed.sh"
 run_test "pf-expiry"   "$qadenatestscripts/test_pricefeed_expiry.sh"
 run_test "transfers"   "$qadenatestscripts/test_transfers.sh"
+if [ "$with_sgx" = "true" ]; then
+    # FIRST among the functional suites, for two reasons.  A broken or non-reproducible SGX build
+    # should fail before an hour of chain tests runs on top of it; and it must come before
+    # enclave-upgrade, which leaves the installed enclave at a measurement NEWER than the committed
+    # source -- a --build-sgx after that would install the older measurement as main and the node
+    # would then find no sealed params matching it.
+    run_test "sgx-build"   "$qadenatestscripts/test_sgx_build.sh"
+fi
+
 run_test "suspicious"  "$qadenatestscripts/test_suspicious.sh"
 run_test "bank-scan"   "$qadenatestscripts/test_bank_restriction.sh"
 run_test "params"      "$qadenatestscripts/test_params_validation.sh"

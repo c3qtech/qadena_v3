@@ -32,6 +32,44 @@
 # it registers a new identity on chain permanently and swaps the running enclave.  It does restore
 # the repo's version files on exit, so a run leaves no diff behind; the installed binaries and the
 # chain are left upgraded, and the next --from-genesis run rebuilds both from scratch.
+#
+# ----------------------------------------------------------------------------------------------
+# SGX MODE
+#
+# On real SGX the identity is not a number in a text file -- it is the MEASUREMENT OF THE BINARY, so
+# almost every step above has to work differently and the difference is not cosmetic.
+#
+# 1. THE NEW IDENTITY CANNOT BE CHOSEN, ONLY DISCOVERED.  In debug mode the next uniqueID is whatever
+#    we write into test_unique_id.txt, so it can be registered before the enclave that has it exists.
+#    MRENCLAVE is a hash of the built binary, so on SGX it cannot be known until after the build.
+#    The order therefore inverts: BUILD FIRST, then register what came out.
+#
+# 2. THE SOURCE CHANGE MUST BE COMMITTED.  build_enclave.sh --build-sgx runs `git checkout -f && git
+#    clean -fd` before building, because a reproducible build is only meaningful against a known tree
+#    state.  An uncommitted version.txt bump is therefore DISCARDED before the compiler sees it, and
+#    the build reproduces the identical measurement -- leaving nothing to upgrade to, while looking
+#    like it worked.  So this suite makes a temporary local commit and resets to the original HEAD on
+#    exit.  The preflight refuses to start on a dirty tree, since `git clean -fd` would otherwise
+#    destroy uncommitted work (including any untracked test scripts).
+#
+# 3. WHAT MAKES THE MEASUREMENT CHANGE.  cmd/qadenad_enclave/version.txt is //go:embed-ed into the
+#    binary (enclave.go:195), so bumping it changes the bytes and therefore MRENCLAVE.  That is why
+#    the same version bump that drives check_upgrade_enclave.sh's comparison also produces the new
+#    identity -- one change, both effects.  The suite asserts the measurement actually moved rather
+#    than assuming it.
+#
+# 4. THE BUILD INSTALLS, SO THE UPGRADE HAS TO BE HELD BACK.  build_enclave.sh installs its output as
+#    the main enclave immediately, and check_upgrade_enclave.sh triggers on the MAIN binary's version
+#    being higher.  Registration and promotion each need a restart, and a restart with the new binary
+#    already in place would attempt the upgrade against an identity that is not yet active -- which
+#    fails with "couldn't find an active enclave identity".  So after the build the previous binary
+#    is put back as main, and the new one is only swapped in once its identity is active.
+#
+# 5. THE SIGNER IS FIXED BY THE KEY, NOT BY A FILE.  Both builds sign with the same public.pem, so
+#    MRSIGNER is unchanged for free -- and since real sealing uses the SGX product key, the migration
+#    this suite tests is enforced by hardware here rather than by the debug prefix convention.
+#
+# Everything from "register the next enclave identity" onwards is then common to both modes.
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
@@ -57,11 +95,20 @@ fail() {
 # --from-genesis run would then build genesis around an identity this test invented.  Restored on
 # every exit path, including failure.
 restore_version_files() {
+    # SGX mode makes a temporary commit so the reproducible build can see the version bump (see the
+    # header).  Undoing that has to come FIRST: it restores the tracked files wholesale, and the
+    # per-file writes below would otherwise be undone by it rather than the other way round.
+    if [ -n "$orig_head" ]; then
+        (cd "$qadenabuild" && git reset --hard "$orig_head" > /dev/null 2>&1) \
+            && echo "restored the repo to $orig_head" \
+            || echo "WARNING: could not reset the repo to $orig_head -- check 'git log' for a leftover temporary commit"
+        return
+    fi
     [ -n "$saved_version" ] && printf '%s' "$saved_version" > "$version_file"
     [ -n "$saved_unique" ]  && printf '%s' "$saved_unique"  > "$unique_file"
     [ -n "$saved_signer" ]  && printf '%s' "$saved_signer"  > "$signer_file"
 }
-saved_version=""; saved_unique=""; saved_signer=""
+saved_version=""; saved_unique=""; saved_signer=""; orig_head=""
 # ZERR as well as EXIT: a hard zsh error -- assigning to a read-only special like `status`, say --
 # can tear the shell down without running the EXIT trap, which leaves the version files bumped and
 # the next run confused about which enclave is actually installed.  The preflight below catches that
@@ -84,9 +131,31 @@ echo "preflight"
 echo "========================="
 qadenad_alias status > /dev/null 2>&1 || fail "chain is not reachable -- start it first"
 
+# WHICH ENCLAVE IS ACTUALLY RUNNING decides where the current identity is read from, and the two
+# sources disagree by design: on SGX the *.txt files are still embedded in the binary but they do not
+# describe it -- the measurement does.  Reading the text files on an SGX box would name an identity
+# no sealed-params file exists for, and the preflight below would blame the chain for it.
+if use_real_enclave "$qadenabin/qadenad_enclave"; then
+    sgx_mode=1
+    echo "SGX mode: the running enclave is ego-signed, so identities come from measurements"
+else
+    sgx_mode=0
+    echo "debug mode: identities come from cmd/qadenad_enclave/*.txt"
+fi
+
 saved_version=$(cat "$version_file")
-saved_unique=$(cat "$unique_file")
-saved_signer=$(cat "$signer_file")
+if [ $sgx_mode -eq 1 ]; then
+    # `ego uniqueid`/`ego signerid` accept a signed executable, so both come from the binary that is
+    # actually installed rather than from anything that merely claims to describe it.
+    saved_unique=$(ego uniqueid "$qadenabin/qadenad_enclave" 2>/dev/null) \
+        || fail "could not measure $qadenabin/qadenad_enclave"
+    saved_signer=$(ego signerid "$qadenabin/qadenad_enclave" 2>/dev/null) \
+        || fail "could not read the signer id of $qadenabin/qadenad_enclave"
+    [ -n "$saved_unique" ] || fail "ego reported an empty measurement for the installed enclave"
+else
+    saved_unique=$(cat "$unique_file")
+    saved_signer=$(cat "$signer_file")
+fi
 echo "current enclave: $saved_version / $saved_unique / $saved_signer"
 
 old_params="$QADENAHOME/enclave_config/enclave_params_$saved_unique.json"
@@ -130,9 +199,48 @@ echo "========================="
 #
 # Note that build.sh --update-test-unique-id bumps BOTH ids.  That is fine for a fresh chain and
 # wrong for an upgrade; this suite deliberately does not use it.
-next_unique=$(increment_id "$unique_file")
-next_signer="$saved_signer"
-next_version=$(increment_version "$version_file")
+if [ $sgx_mode -eq 1 ]; then
+    # SGX: BUILD FIRST.  The measurement is a hash of the binary, so there is nothing to register
+    # until it exists.  See the header for why the bump must be committed and why the freshly built
+    # binary is then put back in its box until its identity is active.
+    [ -z "$(cd "$qadenabuild" && git status --porcelain)" ] \
+        || fail "the working tree has uncommitted changes; --build-sgx runs 'git clean -fd' and would destroy them. Commit or stash first."
+    orig_head=$(cd "$qadenabuild" && git rev-parse HEAD)
+
+    next_version=$(increment_version "$version_file")
+    (cd "$qadenabuild" && git commit -q -am "temp: bump enclave version to $next_version for the upgrade test") \
+        || fail "could not commit the version bump; --build-sgx would discard it and rebuild the same measurement"
+    echo "temporary commit made on top of $orig_head (reset on exit)"
+
+    "$qadenabuildscripts/build_enclave.sh" --build-sgx > /tmp/enclave_upgrade_build.log 2>&1 \
+        || { tail -20 /tmp/enclave_upgrade_build.log; fail "the --build-sgx enclave build failed"; }
+
+    next_unique=$(cat "$enclave_src/reproducible_build_unique_id.txt")
+    next_signer=$(cat "$enclave_src/reproducible_build_signer_id.txt")
+    [ -n "$next_unique" ] || fail "the build recorded no measurement"
+
+    # If the bump did not move the measurement there is no upgrade to test, and every assertion below
+    # would pass vacuously against a single unchanged enclave.  version.txt is //go:embed-ed, so this
+    # failing means the embed was dropped -- exactly the kind of change that would silently turn this
+    # suite into a no-op.
+    [ "$next_unique" != "$saved_unique" ] \
+        || fail "the version bump did not change the measurement ($next_unique); version.txt is meant to be //go:embed-ed into the enclave, so there is nothing to upgrade TO"
+    [ "$next_signer" = "$saved_signer" ] \
+        || fail "the signer id changed ($saved_signer -> $next_signer); the new enclave would be unable to unseal anything the old one wrote, since MustSeal uses the product (signer) key"
+
+    # Put the OLD binary back as main.  The build installed the new one, and leaving it there would
+    # make the next restart attempt the upgrade before the identity is active.  The new binary is
+    # already preserved as qadenad_enclave.$next_unique, so nothing is lost by this.
+    [ -x "$qadenabin/qadenad_enclave.$next_unique" ] \
+        || fail "the build did not install $qadenabin/qadenad_enclave.$next_unique"
+    cp "$qadenabin/qadenad_enclave.$saved_unique" "$qadenabin/qadenad_enclave" \
+        || fail "could not restore the previous enclave as main"
+    echo "new enclave built and held back; main is still $saved_unique"
+else
+    next_unique=$(increment_id "$unique_file")
+    next_signer="$saved_signer"
+    next_version=$(increment_version "$version_file")
+fi
 echo "next enclave: $next_version / $next_unique / $next_signer (signer deliberately unchanged)"
 
 # Output kept, not discarded: when registration fails the interesting evidence is which of the
@@ -201,8 +309,18 @@ echo "========================="
 "$qadenascripts/stop_qadena.sh" > /dev/null 2>&1 || true
 sleep 3
 
-"$qadenabuildscripts/build_enclave.sh" > /dev/null 2>&1 \
-    || fail "could not build the enclave at $next_unique"
+if [ $sgx_mode -eq 1 ]; then
+    # Already built above; this is the swap that was deliberately deferred until the identity went
+    # active.  A copy rather than a move, so qadenad_enclave.$next_unique stays on disk -- the next
+    # upgrade from this measurement would need it to hand its keys over, exactly as this one needed
+    # qadenad_enclave.$saved_unique.
+    cp "$qadenabin/qadenad_enclave.$next_unique" "$qadenabin/qadenad_enclave" \
+        || fail "could not install $next_unique as the main enclave"
+    echo "swapped $next_unique in as the main enclave"
+else
+    "$qadenabuildscripts/build_enclave.sh" > /dev/null 2>&1 \
+        || fail "could not build the enclave at $next_unique"
+fi
 
 [ -x "$qadenabin/qadenad_enclave.$next_unique" ] \
     || fail "build succeeded but $qadenabin/qadenad_enclave.$next_unique was not installed"
