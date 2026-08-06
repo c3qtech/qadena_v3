@@ -1,0 +1,8 @@
+{
+    "exe": "offline/attest/attest",
+    "key": "private.pem",
+    "debug": false,
+    "heapSize": 256,
+    "productID": 1,
+    "securityVersion": 1
+}

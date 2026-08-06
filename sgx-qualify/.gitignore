@@ -1,0 +1,8 @@
+private.pem
+public.pem
+net/server/server
+net/client/client
+offline/attest/attest
+offline/verify/verify
+go.sum
+quote.txt
