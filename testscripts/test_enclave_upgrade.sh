@@ -90,6 +90,25 @@ fail() {
     exit 1
 }
 
+# All git access goes through this, because on SGX this suite runs under sudo and plain git breaks
+# there in two separate ways:
+#
+#   - the repo is owned by the invoking user, not root, so git refuses it with "detected dubious
+#     ownership in repository" -- and `git status --porcelain` then prints NOTHING to stdout while
+#     failing, which reads exactly like a clean tree.  The dirty-tree guard would wave it through and
+#     --build-sgx would go on to `git clean -fd` the user's work.
+#   - root has no user.name/user.email under sudo (HOME becomes /root), so the temporary commit
+#     fails with "Please tell me who you are".
+#
+# Both are supplied per-invocation rather than written to any config, so running this suite leaves no
+# git configuration behind on the machine.
+git_repo() {
+    git -c safe.directory="$qadenabuild" \
+        -c user.name="qadena regression" \
+        -c user.email="regression@localhost" \
+        -C "$qadenabuild" "$@"
+}
+
 # The version files are tracked in git.  Bumping them is how the build picks up a new identity, but
 # leaving them bumped would turn every run of this suite into an uncommitted diff -- and a later
 # --from-genesis run would then build genesis around an identity this test invented.  Restored on
@@ -99,7 +118,7 @@ restore_version_files() {
     # header).  Undoing that has to come FIRST: it restores the tracked files wholesale, and the
     # per-file writes below would otherwise be undone by it rather than the other way round.
     if [ -n "$orig_head" ]; then
-        (cd "$qadenabuild" && git reset --hard "$orig_head" > /dev/null 2>&1) \
+        git_repo reset --hard "$orig_head" > /dev/null 2>&1 \
             && echo "restored the repo to $orig_head" \
             || echo "WARNING: could not reset the repo to $orig_head -- check 'git log' for a leftover temporary commit"
         return
@@ -203,12 +222,16 @@ if [ $sgx_mode -eq 1 ]; then
     # SGX: BUILD FIRST.  The measurement is a hash of the binary, so there is nothing to register
     # until it exists.  See the header for why the bump must be committed and why the freshly built
     # binary is then put back in its box until its identity is active.
-    [ -z "$(cd "$qadenabuild" && git status --porcelain)" ] \
+    # Checked for FAILURE as well as for output: a git that errors prints nothing to stdout, which
+    # would otherwise be indistinguishable from a clean tree.
+    tree_state=$(git_repo status --porcelain) \
+        || fail "could not read git status for $qadenabuild; refusing to run --build-sgx blind, since it would 'git clean -fd' whatever is there"
+    [ -z "$tree_state" ] \
         || fail "the working tree has uncommitted changes; --build-sgx runs 'git clean -fd' and would destroy them. Commit or stash first."
-    orig_head=$(cd "$qadenabuild" && git rev-parse HEAD)
+    orig_head=$(git_repo rev-parse HEAD) || fail "could not resolve HEAD for $qadenabuild"
 
     next_version=$(increment_version "$version_file")
-    (cd "$qadenabuild" && git commit -q -am "temp: bump enclave version to $next_version for the upgrade test") \
+    git_repo commit -q -am "temp: bump enclave version to $next_version for the upgrade test" \
         || fail "could not commit the version bump; --build-sgx would discard it and rebuild the same measurement"
     echo "temporary commit made on top of $orig_head (reset on exit)"
 

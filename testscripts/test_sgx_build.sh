@@ -61,9 +61,15 @@ echo "SGX present, ego $(ego uniqueid /bin/true > /dev/null 2>&1; echo ok) and d
 
 # The reproducible build refuses to run against a dirty tree -- it does `git checkout -f && git
 # clean -fd` first, which would DESTROY uncommitted work.  Refuse rather than let that happen.
-if [ -n "$(cd "$qadenabuild" && git status --porcelain)" ]; then
-    fail "the working tree has uncommitted changes; the reproducible build would run 'git clean -fd' and discard them. Commit or stash first."
-fi
+#
+# safe.directory is supplied because this suite runs under sudo on SGX and git otherwise rejects a
+# repo owned by another user with "detected dubious ownership".  That failure prints nothing to
+# stdout, so an unguarded `git status --porcelain` would look exactly like a clean tree -- which is
+# why the command's exit status is checked separately from its output.
+tree_state=$(git -c safe.directory="$qadenabuild" -C "$qadenabuild" status --porcelain) \
+    || fail "could not read git status for $qadenabuild; refusing to start a build that would 'git clean -fd' whatever is there"
+[ -z "$tree_state" ] \
+    || fail "the working tree has uncommitted changes; the reproducible build would run 'git clean -fd' and discard them. Commit or stash first."
 echo "working tree clean"
 
 # THE CHAIN MUST BE DOWN FOR THIS.  Installing overwrites $qadenabin/qadenad_enclave, and Linux
