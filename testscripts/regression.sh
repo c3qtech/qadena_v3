@@ -433,8 +433,29 @@ if [ "$from_genesis" = "true" ]; then
     echo "advertising $advertise_ip"
 
     # the node has to be down before its home directory is removed out from under it
-    "$qadenascripts/stop_qadena.sh" > /dev/null 2>&1
+    #
+    # THE RESULT IS CHECKED.  This used to discard both output and exit status, which hid a
+    # stop_qadena.sh that could not kill a run_enclave.sh respawn loop: the loop kept restarting a
+    # DEBUG enclave, is_qadena_running stayed true, and start_qadena.sh then reported "already
+    # running" and never launched the chain.  The run failed 25 minutes later with "chain did not
+    # produce a block within 120s", naming nothing that had gone wrong.
+    if ! "$qadenascripts/stop_qadena.sh"; then
+        echo "stop_qadena.sh reported failure; refusing to rebuild on top of a node that is still running"
+        summarize
+        exit 1
+    fi
     sleep 2
+
+    # Independently confirmed, because "stop succeeded" and "nothing is running" are not the same
+    # claim -- a supervisor can respawn a process after the script has finished checking.
+    leftover=$(pgrep -af "qadenad|run_enclave.sh|run_signerenclave.sh|ego-host" 2>/dev/null | grep -v "regression.sh" || true)
+    if [ -n "$leftover" ]; then
+        echo "processes are still alive after stop_qadena.sh:"
+        echo "$leftover"
+        echo "a --from-genesis run cannot proceed with a live node or a respawn loop"
+        summarize
+        exit 1
+    fi
 
     # --with-sgx MUST propagate to init.sh.  genesis.json is written with the enclave ids produced by
     # the build, so a debug-built genesis names debug ids -- and the SGX enclave installed later

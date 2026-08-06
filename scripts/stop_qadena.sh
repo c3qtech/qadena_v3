@@ -69,18 +69,43 @@ echo "stop_qadena.sh: -----------"
 echo "stop_qadena.sh: STOP QADENA"
 echo "stop_qadena.sh: -----------"
 
+stop_failed=0
+
+# SUPERVISORS DIE FIRST.  run_enclave.sh and run_signerenclave.sh are `while true` respawn loops, so
+# killing an enclave while its supervisor lives just produces another one -- inside the two-second
+# window this script then uses to decide whether the kill worked.
+#
+# That produced a supervisor nothing could stop.  `pkill -f "qadenad"` also matches qadenad_ENCLAVE
+# (substring), so the chain block below would kill the enclave, run_enclave.sh would restart it, the
+# "still running" check would trip, and the script would exit 1 -- BEFORE reaching the enclave block
+# that kills run_enclave.sh.  Every subsequent stop repeated it.  One survived four attempts across
+# an hour, kept respawning a DEBUG enclave, and made is_qadena_running true forever; start_qadena.sh
+# then reported "already running" and never launched the chain, so a --from-genesis run failed with
+# "chain did not produce a block within 120s" and no mention of any of this.
+#
+# Unconditional, and before the flag checks: a stray supervisor is never wanted, whichever subset of
+# components this invocation was asked to stop.
+pkill -KILL -f "run_enclave.sh"
+pkill -KILL -f "run_signerenclave.sh"
+
 if [[ $stop_qadena -eq 1 ]] ; then
     echo "stop_qadena.sh: Stopping Qadena"
     pkill -INT -f "qadenad"
 
-    # check if qadeand is dead after 2 seconds
+    # check if qadenad is dead after 2 seconds
     sleep 2
-    pgrep -f "qadenad" > /dev/null
-    if [[ $? -eq 0 ]]; then
-        echo "stop_qadena.sh: Error: qadenad is still running"
+    if pgrep -f "qadenad" > /dev/null ; then
+        echo "stop_qadena.sh: qadenad did not exit on SIGINT, escalating to SIGKILL"
         pkill -9 -f "qadenad"
-        exit 1
+        sleep 1
+        if pgrep -f "qadenad" > /dev/null ; then
+            echo "stop_qadena.sh: Error: qadenad is STILL running after SIGKILL"
+            stop_failed=1
+        fi
     fi
+    # NOT `exit 1` here.  Exiting mid-script leaves the enclave, init-enclave and signer-enclave
+    # blocks below unrun, which is how a supervisor outlived the script meant to kill it.  The
+    # failure is remembered and reported at the end, after everything else has been stopped.
 fi
 
 if [[ $stop_enclave -eq 1 ]] ; then
@@ -126,3 +151,8 @@ if is_qadena_running; then
     echo "stop_qadena.sh: Error: Qadena is still running"
     exit 1
 fi
+
+# A qadenad that survived SIGKILL above is still a failure, even though nothing is running under the
+# names is_qadena_running looks for.  Reported here rather than by an early exit, so everything got
+# stopped first.
+exit $stop_failed
