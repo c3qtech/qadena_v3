@@ -110,13 +110,42 @@ done
 
 # The regulator's private key lives in the enclave params, not the keyring.  The file is a JSON
 # blob with a signer id prefixed before the opening brace, so strip everything up to it.
+#
+# THAT ONLY WORKS IN DEBUG MODE, and the difference is the point rather than an inconvenience.  The
+# debug enclave "seals" by prefixing an id onto plaintext JSON, so the regulator private key is
+# sitting in a file readable by anyone on the box.  A real SGX enclave seals with the hardware key,
+# so the same file is ciphertext and the key CANNOT be recovered from outside the enclave by anyone,
+# including root and including this test.  That is the security property the whole design rests on.
+#
+# So under real sealing this suite drops the assertions that need the key and keeps the rest, and it
+# says exactly which ones it dropped.  Failing instead would report a broken chain when the chain is
+# behaving correctly; skipping quietly would let "suspicious PASSED" imply a decryption check that
+# never ran.
 params_file=$(ls "$QADENAHOME"/enclave_config/enclave_params_*.json 2>/dev/null | head -1)
 [ -n "$params_file" ] || fail "no enclave params file under $QADENAHOME/enclave_config"
-regulator_privk=$(sed 's/^[^{]*//' "$params_file" | jq -r '.SharedEnclaveParams.RegulatorPrivK')
-[ -n "$regulator_privk" ] && [ "$regulator_privk" != "null" ] \
-    || fail "could not read RegulatorPrivK from $params_file"
-regulator_id=$(sed 's/^[^{]*//' "$params_file" | jq -r '.SharedEnclaveParams.RegulatorID')
-echo "regulator: $regulator_id"
+
+sealed_plaintext=0
+if sed 's/^[^{]*//' "$params_file" 2>/dev/null | jq -e '.SharedEnclaveParams' > /dev/null 2>&1; then
+    sealed_plaintext=1
+fi
+
+regulator_privk=""
+if [ $sealed_plaintext -eq 1 ]; then
+    regulator_privk=$(sed 's/^[^{]*//' "$params_file" | jq -r '.SharedEnclaveParams.RegulatorPrivK')
+    [ -n "$regulator_privk" ] && [ "$regulator_privk" != "null" ] \
+        || fail "could not read RegulatorPrivK from $params_file"
+    regulator_id=$(sed 's/^[^{]*//' "$params_file" | jq -r '.SharedEnclaveParams.RegulatorID')
+    echo "regulator: $regulator_id"
+else
+    # Distinguished from a corrupt file by checking the enclave is genuinely a real one; otherwise a
+    # debug params file that had been truncated would silently take this branch and disable the
+    # decryption assertion on a chain where it should have worked.
+    use_real_enclave "$qadenabin/qadenad_enclave" \
+        || fail "$params_file is not parseable and the enclave is NOT a real SGX one, so it should have been plaintext -- the file looks corrupt"
+    echo "REAL SGX SEALING: $params_file is ciphertext, so the regulator key cannot be read from outside the enclave."
+    echo "NOT VERIFIED IN THIS RUN: that a filed report decrypts with the regulator key (needs that key)."
+    echo "STILL VERIFIED: that crossing the threshold FILES a report, that opt-in is respected, and the counts."
+fi
 
 # the threshold is evaluated in USD, so a missing price makes this test meaningless
 qdn_usd=$(qadenad_alias query pricefeed price cn:qdn:usd --output json 2>/dev/null | jq -r '.price.price')
@@ -220,9 +249,22 @@ echo "suspicious transactions: $mid_count -> $after_count"
 echo "-------------------------"
 echo "the report must be readable BY THE REGULATOR -- it is encrypted to their key"
 echo "-------------------------"
-decrypted=$(qadenad_alias query qadena list-suspicious-transaction "$regulator_privk" 2>&1)
-[ -n "$decrypted" ] || fail "the regulator key decrypted nothing; the report is not readable by $regulator_id"
-echo "$decrypted" | tail -20
+if [ $sealed_plaintext -eq 1 ]; then
+    decrypted=$(qadenad_alias query qadena list-suspicious-transaction "$regulator_privk" 2>&1)
+    [ -n "$decrypted" ] || fail "the regulator key decrypted nothing; the report is not readable by $regulator_id"
+    echo "$decrypted" | tail -20
+else
+    # Under real sealing the key is unavailable to this script by design, so the strongest thing that
+    # can still be shown from outside is that the report EXISTS and is not stored in the clear.  That
+    # is worth asserting rather than passing over: a report that listed readably without a key would
+    # mean the encryption had stopped being applied, which is the failure that matters most here and
+    # is detectable without ever holding the key.
+    echo "REAL SGX SEALING: the regulator key is inside the enclave, so decryption cannot be checked here."
+    clear_listing=$(qadenad_alias query qadena list-suspicious-transaction --output json 2>/dev/null)
+    echo "$clear_listing" | grep -qiE '"(srcWalletID|dstWalletID|amount)"[[:space:]]*:[[:space:]]*"[a-z]+1[a-z0-9]{20,}"' \
+        && fail "a suspicious transaction lists readable wallet ids WITHOUT the regulator key; the report is not encrypted"
+    echo "reports are present and not readable without the regulator key"
+fi
 
 echo "========================="
 echo "5. the funds still queued normally despite being flagged"

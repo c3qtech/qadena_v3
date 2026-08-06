@@ -184,18 +184,47 @@ old_params="$QADENAHOME/enclave_config/enclave_params_$saved_unique.json"
 [ -x "$qadenabin/qadenad_enclave.$saved_unique" ] \
     || fail "no $qadenabin/qadenad_enclave.$saved_unique -- upgrade_enclave.sh needs the old binary to hand its keys over"
 
-# Captured BEFORE anything is touched.  These three are the whole point of the test.
-old_regulator=$(regulator_privk_of "$old_params")
-old_jar=$(jar_privk_of "$old_params")
+# Captured BEFORE anything is touched.
+#
+# READING THE SEALED KEYS IS A DEBUG-ONLY CAPABILITY, and that asymmetry is the security property
+# rather than a limitation of the test.  The debug enclave "seals" by prefixing an id onto plaintext
+# JSON, so the regulator and jar private keys sit in a file any process on the box can read.  A real
+# SGX enclave seals with the hardware key, so the same file is ciphertext that NOBODY outside the
+# enclave can read -- including root, and including this test.
+#
+# So on SGX the before/after key comparison is impossible, and the suite leans on the assertion that
+# was always the stronger one anyway: a scanned send after the upgrade (5b).  Comparing the key files
+# proves the bytes match; the send proves the new enclave can actually USE what the old one sealed,
+# which is what an upgrade has to preserve.  Section 5b runs identically in both modes.
 reports_before=$(suspicious_count)
-[ -n "$old_regulator" ] && [ "$old_regulator" != "null" ] || fail "could not read RegulatorPrivK from $old_params"
 [ -n "$reports_before" ] || fail "could not count suspicious transactions"
-echo "sealed keys captured; $reports_before reports on record"
 
-# A report to decrypt afterwards.  With none on record the decryption assertion below would pass
-# vacuously -- and that assertion is the one that would actually catch lost keys.
-[ "$reports_before" -gt 0 ] \
-    || fail "no reports on record; run test_suspicious.sh first or this suite cannot prove the keys still work"
+can_read_sealed_keys=0
+old_regulator=""; old_jar=""
+if [ $sgx_mode -eq 0 ]; then
+    old_regulator=$(regulator_privk_of "$old_params")
+    old_jar=$(jar_privk_of "$old_params")
+    [ -n "$old_regulator" ] && [ "$old_regulator" != "null" ] \
+        || fail "could not read RegulatorPrivK from $old_params"
+    can_read_sealed_keys=1
+    echo "sealed keys captured; $reports_before reports on record"
+
+    # A report to decrypt afterwards.  With none on record the decryption assertion below would pass
+    # vacuously -- and that assertion is the one that would actually catch lost keys.
+    [ "$reports_before" -gt 0 ] \
+        || fail "no reports on record; run test_suspicious.sh first or this suite cannot prove the keys still work"
+else
+    # Assert it really IS opaque rather than assuming so.  If a real enclave ever wrote its params in
+    # the clear, every private key on the node would be readable and this is the one place positioned
+    # to notice.
+    if sed 's/^[^{]*//' "$old_params" 2>/dev/null | jq -e '.SharedEnclaveParams.RegulatorPrivK' > /dev/null 2>&1; then
+        fail "$old_params is READABLE PLAINTEXT under a real SGX enclave; the regulator and jar private keys are exposed on disk"
+    fi
+    echo "REAL SGX SEALING: $old_params is ciphertext, so the keys cannot be compared across the upgrade."
+    echo "NOT VERIFIED IN THIS RUN: byte-for-byte key preservation, and report decryption (both need the sealed keys)."
+    echo "VERIFIED INSTEAD, and more strongly: that the new enclave can USE the old one's sealed state (5b)."
+    echo "$reports_before reports on record"
+fi
 
 echo "========================="
 echo "1. register the next enclave identity by governance"
@@ -377,16 +406,29 @@ echo "4. the sealed keys came ACROSS, not fresh"
 echo "========================="
 # The heart of it.  A fresh enclave produces perfectly valid keys and a chain that looks healthy --
 # the failure is invisible until someone tries to read a report, which may be months later.
-new_regulator=$(regulator_privk_of "$new_params")
-new_jar=$(jar_privk_of "$new_params")
+new_regulator=""
+if [ $can_read_sealed_keys -eq 1 ]; then
+    new_regulator=$(regulator_privk_of "$new_params")
+    new_jar=$(jar_privk_of "$new_params")
 
-[ "$new_regulator" = "$old_regulator" ] \
-    || fail "the regulator key CHANGED across the upgrade; every report filed before it is now permanently undecryptable"
-echo "regulator key preserved"
+    [ "$new_regulator" = "$old_regulator" ] \
+        || fail "the regulator key CHANGED across the upgrade; every report filed before it is now permanently undecryptable"
+    echo "regulator key preserved"
 
-[ "$new_jar" = "$old_jar" ] \
-    || fail "the jar key CHANGED across the upgrade"
-echo "jar key preserved"
+    [ "$new_jar" = "$old_jar" ] \
+        || fail "the jar key CHANGED across the upgrade"
+    echo "jar key preserved"
+else
+    # Under hardware sealing the ciphertext cannot be compared either -- re-sealing the identical
+    # plaintext yields different bytes, so a mismatch would prove nothing and a match is impossible.
+    # What IS checkable from outside is that the new enclave sealed its params at all and did not
+    # write them in the clear; whether the CONTENT carried across is settled by 5b.
+    [ -s "$new_params" ] || fail "$new_params is empty; the new enclave sealed nothing"
+    if sed 's/^[^{]*//' "$new_params" 2>/dev/null | jq -e '.SharedEnclaveParams.RegulatorPrivK' > /dev/null 2>&1; then
+        fail "$new_params is READABLE PLAINTEXT under a real SGX enclave; the migrated keys are exposed on disk"
+    fi
+    echo "new params sealed and opaque; key identity is settled functionally by 5b, not by comparison"
+fi
 
 echo "========================="
 echo "5. reports filed before the upgrade are still readable"
@@ -397,12 +439,16 @@ reports_after=$(suspicious_count)
 [ "$reports_after" = "$reports_before" ] \
     || fail "report count changed across the upgrade ($reports_before -> $reports_after)"
 
-decrypted=$(qadenad_alias query qadena list-suspicious-transaction "$new_regulator" 2>&1)
-echo "$decrypted" | grep -q "Suspicious Transaction" \
-    || { echo "$decrypted" | head -5; fail "the migrated regulator key could not decrypt any report"; }
-echo "$decrypted" | grep -qiE "couldn't decrypt|invalid length|generic error" \
-    && { echo "$decrypted" | head -5; fail "a report failed to decrypt with the migrated key"; }
-echo "$reports_after reports still decrypt with the migrated key"
+if [ $can_read_sealed_keys -eq 1 ]; then
+    decrypted=$(qadenad_alias query qadena list-suspicious-transaction "$new_regulator" 2>&1)
+    echo "$decrypted" | grep -q "Suspicious Transaction" \
+        || { echo "$decrypted" | head -5; fail "the migrated regulator key could not decrypt any report"; }
+    echo "$decrypted" | grep -qiE "couldn't decrypt|invalid length|generic error" \
+        && { echo "$decrypted" | head -5; fail "a report failed to decrypt with the migrated key"; }
+    echo "$reports_after reports still decrypt with the migrated key"
+else
+    echo "$reports_after reports still on record (unchanged); decryption needs the sealed regulator key and cannot be checked here"
+fi
 
 echo "========================="
 echo "5b. the enclave can still UNSEAL what the old one wrote"
@@ -422,6 +468,37 @@ scan_probe=$(qadenad_alias tx bank send treasury "$(qadenad_alias keys show ann 
 probe_hash=$(echo "$scan_probe" | jq -r '.txhash' 2>/dev/null)
 [ -n "$probe_hash" ] && [ "$probe_hash" != "null" ] \
     || fail "the probe send produced no txhash; the chain was not accepting transactions after the restart"
+
+# READ THE IMMEDIATE RESPONSE FIRST.  A CheckTx rejection is reported right here, with a raw_log that
+# names the cause -- and the transaction is then never included in a block, so it can never be found
+# by the polling below.  Discarding this and polling anyway is how a run reported
+#
+#     the probe send <hash> never resolved, so whether the sealed store survived is UNKNOWN
+#
+# after five minutes, when the answer had been handed to it immediately.  A txhash is returned for a
+# rejected transaction too, so its presence proves nothing about acceptance.
+#
+# Retried rather than failed outright: the node has just restarted, and a first attempt can lose to
+# a stale sequence or an enclave still coming up.  What must not happen is treating the rejection as
+# an absence of information.
+probe_check=$(echo "$scan_probe" | jq -r '.code // empty' 2>/dev/null)
+if [ -n "$probe_check" ] && [ "$probe_check" != "0" ]; then
+    probe_log=$(echo "$scan_probe" | jq -r '.raw_log // empty' 2>/dev/null)
+    echo "probe rejected at CheckTx (code $probe_check): $probe_log"
+    echo "retrying -- the node has just restarted"
+    for _ in {1..10}; do
+        sleep 5
+        scan_probe=$(qadenad_alias tx bank send treasury "$(qadenad_alias keys show ann -a --keyring-backend test)" \
+            1qdn --from treasury --yes --output json \
+            --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment 2>/dev/null)
+        probe_check=$(echo "$scan_probe" | jq -r '.code // empty' 2>/dev/null)
+        [ "$probe_check" = "0" ] && break
+    done
+    [ "$probe_check" = "0" ] \
+        || fail "the probe send is still refused at CheckTx (code $probe_check): $(echo "$scan_probe" | jq -r '.raw_log // empty' 2>/dev/null)"
+    probe_hash=$(echo "$scan_probe" | jq -r '.txhash' 2>/dev/null)
+    echo "probe accepted on retry"
+fi
 
 # POLLED, and "not resolvable yet" is kept DISTINCT from "the scan refused it".
 #
