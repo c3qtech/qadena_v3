@@ -105,9 +105,23 @@ evm_value_send() {
 echo "========================="
 echo "preflight"
 echo "========================="
-if [ -d "$HOME/.foundry/bin" ] && [[ ! $PATH == *"$HOME/.foundry/bin"* ]]; then
-    export PATH="$HOME/.foundry/bin:$PATH"
+# foundry installs per-user under ~/.foundry/bin, which is not on the default PATH.
+#
+# THE SUDO CASE IS THE ONE THAT BITES.  On SGX the whole regression runs as root, so $HOME is /root
+# and this looked for /root/.foundry/bin -- while the toolchain sits in the invoking user's home.
+# sudo's secure_path strips it from PATH as well, so a perfectly good foundry install still produced
+# "cast (foundry) not found" and the EVM suite was skipped on exactly the machine it was wanted on.
+# SUDO_USER names the real user, and setup_env.sh already resolves QADENAHOME the same way.
+foundry_homes=("$HOME")
+if [ -n "$SUDO_USER" ]; then
+    sudo_home=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)
+    [ -n "$sudo_home" ] && foundry_homes+=("$sudo_home")
 fi
+for h in $foundry_homes; do
+    if [ -d "$h/.foundry/bin" ] && [[ ! $PATH == *"$h/.foundry/bin"* ]]; then
+        export PATH="$h/.foundry/bin:$PATH"
+    fi
+done
 command -v cast > /dev/null 2>&1 \
     || fail "cast (foundry) not found -- install from https://foundry.paradigm.xyz, or skip this test"
 
