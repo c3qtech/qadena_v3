@@ -53,7 +53,7 @@ only=""
 since=""
 
 # The default set is "what a node needs to run".  testscripts is deliberately outside it.
-DEFAULT_COMPONENTS="chain,enclave,signer,libs,scripts,config"
+DEFAULT_COMPONENTS="chain,enclave,signer,libs,scripts,config,prereqs"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -74,8 +74,8 @@ want() { echo ",$selected," | grep -q ",$1,"; }
 
 for c in ${(s:,:)selected}; do
     case "$c" in
-        chain|enclave|signer|libs|scripts|config|testscripts) ;;
-        *) fail "unknown component '$c'.  Valid: chain enclave signer libs scripts config testscripts" ;;
+        chain|enclave|signer|libs|scripts|config|prereqs|testscripts) ;;
+        *) fail "unknown component '$c'.  Valid: chain enclave signer libs scripts config prereqs testscripts" ;;
     esac
 done
 
@@ -97,8 +97,13 @@ commit=$(cd "$qadenabuild" && git rev-parse --short HEAD)
 head_time=$(cd "$qadenabuild" && git log -1 --format=%ct HEAD)
 stale=0
 
-stage=$(mktemp -d) || fail "could not create a staging directory"
-trap 'rm -rf "$stage"' EXIT INT TERM
+# The archive gets a TOP-LEVEL DIRECTORY, so `tar xzf` in a home directory produces one tidy folder
+# rather than scattering bin/, scripts/ and config/ into whatever the operator was standing in.  The
+# final name depends on the version, which is not known until the binaries have been read, so stage
+# under a placeholder and rename before tarring.
+tmproot=$(mktemp -d) || fail "could not create a staging directory"
+trap 'rm -rf "$tmproot"' EXIT INT TERM
+stage="$tmproot/pkg"
 mkdir -p "$stage/bin"
 
 chain_src="$qadenabuild/cmd/qadenad/qadenad"
@@ -203,6 +208,20 @@ if want config; then
     included="$included config/"
 fi
 
+if want prereqs; then
+    # THE MACHINE HAS TO BE ABLE TO SATISFY ITS OWN PREREQUISITES.  ego, the SGX DCAP quote provider,
+    # the PCCS configuration and the sgx/sgx_prv group membership are not things a node package can
+    # install by copying files, and without them the node cannot start -- so ship the script that
+    # does install them rather than leaving the operator to find it.  It is ~25KB.
+    #
+    # It is the BUILD setup script, so it installs Go, ignite and docker too, which a run-only node
+    # does not need.  That is deliberate: one tested path beats a run-only variant that drifts out of
+    # step with the real one.  install.sh only points at it, and never runs it.
+    mkdir -p "$stage/ubuntu"
+    cp "$qadenabuild"/ubuntu/* "$stage/ubuntu/"
+    included="$included ubuntu/"
+fi
+
 if want testscripts; then
     mkdir -p "$stage/testscripts" "$stage/test_data"
     cp "$qadenabuild"/testscripts/* "$stage/testscripts/"
@@ -212,8 +231,31 @@ fi
 
 [[ -n "$included" ]] || fail "nothing selected to package (check --only)"
 
+# THE INSTALLER TRAVELS WITH THE PACKAGE.  A target machine has the download and nothing else -- no
+# checkout to run scripts/install_release.sh from -- so it ships at the package root as install.sh
+# and is standalone by construction.  It is NOT checksummed with the payload and NOT on the
+# installer's own allow-list: it is the thing doing the verifying, not a thing being installed.
+cp "$qadenascripts/install_release.sh" "$stage/install.sh"
+chmod +x "$stage/install.sh"
+
+cat > "$stage/README.txt" <<EOF
+Qadena node package
+
+  tar xzf <this archive>
+  sudo ./<extracted directory>/install.sh
+
+install.sh works out whether this machine needs a first install or an upgrade.  For an upgrade it
+stages the new enclave beside the running one and switches only once the chain has made the new
+identity ACTIVE; add --wait-active to have it wait for that and perform the cutover itself, and
+--restart to start the node afterwards.
+
+The machine needs ego (EGo 1.8.1) to run a node at all, and jq, curl and dasel to join a chain.
+
+Contents are listed in manifest.txt and checksummed in sha256sums.txt.
+EOF
+
 checksum_all() {
-    ( cd "$stage" && find bin scripts config testscripts test_data -type f 2>/dev/null \
+    ( cd "$stage" && find bin scripts config ubuntu testscripts test_data -type f 2>/dev/null \
         | sort | xargs sha256sum > sha256sums.txt )
 }
 checksum_all
@@ -248,22 +290,30 @@ fi
 label=$(grep '^qadenad.version:' "$manifest" | awk '{print $2}')
 [[ -n "$label" ]] || label="$commit"
 kind=$([[ -n "$since" ]] && echo update || echo full)
-archive="$outdir/qadena-$kind-$label-$commit.tar.gz"
+pkgname="qadena-$kind-$label-$commit"
+archive="$outdir/$pkgname.tar.gz"
 mkdir -p "$outdir"
-tar -czf "$archive" -C "$stage" .
+
+# Rename the placeholder to the real package name so the archive carries ONE top-level directory:
+# `tar xzf` in a home directory then produces one tidy folder instead of scattering bin/, scripts/
+# and config/ across whatever the operator happened to be standing in.
+mv "$stage" "$tmproot/$pkgname"
+tar -czf "$archive" -C "$tmproot" "$pkgname"
+stage="$tmproot/$pkgname"
 
 echo "================================================"
 echo "packaged: $archive"
-sed 's/^/  /' "$manifest"
+sed 's/^/  /' "$stage/manifest.txt"
 echo "  size: $(du -h "$archive" | cut -f1)"
 echo "================================================"
 echo ""
-if grep -q '^qadenad_enclave.unique_id:' "$manifest"; then
-    u=$(grep '^qadenad_enclave.unique_id:' "$manifest" | awk '{print $2}')
-    s=$(grep '^qadenad_enclave.signer:' "$manifest" | awk '{print $2}')
+if grep -q '^qadenad_enclave.unique_id:' "$stage/manifest.txt"; then
+    u=$(grep '^qadenad_enclave.unique_id:' "$stage/manifest.txt" | awk '{print $2}')
+    s=$(grep '^qadenad_enclave.signer:' "$stage/manifest.txt" | awk '{print $2}')
     echo "If this enclave is NEW to the chain, register it before installing anywhere:"
     echo "  testscripts/test_update_enclave_identity.sh $u $s unvalidated"
     echo ""
 fi
-echo "On each target node:"
-echo "  scripts/install_release.sh $(basename "$archive")"
+echo "On each target node -- no checkout, no toolchain, just the download:"
+echo "  tar xzf $(basename "$archive")"
+echo "  sudo ./$pkgname/install.sh"

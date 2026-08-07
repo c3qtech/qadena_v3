@@ -2,7 +2,19 @@
 #
 # Install or upgrade a Qadena node from a package built by buildscripts/package_release.sh.
 #
+# ON A TARGET MACHINE, which has nothing but the download:
+#
+#   tar xzf qadena-full-1.1.8-abc1234.tar.gz
+#   sudo ./qadena-full-1.1.8-abc1234/install.sh
+#
+# There is no git checkout, no build tree and no toolchain on that machine, and this script needs
+# none: it is shipped inside the package as install.sh and sources nothing.  ego IS required, since
+# a node cannot start without it whatever is installed.
+#
+# From a checkout, pointing at an archive works too:
+#
 #   scripts/install_release.sh <archive.tar.gz> [--wait-active[=SECONDS]] [--restart] [--force]
+#                                               [--home DIR]
 #
 # ONE SCRIPT, BOTH JOBS.  It works out for itself whether this machine needs a first INSTALL or an
 # UPGRADE, because the difference is observable -- a machine with no qadenad and no sealed enclave
@@ -36,8 +48,12 @@
 # they are.  Sealed state migrates via this node's OWN old enclave at the next start -- it is never
 # copied between machines.
 
+# STANDALONE BY DESIGN.  This script is shipped INSIDE the package as install.sh, so on a target
+# machine there is no git checkout, no setup_env.sh in a sibling directory, and no build tree to
+# infer anything from -- which is the whole point of distributing a package.  It therefore derives
+# everything it needs itself and sources nothing.
+
 SCRIPT_DIR="${0:A:h}"
-source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
@@ -46,6 +62,7 @@ wait_active=0
 wait_secs=1800
 restart=0
 force=0
+home_override=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -53,24 +70,86 @@ while [[ $# -gt 0 ]]; do
     --wait-active=*)  wait_active=1; wait_secs="${1#*=}"; shift ;;
     --restart)        restart=1; shift ;;
     --force)          force=1; shift ;;
+    --home)           [[ -n "$2" && "$2" != --* ]] || { echo "--home requires a directory"; exit 1; }
+                      home_override="$2"; shift 2 ;;
     --help)
-      sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) archive="$1"; shift ;;
   esac
 done
 
-fail() { echo ""; echo "install_release.sh: $1" >&2; exit 1; }
+fail() { echo ""; echo "install: $1" >&2; exit 1; }
 mval() { grep "^$1:" "$stage/manifest.txt" 2>/dev/null | awk '{print $2}'; }
 
-[[ -n "$archive" ]] || fail "no archive given.  Usage: install_release.sh <archive.tar.gz>"
-[[ -f "$archive" ]] || fail "no such archive: $archive"
-archive="${archive:A}"
+# WHERE THE NODE LIVES.  Under sudo, $HOME is root's, and installing a node into /root is a mistake
+# that is tedious to undo -- the enclave needs root to run, so sudo is the normal case, not the
+# exception.  Resolve the invoking user's home instead, exactly as setup_env.sh does.
+if [[ -n "$home_override" ]]; then
+    QADENAHOME="${home_override:A}"
+elif [[ -n "$SUDO_USER" ]]; then
+    QADENAHOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)/qadena"
+else
+    QADENAHOME="$(cd ~ && pwd)/qadena"
+fi
+export QADENAHOME
+qadenabin="$QADENAHOME/bin"
+qadenascripts="$QADENAHOME/scripts"
+export LD_LIBRARY_PATH="$qadenabin:$LD_LIBRARY_PATH"
+echo "node home: $QADENAHOME"
 
-stage=$(mktemp -d) || fail "could not create a staging directory"
-trap 'rm -rf "$stage"' EXIT INT TERM
-tar -xzf "$archive" -C "$stage" || fail "could not extract $archive"
-[[ -f "$stage/manifest.txt" ]] || fail "$archive has no manifest -- is it a qadena release package?"
+# WHAT THE TARGET MACHINE MUST ALREADY HAVE.  ego is not optional and never becomes optional: run.sh
+# derives --enclave-signer-id and --enclave-unique-id from it on every start, so a box without it
+# cannot run a node no matter what is installed.  Better to say so now than at the first start.
+prereq_hint() {
+    # The package ships ubuntu/setup_qadena_build.sh precisely so a bare machine can fix this
+    # itself.  Point at the copy that travelled with this package, not at a checkout that may not
+    # exist here.
+    # $SCRIPT_DIR/ubuntu when run from an unpacked package, ../ubuntu when run from a checkout.
+    for d in "$SCRIPT_DIR/ubuntu" "$SCRIPT_DIR/../ubuntu"; do
+        if [[ -f "$d/setup_qadena_build.sh" ]]; then
+            echo "       sudo ${d:A}/setup_qadena_build.sh"
+            return 0
+        fi
+    done
+    echo "       run ubuntu/setup_qadena_build.sh from the qadena source tree"
+}
+
+if ! command -v ego > /dev/null 2>&1; then
+    fail "ego is not installed, and a node cannot start without it -- run.sh derives
+       --enclave-signer-id and --enclave-unique-id from it on every start.
+
+       This package ships the setup script that installs it, along with the SGX quote
+       provider, the PCCS configuration and the sgx/sgx_prv group membership:
+$(prereq_hint)"
+fi
+missing=""
+for t in jq curl dasel; do
+    command -v "$t" > /dev/null 2>&1 || missing="$missing $t"
+done
+if [[ -n "$missing" ]]; then
+    echo "  NOTE: missing:$missing -- needed to JOIN a chain (add_full_node.sh,"
+    echo "        convert_to_validator.sh), not to install.  Install before joining:"
+    prereq_hint
+fi
+
+# EITHER an archive to unpack, OR this script sitting inside an already-unpacked package.  The second
+# form is what a target machine actually does: untar, run ./install.sh, done.
+if [[ -z "$archive" && -f "$SCRIPT_DIR/manifest.txt" ]]; then
+    stage="$SCRIPT_DIR"
+    echo "package: $stage (already unpacked)"
+else
+    [[ -n "$archive" ]] || fail "no archive given, and no manifest.txt beside this script.
+       Usage:  install_release.sh <archive.tar.gz>
+       or:     tar xzf <archive.tar.gz> && <extracted-dir>/install.sh"
+    [[ -f "$archive" ]] || fail "no such archive: $archive"
+    archive="${archive:A}"
+    stage=$(mktemp -d) || fail "could not create a staging directory"
+    trap 'rm -rf "$stage"' EXIT INT TERM
+    tar -xzf "$archive" --strip-components=1 -C "$stage" \
+        || fail "could not extract $archive"
+    [[ -f "$stage/manifest.txt" ]] || fail "$archive has no manifest -- is it a qadena release package?"
+fi
 
 echo "=== package ==="
 sed 's/^/  /' "$stage/manifest.txt"
@@ -96,6 +175,9 @@ while read -r _sum entry; do
         bin/qadenad|bin/qadenad_enclave|bin/signer_enclave|bin/libwasmvm*.so) ;;
         scripts/*|testscripts/*|test_data/*) ;;
         config/config.yml|config/public.pem) ;;
+        # Carried for the operator to run by hand; this script points at it but never runs it, and
+        # never copies it into the node home.
+        ubuntu/*) ;;
         *) fail "the package contains '$entry', which this installer will not write.
        Only binaries, scripts, testscripts, config.yml and public.pem are installable.  Node
        identity and chain state are never distributed." ;;
@@ -414,7 +496,13 @@ if [[ -n "$new_unique" ]]; then
     else
         echo "  STAGED but not activated; this node still runs $cur_version (${cur_unique:0:16})."
         echo "  When the chain has promoted $new_unique, finish with:"
-        echo "    scripts/install_release.sh $archive --wait-active --restart"
+        # Re-invoke however this run was invoked -- from the unpacked package on a target machine,
+        # or from a checkout against the archive.
+        if [[ -n "$archive" ]]; then
+            echo "    $0 $archive --wait-active --restart"
+        else
+            echo "    $0 --wait-active --restart"
+        fi
     fi
 fi
 
