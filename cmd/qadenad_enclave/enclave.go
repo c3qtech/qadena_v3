@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"os"
 	"strings"
+	"syscall"
 
 	"encoding/hex"
 
@@ -7343,14 +7344,35 @@ func main() {
 	if SupportsUnixDomainSockets {
 		var err error
 
-		// delete file if it exists
-		os.Remove(fmt.Sprintf("/tmp/qadena_%d.sock", *port))
+		sockPath := fmt.Sprintf("/tmp/qadena_%d.sock", *port)
+
+		// A LEFTOVER SOCKET IS REMOVED, and a removal that FAILS is reported.
+		//
+		// This used to discard the error, which is fine while the same user always runs the enclave
+		// and misleading the moment that changes.  /tmp is sticky, so a socket left behind by a
+		// previous run AS ANOTHER USER -- root, typically, after the node was started with sudo for
+		// SGX -- cannot be unlinked here.  net.Listen then fails with
+		//
+		//     bind: address already in use
+		//
+		// which names neither the file nor the reason, and run_enclave.sh retries forever against a
+		// condition that will never clear on its own.
+		if err := os.Remove(sockPath); err != nil && !os.IsNotExist(err) {
+			c.LoggerError(logger, "could not remove the stale socket "+sockPath+": "+err.Error())
+			if fi, statErr := os.Stat(sockPath); statErr == nil {
+				if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
+					c.LoggerError(logger, fmt.Sprintf(
+						"it belongs to uid %d and this process is uid %d -- /tmp is sticky, so only that user or root can remove it.  Run:  sudo rm -f %s",
+						st.Uid, os.Getuid(), sockPath))
+				}
+			}
+		}
 
 		// listen on a unix domain socket
-		lis, err = net.Listen("unix", fmt.Sprintf("/tmp/qadena_%d.sock", *port))
+		lis, err = net.Listen("unix", sockPath)
 
 		if err != nil {
-			c.LoggerError(logger, "failed to listen: "+err.Error())
+			c.LoggerError(logger, "failed to listen on "+sockPath+": "+err.Error())
 			return
 		}
 	} else {
