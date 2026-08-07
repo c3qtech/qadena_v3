@@ -101,8 +101,17 @@ add_binary() {   # name src [signed]
         stale=1
     fi
 
+    # THE TWO BINARIES ANSWER DIFFERENTLY.  qadenad is a cobra command, so it wants the `version`
+    # SUBCOMMAND -- `-version` gets you "unknown shorthand flag: 'v'", which then sails on into the
+    # manifest as the version string.  It also links libwasmvm at load time, so it cannot even start
+    # without the library on the path.  The enclaves are plain binaries with a -version flag.
     local ver meas=""
-    ver=$("$src" -version 2>&1 | head -1)
+    if [[ "$name" == "qadenad" ]]; then
+        ver=$(LD_LIBRARY_PATH="$qadenabin:$(dirname "$src")" "$src" version 2>/dev/null | head -1)
+        [[ -n "$ver" ]] || fail "$name would not report its version -- is libwasmvm missing from $qadenabin?"
+    else
+        ver=$("$src" -version 2>&1 | head -1)
+    fi
     if [[ "$signed" == "signed" ]]; then
         command -v ego > /dev/null 2>&1 || fail "ego is not installed; cannot verify $name is signed"
         meas=$(ego uniqueid "$src" 2>/dev/null | tail -1)

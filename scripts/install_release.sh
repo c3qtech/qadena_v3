@@ -175,7 +175,11 @@ for f in "$stage"/bin/*(N); do
             echo "  installed signer_enclave ($m)"
             ;;
         qadenad)
-            v=$("$f" -version 2>&1 | head -1)
+            # cobra: the `version` SUBCOMMAND, not -version.  And it links libwasmvm at load time,
+            # so it needs the staged libs (first install) or the installed ones on the path.
+            v=$(LD_LIBRARY_PATH="$stage/bin:$qadenabin" "$f" version 2>/dev/null | head -1)
+            [[ -n "$v" ]] || v="$(mval qadenad.version)"
+            [[ -n "$v" ]] || v="unknown"
             cp "$f" "$qadenabin/qadenad.$v"
             cp "$f" "$qadenabin/qadenad"
             echo "  installed qadenad ($v)"
