@@ -87,6 +87,7 @@ check_signed signer_enclave  signer_enclave
 echo ""
 echo "=== 2. the enclave can still unseal what this node stored ==="
 new_encl="$stage/bin/qadenad_enclave"
+first_install=0
 if [[ -f "$new_encl" ]]; then
     cur="$qadenabin/qadenad_enclave"
     new_unique=$(ego uniqueid "$new_encl" 2>/dev/null | tail -1)
@@ -124,6 +125,7 @@ if [[ -f "$new_encl" ]]; then
     else
         echo "  no enclave installed yet -- first install"
         activate=1
+        first_install=1
     fi
 fi
 
@@ -131,6 +133,14 @@ echo ""
 echo "=== 3. the chain accepts this enclave identity ==="
 if [[ ! -f "$new_encl" ]]; then
     echo "  no enclave in this package -- skipped"
+elif [[ $first_install -eq 1 ]]; then
+    # A BARE MACHINE CANNOT ASK, AND HAS NOTHING TO PROTECT.  There is no qadenad to query with, no
+    # home directory to query from, and no sealed state that a wrong identity could strand.  The
+    # check exists to stop an UPGRADE from stepping onto an identity the chain will not accept; on a
+    # first install the node has not joined yet and the identity is checked when it does.
+    echo "  first install -- nothing to query with and no sealed state at risk; skipped"
+    echo "  (this enclave must still be registered and active before the node can participate:"
+    echo "   $new_unique)"
 elif [[ $force -eq 1 ]]; then
     echo "  SKIPPED (--force)"
 else
