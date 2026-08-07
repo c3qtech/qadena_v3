@@ -7,24 +7,36 @@
 # commit measures the same on every machine, which this repo verifies -- so a binary built once and
 # copied is EQUIVALENT to one built locally.  Build once, distribute, verify on arrival.
 #
-# WHAT IS PACKAGED: the expensive artifacts only.
+# WHAT IS PACKAGED: everything buildscripts/install.sh puts on a node, which is the authority on
+# what a running node actually needs.  Binaries alone are NOT enough, and the two easiest omissions
+# both fail late rather than loudly:
 #
-#   qadenad          the chain binary
-#   qadenad_enclave  the signed SGX enclave
-#   signer_enclave   the signed SGX signer enclave
-#   libwasmvm*.so    the wasm runtime shared libraries
+#   chain    qadenad
+#   enclave  qadenad_enclave, the signed SGX enclave
+#   signer   signer_enclave, the signed SGX signer enclave
+#   libs     libwasmvm*.so -- qadenad links these at LOAD time and will not even start without them
+#   scripts  scripts/* -- run.sh, start_qadena.sh, add_full_node.sh and the rest
+#   config   config.yml and public.pem, described below
 #
-# Scripts are NOT packaged by default: they come from git, which is cheap and needs no toolchain,
-# and keeping them in git means the version you run is the version you can read.  --with-scripts
-# includes them for machines that will not have a checkout.
+# public.pem is the ENCLAVE SIGNER'S PUBLIC KEY.  run.sh derives --enclave-signer-id from it
+# (`ego signerid $QADENAHOME/config/public.pem`), so a node without it cannot start, and a node with
+# the WRONG one starts and is refused by the chain.  It is packaged, and checked against the
+# packaged enclave's own signer before the archive is written.
+#
+# config.yml carries minimum-gas-prices, which add_full_node.sh and convert_to_validator.sh read
+# when writing app.toml.  Without it, joining fails.
+#
+# testscripts is available via --only but is NOT in the default set: a node does not need the test
+# suite to run, and it pulls in test_data with it.
 #
 # WHAT IS NEVER PACKAGED: anything node-specific.  genesis.json belongs to the chain and is fetched
-# when joining; enclave_params_<id>.json is SEALED to one machine's enclave; keyring, node_key and
-# priv_validator_key are that node's identity.  Copying any of them between machines either fails to
-# unseal or moves secrets somewhere they were never meant to be.
+# when joining; enclave_params_<id>.json is SEALED to one machine's enclave; keyring, node_key,
+# priv_validator_key, app.toml and config.toml are that node's own identity and settings.  Copying
+# any of them between machines either fails to unseal or moves secrets somewhere they were never
+# meant to be.
 #
-#   ./buildscripts/package_release.sh [--out DIR] [--with-scripts]
-#                                     [--only chain,enclave,signer,libs]
+#   ./buildscripts/package_release.sh [--out DIR]
+#                                     [--only chain,enclave,signer,libs,scripts,config,testscripts]
 #                                     [--changed-since <manifest.txt>]
 #
 # --changed-since produces an UPDATE: only components whose checksum differs from that manifest are
@@ -37,25 +49,35 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 set -e
 
 outdir="."
-with_scripts=0
 only=""
 since=""
+
+# The default set is "what a node needs to run".  testscripts is deliberately outside it.
+DEFAULT_COMPONENTS="chain,enclave,signer,libs,scripts,config"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out)   [[ -n "$2" && "$2" != --* ]] || { echo "--out requires a directory"; exit 1; }; outdir="$2"; shift 2 ;;
     --only)  [[ -n "$2" && "$2" != --* ]] || { echo "--only requires a list"; exit 1; }; only="$2"; shift 2 ;;
     --changed-since) [[ -n "$2" && "$2" != --* ]] || { echo "--changed-since requires a manifest"; exit 1; }; since="$2"; shift 2 ;;
-    --with-scripts) with_scripts=1; shift ;;
     --help)
-      sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
 
 fail() { echo "package_release.sh: $1" >&2; exit 1; }
-want() { [[ -z "$only" ]] && return 0; echo ",$only," | grep -q ",$1,"; }
+
+selected="${only:-$DEFAULT_COMPONENTS}"
+want() { echo ",$selected," | grep -q ",$1,"; }
+
+for c in ${(s:,:)selected}; do
+    case "$c" in
+        chain|enclave|signer|libs|scripts|config|testscripts) ;;
+        *) fail "unknown component '$c'.  Valid: chain enclave signer libs scripts config testscripts" ;;
+    esac
+done
 
 # A dirty tree means the artifacts correspond to no commit, so nobody can reproduce the measurements
 # -- which is the entire basis for trusting a binary you did not build yourself.  Untracked files
@@ -136,23 +158,65 @@ if want enclave; then add_binary qadenad_enclave "$encl_src" signed;    fi
 if want signer;  then add_binary signer_enclave  "$sign_src" signed;    fi
 
 if want libs; then
-    # (N) yields an empty list rather than a zsh "no matches found" error when a location has none.
-    for lib in "$qadenabuild"/cmd/qadenad/libwasmvm*.so(N) "$QADENAHOME"/bin/libwasmvm*.so(N); do
+    # install.sh takes these from vendor, which is the authoritative copy; the other two locations
+    # are where a previous install left them.  (N) yields an empty list rather than a zsh
+    # "no matches found" error when a location has none.
+    for lib in "$qadenabuild"/vendor/github.com/CosmWasm/wasmvm/v2/internal/api/*.so(N) \
+               "$qadenabuild"/cmd/qadenad/libwasmvm*.so(N) "$qadenabin"/libwasmvm*.so(N); do
         [[ -f "$lib" ]] || continue
-        cp "$lib" "$stage/bin/"
-        included="$included $(basename "$lib")"
+        b=$(basename "$lib")
+        [[ -f "$stage/bin/$b" ]] && continue     # first location wins
+        cp "$lib" "$stage/bin/$b"
+        included="$included $b"
     done
+    [[ -n "$(echo "$stage"/bin/*.so(N))" ]] \
+        || fail "no libwasmvm*.so found -- qadenad links these at load time and will not start without them"
 fi
 
-if [[ $with_scripts -eq 1 ]]; then
+if want scripts; then
     mkdir -p "$stage/scripts"
-    cp -r "$qadenabuild/scripts/." "$stage/scripts/" 2>/dev/null || true
+    cp "$qadenabuild"/scripts/* "$stage/scripts/"
     included="$included scripts/"
+fi
+
+if want config; then
+    mkdir -p "$stage/config"
+
+    # ONLY THESE TWO.  Everything else under config/ is the node's own -- genesis.json, node_key.json,
+    # priv_validator_key.json, app.toml, config.toml -- and is written by joining, not by installing.
+    cp "$qadenabuild/config.yml" "$stage/config/config.yml"
+
+    pem="$qadenabuild/cmd/qadenad_enclave/public.pem"
+    [[ -f "$pem" ]] || fail "no public.pem at $pem -- run.sh derives --enclave-signer-id from it and the node cannot start without it"
+    cp "$pem" "$stage/config/public.pem"
+
+    # THE PEM MUST BELONG TO THE PACKAGED ENCLAVE.  A stale public.pem produces a valid-looking node
+    # that hands the chain the wrong --enclave-signer-id and is refused -- a failure that surfaces
+    # only at startup on the target machine, long after this archive was built.
+    if want enclave; then
+        pem_signer=$(ego signerid "$pem" 2>/dev/null | tail -1)
+        encl_signer=$(grep '^qadenad_enclave.signer:' "$manifest" | awk '{print $2}')
+        [[ "$pem_signer" == "$encl_signer" ]] \
+            || fail "public.pem signs as $pem_signer but the packaged enclave's signer is $encl_signer"
+        echo "  public.pem matches the packaged enclave's signer"
+    fi
+    included="$included config/"
+fi
+
+if want testscripts; then
+    mkdir -p "$stage/testscripts" "$stage/test_data"
+    cp "$qadenabuild"/testscripts/* "$stage/testscripts/"
+    cp "$qadenabuild"/test_data/* "$stage/test_data/" 2>/dev/null || true
+    included="$included testscripts/"
 fi
 
 [[ -n "$included" ]] || fail "nothing selected to package (check --only)"
 
-( cd "$stage" && find bin scripts -type f 2>/dev/null | sort | xargs sha256sum > sha256sums.txt )
+checksum_all() {
+    ( cd "$stage" && find bin scripts config testscripts test_data -type f 2>/dev/null \
+        | sort | xargs sha256sum > sha256sums.txt )
+}
+checksum_all
 
 # --changed-since: drop components whose checksum already matches the reference manifest.  Binaries
 # are large and usually all change together, so this pays off mainly for a single-component fix.
@@ -167,7 +231,7 @@ if [[ -n "$since" ]]; then
         fi
     done < "$stage/sha256sums.txt"
     [[ -n "$kept" ]] || fail "nothing changed since $since -- no update needed"
-    ( cd "$stage" && find bin scripts -type f 2>/dev/null | sort | xargs sha256sum > sha256sums.txt )
+    checksum_all
     included="$kept"
     echo "update.since: $(basename "$since")" >> "$manifest"
 fi
