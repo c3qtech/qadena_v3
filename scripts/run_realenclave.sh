@@ -61,9 +61,25 @@ fi
 
 CHAINID=$(jq -r '.chain_id' "$QADENAHOME/config/genesis.json")
 
+# THE SGX ENCLAVE GETS A LOG LEVEL TOO, exactly as the debug one does in run_enclave.sh.
+#
+# It never did, so every c.LoggerDebug call inside a real enclave was silently dropped while the
+# same code logged normally in debug mode.  The asymmetry is invisible until something goes wrong
+# under SGX and the log that would explain it does not exist: an enclave identity sat at "inactive"
+# with ZERO log lines about the promotion check, which reads as "the code never ran" and actually
+# meant "the code cannot say anything".
+#
+# Same derivation as run_enclave.sh, so both modes agree with config.toml.
+log_level=$(grep "log_level" $QADENAHOME/config/config.toml | awk '{print $3}' | tr -d '"' | tr -d "'")
+if [[ $log_level == "debug" ]] ; then
+    log_level="debug"
+else
+    log_level="info"
+fi
+
 if [ $IS_UP -eq 1 ] ; then
    while true; do
-       ego run $qadenabin/qadenad_enclave --realenclave --home=$QADENAHOME --chain-id=$CHAINID
+       ego run $qadenabin/qadenad_enclave --realenclave --home=$QADENAHOME --chain-id=$CHAINID --log-level $log_level
        ret=$?
        if [[ $ret -eq 20 || $ret -eq 10 || $ret -eq 1 || $ret -eq 2 ]]; then
            echo "run_realenclave.sh: qadenad_enclave exited with $ret"

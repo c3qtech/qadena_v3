@@ -132,9 +132,32 @@ if [[ "$DOCKER_BUILD" = "" ]]; then
     genesisfile="$qadenaconfig/genesis.json"
 
     # modify genesis.json
-    jq --arg uniqueid "$unique_id" --arg signerid "$signer_id" '
+    # CHECKED, because the obvious form DESTROYS GENESIS on any failure.
+    #
+    # `jq ... $genesisfile > $genesisfile.tmp` creates the temp file before jq runs, so a jq that
+    # fails for any reason -- an unreadable genesis, most easily after the node was last run under
+    # sudo and the file is owned by root -- leaves an EMPTY temp file, and the unconditional mv then
+    # replaces a valid genesis with zero bytes.  The build still reports success; the node fails much
+    # later with "failed to parse chain-id from genesis file: EOF".
+    #
+    # That happened: a build run as the ordinary user truncated a full node's genesis to 0 bytes and
+    # the failure only surfaced at the next start.
+    if ! jq --arg uniqueid "$unique_id" --arg signerid "$signer_id" '
        .app_state.qadena.enclaveIdentityList |= map(.uniqueID = $uniqueid | .signerID = $signerid)
-          ' $genesisfile > $genesisfile.tmp
+          ' $genesisfile > $genesisfile.tmp ; then
+        echo "************************"
+        echo "   ERROR: could not rewrite $genesisfile with the enclave identity."
+        echo "   The original is untouched.  If it is owned by another user (root, after a sudo run),"
+        echo "   fix the ownership and rebuild."
+        echo "************************"
+        rm -f $genesisfile.tmp
+        exit 1
+    fi
+    if [[ ! -s $genesisfile.tmp ]] ; then
+        echo "   ERROR: the rewritten genesis is empty; refusing to replace $genesisfile"
+        rm -f $genesisfile.tmp
+        exit 1
+    fi
 
     # Rename the new files
     mv $genesisfile.tmp $genesisfile
