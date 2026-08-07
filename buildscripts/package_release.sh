@@ -19,9 +19,19 @@
 #   config   config.yml and public.pem, described below
 #
 # public.pem is the ENCLAVE SIGNER'S PUBLIC KEY.  run.sh derives --enclave-signer-id from it
-# (`ego signerid $QADENAHOME/config/public.pem`), so a node without it cannot start, and a node with
-# the WRONG one starts and is refused by the chain.  It is packaged, and checked against the
-# packaged enclave's own signer before the archive is written.
+# (`ego signerid $QADENAHOME/config/public.pem`).  It is packaged, and checked against the packaged
+# enclave's own signer before the archive is written.
+#
+# BE PRECISE ABOUT WHAT IT COSTS TODAY: nothing.  keeper.InitEnclave checks SupportsUnixDomainSockets
+# first, and that is hardcoded true and assigned nowhere else, so the chain always dials
+# unix:///tmp/qadena_50051.sock with insecure credentials and only LOGS signerID and uniqueID.  The
+# attested path -- dialRealEnclave, registered for real SGX, which verifies the enclave's remote
+# report against those two IDs -- is unreachable.  add_full_node.sh has deleted public.pem since the
+# first commit and nodes ran anyway for exactly this reason: run.sh passes
+# "--enclave-signer-id ERROR:" (the text ego prints when the file is missing) and nothing reads it.
+#
+# It is shipped because install.sh ships it, it costs 621 bytes, and the day
+# SupportsUnixDomainSockets stops being hardcoded, its absence stops being free.
 #
 # config.yml carries minimum-gas-prices, which add_full_node.sh and convert_to_validator.sh read
 # when writing app.toml.  Without it, joining fails.
@@ -200,7 +210,7 @@ if want config; then
     cp "$qadenabuild/config/node_params.json" "$stage/config/node_params.json"
 
     pem="$qadenabuild/cmd/qadenad_enclave/public.pem"
-    [[ -f "$pem" ]] || fail "no public.pem at $pem -- run.sh derives --enclave-signer-id from it and the node cannot start without it"
+    [[ -f "$pem" ]] || fail "no public.pem at $pem -- run.sh derives --enclave-signer-id from it"
     cp "$pem" "$stage/config/public.pem"
 
     # THE PEM MUST BELONG TO THE PACKAGED ENCLAVE.  A stale public.pem produces a valid-looking node

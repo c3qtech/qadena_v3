@@ -443,13 +443,17 @@ if [[ -f "$stage/config/public.pem" ]]; then
     pem_signer=$(ego signerid "$stage/config/public.pem" 2>/dev/null | tail -1)
     if [[ -f "$dest" ]]; then
         old_signer=$(ego signerid "$dest" 2>/dev/null | tail -1)
-        # public.pem IS the node's answer to "which enclave signer do I trust".  Replacing it with a
-        # different one is the MRSIGNER change again, in file form -- so refuse it here too rather
-        # than let the node start and be rejected by the chain for a reason nobody will connect back
-        # to this install.
+        # public.pem records which enclave signer this node was set up for.  A package carrying a
+        # different one is the MRSIGNER change in file form, so refuse it here too.
+        #
+        # Today this is belt-and-braces rather than load-bearing: keeper.InitEnclave checks
+        # SupportsUnixDomainSockets first, that is hardcoded true, and the socket path only LOGS the
+        # signer id -- the attested dial that would verify it is unreachable.  The MRSIGNER check in
+        # section 2 is the one that actually protects sealed state.  This check costs nothing and
+        # starts mattering the moment the socket path is not the only one.
         if [[ -n "$old_signer" && "$old_signer" != "$pem_signer" ]]; then
             fail "public.pem here signs as $old_signer, the package's as $pem_signer.
-       This node's sealed state belongs to $old_signer.  Refusing to replace it."
+       This node was set up for $old_signer.  Refusing to replace it."
         fi
     fi
     install_file "$stage/config/public.pem" "$dest"
