@@ -40,6 +40,16 @@ function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 # failure message written there disappears into the variable and set -e then kills the script with
 # nothing printed at all.  That is exactly how the first version of this suite failed: one second,
 # no output, no clue.
+# A PRIVATE TEMPORARY FILE, not a fixed name in /tmp.
+#
+# This used to write /tmp/qadena-params-proposal.json unconditionally.  /tmp is world-writable and
+# STICKY, so once a run under a different user (root, on an SGX box) left that file behind, every
+# later run as an ordinary user failed with "permission denied" on a path that has nothing to do
+# with what is being tested -- and the suite reported a failure that looked like a chain problem.
+# A fixed name in a shared directory is also the classic shape of a symlink attack.
+proposal_file=$(mktemp -t qadena-params-proposal.XXXXXX) || { echo "could not create a temp file"; exit 1; }
+trap 'rm -f "$proposal_file"' EXIT INT TERM
+
 fail() {
     echo "FAILED: $1" >&2
     exit 1
@@ -51,7 +61,7 @@ live_params() {
 
 # write_proposal <params-json> <title> -- builds the proposal file, echoes its path.
 write_proposal() {
-    local params_json="$1" title="$2" file="/tmp/qadena-params-proposal.json"
+    local params_json="$1" title="$2" file="$proposal_file"
     jq -n --arg authority "$authority" --arg title "$title" --argjson params "$params_json" '{
         messages: [ {
             "@type": "/qadena.qadena.MsgUpdateParams",

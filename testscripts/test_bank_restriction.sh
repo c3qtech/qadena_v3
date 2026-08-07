@@ -48,6 +48,16 @@ function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 gas_flags=(--gas auto --gas-adjustment 1.5 --gas-prices 0.5aqdn)
 
+# A PRIVATE TEMPORARY FILE, not a fixed name in /tmp.
+#
+# This used to write /tmp/qadena-whitelist-proposal.json unconditionally.  /tmp is world-writable and
+# STICKY, so once a run under a different user (root, on an SGX box) left that file behind, every
+# later run as an ordinary user failed with "permission denied" on a path that has nothing to do
+# with what is being tested -- and the suite reported a failure that looked like a chain problem.
+# A fixed name in a shared directory is also the classic shape of a symlink attack.
+proposal_file=$(mktemp -t qadena-whitelist-proposal.XXXXXX) || { echo "could not create a temp file"; exit 1; }
+trap 'rm -f "$proposal_file"' EXIT INT TERM
+
 fail() {
     echo "FAILED: $1"
     exit 1
@@ -210,7 +220,7 @@ authority=$(qadenad_alias query auth module-account gov --output json 2>/dev/nul
 # rather than asserting success, and each caller says which status it expects.
 submit_whitelist_proposal() {
     local msgtype="$1" address="$2" codeid="$3" reason="$4" title="$5" file result tx_hash proposal_id
-    file="/tmp/qadena-whitelist-proposal.json"
+    file="$proposal_file"
 
     # `codeID` and `reason` exist on the ADD message only -- MsgRemoveScannedContractWhitelist
     # carries just an authority and an address, and an unknown field makes the whole message
