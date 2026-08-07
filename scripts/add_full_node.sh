@@ -229,10 +229,22 @@ else
 	cp /tmp/qadena_config_backup/*.toml $QADENAHOME/config/
 
 	echo "Fixing up app.toml"
-	# get it from config.yml
-	minimum_gas_prices=`dasel -f $QADENAHOME/config/config.yml 'validators.first().app.minimum-gas-prices'`
-	# set it on app.toml
-	dasel put -v "$minimum_gas_prices" '.minimum-gas-prices' -f $QADENAHOME/config/app.toml
+	# THE WHOLE app: STANZA, not just minimum-gas-prices.
+	#
+	# This used to copy exactly one key out of config.yml.  The genesis node gets its app.toml from
+	# `ignite chain init`, which renders that stanza in full; a joining node gets it from
+	# `qadenad init`, whose stock template has NO [json-rpc], NO [evm] and NO [wasm] section at all.
+	# So every joined node silently differed from the genesis node in everything config.yml
+	# prescribes -- and nothing failed, because none of it is consensus-critical.
+	#
+	# It surfaced as the EVM JSON-RPC never coming up on the second validator: port 8545 simply was
+	# not listening, because json-rpc.enable lives in a section that did not exist.  run.sh hides
+	# that further by passing --json-rpc.api on the command line, so the API list is configured
+	# while the server stays off.  Also silently missing: the evm mempool limits, wasm's
+	# query_gas_limit and memory_cache_size, and the pruning settings.
+	$qadenascripts/apply_app_config.sh \
+	    --config $QADENAHOME/config/config.yml \
+	    --app-toml $QADENAHOME/config/app.toml
 
 	echo "Fixing up config.toml"
 
