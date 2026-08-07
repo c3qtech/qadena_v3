@@ -247,12 +247,38 @@ if [ "$with_contracts" = "true" ]; then
     # Skipping deployment against a phantom address is the worst available outcome:
     # the stack comes up, setup-backend registers an address that does not exist, and
     # the first real failure surfaces somewhere else entirely.  That cost an afternoon.
-    if [ -n "$existing" ] && ! qadenad_alias query wasm contract "$existing" > /dev/null 2>&1; then
-        echo "-------------------------"
-        echo "Recorded contract $existing is NOT on this chain -- redeploying"
-        echo "  (enf_state.json is left over from a previous chain)"
-        echo "-------------------------"
-        existing=""
+    # EXISTENCE IS NOT ENOUGH -- IT MUST ALSO BE OURS.  wasm contract addresses are derived
+    # deterministically from code_id and instance sequence, so a rebuilt chain that replays the same
+    # work in the same order re-mints the SAME addresses.  Observed exactly that: after wiping the
+    # chain and re-running regression, testscripts/test_enf_contracts.sh instantiated at block 1974
+    # and landed on the very address a previous chain's setup_enf had left in enf_state.json.  The
+    # existence check passed truthfully, deployment was skipped, and ENF_NOTARIAL_CONTRACT_ADDRESS
+    # pointed at a contract owned by the regression signer -- one that the next regression run drops
+    # and redeploys over.
+    #
+    # So compare the CREATOR against the ENF deployer.  setup-enf has already run by this point, so
+    # the key exists and the keyring is as fresh as the chain is.
+    if [ -n "$existing" ]; then
+        contract_json=$(qadenad_alias query wasm contract "$existing" --output json 2>/dev/null) || contract_json=""
+        contract_creator=$(echo "$contract_json" | jq -r '.contract_info.creator // empty' 2>/dev/null)
+        enf_deployer=$(qadenad_alias keys show ENF -a --keyring-backend test 2>/dev/null)
+
+        if [ -z "$contract_creator" ]; then
+            echo "-------------------------"
+            echo "Recorded contract $existing is NOT on this chain -- redeploying"
+            echo "  (enf_state.json is left over from a previous chain)"
+            echo "-------------------------"
+            existing=""
+        elif [ -n "$enf_deployer" ] && [ "$contract_creator" != "$enf_deployer" ]; then
+            echo "-------------------------"
+            echo "Recorded contract $existing exists but was NOT deployed by ENF -- redeploying"
+            echo "  creator:      $contract_creator"
+            echo "  ENF deployer: $enf_deployer"
+            echo "  (deterministic wasm addresses mean a stale enf_state.json can name a real"
+            echo "   contract belonging to something else -- e.g. the regression suite)"
+            echo "-------------------------"
+            existing=""
+        fi
     fi
 
     if [ -n "$existing" ] && [ "$force_contracts" != "true" ]; then

@@ -106,11 +106,43 @@ setup_enf() {
     echo "-------------------------"
     local mnemonic=$(qadenad_alias keys mnemonic)
     # Args mirror cadena's setup_dbm() create_user.sh call; identity provider = ENF's.
-    "$qadenaproviderscripts/create_user.sh" \
+    #
+    # THE a/bf VALUES MUST DIFFER FROM CADENA'S.  A credential is unique on
+    # (CredentialID, CredentialType) -- see msg_server_create_credential.go -- and CredentialID is
+    # derived from these two.  cadena_cli.sh uses a="5555" bf="7777", and this call was written by
+    # copying setup_dbm() verbatim, so it used them too.  The result: the ENF deployer and the
+    # cadena DBM deployer cannot coexist on one chain.  On a chain where the cadena suite has run,
+    # creating the ENF deployer fails with "codespace qadena code 1115: Credential already exists".
+    #
+    # It failed quietly: the wallets are created first and succeed, only the personal-info
+    # credential collides, create_user.sh does not propagate the failure, and setup_enf.sh went on
+    # to report "chain setup complete" with the ENF deployer missing its credential.
+    #
+    # THE OUTPUT IS INSPECTED, not just the exit status.  create_user.sh returns 0 even when one of
+    # the transactions it broadcasts is rejected on chain, so checking $? alone catches nothing --
+    # that is exactly how the collision above stayed invisible.  Tee it so a normal run still shows
+    # progress, then fail on any rejected tx.
+    local cu_log
+    cu_log=$(mktemp)
+    if ! "$qadenaproviderscripts/create_user.sh" \
       "$name" "$mnemonic" "pioneer1" "" \
       "ENF" "" "Deployer" "1990-Jan-01" "PH" "PH" "M" \
-      "no-reply+enf-deployer@enf.ph" "+6320000001" "5555" "7777" \
-      "$ENF_IDENTITY_PROVIDER" "" "" "" "$eph_count" "$ENF_CREATE_WALLET_SPONSOR"
+      "no-reply+enf-deployer@enf.ph" "+6320000001" "5561" "7783" \
+      "$ENF_IDENTITY_PROVIDER" "" "" "" "$eph_count" "$ENF_CREATE_WALLET_SPONSOR" 2>&1 | tee "$cu_log"; then
+      rm -f "$cu_log"
+      echo "create_user.sh failed for '$name'"; exit 1
+    fi
+    if grep -qE "failed with [0-9]+:|codespace qadena code" "$cu_log"; then
+      echo ""
+      echo "create_user.sh reported a REJECTED transaction while creating '$name':"
+      grep -E "failed with [0-9]+:|codespace qadena code" "$cu_log" | head -5
+      echo ""
+      echo "The deployer is not fully set up.  'Credential already exists' here means the a/bf"
+      echo "values collide with another deployer on this chain -- see the comment above."
+      rm -f "$cu_log"
+      exit 1
+    fi
+    rm -f "$cu_log"
   fi
 
   echo "-------------------------"
