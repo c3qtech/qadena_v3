@@ -23,6 +23,7 @@
 #   cadena        cadena-smart-contracts: the GAA -> PAP -> SARO -> NCA -> Obligation -> DV chain
 #   enf           enf-smart-contracts: the ENF notarial book (ENP registry + entries)
 #   credentials   update_credentials.sh                                    (--with-credentials)
+#   peer-agreement   every peer computed the SAME app hash -- i.e. no fork
 #   enclave-upgrade  a new enclave measurement takes over the sealed state (--with-enclave-upgrade)
 #
 # Everything except the genesis/chain/credentials layers is IDEMPOTENT -- safe to repeat against the
@@ -559,6 +560,11 @@ run_test "wasm"        "$qadenatestscripts/test_wasm.sh"
 run_test "evm"         "$qadenatestscripts/test_evm.sh"
 run_test "cadena"      "$qadenatestscripts/test_cadena_contracts.sh"
 run_test "enf"         "$qadenatestscripts/test_enf_contracts.sh"
+
+# LAST of the always-on suites, and deliberately after everything that writes: a fork shows up in
+# the app hash only once the suites have put transactions through.  Run early it would compare two
+# idle nodes and pass regardless.
+run_test "peer-agreement" "$qadenatestscripts/test_peer_agreement.sh"
 
 if [ "$with_credentials" = "true" ]; then
     # LAST, because it mutates identities the other suites read: it removes al's email credential,

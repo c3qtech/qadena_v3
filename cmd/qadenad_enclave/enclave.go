@@ -6412,6 +6412,21 @@ func (s *qadenaServer) resolveReportParty(walletID string, contract *types.Scann
 	return reportParty{pi: &pi}, nil
 }
 
+// suspiciousReportSeed is the secret the report encryption derives its ephemeral key and nonce from.
+//
+// It must be IDENTICAL on every enclave, or the nodes produce different ciphertext and fork -- which
+// is the whole point of deriving rather than sampling.  The jar private key qualifies: it lives in
+// SharedEnclaveParams and InitEnclave hands it to a joining node's enclave, so every enclave in the
+// set holds the same bytes.
+//
+// The regulator key is deliberately NOT used.  It is intended to be handed to the regulator
+// eventually, and a seed that leaves the enclave set would let its holder recompute every ephemeral
+// key ever derived.  That grants nothing today -- the regulator can already decrypt these reports --
+// but it would tie the secrecy of the derivation to a key that is meant to be exported.
+func (s *qadenaServer) suspiciousReportSeed() []byte {
+	return []byte(s.getSharedEnclaveParamsJarPrivK())
+}
+
 // createSuspiciousTransaction files one report with the regulator.
 //
 // RETURNS AN ERROR, and every caller must act on it.  It used to return nothing and simply log on
@@ -6470,27 +6485,83 @@ func (s *qadenaServer) createSuspiciousTransaction(ctx context.Context, reason s
 	eSuspiciousAmount.USDCoinAmount = &tf.USDCoinAmount
 	eSuspiciousAmount.CoinAmount = &tf.CoinAmount
 
+	// EVERY FIELD BELOW IS ENCRYPTED DETERMINISTICALLY, and that is a consensus requirement rather
+	// than a preference.  This report is written into CHAIN state by EnclaveEndBlock, and every
+	// validator builds it in its own enclave.  With ecies.Encrypt -- a fresh ephemeral key and a
+	// fresh nonce from crypto/rand -- each node produced different bytes for the same report, the
+	// app hashes diverged, and the chain forked.  That is not a risk, it happened: a two-validator
+	// chain forked at the exact block that filed its first report, and the second validator halted
+	// with "wrong Block.Header.AppHash".
+	//
+	// The encryption is still public-key to the regulator and byte-compatible with ecies.Decrypt --
+	// the regulator reads it with their private key alone.  Only the source of the two random
+	// values changes.
+	//
+	// THE CONTEXT MUST BE UNIQUE PER ENCRYPTION.  Reusing one would reuse both the AES key and the
+	// GCM nonce, which leaks plaintext and allows tag forgery.  Uniqueness here comes from:
+	//   tf.Time   block time, identical on every node, distinct per block
+	//   reason    separates the per-send report from the aggregated one in the same transaction
+	//   seq       ordinal within the block, so two reports in one block never collide
+	//   parties   the source/destination nonces
+	//   field tag distinguishes the several fields of one report
+	// A block height alone would satisfy none of the last four.
+	seed := s.suspiciousReportSeed()
+	if len(seed) == 0 {
+		c.LoggerError(logger, "no shared enclave secret to derive report encryption from")
+		return types.ErrGenericEnclave
+	}
+	seq := len(s.pendingSuspiciousTransactions) + len(s.newSuspiciousTransactions)
+	baseCtx := fmt.Sprintf("suspicious|%s|%s|%s|%s|%s|%d",
+		jarID, regulatorPubKID, tf.Time, reason, eSuspiciousAmount.Nonce, seq)
+
+	encField := func(tag string, v proto.Message) ([]byte, error) {
+		return c.ProtoMarshalAndBEncryptDeterministic(regulatorPubK, v, seed, []byte(baseCtx+"|"+tag))
+	}
+
+	encAmount, err := encField("amount", &eSuspiciousAmount)
+	if err != nil {
+		c.LoggerError(logger, "could not encrypt the report amount: "+err.Error())
+		return types.ErrGenericEnclave
+	}
+	encOptIn, err := c.BEncryptDeterministic(regulatorPubK, []byte(optInReason), seed, []byte(baseCtx+"|optin"))
+	if err != nil {
+		c.LoggerError(logger, "could not encrypt the opt-in reason: "+err.Error())
+		return types.ErrGenericEnclave
+	}
+
 	var st = types.SuspiciousTransaction{JarID: jarID,
 		RegulatorPubKID:             regulatorPubKID,
 		Reason:                      reason,
 		Time:                        tf.Time,
 		SourceKind:                  src.kind(),
 		DestinationKind:             dst.kind(),
-		EncEAmountRegulatorPubK:     c.ProtoMarshalAndBEncrypt(regulatorPubK, &eSuspiciousAmount),
-		EncOptInReasonRegulatorPubK: c.MarshalAndBEncrypt(regulatorPubK, optInReason),
+		EncEAmountRegulatorPubK:     encAmount,
+		EncOptInReasonRegulatorPubK: encOptIn,
 	}
 
 	// Only the descriptor that side actually has is encrypted into the report; the other stays
 	// empty, which is what SourceKind/DestinationKind tell the reader to expect.
 	if src.pi != nil {
-		st.EncSourcePersonalInfoRegulatorPubK = c.ProtoMarshalAndBEncrypt(regulatorPubK, src.pi)
+		if st.EncSourcePersonalInfoRegulatorPubK, err = encField("src.pi", src.pi); err != nil {
+			c.LoggerError(logger, "could not encrypt source personal info: "+err.Error())
+			return types.ErrGenericEnclave
+		}
 	} else {
-		st.EncSourceContractInfoRegulatorPubK = c.ProtoMarshalAndBEncrypt(regulatorPubK, src.ci)
+		if st.EncSourceContractInfoRegulatorPubK, err = encField("src.ci", src.ci); err != nil {
+			c.LoggerError(logger, "could not encrypt source contract info: "+err.Error())
+			return types.ErrGenericEnclave
+		}
 	}
 	if dst.pi != nil {
-		st.EncDestinationPersonalInfoRegulatorPubK = c.ProtoMarshalAndBEncrypt(regulatorPubK, dst.pi)
+		if st.EncDestinationPersonalInfoRegulatorPubK, err = encField("dst.pi", dst.pi); err != nil {
+			c.LoggerError(logger, "could not encrypt destination personal info: "+err.Error())
+			return types.ErrGenericEnclave
+		}
 	} else {
-		st.EncDestinationContractInfoRegulatorPubK = c.ProtoMarshalAndBEncrypt(regulatorPubK, dst.ci)
+		if st.EncDestinationContractInfoRegulatorPubK, err = encField("dst.ci", dst.ci); err != nil {
+			c.LoggerError(logger, "could not encrypt destination contract info: "+err.Error())
+			return types.ErrGenericEnclave
+		}
 	}
 
 	// PENDING, not committed.  TransactionComplete moves this into newSuspiciousTransactions only if
