@@ -200,12 +200,44 @@ setup_backend() {
     || { echo "Request to $url failed (is the ENF API running? override with -a <base_url>)"; exit 1; }
 }
 
+# THIS IS WHERE THE "INTERMITTENT INSTANTIATE FAILURE" ACTUALLY CAME FROM.
+#
+# It used to be: broadcast, `query wait-tx`, jq the code_id out of that response, save it.  Neither
+# the broadcast's own code nor wait-tx's exit status was checked.  `query wait-tx` waits on a
+# WEBSOCKET EVENT, and when it loses the race it returns "timed out waiting for transaction to be
+# included in a block" for a transaction that committed perfectly well.  Its response then has no
+# store_code event, jq yields nothing, and the function saves an EMPTY code_id and returns 0.
+#
+# So upload reported success, and the failure surfaced one step later as
+# "No code_id — run upload first" -> the suite reported "instantiate failed".  The error named the
+# wrong command, which is why it read as a flaky instantiate for as long as it did.
+#
+# confirm_tx polls the CHAIN rather than trusting the event, which is the whole reason it exists.
 cmd_upload() {
   [[ -f "$WASM" ]] || { echo "Missing $WASM — run ./optimizer.sh first"; exit 1; }
   local resp=$(qadenad_alias --node $QADENA_NODE --gas $gas_auto --gas-adjustment $gas_adjustment --gas-prices $minimum_gas_prices tx wasm store "$WASM" --from $FROM -y -o json)
-  local hash=$(echo "$resp" | jq -r '.txhash')
-  local r2=$(qadenad_alias --node $QADENA_NODE query wait-tx "$hash" --timeout 30s -o json)
-  local code_id=$(echo "$r2" | jq -r '.events[] | select(.type=="store_code") | .attributes[] | select(.key=="code_id") | .value')
+
+  local hash=$(echo "$resp" | jq -r '.txhash // empty' 2>/dev/null)
+  local bcode=$(echo "$resp" | jq -r '.code // empty' 2>/dev/null)
+  if [[ -z "$hash" ]]; then
+    echo "upload: the store transaction was never broadcast (no txhash)."
+    echo "$resp" | head -5
+    exit 1
+  fi
+  if [[ -n "$bcode" && "$bcode" != "0" ]]; then
+    echo "upload: rejected at CheckTx with code $bcode: $(echo "$resp" | jq -r '.raw_log // empty')"
+    exit 1
+  fi
+
+  confirm_tx "$hash" 60 || { echo "upload: $hash was not confirmed on chain"; exit 1; }
+
+  # Read the code_id back from the CONFIRMED transaction, not from the wait response.
+  local code_id=$(qadenad_alias --node $QADENA_NODE query tx "$hash" -o json 2>/dev/null \
+    | jq -r '.events[]? | select(.type=="store_code") | .attributes[]? | select(.key=="code_id") | .value' 2>/dev/null | tail -1)
+  if [[ -z "$code_id" ]]; then
+    echo "upload: $hash committed but carried no store_code/code_id event."
+    exit 1
+  fi
   save_state "code_id" "$code_id"
 }
 
@@ -219,8 +251,17 @@ cmd_instantiate() {
   # keeps records and never held or paid out funds, so the deposit was doing nothing to begin with.
   local resp=$(qadenad_alias --node $QADENA_NODE --gas $gas_auto --gas-adjustment $gas_adjustment --gas-prices $minimum_gas_prices tx wasm instantiate "$code_id" '{}' \
     --admin="$admin" --from $FROM --label "enf-notarial-book-v1" -y -o json)
-  wait_for_tx "$resp"
-  local addr=$(qadenad_alias --node $QADENA_NODE query wasm list-contract-by-code "$code_id" -o json | jq -r '.contracts[-1]')
+
+  # CHECKED.  wait_for_tx's status was previously discarded, so a lost websocket race fell straight
+  # through to list-contract-by-code -- which happily returns the PREVIOUS contract for this code_id,
+  # or null.  Either way the state file ended up naming something that was not just instantiated.
+  wait_for_tx "$resp" "instantiate" || exit 1
+
+  local addr=$(qadenad_alias --node $QADENA_NODE query wasm list-contract-by-code "$code_id" -o json 2>/dev/null | jq -r '.contracts[-1] // empty' 2>/dev/null)
+  if [[ -z "$addr" || "$addr" == "null" ]]; then
+    echo "instantiate: committed but no contract is listed under code_id $code_id"
+    exit 1
+  fi
   save_state "contract_address" "$addr"
   echo "Contract address: $addr"
   echo ">> Set ENF_NOTARIAL_CONTRACT_ADDRESS=$addr in the API env"
