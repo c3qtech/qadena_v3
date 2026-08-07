@@ -92,18 +92,23 @@ done
 echo "========================="
 echo "2. THE APP HASHES AGREE"
 echo "========================="
-# A BLOCK HEADER CARRIES THE APP HASH OF THE *PREVIOUS* BLOCK'S EXECUTION, and getting that wrong
-# makes this suite useless.  A forked peer halts at the block it disagreed on: it COMMITTED that
-# block (computing its own app hash) and then rejected the next one, whose header carried the other
-# node's result.  So the disagreement never appears in any block the peer holds -- comparing headers
-# at a common height only ever compares blocks from BEFORE the fork, and reports agreement.
+# TWO DIFFERENT FAILURES, and only one of them is visible in an app hash.
 #
-# The first version of this suite did exactly that and passed on a chain that had demonstrably
-# forked 3000 blocks earlier.
+# A block header carries the app hash of the PREVIOUS block's execution.  /status latest_app_hash is
+# the header of the node's latest block, so for a node at height P it is the result of executing
+# P-1 -- NOT of executing P.  Comparing it against block[P+1] compares two different heights and
+# fails on a perfectly healthy chain; that mistake was in the first two versions of this suite.
 #
-# What actually compares the two computations:
-#   peer's  /status latest_app_hash     -- what the PEER computed for its last height P
-#   local's block[P+1].header.app_hash  -- what THIS node computed for the same height P
+#   (a) DIVERGED AND STILL RUNNING -- a partition, or two nodes on different chains.  Their app
+#       hashes for the same height differ, so comparing like for like finds it.
+#
+#   (b) DIVERGED AND HALTED -- what actually happened here.  The peer committed the block it
+#       disagreed on, then rejected the NEXT one because its header carried the other node's
+#       result, and stopped.  Its own bad app hash never reaches a block header anywhere, so no
+#       comparison of published state can see it.  The only external evidence is that it stopped
+#       following the chain while believing it was caught up.
+#
+# So (a) is caught by comparison and (b) by the halt check, and both are failures.
 divergence=0
 halted=0
 while IFS='|' read -r moniker ip; do
@@ -118,50 +123,43 @@ while IFS='|' read -r moniker ip; do
     pheight=$(echo "$pstatus" | jq -r '.result.sync_info.latest_block_height')
     ptheirs=$(echo "$pstatus" | jq -r '.result.sync_info.latest_app_hash')
     pcatching=$(echo "$pstatus" | jq -r '.result.sync_info.catching_up')
-
     [ -n "$pheight" ] && [ "$pheight" != "null" ] || { echo "  $moniker: no height"; continue; }
 
-    # What this node computed for the peer's last height, read out of the NEXT block's header.
-    mine=$(curl -s -m 8 "$RPC/block?height=$(( pheight + 1 ))" 2>/dev/null \
+    # LIKE FOR LIKE: the peer's latest app hash is the header of ITS block at pheight, so compare it
+    # against this node's header for the SAME height.
+    mine=$(curl -s -m 8 "$RPC/block?height=$pheight" 2>/dev/null \
            | jq -r '.result.block.header.app_hash' 2>/dev/null)
 
     if [ -z "$mine" ] || [ "$mine" = "null" ]; then
-        # This node has not reached pheight+1 yet -- the peer is at or ahead of us, so there is
-        # nothing to compare and nothing wrong.
-        echo "  $moniker: at height $pheight, this node has not passed it yet -- NOT compared"
-        continue
-    fi
-
-    if [ "$ptheirs" = "$mine" ]; then
-        echo "  $moniker: MATCH for height $pheight  ${mine:0:32}"
+        echo "  $moniker: this node has no block at $pheight -- NOT compared"
+    elif [ "$ptheirs" = "$mine" ]; then
+        echo "  $moniker: MATCH at height $pheight  ${mine:0:32}"
     else
-        echo "  $moniker: DIVERGED executing height $pheight"
-        echo "      peer      ($moniker) computed: $ptheirs"
-        echo "      this node ($local_moniker) computed: $mine"
+        echo "  $moniker: DIVERGED at height $pheight"
+        echo "      peer      ($moniker): $ptheirs"
+        echo "      this node ($local_moniker): $mine"
         divergence=1
     fi
 
-    # A peer far behind that believes it is caught up is halted, which on this chain means it
-    # rejected a block rather than lost connectivity.  Failing on it matters: with lopsided stake
-    # the remaining validator finalises alone and everything else looks perfectly healthy.
     behind=$(( local_height - pheight ))
     if [ "$behind" -gt 50 ] && [ "$pcatching" = "false" ]; then
-        echo "      HALTED: $behind blocks behind and not catching up"
+        echo "      HALTED: $behind blocks behind, catching_up=false"
         halted=1
     fi
 done <<< "$peers"
 
 if [ "$divergence" -ne 0 ]; then
-    fail "peers computed DIFFERENT app hashes for the same height -- the chain has FORKED.
-       This is a consensus bug, not a flaky test: one block produced different state on
-       different nodes.  Every node-local assertion still passes, which is why this suite
-       exists."
+    fail "peers published DIFFERENT app hashes for the same height -- the chain has FORKED and both
+       sides are still running.  One block produced different state on different nodes."
 fi
 
 if [ "$halted" -ne 0 ]; then
-    fail "a peer has stopped following the chain while believing it is caught up.
-       It rejected a block rather than lost connectivity.  Check its log for
-       'wrong Block.Header.AppHash' or 'CONSENSUS FAILURE'."
+    fail "a peer stopped following the chain while believing it is caught up.
+       That is a rejected block, not lost connectivity -- and a forked peer looks EXACTLY like
+       this, because the app hash it disagreed on never reaches any block header.  Check its
+       log for 'wrong Block.Header.AppHash' or 'CONSENSUS FAILURE'.
+       Note the chain keeps producing blocks regardless if the remaining validators hold more
+       than 2/3 of the stake, so nothing else will report a problem."
 fi
 
 echo "========================="
