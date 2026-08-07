@@ -236,6 +236,25 @@ if [ "$with_contracts" = "true" ]; then
     # configured with.  enf_cli.sh records the address in enf_state.json, so that is the thing to
     # check.  stdout is clean here -- setup_env.sh writes its banner to stderr.
     existing=$("$enfdir/enf_cli.sh" contract-addr 2>/dev/null | tail -1)
+
+    # A recorded address only means something if the contract is still THERE.  The
+    # chain-id is constant across reinstalls (qadena_4444-1), so it cannot be used to
+    # spot a wiped chain -- and enf_state.json is gitignored local residue that
+    # outlives any number of chains.  Asking the chain is both simpler and correct for
+    # every reason the contract might be missing: chain wiped, wrong node, contract
+    # removed, state file hand-edited.
+    #
+    # Skipping deployment against a phantom address is the worst available outcome:
+    # the stack comes up, setup-backend registers an address that does not exist, and
+    # the first real failure surfaces somewhere else entirely.  That cost an afternoon.
+    if [ -n "$existing" ] && ! qadenad_alias query wasm contract "$existing" > /dev/null 2>&1; then
+        echo "-------------------------"
+        echo "Recorded contract $existing is NOT on this chain -- redeploying"
+        echo "  (enf_state.json is left over from a previous chain)"
+        echo "-------------------------"
+        existing=""
+    fi
+
     if [ -n "$existing" ] && [ "$force_contracts" != "true" ]; then
         echo "-------------------------"
         echo "Contract already deployed: $existing"

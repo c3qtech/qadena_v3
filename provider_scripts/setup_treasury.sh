@@ -45,7 +45,30 @@ fi
 
 name="$treasury_name"
 
-echo $treasury_mnemonic | qadenad_alias keys add $name --recover
+# Idempotent. `keys add --recover` prompts "override the existing name X? [y/N]" when
+# the key is already in the keyring, and stdin here is the piped mnemonic -- so the
+# mnemonic itself gets eaten as the answer, which is not "y", and the whole thing dies
+# with "key overwrite confirmation for X aborted". That aborts the CALLER too, so
+# re-running setup_enf.sh / setup_veritas.sh on a machine that already has the keys
+# stops before doing any of the work it was asked to do.
+#
+# The mnemonic is a fixed literal, so an existing key of this name should already be
+# the right one -- but that is verified rather than assumed, because silently using
+# somebody else's key of the same name would be far worse than stopping.
+if qadenad_alias keys show "$name" > /dev/null 2>&1; then
+    existing_addr=$(qadenad_alias keys show "$name" --address)
+    expected_addr=$(echo "$treasury_mnemonic" | qadenad_alias keys add "$name" --recover --dry-run --output json 2>/dev/null | jq -r '.address // empty')
+    if [ -n "$expected_addr" ] && [ "$existing_addr" != "$expected_addr" ]; then
+        echo "FAILED: key '$name' already exists but is NOT the one this mnemonic derives"
+        echo "  in keyring: $existing_addr"
+        echo "  expected:   $expected_addr"
+        echo "  delete it first:  qadenad keys delete $name"
+        exit 1
+    fi
+    echo "$name key already exists ($existing_addr) -- skipping keys add"
+else
+    echo "$treasury_mnemonic" | qadenad_alias keys add "$name" --recover
+fi
 
 qadena_addr=$(qadenad_alias keys show $name --address)
 echo "created $name with address $qadena_addr"

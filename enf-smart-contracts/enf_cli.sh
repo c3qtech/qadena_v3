@@ -33,6 +33,14 @@ CONTRACT_OVERRIDE=""
 ENF_API_BASE="${ENF_API_BASE:-http://localhost:3002}"  # ENF API base URL (override with -a)
 APIVERSION="${APIVERSION:-v1}"
 ENF_EPH_COUNT="${ENF_EPH_COUNT:-3}"  # number of ephemeral signing wallets (matches setup-enf)
+# The create-wallet sponsor that pays to create the ENF deployer wallet. Must match the
+# key setup_enf.sh made: it sets createwalletsponsorname="enf-create-wallet-sponsor",
+# and the keyring holds per-product sponsors (enf-, ekycph-, sec-) with no bare
+# "create-wallet-sponsor". Hardcoding the bare name here meant setup-enf could never
+# work on a machine set up by setup_enf.sh: create-wallet failed with "Couldn't access
+# private key create-wallet-sponsor", rolled back the keys it had just made ("Removed
+# key ENF"), and every later step then ran with an empty address.
+ENF_CREATE_WALLET_SPONSOR="${ENF_CREATE_WALLET_SPONSOR:-enf-create-wallet-sponsor}"
 
 save_state() {
   [[ -f "$ENF_SCRIPT_DIR/$STATE_FILE" ]] || echo '{}' > "$ENF_SCRIPT_DIR/$STATE_FILE"
@@ -102,7 +110,7 @@ setup_enf() {
       "$name" "$mnemonic" "pioneer1" "" \
       "ENF" "" "Deployer" "1990-Jan-01" "PH" "PH" "M" \
       "no-reply+enf-deployer@enf.ph" "+6320000001" "5555" "7777" \
-      "$ENF_IDENTITY_PROVIDER" "" "" "" "$eph_count" "create-wallet-sponsor"
+      "$ENF_IDENTITY_PROVIDER" "" "" "" "$eph_count" "$ENF_CREATE_WALLET_SPONSOR"
   fi
 
   echo "-------------------------"
@@ -129,6 +137,18 @@ setup_enf() {
 setup_backend() {
   local addr="$(contract_addr)"
   [[ -n "$addr" ]] || { echo "No contract address in state — run setup/instantiate first"; exit 1; }
+
+  # Verify the contract is actually on chain before telling the app-server to use it.
+  # Registering a phantom address does not fail here -- it fails later and elsewhere:
+  # the app-server tries to import the signing key for a contract that does not exist
+  # and reports "failed to decrypt private key: EOF", which points at the keyring and
+  # sends the investigation to entirely the wrong place.
+  if ! qadenad_alias --node "$QADENA_NODE" query wasm contract "$addr" > /dev/null 2>&1; then
+    echo "Contract $addr is not on this chain (node $QADENA_NODE)."
+    echo "  enf_state.json is stale -- most likely the chain was reinstalled."
+    echo "  Run:  ./enf_cli.sh clean  then  setup_enf.sh --with-contracts"
+    exit 1
+  fi
   [[ -n "$qadenatestscripts" && -x "$qadenatestscripts/extract_ephem_keys.sh" ]] || {
     echo "extract_ephem_keys.sh not found (qadenatestscripts=$qadenatestscripts)"; exit 1; }
 
