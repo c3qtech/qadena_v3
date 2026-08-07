@@ -187,9 +187,17 @@ fi
 if want config; then
     mkdir -p "$stage/config"
 
-    # ONLY THESE TWO.  Everything else under config/ is the node's own -- genesis.json, node_key.json,
-    # priv_validator_key.json, app.toml, config.toml -- and is written by joining, not by installing.
+    # ONLY THESE THREE.  Everything else under config/ is the node's own -- genesis.json,
+    # node_key.json, priv_validator_key.json, app.toml, config.toml -- and is written by joining, not
+    # by installing.
     cp "$qadenabuild/config.yml" "$stage/config/config.yml"
+
+    # node_params.json is shipped as the TEMPLATE, with the literal "PioneerID" that setPioneerID.sh
+    # substitutes.  add_full_node.sh sed-edits this file in place and does NOT create it -- on a
+    # machine with a build tree init.sh had already copied it in, which is why joining worked there
+    # and failed on a machine that only ever saw a package.  install.sh only writes it when absent,
+    # since after substitution it carries this node's own pioneer id.
+    cp "$qadenabuild/config/node_params.json" "$stage/config/node_params.json"
 
     pem="$qadenabuild/cmd/qadenad_enclave/public.pem"
     [[ -f "$pem" ]] || fail "no public.pem at $pem -- run.sh derives --enclave-signer-id from it and the node cannot start without it"

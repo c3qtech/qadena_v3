@@ -174,7 +174,7 @@ while read -r _sum entry; do
     case "$entry" in
         bin/qadenad|bin/qadenad_enclave|bin/signer_enclave|bin/libwasmvm*.so) ;;
         scripts/*|testscripts/*|test_data/*) ;;
-        config/config.yml|config/public.pem) ;;
+        config/config.yml|config/public.pem|config/node_params.json) ;;
         # Carried for the operator to run by hand; this script points at it but never runs it, and
         # never copies it into the node home.
         ubuntu/*) ;;
@@ -454,6 +454,19 @@ if [[ -f "$stage/config/public.pem" ]]; then
     fi
     install_file "$stage/config/public.pem" "$dest"
     echo "  installed config/public.pem (signer $pem_signer)"
+fi
+
+if [[ -f "$stage/config/node_params.json" ]]; then
+    dest="$QADENAHOME/config/node_params.json"
+    if [[ -f "$dest" ]]; then
+        # ONCE SUBSTITUTED IT IS NODE IDENTITY.  The shipped copy still says "PioneerID"; the one
+        # here says which pioneer this node is.  Writing the template over it would rename the node
+        # to a placeholder, so an existing file is always left alone.
+        echo "  config/node_params.json exists (pioneer_id kept as-is)"
+    else
+        cp "$stage/config/node_params.json" "$dest"
+        echo "  installed config/node_params.json (template)"
+    fi
 fi
 
 if [[ -f "$stage/config/config.yml" ]]; then
