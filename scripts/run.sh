@@ -153,7 +153,25 @@ fi
 
 
 if use_real_enclave "$qadenabin/qadenad_enclave" ; then
-    qadenad_alias start --json-rpc.api eth,txpool,personal,net,debug,web3 --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --enclave-addr localhost:50051 --enclave-signer-id `ego signerid $QADENAHOME/config/public.pem` --enclave-unique-id `ego uniqueid $qadenabin/qadenad_enclave` --home=$QADENAHOME --log-level $log_level &
+    # SUBSTITUTED INLINE, THESE FAIL SILENTLY.  `ego signerid` writes "ERROR: reading key file: ..."
+    # to STDOUT (not stderr) and exits 1, so a missing public.pem used to become the literal
+    # argument `--enclave-signer-id ERROR:` with the rest of the message trailing as stray
+    # positional args -- and the node started anyway, because keeper.InitEnclave takes the
+    # unix-domain-socket branch and never reads the value.  Extract first, and say so if it failed.
+    signer_id=`ego signerid $QADENAHOME/config/public.pem` || signer_id=""
+    unique_id=`ego uniqueid $qadenabin/qadenad_enclave` || unique_id=""
+    if [[ -z "$signer_id" || "$signer_id" == ERROR:* ]]; then
+        echo "run.sh: WARNING: could not read a signer id from $QADENAHOME/config/public.pem"
+        echo "run.sh:          ($signer_id)"
+        echo "run.sh:          Starting anyway -- the chain reaches its enclave over a unix domain"
+        echo "run.sh:          socket and does not check this today -- but reinstall public.pem."
+        signer_id=""
+    fi
+    if [[ -z "$unique_id" || "$unique_id" == ERROR:* ]]; then
+        echo "run.sh: WARNING: could not read a unique id from $qadenabin/qadenad_enclave ($unique_id)"
+        unique_id=""
+    fi
+    qadenad_alias start --json-rpc.api eth,txpool,personal,net,debug,web3 --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --enclave-addr localhost:50051 --enclave-signer-id "$signer_id" --enclave-unique-id "$unique_id" --home=$QADENAHOME --log-level $log_level &
     PIDS+=$!
     PROC_NAMES[$!]="qadenad (real enclave)"
 else

@@ -45,10 +45,27 @@ fi
 
 if use_real_enclave "$qadenabin/qadenad_enclave" ; then
     echo "init_enclave.sh: Real enclave detected"
-    SIGNER_ID=`ego signerid $QADENAHOME/config/public.pem`
-    echo "init_enclave.sh: Extracted signer id from $QADENAHOME/config/public.pem: $SIGNER_ID"
-    UNIQUE_ID=`ego uniqueid $qadenabin/qadenad_enclave`
-    echo "init_enclave.sh: Extracted unique id from $qadenabin/qadenad_enclave: $UNIQUE_ID"
+
+    # EGO REPORTS FAILURE ON STDOUT, not stderr -- `ego signerid missing-file` prints
+    # "ERROR: reading key file: ..." to stdout, exits 1, and puts only its INFO banner on stderr.
+    # Backtick capture therefore swallows the failure into the variable, and the line below used to
+    # announce "Extracted signer id ...: ERROR: reading key file: ...".  A log full of the word
+    # "Extracted" is how a missing public.pem stayed invisible.  Check the status, say what happened.
+    SIGNER_ID=`ego signerid $QADENAHOME/config/public.pem` || SIGNER_ID=""
+    if [[ -z "$SIGNER_ID" || "$SIGNER_ID" == ERROR:* ]]; then
+        echo "init_enclave.sh: FAILED to read a signer id from $QADENAHOME/config/public.pem: $SIGNER_ID"
+        SIGNER_ID=""
+    else
+        echo "init_enclave.sh: Extracted signer id from $QADENAHOME/config/public.pem: $SIGNER_ID"
+    fi
+
+    UNIQUE_ID=`ego uniqueid $qadenabin/qadenad_enclave` || UNIQUE_ID=""
+    if [[ -z "$UNIQUE_ID" || "$UNIQUE_ID" == ERROR:* ]]; then
+        echo "init_enclave.sh: FAILED to read a unique id from $qadenabin/qadenad_enclave: $UNIQUE_ID"
+        UNIQUE_ID=""
+    else
+        echo "init_enclave.sh: Extracted unique id from $qadenabin/qadenad_enclave: $UNIQUE_ID"
+    fi
 else
     SIGNER_ID="*"
     UNIQUE_ID="*"
