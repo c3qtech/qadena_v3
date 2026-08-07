@@ -142,8 +142,12 @@ else
         echo "  NOTE: not active yet.  The old enclave hands its keys over only to an ACTIVE identity."
         echo "        Promotion happens on the PROPOSER's enclave at its first UpdateHeight after a"
         echo "        restart, so restarting the proposing validator is what triggers it."
-        [[ $activate -eq 1 ]] && fail "refusing --activate while the identity is '$st'; activating now
+        # An `if`, not `[[ ... ]] && fail`: under set -e the latter exits the script when activate is
+        # 0, aborting an install that was going perfectly well.
+        if [[ $activate -eq 1 ]]; then
+            fail "refusing --activate while the identity is '$st'; activating now
        would make the next start attempt an upgrade that cannot complete"
+        fi
     fi
 fi
 
