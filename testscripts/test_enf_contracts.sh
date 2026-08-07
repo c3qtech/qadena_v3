@@ -54,6 +54,33 @@ enf_json() {
     "$cli" -k "$signer" "$@" 2>/dev/null | sed -n '/^{/,$p'
 }
 
+# run_cli <label> <args...> -- quiet on success, and on failure prints WHAT WENT WRONG.
+#
+# These used to be `"$cli" ... > /dev/null 2>&1 || fail "instantiate failed"`, which discarded the
+# only copy of the error.  A regression run then reported exactly "FAILED: instantiate failed" with
+# no raw_log, no tx hash and no code -- and since the tx is gone by the time anyone reads the log,
+# there is nothing left to investigate afterwards.  The output is suppressed on success because the
+# CLI is noisy; suppressing it on FAILURE is what cost the diagnosis.
+run_cli() {
+    local label="$1"; shift
+    local out
+    if ! out=$("$cli" -k "$signer" "$@" 2>&1); then
+        echo "--- $label failed, output follows ---"
+        echo "$out"
+        echo "--- end of $label output ---"
+        fail "$label failed"
+    fi
+    # A tx can be broadcast successfully and still be rejected on chain, in which case the CLI exits
+    # 0 with a non-zero code in its JSON.  Catch that here rather than three assertions later.
+    # Anchored, because a loose /code.*[1-9]/ also matches "Saved code_id: 7" and would fail every
+    # successful upload.  Only the two forms cosmos actually prints for a result code count.
+    if echo "$out" | grep -qE '^ *"?code"?: *"?[1-9]|UNCONFIRMED'; then
+        echo "--- $label reported a failure despite exiting 0 ---"
+        echo "$out"
+        fail "$label was not confirmed on chain"
+    fi
+}
+
 echo "========================="
 echo "preflight"
 echo "========================="
@@ -69,8 +96,8 @@ echo "========================="
 echo "1. deploy a fresh contract"
 echo "========================="
 "$cli" clean > /dev/null 2>&1 || true
-"$cli" -k "$signer" upload > /dev/null 2>&1 || fail "upload failed"
-"$cli" -k "$signer" instantiate > /dev/null 2>&1 || fail "instantiate failed"
+run_cli "upload" upload
+run_cli "instantiate" instantiate
 
 addr=$("$cli" -k "$signer" contract-addr 2>/dev/null | grep -oE 'qadena1[a-z0-9]+' | tail -1)
 [ -n "$addr" ] || fail "no contract address after instantiate"
@@ -85,8 +112,7 @@ echo "entries at deploy: ${count:-0}"
 echo "========================="
 echo "2. register an ENP and read it back"
 echo "========================="
-"$cli" -k "$signer" register-enp "$roll" "$email" "$name" "$commission" > /dev/null 2>&1 \
-    || fail "register-enp failed"
+run_cli "register-enp" register-enp "$roll" "$email" "$name" "$commission"
 
 got=$(enf_json get-enp "$roll")
 echo "$got" | jq -r '.data | {roll_number, email, full_name, commission_number, change_count}'
@@ -111,8 +137,7 @@ echo "email and commission indexes both resolve to $roll"
 echo "========================="
 echo "4. update the ENP -- the change must be recorded, not just applied"
 echo "========================="
-"$cli" -k "$signer" update-enp "$roll" "$new_email" "$name" "$new_commission" "$changed_by" > /dev/null 2>&1 \
-    || fail "update-enp failed"
+run_cli "update-enp" update-enp "$roll" "$new_email" "$name" "$new_commission" "$changed_by"
 
 got=$(enf_json get-enp "$roll")
 [ "$(echo "$got" | jq -r '.data.email')"             = "$new_email" ]      || fail "email was not updated"
@@ -130,8 +155,7 @@ echo "$n change record(s) retained"
 echo "========================="
 echo "5. create a notarial entry and read it back"
 echo "========================="
-"$cli" -k "$signer" create-entry "$entry_id" "$roll" > /dev/null 2>&1 \
-    || fail "create-entry failed"
+run_cli "create-entry" create-entry "$entry_id" "$roll"
 
 entry=$(enf_json get-entry "$entry_id")
 [ "$(echo "$entry" | jq -r '.data.id')" = "$entry_id" ] || fail "get-entry did not return $entry_id"
