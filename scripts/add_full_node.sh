@@ -206,7 +206,23 @@ else
 	cp $QADENAHOME/config/*.toml /tmp/qadena_config_backup/
 
 	echo "Removing configuration directories from:  $QADENAHOME (config, data, keyring-test, enclave_config, enclave_data)"
-	rm -f $QADENAHOME/config/public.pem
+	# public.pem IS NOT NODE STATE and is deliberately NOT removed here.  It is the enclave signer's
+	# public key, installed alongside the binaries by install.sh / install_release.sh, and nothing
+	# anywhere puts it back once deleted.
+	#
+	# Deleting it does not fail here, or at the next step, which is why it survived so long.  It
+	# fails at the node's FIRST START, in init_enclave.sh:
+	#
+	#   qadenad_alias enclave init-enclave --enclave-signer-id $SIGNER_ID --enclave-unique-id ...
+	#
+	# is unquoted, so an unreadable public.pem makes $SIGNER_ID empty, --enclave-signer-id swallows
+	# --enclave-unique-id as its value, every positional shifts left, and the command dies with
+	# "accepts 4 arg(s), received 5".  The enclave never initialises and the node kills itself.
+	#
+	# It was survivable only while every machine also had a build tree whose install.sh could put the
+	# file back; a node installed from a release package has no such tree.  (The value is not read by
+	# run.sh's --enclave-signer-id -- keeper.InitEnclave takes the unix-domain-socket branch and only
+	# logs it -- but init_enclave.sh needs the FILE to exist to form a valid command line at all.)
 	rm -f $QADENAHOME/config/*.toml
 	rm -f $QADENAHOME/config/*.1
 	rm -f $QADENAHOME/config/genesis.json

@@ -53,16 +53,27 @@ if use_real_enclave "$qadenabin/qadenad_enclave" ; then
     # "Extracted" is how a missing public.pem stayed invisible.  Check the status, say what happened.
     SIGNER_ID=`ego signerid $QADENAHOME/config/public.pem` || SIGNER_ID=""
     if [[ -z "$SIGNER_ID" || "$SIGNER_ID" == ERROR:* ]]; then
-        echo "init_enclave.sh: FAILED to read a signer id from $QADENAHOME/config/public.pem: $SIGNER_ID"
-        SIGNER_ID=""
+        # STOP HERE.  Carrying on produces a command line that is wrong in a way that names nothing:
+        # the arguments below are unquoted, so an empty SIGNER_ID makes --enclave-signer-id swallow
+        # --enclave-unique-id as its value, every positional shifts left, and cobra reports
+        # "accepts 4 arg(s), received 5".  Nothing in that message mentions public.pem.
+        echo "init_enclave.sh: FAILED to read a signer id from $QADENAHOME/config/public.pem"
+        echo "init_enclave.sh: ($SIGNER_ID)"
+        echo "init_enclave.sh:"
+        echo "init_enclave.sh: That file is installed with the binaries and is not node state."
+        echo "init_enclave.sh: Reinstall it:  scripts/install_release.sh <package>"
+        echo "init_enclave.sh: or copy it from cmd/qadenad_enclave/public.pem in a build tree."
+        exit 1
     else
         echo "init_enclave.sh: Extracted signer id from $QADENAHOME/config/public.pem: $SIGNER_ID"
     fi
 
     UNIQUE_ID=`ego uniqueid $qadenabin/qadenad_enclave` || UNIQUE_ID=""
     if [[ -z "$UNIQUE_ID" || "$UNIQUE_ID" == ERROR:* ]]; then
-        echo "init_enclave.sh: FAILED to read a unique id from $qadenabin/qadenad_enclave: $UNIQUE_ID"
-        UNIQUE_ID=""
+        echo "init_enclave.sh: FAILED to read a unique id from $qadenabin/qadenad_enclave"
+        echo "init_enclave.sh: ($UNIQUE_ID)"
+        echo "init_enclave.sh: is that an ego-signed enclave?  A debug build has no measurement."
+        exit 1
     else
         echo "init_enclave.sh: Extracted unique id from $qadenabin/qadenad_enclave: $UNIQUE_ID"
     fi
@@ -71,7 +82,10 @@ else
     UNIQUE_ID="*"
 fi
 
-qadenad_alias enclave init-enclave --enclave-signer-id $SIGNER_ID --enclave-unique-id $UNIQUE_ID $PIONEER $EXT_ADDR $JARID $REGULATORID 
+# QUOTED.  Unquoted, an empty or multi-word id silently reshapes the whole command line -- the flag
+# takes the next flag as its value and the positionals shift, so the error names an argument count
+# rather than the thing that was actually missing.
+qadenad_alias enclave init-enclave --enclave-signer-id "$SIGNER_ID" --enclave-unique-id "$UNIQUE_ID" "$PIONEER" "$EXT_ADDR" "$JARID" "$REGULATORID"
 RET=$?
 if [[ $RET != 0 ]] ; then
     echo "init_enclave.sh: qadenad enclave init-enclave failed, need to kill qadenad, qadenad_enclave and signer_enclave"
