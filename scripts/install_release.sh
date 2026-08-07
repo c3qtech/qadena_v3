@@ -317,10 +317,32 @@ fi
 # ---------------------------------------------------------------------------------------------
 # 4. stop the node if the cutover is actually going to happen
 # ---------------------------------------------------------------------------------------------
-# ETXTBSY: Linux refuses to write the image of a running process, and a half-copied binary is worse
-# than none.  Stopping is deferred to here so that a run which turns out to be blocked -- unregistered
-# identity, wrong signer, inactive with no --wait-active -- never takes the node down for nothing.
-if [[ $node_running -eq 1 ]]; then
+# WHY STOPPING IS NEEDED AT ALL, AND WHY IT IS NOT ALWAYS NEEDED.
+#
+#   binaries  ETXTBSY -- Linux refuses to write the image of a running process, and a half-copied
+#             binary is worse than none.
+#   scripts   subtler, and the reason a scripts-only update still stops the node: a shell reads its
+#             script LAZILY, by byte offset.  run.sh is executing the whole time the node is up, so
+#             rewriting it underneath the running shell makes it resume at an offset that now lands
+#             mid-token.  The failure is arbitrary and looks nothing like an install problem.
+#   config    safe -- config.yml, public.pem and node_params.json are read at startup, never held
+#             open, so a package containing only those changes nothing that is running.
+#
+# Deferred to here so that a run which turns out to be blocked -- unregistered identity, wrong
+# signer, inactive with no --wait-active -- never takes the node down for nothing.
+needs_stop=0
+stop_reason=""
+if [[ -n "$(echo "$stage"/bin/*(N))" ]]; then
+    needs_stop=1; stop_reason="the packaged binaries are in use (ETXTBSY)"
+elif [[ -d "$stage/scripts" ]]; then
+    needs_stop=1; stop_reason="run.sh is executing and a shell re-reads its script by byte offset"
+fi
+
+if [[ $node_running -eq 1 && $needs_stop -eq 0 ]]; then
+    echo ""
+    echo "=== 4. the node keeps running ==="
+    echo "  this package changes nothing that is currently in use."
+elif [[ $node_running -eq 1 ]]; then
     if [[ $can_activate -eq 0 ]]; then
         echo ""
         echo "=== 4. leaving the node running ==="
@@ -328,7 +350,8 @@ if [[ $node_running -eq 1 ]]; then
         echo "  Only the new enclave is staged alongside; the running node is untouched."
     else
         echo ""
-        echo "=== 4. stopping the node for the cutover ==="
+        echo "=== 4. stopping the node ==="
+        echo "  $stop_reason"
         "$qadenascripts/stop_qadena.sh" --all || fail "could not stop the node"
         sleep 3
         if pgrep -x qadenad > /dev/null 2>&1 || pgrep -f "ego-host" > /dev/null 2>&1; then
@@ -336,6 +359,12 @@ if [[ $node_running -eq 1 ]]; then
         fi
         node_running=0
         echo "  stopped"
+        # A scripts/config-only update has no enclave cutover to perform, so nothing downstream will
+        # restart it.  Say so, rather than leaving a validator down and silent.
+        if [[ -z "$new_unique" && $restart -eq 0 ]]; then
+            echo "  NOTE: this package has no enclave, so nothing below will restart the node."
+            echo "        Pass --restart, or start it yourself when the install finishes."
+        fi
     fi
 fi
 
