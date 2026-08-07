@@ -223,11 +223,13 @@ checksum_all
 if [[ -n "$since" ]]; then
     [[ -f "$since" ]] || fail "no such reference manifest: $since"
     kept=""
-    while read -r sum path; do
-        if grep -q "^$sum  $path\$" "$since" 2>/dev/null; then
-            rm -f "$stage/$path"
+    # NOT `read -r sum path`.  In zsh `path` is the array tied to $PATH, so reading into it replaces
+    # the command search path and everything after this loop stops being found.
+    while read -r sum entry; do
+        if grep -q "^$sum  $entry\$" "$since" 2>/dev/null; then
+            rm -f "$stage/$entry"
         else
-            kept="$kept $(basename "$path")"
+            kept="$kept $(basename "$entry")"
         fi
     done < "$stage/sha256sums.txt"
     [[ -n "$kept" ]] || fail "nothing changed since $since -- no update needed"

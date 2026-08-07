@@ -89,12 +89,14 @@ echo "  checksums ok"
 # priv_validator_key.json and node_key.json all live in the same directory as the two files that are
 # legitimately shipped, and quietly restoring any of them would destroy the node's identity or its
 # view of the chain.
-while read -r _ path; do
-    case "$path" in
+# NOT `read -r _ path`.  In zsh `path` is the array tied to $PATH, so reading into it replaces the
+# command search path with "bin/qadenad" and every command after this loop is not found.
+while read -r _sum entry; do
+    case "$entry" in
         bin/qadenad|bin/qadenad_enclave|bin/signer_enclave|bin/libwasmvm*.so) ;;
         scripts/*|testscripts/*|test_data/*) ;;
         config/config.yml|config/public.pem) ;;
-        *) fail "the package contains '$path', which this installer will not write.
+        *) fail "the package contains '$entry', which this installer will not write.
        Only binaries, scripts, testscripts, config.yml and public.pem are installable.  Node
        identity and chain state are never distributed." ;;
     esac
