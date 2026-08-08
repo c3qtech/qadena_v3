@@ -141,8 +141,8 @@ jar_privk_of() {
     sed 's/^[^{]*//' "$1" | jq -r '.SharedEnclaveParams.JarPrivK'
 }
 suspicious_count() {
-    qadenad_alias query qadena list-suspicious-transaction --output json 2>/dev/null \
-        | jq -r '.SuspiciousTransaction | length' 2>/dev/null || echo ""
+    qadenad_alias query qadena list-suspicious-transaction --count-total --output json 2>/dev/null \
+        | jq -r '.pagination.total' 2>/dev/null || echo ""
 }
 
 echo "========================="

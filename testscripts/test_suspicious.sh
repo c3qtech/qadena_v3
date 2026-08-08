@@ -95,9 +95,19 @@ bank_qdn() {
 # human-readable print that emits no JSON at all -- with zero records it prints nothing, which is
 # indistinguishable from a failed query.  Keyless returns the raw proto response, which is countable.
 # The decrypting form is still used below, to show that the record is readable by the regulator.
+#
+# COUNT WITH --count-total, NOT by measuring the returned array.  --limit defaults to 100, so
+# `.SuspiciousTransaction | length` stops at 100 no matter how many records exist and every
+# "did this file a report?" assertion below silently becomes `100 -gt 100`, which is false forever.
+#
+# Nothing detected it for a long time because it needs a hundred reports on one chain to appear, and
+# until the suite was run repeatedly no chain ever had that many.  It surfaced on a loop of it: runs
+# 1 and 2 green, then every run from 7 on failing in suspicious, bank-scan and evm at once, all of
+# them reporting a threshold that had stopped being applied.  The chain was fine -- it had 281
+# records and was still filing them.
 suspicious_count() {
-    qadenad_alias query qadena list-suspicious-transaction --output json 2>/dev/null \
-        | jq -r '.SuspiciousTransaction | length' 2>/dev/null || echo ""
+    qadenad_alias query qadena list-suspicious-transaction --count-total --output json 2>/dev/null \
+        | jq -r '.pagination.total' 2>/dev/null || echo ""
 }
 
 echo "========================="

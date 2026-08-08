@@ -315,8 +315,8 @@ echo "========================="
 # The threshold is 10000usd by default and qdn is seeded at 0.01 USD, so 2,000,000qdn is $20,000 --
 # clear of the chain default and of the per-jurisdiction overrides alike, without relying on which
 # one the recipient's residency selects.
-susp_before=$(qadenad_alias query qadena list-suspicious-transaction --output json 2>/dev/null \
-    | jq -r '.SuspiciousTransaction | length')
+susp_before=$(qadenad_alias query qadena list-suspicious-transaction --count-total --output json 2>/dev/null \
+    | jq -r '.pagination.total')
 [ -n "$susp_before" ] || fail "could not read the suspicious transaction list"
 echo "suspicious transactions before: $susp_before"
 
@@ -328,8 +328,8 @@ code=$(send_result treasury "$ann_addr" "2000000qdn")
 susp_after=""
 i=0
 while [ $i -lt 15 ]; do
-    susp_after=$(qadenad_alias query qadena list-suspicious-transaction --output json 2>/dev/null \
-        | jq -r '.SuspiciousTransaction | length')
+    susp_after=$(qadenad_alias query qadena list-suspicious-transaction --count-total --output json 2>/dev/null \
+        | jq -r '.pagination.total')
     [ "$susp_after" -gt "$susp_before" ] 2>/dev/null && break
     sleep 2
     i=$((i + 1))
@@ -342,8 +342,13 @@ echo "report filed: $susp_before -> $susp_after"
 # ... and it names the treasury as a CONTRACT rather than inventing a person for it.  This is what
 # the party kind is for: without it the report would have to carry a fabricated identity, which a
 # regulator could not tell apart from a real one.
-latest_kind=$(qadenad_alias query qadena list-suspicious-transaction --output json 2>/dev/null \
-    | jq -r '.SuspiciousTransaction | sort_by(.id | tonumber) | last | .sourceKind // "SUSPICIOUS_PARTY_KIND_WALLET"')
+#
+# --reverse --limit 1 asks the chain for the newest record, rather than sorting whatever the default
+# page happened to contain.  The default --limit is 100, so once the chain held more than that this
+# was sorting the FIRST hundred records and calling the hundredth "latest" -- reading a report from
+# an earlier run, and asserting the party kind of a transaction this case did not make.
+latest_kind=$(qadenad_alias query qadena list-suspicious-transaction --reverse --limit 1 --output json 2>/dev/null \
+    | jq -r '.SuspiciousTransaction | last | .sourceKind // "SUSPICIOUS_PARTY_KIND_WALLET"')
 [ "$latest_kind" = "SUSPICIOUS_PARTY_KIND_CONTRACT" ] \
     || fail "the report should name the treasury as a CONTRACT party, got $latest_kind"
 echo "reported with sourceKind CONTRACT"

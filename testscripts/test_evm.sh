@@ -331,8 +331,8 @@ echo "-------------------------"
 #
 # The threshold is still what decides -- it now decides whether to REPORT rather than whether to
 # REFUSE -- so the assertion moved to the report count below.
-susp_before=$(qadenad_alias query qadena list-suspicious-transaction --output json 2>/dev/null \
-    | jq -r '.SuspiciousTransaction | length')
+susp_before=$(qadenad_alias query qadena list-suspicious-transaction --count-total --output json 2>/dev/null \
+    | jq -r '.pagination.total')
 ann_before=$(bank_aqdn "$ann_addr")
 bank_send "$account" "$ann_addr" "${large_qdn}qdn"
 [ "$bank_code" = "0" ] \
@@ -341,8 +341,8 @@ bank_send "$account" "$ann_addr" "${large_qdn}qdn"
 susp_after=""
 i=0
 while [ $i -lt 15 ]; do
-    susp_after=$(qadenad_alias query qadena list-suspicious-transaction --output json 2>/dev/null \
-        | jq -r '.SuspiciousTransaction | length')
+    susp_after=$(qadenad_alias query qadena list-suspicious-transaction --count-total --output json 2>/dev/null \
+        | jq -r '.pagination.total')
     [ "$susp_after" -gt "$susp_before" ] 2>/dev/null && break
     sleep 2
     i=$((i + 1))
