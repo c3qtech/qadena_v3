@@ -386,8 +386,17 @@ qadenad_alias query wait-tx "$store_hash" --timeout 60s > /dev/null 2>&1 || true
 [ "$(qadenad_alias query tx "$store_hash" --output json 2>/dev/null | jq -r '.code')" = "0" ] \
     || fail "storing the test contract failed"
 
-wasm_code_id=$(qadenad_alias query wasm list-code --output json 2>/dev/null \
-    | jq -r '.code_infos | sort_by(.code_id | tonumber) | last | .code_id')
+#
+# --reverse --limit 1 asks the chain for the NEWEST code, rather than sorting the first page.
+# list-code paginates at 100 by default, and this suite stores a contract on every run, so once the
+# chain passed a hundred codes both this and the second store below read code_id 100 forever --
+# and case 10, which requires the second store to produce a NEW id, failed with
+#
+#     FAILED: the second store did not produce a new code id (got 100, had 100)
+#
+# naming a store that had worked perfectly well.
+wasm_code_id=$(qadenad_alias query wasm list-code --reverse --limit 1 --output json 2>/dev/null \
+    | jq -r '.code_infos[0].code_id')
 [ -n "$wasm_code_id" ] && [ "$wasm_code_id" != "null" ] || fail "no code id after store"
 
 label="bankscan-pin-$(date +%s | tail -c 7)"
@@ -400,8 +409,8 @@ qadenad_alias query wait-tx "$inst_hash" --timeout 60s > /dev/null 2>&1 || true
 [ "$(qadenad_alias query tx "$inst_hash" --output json 2>/dev/null | jq -r '.code')" = "0" ] \
     || fail "instantiating the test contract failed"
 
-contract_addr=$(qadenad_alias query wasm list-contract-by-code "$wasm_code_id" --output json 2>/dev/null \
-    | jq -r '.contracts | last')
+contract_addr=$(qadenad_alias query wasm list-contract-by-code "$wasm_code_id" --reverse --limit 1 --output json 2>/dev/null \
+    | jq -r '.contracts[0]')
 [ -n "$contract_addr" ] && [ "$contract_addr" != "null" ] || fail "could not resolve the contract address"
 echo "contract $contract_addr at code id $wasm_code_id"
 
@@ -507,8 +516,8 @@ qadenad_alias query wait-tx "$store_hash" --timeout 60s > /dev/null 2>&1 || true
 [ "$(qadenad_alias query tx "$store_hash" --output json 2>/dev/null | jq -r '.code')" = "0" ] \
     || fail "storing the second copy failed"
 
-new_code_id=$(qadenad_alias query wasm list-code --output json 2>/dev/null \
-    | jq -r '.code_infos | sort_by(.code_id | tonumber) | last | .code_id')
+new_code_id=$(qadenad_alias query wasm list-code --reverse --limit 1 --output json 2>/dev/null \
+    | jq -r '.code_infos[0].code_id')
 [ -n "$new_code_id" ] && [ "$new_code_id" != "$wasm_code_id" ] \
     || fail "the second store did not produce a new code id (got $new_code_id, had $wasm_code_id)"
 echo "second code id: $new_code_id"

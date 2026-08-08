@@ -79,8 +79,8 @@ run_tx() {
 }
 
 contract_count() {
-    qadenad_alias query wasm list-contract-by-code "$1" --output json 2>/dev/null \
-        | jq -r '.contracts | length'
+    qadenad_alias query wasm list-contract-by-code "$1" --count-total --output json 2>/dev/null \
+        | jq -r '.pagination.total'
 }
 
 # create the account if missing, fund it if empty -- guarded separately so a run that died between
@@ -125,8 +125,8 @@ run_tx qadenad_alias tx wasm store "$wasm_file" --from alice --yes --output json
 [ "$tx_code" = "0" ] || fail "tx wasm store failed with code $tx_code: $tx_log"
 
 # a fresh code id per run, so the contract counts below start from zero and can be compared
-code_id=$(qadenad_alias query wasm list-code --output json 2>/dev/null \
-    | jq -r '.code_infos[-1].code_id')
+code_id=$(qadenad_alias query wasm list-code --reverse --limit 1 --output json 2>/dev/null \
+    | jq -r '.code_infos[0].code_id')
 [ -n "$code_id" ] && [ "$code_id" != "null" ] || fail "no code id after store"
 echo "code id: $code_id"
 
@@ -140,8 +140,8 @@ run_tx qadenad_alias tx wasm instantiate "$code_id" "$init" \
     --from alice --yes --output json "${gas_flags[@]}"
 [ "$tx_code" = "0" ] || fail "a zero-value instantiate failed with code $tx_code: $tx_log"
 
-contract_addr=$(qadenad_alias query wasm list-contract-by-code "$code_id" --output json 2>/dev/null \
-    | jq -r '.contracts[-1]')
+contract_addr=$(qadenad_alias query wasm list-contract-by-code "$code_id" --reverse --limit 1 --output json 2>/dev/null \
+    | jq -r '.contracts[0]')
 [ -n "$contract_addr" ] && [ "$contract_addr" != "null" ] \
     || fail "no contract address for code id $code_id"
 echo "contract: $contract_addr"
