@@ -2,27 +2,30 @@
 #
 # Runs testscripts/regression.sh back to back for as long as the chain can pay for it.
 #
-# WHY THERE IS A LIMIT AT ALL, and why this script watches for it rather than just looping.
+# WHY THE FLOOR EXISTS, and why it is a backstop rather than a scheduled death.
 #
-# A run costs the treasury more than it destroys, but not all of it comes back.  Measured across
-# four consecutive runs on the two-node testnet, with every suite passing:
+# A run costs the treasury more than it destroys.  Measured across consecutive runs on the two-node
+# testnet with every suite passing:
 #
 #     treasury spent per run              7,007,732 qdn
-#     recovered by regression.sh's reclaim 3,200,116 qdn   (46%)
-#     escrowed into encrypted balances     3,807,616 qdn   (54%, unrecoverable)
+#     recovered by regression.sh's reclaim 3,200,116 qdn
 #
-# The unrecoverable half is not waste, it is the shape of the module.  transfer-funds takes
-# [from-encrypted-amount] [from-transparent-amount], and the large transfers in test_suspicious.sh
-# spend the TRANSPARENT side to credit the recipient's ENCRYPTED balance.  Nothing in the Msg
-# service goes the other way -- TransferFunds and ReceiveFunds both credit an encrypted balance and
-# there is no unshield -- so every run moves about 4.5 million qdn permanently out of the pool that
-# funds the next one.  Reclaiming roughly doubles the runway; it cannot make it infinite.
+# The rest is not destroyed either.  It has crossed from a transparent balance into ann's ENCRYPTED
+# one, via the [from-transparent-amount] slot of transfer-funds in test_suspicious.sh, and
+# reclaim_funds() does not yet bring it back -- see the note there.  It CAN be brought back:
+# receive-funds takes a [to-transparent-amount], which converts a collected transfer into transparent
+# balance, and case 10 of test_transfers.sh asserts exactly that round trip.
 #
-# From a 2,000,000,000 qdn genesis treasury that is on the order of 500 runs, or about four days of
-# running back to back.  When it runs out, every suite fails at once on insufficient funds, and the
-# summary looks like a catastrophic regression rather than an empty wallet.  So this script STOPS on
-# a floor and says why.  Rebuilding is a deliberate act -- regression.sh --from-genesis -- because it
-# destroys the chain, and it is not something a loop should decide to do at 3am.
+# An earlier version of this comment said the opposite -- that nothing unshields an encrypted balance,
+# that ~4.5 million qdn a run left the pool for good, and that a 2 billion qdn treasury was therefore
+# good for about 500 runs before only --from-genesis could recover it.  That was wrong.  Nothing here
+# has to end after four days; the drain is a gap in the reclaim, not a property of the chain.
+#
+# The floor stays regardless, because a treasury that DOES run down takes every suite with it at
+# once, and a wall of failures on insufficient funds reads as a catastrophic regression rather than
+# an empty wallet.  Stopping and saying so is worth more than looping into that.  Rebuilding remains
+# a deliberate act -- regression.sh --from-genesis -- because it destroys the chain, and that is not
+# something a loop should decide at 3am.
 #
 # Usage:
 #   run_regression_continually.sh                    loop until the treasury floor is hit
@@ -101,8 +104,9 @@ while true; do
         echo "======================================================================"
         echo "TREASURY FLOOR REACHED: ${have}qdn left, floor is ${floor_qdn}qdn"
         echo "======================================================================"
-        echo "About 4.5 million qdn per run crosses into encrypted balances and cannot be swept"
-        echo "back, so this chain has funded as many runs as it can.  Rebuild when you are ready:"
+        echo "reclaim_funds() returns the transparent balance but not what crossed into ann's"
+        echo "encrypted one, so the pool drains slowly.  That is recoverable (see reclaim_funds),"
+        echo "but until it is, rebuilding is the way back:"
         echo ""
         echo "    testscripts/regression.sh --from-genesis"
         echo ""

@@ -514,6 +514,37 @@ replenish_funds() {
     local al_enc_topup=50000
     local al_enc ann_enc
 
+    # CLEAR ANN'S EPHEMERAL QUEUES FIRST, whatever left something in them.
+    #
+    # test_transfers.sh measures a delta across receive-funds, which takes ONE queued entry per call,
+    # so it is only correct against a queue holding just its own transfer.  test_suspicious.sh drains
+    # what it queues (case 5) -- but only if it REACHES case 5.  When it aborted early instead, on
+    # the report assertions that had gone blind at 100 records, its case-2 transfer had already
+    # landed and the drain never ran.  Forty-odd such runs left twelve entries, 14,400,900qdn, sitting
+    # in ann-eph1, and the next transfers run drained one of them and reported
+    #
+    #     FAILED: ann-eph1 released -1200000.000000000000000000, expected -100
+    #
+    # Cleaning up after yourself only works on the paths where you get to run.  Starting from a known
+    # state works regardless of how the previous run died, which is the property a repeatable suite
+    # actually needs.
+    local eph drained total_drained=0
+    for eph in ann-eph1 ann-eph2; do
+        addr_of_eph=$(qadenad_alias keys show "$eph" -a --keyring-backend test 2>/dev/null) || continue
+        [ -n "$addr_of_eph" ] || continue
+        drained=0
+        # Bounded: a queue this long is already an anomaly, and an unbounded loop here would spin on
+        # a wallet that cannot be drained at all.
+        while [ "$drained" -lt 40 ]; do
+            [ "$(enc_qdn "$eph")" = "0" ] 2>/dev/null && break
+            qadenad_alias tx qadena receive-funds "$eph" 0qdn --from ann --yes > /dev/null 2>&1 || break
+            drained=$((drained + 1))
+        done
+        [ "$drained" -gt 0 ] && echo "drained $drained leftover queue entries from $eph"
+        total_drained=$((total_drained + drained))
+    done
+    [ "$total_drained" -eq 0 ] && echo "ann's ephemeral queues were already empty"
+
     al_enc=$(enc_qdn al)
     [ -n "$al_enc" ] || { echo "could not read al's encrypted balance; leaving it alone"; return 0; }
 
@@ -558,13 +589,23 @@ replenish_funds() {
 # moment al is solvent again.  Reclaiming is therefore enough on its own: put the transparent
 # balance back and the guards go quiet.
 #
-# WHAT THIS CANNOT RECOVER, and it is the reason the ceiling moves rather than disappears.
+# WHAT THIS DOES NOT YET RECOVER -- and it is a gap in this function, not a property of the chain.
+#
 # transfer-funds takes [from-encrypted-amount] [from-transparent-amount], and the large transfers in
-# test_suspicious.sh spend the TRANSPARENT side to credit the recipient's ENCRYPTED balance.  The
-# Msg service (proto/qadena/qadena/tx.proto) has no reverse: TransferFunds and ReceiveFunds both
-# credit an encrypted balance, and nothing unshields one.  So the qdn that crosses into an encrypted
-# wallet is out of reach of any sweep, and the transparent pool still shrinks -- just far more
-# slowly.  Only a --from-genesis rebuild resets it.
+# test_suspicious.sh spend the TRANSPARENT side to credit the recipient's ENCRYPTED balance.  This
+# sweep only moves transparent balance, so what crossed over stays with ann and the transparent pool
+# still shrinks by roughly 2.4 million qdn a run.
+#
+# It is RECOVERABLE, though.  receive-funds takes [to-transparent-amount], so collecting a transfer
+# with an amount rather than the 0qdn every caller here passes brings it back out as transparent
+# balance -- measured at exactly that, and asserted by case 10 of test_transfers.sh.  An earlier
+# version of this comment claimed the opposite, that nothing unshields an encrypted balance and only
+# --from-genesis could reset the pool; that was wrong, read off transfer-funds' signature and the Msg
+# service without checking what receive-funds' second argument does.
+#
+# Closing it means routing ann's encrypted surplus back to al as transparent balance, which would
+# stop the 5,000,000qdn top-up firing at all -- and per the per-run deltas that top-up IS the entire
+# net drain.  Not done here yet.
 #
 # Best-effort by design: a reclaim that cannot run leaves the chain exactly as the suites left it,
 # which is the old behaviour and no worse.  It reports what it moved and fails only if a send it

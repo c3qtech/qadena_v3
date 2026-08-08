@@ -53,6 +53,18 @@ func CmdReceiveFunds() *cobra.Command {
 
 			if argTransparentAmount == "all" {
 				transparentAmount = math.NewInt(-1)
+				// THE DENOM STILL HAS TO BE SET.  "all" carries no denom of its own, and token was
+				// left as "" here -- so every lookup keyed on it downstream missed, and the command
+				// failed with
+				//
+				//     There are no funds enqueued for
+				//
+				// whose blank tail is the empty denom being printed.  It reads as an empty queue,
+				// and it happens with the funds plainly sitting in it: the only documented way to
+				// move an encrypted balance back out to a transparent one could never work.
+				//
+				// qdn rather than aqdn, matching what the else branch normalises to below.
+				token = types.QadenaTokenDenom
 			} else {
 				transparentAmountCoin, err := sdktypes.ParseCoinNormalized(argTransparentAmount)
 				if err != nil {

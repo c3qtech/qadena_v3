@@ -111,6 +111,13 @@ delta_of() {
     python3 -c "from decimal import Decimal; print(Decimal('$2')-Decimal('$1'))"
 }
 
+# TRANSPARENT (bank) balance in aqdn.  The other balance a wallet has -- everything above this line
+# measures the ENCRYPTED one, and case 10 is about the boundary between them.
+bank_aqdn() {
+    qadenad_alias query bank balances "$1" --output json 2>/dev/null \
+        | jq -r '.balances[] | select(.denom=="aqdn") | .amount' 2>/dev/null | head -1
+}
+
 echo "========================="
 echo "preflight"
 echo "========================="
@@ -430,6 +437,83 @@ raise SystemExit(0 if Decimal('$remaining') == 0 else 1)
 delta_is "$al_pre" "$al_post" "0" \
     || fail "al is out $(delta_of "$al_pre" "$al_post") after sending and reclaiming the same amount -- value was lost"
 echo "all ${#drain_amounts} transfers came back in order; nothing left behind"
+
+echo "========================="
+echo "10. an encrypted balance can be brought back OUT, as transparent"
+echo "========================="
+# receive-funds takes [eph-wallet-id] [to-transparent-amount], and passing `all` there is what turns
+# a collected transfer into the collector's TRANSPARENT balance instead of its encrypted one.  Every
+# other call in this suite, and in every other suite, passes 0qdn -- which keeps the funds encrypted.
+# So nothing exercised this direction at all, and the whole return path was untested.
+#
+# THAT GAP IS ACTIVELY MISLEADING, which is why this case exists.  Reading transfer-funds'
+# [from-encrypted-amount] [from-transparent-amount] signature, and the Msg service in
+# proto/qadena/qadena/tx.proto -- where TransferFunds and ReceiveFunds are the only movers of value
+# and both appear to credit an encrypted balance -- it looks as though value can move INTO an
+# encrypted balance and never back out.  Believe that and every qdn the suites shield is written
+# off: a long-lived test chain looks like it must bleed its transparent supply until only a rebuild
+# from genesis can recover it.  None of that is true, and the argument for it survives exactly as
+# long as no test demonstrates the round trip.
+#
+# So: out of al's encrypted balance, through an ephemeral wallet, back into al's TRANSPARENT
+# balance, asserting BOTH sides move.  al-ephdrain is empty here -- case 9 has just proved it.
+unshield_amount="40"
+
+al_enc_before=$(enc_balance al)
+al_bank_before=$(bank_aqdn "$(addr_of al)")
+[ -n "$al_bank_before" ] || fail "could not read al's transparent balance"
+echo "al before:  encrypted=$al_enc_before  transparent=$(python3 -c "print(int('$al_bank_before')//10**18)")qdn"
+
+qadenad_alias tx qadena transfer-funds "$eph_drain" "${unshield_amount}qdn" 0qdn \
+    --transfer-note "unshield: encrypted back out to transparent" --from al --yes > /dev/null \
+    || fail "could not move ${unshield_amount}qdn of al's encrypted balance into $eph_drain"
+
+# WAIT FOR IT TO BE QUEUED before collecting.  The broadcast returns once the transaction is in the
+# mempool, not once it is in a block, so collecting immediately raced it and failed with
+#
+#     There are no funds enqueued for
+#
+# against a transfer that landed a second later.  The cases above happen to be slow enough between
+# steps to hide this; that is luck, not sequencing.
+queued=false
+for _ in {1..15}; do
+    if [ "$(enc_balance "$eph_drain")" != "0" ] 2>/dev/null; then queued=true; break; fi
+    sleep 2
+done
+[ "$queued" = "true" ] || fail "the ${unshield_amount}qdn transfer never reached $eph_drain's queue"
+
+# A TRANSPARENT AMOUNT, not 0qdn -- this is the entire point of the case.  The other documented form
+# is `all`, which is NOT used here: it never set the token denom, so it failed on a queue that
+# plainly held funds.  Fixed in x/qadena/client/cli/tx_receive_funds.go, but that needs a rebuilt
+# qadenad to take effect, so this asserts the form that works with any binary.
+qadenad_alias tx qadena receive-funds "$eph_drain" "${unshield_amount}qdn" --from al --yes > /dev/null \
+    || fail "al could not collect ${unshield_amount}qdn from $eph_drain as transparent"
+
+al_enc_after=$(enc_balance al)
+al_bank_after=$(bank_aqdn "$(addr_of al)")
+echo "al after:   encrypted=$al_enc_after  transparent=$(python3 -c "print(int('$al_bank_after')//10**18)")qdn"
+
+# The transparent side must GAIN it.  Compared in aqdn with a tolerance, because al pays the gas for
+# both transactions above out of this same balance -- a fee is a few hundred thousand aqdn against a
+# 40qdn move, so anything near the full amount is the transfer and anything near zero is not.
+python3 -c "
+gained = int('$al_bank_after') - int('$al_bank_before')
+want   = $unshield_amount * 10**18
+raise SystemExit(0 if want - 10**16 <= gained <= want else 1)
+" || fail "al's TRANSPARENT balance moved $(python3 -c "print((int('$al_bank_after')-int('$al_bank_before'))/10**18)")qdn, expected about ${unshield_amount} -- receive-funds did not unshield"
+
+# ... and the encrypted side must LOSE it.  Without this the case would pass just as well if the
+# funds had been duplicated rather than converted.
+delta_is "$al_enc_before" "$al_enc_after" "-$unshield_amount" \
+    || fail "al's encrypted balance moved $(delta_of "$al_enc_before" "$al_enc_after"), expected -$unshield_amount"
+
+drain_left=$(enc_balance "$eph_drain")
+python3 -c "
+from decimal import Decimal
+raise SystemExit(0 if Decimal('$drain_left') == 0 else 1)
+" || fail "$eph_drain still holds ${drain_left}qdn after collecting with 'all'"
+
+echo "encrypted -> transparent confirmed: ${unshield_amount}qdn came back out, queue empty"
 
 echo "========================="
 echo "TRANSFER / RECEIVE TESTS PASSED"
