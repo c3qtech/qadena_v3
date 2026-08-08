@@ -14,7 +14,13 @@
 # From a checkout, pointing at an archive works too:
 #
 #   scripts/install_release.sh <archive.tar.gz> [--wait-active[=SECONDS]] [--restart] [--force]
-#                                               [--home DIR]
+#                                               [--home DIR] [--no-prune]
+#
+# PRUNING IS ON BY DEFAULT for scripts/ and testscripts/: a script deleted upstream is deleted here
+# too, so "installed" and "the current release" cannot drift apart.  Copying alone only ever adds,
+# and a dead script is worse than a missing one because it still runs when someone types its name.
+# Pruned files are backed up like any replaced file, and --no-prune turns it off.  bin/ is never
+# pruned -- the measurement-suffixed enclaves must all stay on disk for upgrades to hand over.
 #
 # ONE SCRIPT, BOTH JOBS.  It works out for itself whether this machine needs a first INSTALL or an
 # UPGRADE, because the difference is observable -- a machine with no qadenad and no sealed enclave
@@ -63,6 +69,7 @@ wait_secs=1800
 restart=0
 force=0
 home_override=""
+prune=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -70,10 +77,11 @@ while [[ $# -gt 0 ]]; do
     --wait-active=*)  wait_active=1; wait_secs="${1#*=}"; shift ;;
     --restart)        restart=1; shift ;;
     --force)          force=1; shift ;;
+    --no-prune)       prune=0; shift ;;
     --home)           [[ -n "$2" && "$2" != --* ]] || { echo "--home requires a directory"; exit 1; }
                       home_override="$2"; shift 2 ;;
     --help)
-      sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) archive="$1"; shift ;;
   esac
@@ -446,6 +454,38 @@ for f in "$stage"/bin/*(N); do
     esac
 done
 
+# prune_dir <dir> -- delete installed files the package no longer ships.
+#
+# WITHOUT THIS, "installed" and "the current release" drift apart permanently.  Copying only ever
+# adds and overwrites, so a script deleted upstream lives on every node forever -- and dead scripts
+# are worse than missing ones, because they still run when someone types their name.  Observed with
+# install_enclave_upgrade.sh, which was superseded and removed but stayed on the node that had it.
+#
+# NEVER FOR A DELTA PACKAGE.  --changed-since ships only the components whose checksum moved, so
+# "not in this package" means "unchanged", not "withdrawn".  Pruning against one would delete
+# almost everything.  The manifest records update.since exactly when that applies, so that is the
+# guard.  It is checked once, up front, rather than per directory.
+prune_dir() {
+    local d="$1" src="$stage/$1" dst="$QADENAHOME/$1"
+    [[ -d "$src" && -d "$dst" ]] || return 0
+    local pruned=0 f name
+    for f in "$dst"/*(N); do
+        [[ -f "$f" ]] || continue
+        name="${f:t}"
+        [[ -e "$src/$name" ]] && continue
+        preserve "$f"          # recoverable from $QADENAHOME/backup/<timestamp>/
+        rm -f "$f"
+        echo "    pruned $d/$name"
+        pruned=$(( pruned + 1 ))
+    done
+    [[ $pruned -eq 0 ]] || echo "  pruned $pruned stale file(s) from $d (backed up)"
+}
+
+is_delta=0
+if grep -q '^update.since:' "$stage/manifest.txt" 2>/dev/null; then
+    is_delta=1
+fi
+
 if [[ -d "$stage/scripts" ]]; then
     changed=0
     for f in "$stage"/scripts/*(N); do
@@ -455,6 +495,9 @@ if [[ -d "$stage/scripts" ]]; then
         chmod +x "$dest" 2>/dev/null || true
     done
     echo "  installed scripts ($changed changed)"
+    if [[ $prune -eq 1 && $is_delta -eq 0 ]]; then
+        prune_dir scripts
+    fi
 fi
 
 for d in testscripts test_data; do
@@ -465,7 +508,14 @@ for d in testscripts test_data; do
         [[ "$d" == testscripts ]] && chmod +x "$QADENAHOME/$d/$(basename "$f")" 2>/dev/null || true
     done
     echo "  installed $d"
+    if [[ $prune -eq 1 && $is_delta -eq 0 ]]; then
+        prune_dir "$d"
+    fi
 done
+
+if [[ $is_delta -eq 1 && $prune -eq 1 ]]; then
+    echo "  (pruning skipped: this is an update package, so absence means unchanged)"
+fi
 
 if [[ -f "$stage/config/public.pem" ]]; then
     dest="$QADENAHOME/config/public.pem"
