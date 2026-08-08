@@ -274,6 +274,29 @@ qadenad_alias tx qadena receive-funds ann-eph1 0qdn --from ann --yes > /dev/null
     || fail "ann could not receive the flagged transfer"
 echo "ann received the flagged transfer"
 
+# NOW DRAIN THE REST OF ann-eph1's QUEUE, or this suite strands funds that the NEXT run reads as
+# its own.  This is what made the suite non-repeatable.
+#
+# Cases 2 and 3 each queue an entry of $large_amount; receive-funds takes exactly ONE queued entry
+# per call, so the single receive above leaves the other one behind.  It survives to the next run,
+# where test_transfers.sh queues 100qdn into the same wallet, drains the queue, and measures the
+# delta:
+#
+#     ann-eph1: 1200100.000000000000000000 -> 100.000000000000000000
+#     FAILED: ann-eph1 released -1200000.000000000000000000, expected -100
+#
+# which reads as a transfer bug and is nothing of the kind -- test_transfers.sh reads the queue it
+# is handed, and this suite handed it a stale entry.  Only the FIRST run after genesis passes.
+#
+# The aggregate cases below already avoid exactly this by sending to victor-eph1 and draining it in
+# a loop; ann-eph1 could not be redirected the same way, because case 5 has to prove that ANN
+# receives the flagged transfer.  So it gets the same tidy-up instead, and is best-effort for the
+# same reason: nothing after this point asserts on what is left here.
+for _ in {1..6}; do
+    qadenad_alias tx qadena receive-funds ann-eph1 0qdn --from ann --yes > /dev/null 2>&1 || break
+done
+echo "ann-eph1 queue drained, so the next run starts from an empty queue"
+
 echo "========================="
 echo "6. sub-threshold transfers accumulate without firing"
 echo "========================="
