@@ -116,6 +116,20 @@ if [[ $PIONEER == "" || $PIONEER == "--help" || $GENESIS_PIONEER_FIRST_IP_ADDRES
     exit 1
 fi
 
+# EVERY PROMPT BELOW GUARDS AGAINST EOF, and that is a bug fix rather than defensive habit.
+#
+# The prompts are `while [[ $REPLY != ... ]]; do read REPLY?"..."` loops.  `read` returns non-zero at
+# end of input and leaves REPLY untouched, so the loop condition stays true and it spins as fast as
+# the CPU allows.  Anything that closes stdin does it: a pipe that ends, a here-string, a FIFO whose
+# writer went away, nohup with no terminal.
+#
+# Observed: a run driven through a FIFO sat spinning at ~100% of a core for two and a half hours
+# after its work had finished, stuck on the final "start the node now?" prompt -- competing with a
+# reproducible build and a regression run on the same machine, with nothing in any log to say so.
+#
+# Failing beats defaulting here: these prompts erase configuration and start validators, and
+# guessing on behalf of an absent operator is worse than stopping.
+
 CONTINUE_AFTER_FUNDING=0
 
 if [ -d "$QADENAHOME/enclave_config" ] && [ -f "$QADENAHOME/config/genesis.json" ]; then
@@ -134,7 +148,7 @@ if [ -d "$QADENAHOME/enclave_config" ] && [ -f "$QADENAHOME/config/genesis.json"
 		REPLY=""
 		while [[ $REPLY != "y" && $REPLY != "n" ]]; do
 			echo "You are about to make this node into a full node, with a new Pioneer name '$PIONEER'."
-			read REPLY\?"This will erase all existing configuration data.  Proceed? (y/n) "
+			read REPLY\?"This will erase all existing configuration data.  Proceed? (y/n) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
 			if [[ $REPLY == "y" ]] ; then
 				echo "Ok, will make this a full node."
 			elif [[ $REPLY == "n" ]] ; then
@@ -149,7 +163,7 @@ if [ -d "$QADENAHOME/enclave_config" ] && [ -f "$QADENAHOME/config/genesis.json"
 			REPLY=""
 			echo "This node is already initialized as $MONIKER."
 			while [[ $REPLY != "c" && $REPLY != "s" && $REPLY != "q" ]]; do
-				read REPLY\?"Would you like to [c]ontinue after receiving funding, or [s]tart from scratch (erase all existing configuration data), or [q]uit? (c/s/q) "
+				read REPLY\?"Would you like to [c]ontinue after receiving funding, or [s]tart from scratch (erase all existing configuration data), or [q]uit? (c/s/q) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
 				if [[ $REPLY == "q" ]] ; then
 					exit 0
 				elif [[ $REPLY == "s" ]] ; then
@@ -164,7 +178,7 @@ if [ -d "$QADENAHOME/enclave_config" ] && [ -f "$QADENAHOME/config/genesis.json"
   		 	echo "This node is already initialized as $MONIKER."
 			REPLY=""
 			while [[ $REPLY != "s" && $REPLY != "q" ]]; do
-				read REPLY\?"Would you like to [s]tart from scratch (erase all existing configuration data), or [q]uit? (s/q) "
+				read REPLY\?"Would you like to [s]tart from scratch (erase all existing configuration data), or [q]uit? (s/q) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
 				if [[ $REPLY == "q" ]] ; then
 					exit 0
 				elif [[ $REPLY == "s" ]] ; then
@@ -186,7 +200,7 @@ if [[ $CONTINUE_AFTER_FUNDING -eq 1 ]]; then
 else
 	REPLY=""
 	while [[ $REPLY != "y" && $REPLY != "n" ]]; do
-		read REPLY\?"Final confirmation.  Are you really sure? (y/n) "
+		read REPLY\?"Final confirmation.  Are you really sure? (y/n) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
 		if [[ $REPLY == "y" ]] ; then
 			echo "Ok, will start from scratch."
 		elif [[ $REPLY == "n" ]] ; then
@@ -486,7 +500,7 @@ echo "(PRODUCTION) Full Node:  Please purchase and send at least ${FULL}qdn to $
 echo "(PRODUCTION) Validator Node:  Please purchase and send at least ${VALIDATOR}qdn to $PIONEERADDRESS"
 REPLY=""
 while [[ $REPLY != "y" && $REPLY != "n" ]]; do
-	read REPLY\?"Are you done sending funds to $PIONEERADDRESS ? (y/n) "
+	read REPLY\?"Are you done sending funds to $PIONEERADDRESS ? (y/n) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
 	if [[ $REPLY == "y" ]] ; then
 
 		echo "I will attempt to detect when $PIONEERADDRESS has at least ${FULL}qdn."
@@ -546,7 +560,7 @@ echo ""
 
 REPLY=""
 while [[ $REPLY != "y" && $REPLY != "n" ]]; do
-	read REPLY\?"Do you want to start the new qadena 'full-node' now? (y/n) "
+	read REPLY\?"Do you want to start the new qadena 'full-node' now? (y/n) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
 	if [[ $REPLY == "y" ]] ; then
 		$qadenascripts/start_qadena.sh
 	elif [[ $REPLY == "n" ]] ; then
