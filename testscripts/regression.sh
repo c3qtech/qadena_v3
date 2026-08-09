@@ -43,10 +43,12 @@
 # queue it filled.  Repeating the suite is a property worth re-checking, because nothing here
 # asserts it end to end -- the "idempotency" suite covers setup_prerequisites.sh and nothing else.
 #
-# Being repeatable is also not the same as being SUSTAINABLE: the suites drew about 7-9.4 million
-# qdn per run from the treasury and never gave any of it back, which is a day and a half of running
-# before a 2 billion qdn genesis treasury is gone.  The reclaim suite below returns most of it; see
-# the note on reclaim_funds() for what no sweep can recover.
+# Being repeatable is also not the same as being SUSTAINABLE: the suites drew about 6-9.4 million
+# qdn per run from the treasury and gave none of it back, which is a day and a half of running before
+# a 2 billion qdn genesis treasury is gone.  reclaim_funds() returns it -- both the transparent
+# balance that piles up in ann and victor and, since receive-funds can unshield, the encrypted
+# balance they accumulate as well.  replenish_funds() mints al's encrypted float from al's own
+# transparent balance rather than borrowing it, so nothing has to be held back for it.
 #
 # TWO LAYERS ARE NOT REPEATABLE, and are therefore opt-in:
 #
@@ -509,19 +511,31 @@ print(int(sum((Decimal(l.strip()) for l in sys.stdin if l.strip()), Decimal(0)))
 # already failed on it.
 replenish_funds() {
     # test_transfers.sh permanently loses about 125qdn of al's encrypted balance per run (100 to
-    # ann-eph1, 25 to ann-eph2), and needs roughly 165qdn in hand to complete one.  So:
+    # ann-eph1, 25 to ann-eph2, both collected by ann), and needs roughly 165qdn in hand to complete
+    # one.  So:
     #
     #   minimum  what a single run cannot start without -- the only figure worth failing on
-    #   floor    comfortable headroom (~8 runs), the point at which topping up is worth doing
-    #   topup    what to take when ann is flush, capped by what ann can actually spare
+    #   floor    comfortable headroom (~300 runs), the point at which topping up is worth doing
+    #   topup    how much to mint when it does
     #
-    # A fresh genesis leaves al and ann on 500qdn each, which is above the minimum and below the
-    # floor -- so a new chain notes the shortfall, takes what little ann can spare, and runs.
+    # AL FUNDS ITSELF, out of its own transparent balance.  An encrypted balance is not a separate
+    # currency that has to be sourced from someone who already holds one: transfer-funds takes
+    # [from-encrypted-amount] [from-transparent-amount], and the slot-2 form spends the sender's
+    # TRANSPARENT balance to credit the recipient's ENCRYPTED one.  That is how ann got hers in the
+    # first place -- test_suspicious.sh pushing al's transparent balance into ann-eph1 -- and pointing
+    # it at al's own ephemeral wallet mints al's float directly.  Measured: al transparent -100,
+    # al encrypted +100.
+    #
+    # An earlier version drew this from ann instead, on the theory that only a wallet already holding
+    # an encrypted balance could supply one, and reserved 100,000qdn in ann to keep that possible.
+    # That was wrong twice over: it coupled replenish to a donor wallet it does not need, and it
+    # forced reclaim_funds() to leave behind the very balance it exists to recover.  al's transparent
+    # balance is already kept up by the treasury guards in test_suspicious.sh and test_evm.sh, so
+    # funding from there costs the chain nothing new.
     local al_enc_minimum=200
     local al_enc_floor=1000
     local al_enc_topup=50000
-    local ann_enc_float=200
-    local al_enc ann_enc
+    local al_enc al_bank_qdn
 
     # CLEAR ANN'S EPHEMERAL QUEUES FIRST, whatever left something in them.
     #
@@ -563,44 +577,48 @@ replenish_funds() {
         return 0
     fi
 
-    # TAKE WHAT ANN CAN SPARE, rather than demanding the full top-up.
-    #
-    # This asked for a flat 50,000qdn and FAILED THE RUN when ann could not cover it -- which is the
-    # normal state of a chain that has just been built.  On a fresh genesis setup.sh leaves al and
-    # ann holding 500qdn each, so the very first run reported
-    #
-    #     ann holds 500qdn encrypted, not enough to move 50000qdn to al
-    #     al is below the floor and cannot be topped up, so the transfers suite would fail here
-    #
-    # and transfers then passed anyway, because 500qdn is several runs of headroom.  The constants
-    # were calibrated on a chain where ann had accumulated millions and never sanity-checked against
-    # a new one.
-    ann_enc=$(enc_qdn ann)
-    local spare=0
-    [ -n "$ann_enc" ] && spare=$((ann_enc - ann_enc_float))
-    [ "$spare" -lt 0 ] 2>/dev/null && spare=0
+    # MINT IT FROM AL'S OWN TRANSPARENT BALANCE, capped by what al actually holds.
+    al_bank_qdn=$(qadenad_alias query bank balances "$(qadenad_alias keys show al -a --keyring-backend test 2>/dev/null)" \
+        --output json 2>/dev/null | jq -r '.balances[] | select(.denom=="aqdn") | .amount' 2>/dev/null)
+    al_bank_qdn=$(python3 -c "print(int('${al_bank_qdn:-0}') // 10**18)" 2>/dev/null || echo 0)
+
     local want="$al_enc_topup"
-    [ "$spare" -lt "$want" ] 2>/dev/null && want="$spare"
+    # Leave al enough transparent balance to pay gas and to be worth scanning; the treasury guards
+    # top this side up during the run anyway.
+    local usable=$((al_bank_qdn - 1000))
+    [ "$usable" -lt 0 ] 2>/dev/null && usable=0
+    [ "$usable" -lt "$want" ] 2>/dev/null && want="$usable"
 
     if [ "$want" -le 0 ] 2>/dev/null; then
-        # Nothing to recycle.  That is only a PROBLEM if al cannot fund the next transfers run --
-        # which needs about 165qdn (100 to ann-eph1, 25 to ann-eph2, 40 out and back through case 10).
+        # al cannot fund itself.  Only a PROBLEM if it also cannot complete a run, which needs about
+        # 165qdn (100 to ann-eph1, 25 to ann-eph2, 40 out and back through case 10).
         if [ "$al_enc" -ge "$al_enc_minimum" ] 2>/dev/null; then
-            echo "ann holds ${ann_enc:-0}qdn encrypted and cannot spare any; al's ${al_enc}qdn still covers"
-            echo "the ${al_enc_minimum}qdn a transfers run needs, so this is a note rather than a failure"
+            echo "al holds only ${al_bank_qdn}qdn transparent and cannot mint more, but its ${al_enc}qdn"
+            echo "encrypted still covers the ${al_enc_minimum}qdn a run needs -- a note, not a failure"
             return 0
         fi
-        echo "ann holds ${ann_enc:-0}qdn encrypted and cannot spare any, and al's ${al_enc}qdn is under"
-        echo "the ${al_enc_minimum}qdn a transfers run needs -- transfers will fail on its first send"
+        echo "al holds ${al_bank_qdn}qdn transparent and ${al_enc}qdn encrypted, under the"
+        echo "${al_enc_minimum}qdn a transfers run needs -- transfers will fail on its first send"
         return 1
     fi
 
-    echo "recycling ${want}qdn of encrypted balance from ann to al, via al-eph1"
-    qadenad_alias tx qadena transfer-funds al-eph1 "${want}qdn" 0qdn \
-        --transfer-note "regression replenish: returning al's encrypted float" --from ann --yes > /dev/null \
-        || { echo "  ann could not transfer to al-eph1"; return 1; }
+    echo "minting ${want}qdn of encrypted balance for al from its own transparent balance, via al-eph1"
+    # SLOT 2, not slot 1: [from-encrypted] [from-transparent].  0qdn from the encrypted side (which is
+    # what is short) and the amount from the transparent side.
+    qadenad_alias tx qadena transfer-funds al-eph1 0qdn "${want}qdn" \
+        --transfer-note "regression replenish: al funding its own encrypted float" --from al --yes > /dev/null \
+        || { echo "  al could not move its transparent balance into al-eph1"; return 1; }
 
-    # receive-funds takes one queued entry per call, and al-eph1 held nothing before this.
+    # The broadcast returns at the mempool, not at inclusion.
+    local queued=false i=0
+    while [ $i -lt 20 ]; do
+        [ "$(enc_qdn al-eph1)" != "0" ] 2>/dev/null && { queued=true; break; }
+        sleep 2
+        i=$((i + 1))
+    done
+    [ "$queued" = "true" ] || { echo "  the transfer never reached al-eph1's queue"; return 1; }
+
+    # 0qdn to the transparent side, so it lands as ENCRYPTED balance -- the whole point here.
     qadenad_alias tx qadena receive-funds al-eph1 0qdn --from al --yes > /dev/null \
         || { echo "  al could not collect from al-eph1"; return 1; }
 
@@ -633,16 +651,23 @@ replenish_funds() {
 # sweep only moves transparent balance, so what crossed over stays with ann and the transparent pool
 # still shrinks by roughly 2.4 million qdn a run.
 #
-# It is RECOVERABLE, though.  receive-funds takes [to-transparent-amount], so collecting a transfer
-# with an amount rather than the 0qdn every caller here passes brings it back out as transparent
-# balance -- measured at exactly that, and asserted by case 10 of test_transfers.sh.  An earlier
+# So it UNSHIELDS FIRST, then sweeps.  receive-funds takes [to-transparent-amount], so collecting a
+# transfer with an amount rather than the 0qdn every other caller passes brings the funds back out as
+# transparent balance -- measured exactly, and asserted by case 10 of test_transfers.sh.  An earlier
 # version of this comment claimed the opposite, that nothing unshields an encrypted balance and only
 # --from-genesis could reset the pool; that was wrong, read off transfer-funds' signature and the Msg
-# service without checking what receive-funds' second argument does.
+# service without checking what receive-funds' second argument does, and it is why this function
+# spent so long walking past most of the money.
 #
-# Closing it means routing ann's encrypted surplus back to al as transparent balance, which would
-# stop the 5,000,000qdn top-up firing at all -- and per the per-run deltas that top-up IS the entire
-# net drain.  Not done here yet.
+# WHAT IT WAS WALKING PAST, measured on the rebuilt chain after two runs: ann held 4,750,750qdn and
+# victor 3,860,500qdn encrypted, 8.6 million between them, against a transparent sweep that recovered
+# 3.2 million.  victor is the sharper case -- the sweep looked at its 500qdn transparent balance,
+# found it under the float, and logged "nothing to reclaim" while it sat on 3.8 million.
+#
+# NOTHING NEEDS TO BE HELD BACK.  An earlier version reserved 100,000qdn in ann, believing
+# replenish_funds() could only source al's encrypted float from a wallet that already had one.  It
+# cannot only do that: al mints its own from its own transparent balance (see replenish_funds), so
+# both accumulators are swept to a token float here.
 #
 # Best-effort by design: a reclaim that cannot run leaves the chain exactly as the suites left it,
 # which is the old behaviour and no worse.  It reports what it moved and fails only if a send it
@@ -657,11 +682,112 @@ reclaim_funds() {
     treasury_addr=$(qadenad_alias keys show treasury -a --keyring-backend test 2>/dev/null)
     [ -n "$treasury_addr" ] || { echo "treasury not in the keyring; nothing to reclaim into"; return 0; }
 
-    # ann is the one account that genuinely accumulates: it is the counterparty for the 2,000,000qdn
-    # over-threshold send in test_bank_restriction.sh and for the evm suite's bank leg.  al is a net
-    # SPENDER and is deliberately left alone -- refilling it is what the treasury guards are for, and
-    # taking from it here would just make them fire again.  The per-run throwaway keys (bankscan-*,
-    # evmsrc-*, evmdst-*) hold about 570qdn between them and are not worth enumerating.
+    # UNSHIELD BEFORE SWEEPING, so what comes out of an encrypted balance is carried to the treasury
+    # by the transparent sweep below in the SAME pass rather than sitting a run behind.
+    #
+    # ann-eph2 and victor-eph1 are the routes: an encrypted balance can only move through an
+    # ephemeral wallet.  ann-eph1 is left alone because test_transfers.sh measures deltas against it;
+    # replenish_funds() clears both of ann's queues at the start of every run anyway, and nothing
+    # asserts on victor-eph1's balance.
+    #
+    # The explicit amount is used rather than `all`.  Both work on a current binary, but `all` needed
+    # a fix to set the token denom (x/qadena/client/cli/tx_receive_funds.go) and an older qadenad
+    # would fail on it with "There are no funds enqueued for"; the amount form works on any binary.
+    local reserve eph enc_have enc_surplus before_t after_t
+    local unshielded=0
+    for pair in "ann ann-eph2 1000" "victor victor-eph1 1000"; do
+        acct=${pair%% *}; eph=$(echo "$pair" | awk '{print $2}'); reserve=$(echo "$pair" | awk '{print $3}')
+
+        addr=$(qadenad_alias keys show "$acct" -a --keyring-backend test 2>/dev/null) || continue
+        [ -n "$addr" ] || continue
+        qadenad_alias keys show "$eph" -a --keyring-backend test > /dev/null 2>&1 || continue
+
+        # DRAIN THE TARGET QUEUE FIRST, before putting anything into it.
+        #
+        # An ephemeral wallet's queue is FIFO -- test_transfers.sh case 9 asserts exactly that -- and
+        # receive-funds takes the entry at the HEAD, not the one you just sent.  Transferring into a
+        # queue that already holds entries therefore collects somebody else's, and asking to unshield
+        # more than that entry holds simply fails:
+        #
+        #     victor-eph1:  350000, 350000, 10000, 5619500   <- the last one is ours
+        #     victor could not collect 5619500qdn out of victor-eph1 as transparent
+        #
+        # test_suspicious.sh drains victor-eph1 best-effort in a loop of six and can leave more than
+        # that behind, so this is the normal state of that wallet rather than a rare one.  Draining
+        # first makes the collect below unambiguous AND recovers the leftovers, which are real funds.
+        local pre_drained=0
+        while [ "$pre_drained" -lt 40 ]; do
+            [ "$(enc_qdn "$eph")" = "0" ] 2>/dev/null && break
+            qadenad_alias tx qadena receive-funds "$eph" 0qdn --from "$acct" --yes > /dev/null 2>&1 || break
+            pre_drained=$((pre_drained + 1))
+        done
+        [ "$pre_drained" -gt 0 ] && echo "$acct: recovered $pre_drained stranded queue entries from $eph first"
+
+        enc_have=$(enc_qdn "$acct")
+        [ -n "$enc_have" ] || { echo "$acct: could not read the encrypted balance; skipping the unshield"; continue; }
+        enc_surplus=$((enc_have - reserve))
+        if [ "$enc_surplus" -le 0 ] 2>/dev/null; then
+            echo "$acct holds ${enc_have}qdn encrypted, at or under its ${reserve}qdn reserve -- nothing to unshield"
+            continue
+        fi
+
+        echo "unshielding ${enc_surplus}qdn from $acct via $eph (reserve ${reserve}qdn)"
+        before_t=$(qadenad_alias query bank balances "$addr" --output json 2>/dev/null \
+            | jq -r '.balances[] | select(.denom=="aqdn") | .amount' 2>/dev/null)
+
+        # --opt-in-reason because this is far over the reporting threshold.  Without one the transfer
+        # is still allowed and reported by default, but a chain with
+        # block_transfer_without_opt_in_reason set to true would refuse it -- and a reclaim that
+        # silently stops working on such a chain is exactly the failure this suite exists to catch.
+        if ! qadenad_alias tx qadena transfer-funds "$eph" "${enc_surplus}qdn" 0qdn \
+            --opt-in-reason "regression reclaim: returning the suite's encrypted balance" \
+            --transfer-note "regression reclaim: unshield" --from "$acct" --yes > /dev/null 2>&1; then
+            echo "  $acct could not move its encrypted balance into $eph"
+            failures=$((failures + 1)); continue
+        fi
+
+        # The broadcast returns at the mempool, not at inclusion, so wait for the queue to show it.
+        local queued=false i=0
+        while [ $i -lt 20 ]; do
+            [ "$(enc_qdn "$eph")" != "0" ] 2>/dev/null && { queued=true; break; }
+            sleep 2
+            i=$((i + 1))
+        done
+        [ "$queued" = "true" ] || { echo "  the transfer never reached $eph's queue"; failures=$((failures + 1)); continue; }
+
+        if ! qadenad_alias tx qadena receive-funds "$eph" "${enc_surplus}qdn" --from "$acct" --yes > /dev/null 2>&1; then
+            echo "  $acct could not collect ${enc_surplus}qdn out of $eph as transparent"
+            failures=$((failures + 1)); continue
+        fi
+        sleep 4
+
+        after_t=$(qadenad_alias query bank balances "$addr" --output json 2>/dev/null \
+            | jq -r '.balances[] | select(.denom=="aqdn") | .amount' 2>/dev/null)
+        # `local x` with no assignment PRINTS x=value in zsh when x is already set (local is
+        # typeset, and a bare typeset lists the parameter).  Inside this loop that leaked a stray
+        # "gained=2400124" into the reclaim log on the second iteration.  Assigning at declaration
+        # keeps it quiet.
+        local gained=0
+        gained=$(python3 -c "print((int('${after_t:-0}') - int('${before_t:-0}')) // 10**18)" 2>/dev/null || echo 0)
+        echo "  $acct transparent +${gained}qdn (now unshielded, swept below)"
+        unshielded=$((unshielded + gained))
+
+        # Drain anything the collect left behind, so the next run starts from an empty queue.
+        for _ in {1..6}; do
+            [ "$(enc_qdn "$eph")" = "0" ] 2>/dev/null && break
+            qadenad_alias tx qadena receive-funds "$eph" 0qdn --from "$acct" --yes > /dev/null 2>&1 || break
+        done
+    done
+    [ "$unshielded" -gt 0 ] && echo "unshielded ${unshielded}qdn in total"
+
+    # Now the transparent sweep, which also carries whatever the unshield above just produced.
+    #
+    # ann accumulates as the counterparty for the 2,000,000qdn over-threshold send in
+    # test_bank_restriction.sh and for the evm suite's bank leg; victor as the destination for
+    # test_suspicious.sh's aggregate cases.  al is a net SPENDER and is deliberately left alone --
+    # refilling it is what the treasury guards are for, and taking from it here would just make them
+    # fire again.  The per-run throwaway keys (bankscan-*, evmsrc-*, evmdst-*) hold about 570qdn
+    # between them and are not worth enumerating.
     for acct in ann victor; do
         addr=$(qadenad_alias keys show "$acct" -a --keyring-backend test 2>/dev/null) || continue
         [ -n "$addr" ] || continue
@@ -697,7 +823,7 @@ reclaim_funds() {
         # returns JSON -- with a non-zero .code and the reason in .raw_log -- so a send refused at
         # broadcast would otherwise reach the wait below and be reported as "did not land", which
         # names the symptom and discards the explanation the node already gave.
-        local code
+        local code=""
         code=$(echo "$result" | jq -r '.code // 0' 2>/dev/null)
         if [ "$code" != "0" ] && [ -n "$code" ]; then
             echo "  broadcast from $acct rejected with code $code: $(echo "$result" | jq -r '.raw_log // ""' 2>/dev/null | head -c 200)"
