@@ -243,7 +243,18 @@ submit_whitelist_proposal() {
         || fail "$title proposal tx failed: $(echo "$result" | jq -r .raw_log)"
 
     tx_hash=$(echo "$result" | jq -r .txhash)
-    qadenad_alias query wait-tx "$tx_hash" --timeout 30s > /dev/null || fail "$title tx did not land"
+    # 60s, and a RE-QUERY before giving up -- matching every other wait in this file, which this one
+    # did not.  At 30s it was the only wait that could fail the suite on a slow block, and on a
+    # loaded two-core box it did:
+    #
+    #     timed out waiting for transaction ... to be included in a block: internal logic error
+    #
+    # against a proposal that landed with code 0 a moment later.  "wait-tx timed out" and "the
+    # transaction did not land" are different claims, and only the second is worth failing on.
+    if ! qadenad_alias query wait-tx "$tx_hash" --timeout 60s > /dev/null 2>&1; then
+        qadenad_alias query tx "$tx_hash" --output json > /dev/null 2>&1 \
+            || fail "$title tx did not land"
+    fi
 
     proposal_id=$(qadenad_alias query tx "$tx_hash" --output json \
         | jq -r '.events[] | select(.type=="submit_proposal") | .attributes[] | select(.key=="proposal_id") | .value')

@@ -508,10 +508,19 @@ print(int(sum((Decimal(l.strip()) for l in sys.stdin if l.strip()), Decimal(0)))
 # is a top-up discovered one run too late: the run that first finds al short is the run that has
 # already failed on it.
 replenish_funds() {
-    # test_transfers.sh loses about 125qdn per run, so the floor is dozens of runs of headroom and
-    # the top-up is hundreds -- this moves funds rarely rather than every run.
-    local al_enc_floor=5000
+    # test_transfers.sh permanently loses about 125qdn of al's encrypted balance per run (100 to
+    # ann-eph1, 25 to ann-eph2), and needs roughly 165qdn in hand to complete one.  So:
+    #
+    #   minimum  what a single run cannot start without -- the only figure worth failing on
+    #   floor    comfortable headroom (~8 runs), the point at which topping up is worth doing
+    #   topup    what to take when ann is flush, capped by what ann can actually spare
+    #
+    # A fresh genesis leaves al and ann on 500qdn each, which is above the minimum and below the
+    # floor -- so a new chain notes the shortfall, takes what little ann can spare, and runs.
+    local al_enc_minimum=200
+    local al_enc_floor=1000
     local al_enc_topup=50000
+    local ann_enc_float=200
     local al_enc ann_enc
 
     # CLEAR ANN'S EPHEMERAL QUEUES FIRST, whatever left something in them.
@@ -554,15 +563,40 @@ replenish_funds() {
         return 0
     fi
 
+    # TAKE WHAT ANN CAN SPARE, rather than demanding the full top-up.
+    #
+    # This asked for a flat 50,000qdn and FAILED THE RUN when ann could not cover it -- which is the
+    # normal state of a chain that has just been built.  On a fresh genesis setup.sh leaves al and
+    # ann holding 500qdn each, so the very first run reported
+    #
+    #     ann holds 500qdn encrypted, not enough to move 50000qdn to al
+    #     al is below the floor and cannot be topped up, so the transfers suite would fail here
+    #
+    # and transfers then passed anyway, because 500qdn is several runs of headroom.  The constants
+    # were calibrated on a chain where ann had accumulated millions and never sanity-checked against
+    # a new one.
     ann_enc=$(enc_qdn ann)
-    if [ -z "$ann_enc" ] || [ "$ann_enc" -lt "$al_enc_topup" ] 2>/dev/null; then
-        echo "ann holds ${ann_enc:-?}qdn encrypted, not enough to move ${al_enc_topup}qdn to al"
-        echo "al is below the floor and cannot be topped up, so the transfers suite would fail here"
+    local spare=0
+    [ -n "$ann_enc" ] && spare=$((ann_enc - ann_enc_float))
+    [ "$spare" -lt 0 ] 2>/dev/null && spare=0
+    local want="$al_enc_topup"
+    [ "$spare" -lt "$want" ] 2>/dev/null && want="$spare"
+
+    if [ "$want" -le 0 ] 2>/dev/null; then
+        # Nothing to recycle.  That is only a PROBLEM if al cannot fund the next transfers run --
+        # which needs about 165qdn (100 to ann-eph1, 25 to ann-eph2, 40 out and back through case 10).
+        if [ "$al_enc" -ge "$al_enc_minimum" ] 2>/dev/null; then
+            echo "ann holds ${ann_enc:-0}qdn encrypted and cannot spare any; al's ${al_enc}qdn still covers"
+            echo "the ${al_enc_minimum}qdn a transfers run needs, so this is a note rather than a failure"
+            return 0
+        fi
+        echo "ann holds ${ann_enc:-0}qdn encrypted and cannot spare any, and al's ${al_enc}qdn is under"
+        echo "the ${al_enc_minimum}qdn a transfers run needs -- transfers will fail on its first send"
         return 1
     fi
 
-    echo "recycling ${al_enc_topup}qdn of encrypted balance from ann to al, via al-eph1"
-    qadenad_alias tx qadena transfer-funds al-eph1 "${al_enc_topup}qdn" 0qdn \
+    echo "recycling ${want}qdn of encrypted balance from ann to al, via al-eph1"
+    qadenad_alias tx qadena transfer-funds al-eph1 "${want}qdn" 0qdn \
         --transfer-note "regression replenish: returning al's encrypted float" --from ann --yes > /dev/null \
         || { echo "  ann could not transfer to al-eph1"; return 1; }
 
@@ -572,8 +606,11 @@ replenish_funds() {
 
     al_enc=$(enc_qdn al)
     echo "al's encrypted balance now: ${al_enc}qdn"
-    [ -n "$al_enc" ] && [ "$al_enc" -ge "$al_enc_floor" ] 2>/dev/null \
-        || { echo "  al is still short after the recycle"; return 1; }
+    # Judged against what a run NEEDS, not against the comfortable floor: a partial recycle that
+    # leaves al able to run is a success, and demanding the floor here would fail a run that is
+    # about to pass.
+    [ -n "$al_enc" ] && [ "$al_enc" -ge "$al_enc_minimum" ] 2>/dev/null \
+        || { echo "  al is still under the ${al_enc_minimum}qdn a transfers run needs"; return 1; }
 }
 
 # RETURN WHAT THE SUITES BORROWED, so the treasury survives being run against repeatedly.
@@ -656,12 +693,32 @@ reclaim_funds() {
             --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment) \
             || { echo "  send from $acct was refused"; failures=$((failures + 1)); continue; }
 
+        # CHECK THE BROADCAST CODE, not just the exit status.  A CheckTx rejection exits 0 and still
+        # returns JSON -- with a non-zero .code and the reason in .raw_log -- so a send refused at
+        # broadcast would otherwise reach the wait below and be reported as "did not land", which
+        # names the symptom and discards the explanation the node already gave.
+        local code
+        code=$(echo "$result" | jq -r '.code // 0' 2>/dev/null)
+        if [ "$code" != "0" ] && [ -n "$code" ]; then
+            echo "  broadcast from $acct rejected with code $code: $(echo "$result" | jq -r '.raw_log // ""' 2>/dev/null | head -c 200)"
+            failures=$((failures + 1)); continue
+        fi
+
         hash=$(echo "$result" | jq -r '.txhash' 2>/dev/null)
         [ -n "$hash" ] && [ "$hash" != "null" ] \
             || { echo "  no txhash from the send"; failures=$((failures + 1)); continue; }
 
-        qadenad_alias query wait-tx "$hash" --timeout 30s > /dev/null 2>&1 \
-            || { echo "  reclaim tx $hash did not land within 30s"; failures=$((failures + 1)); continue; }
+        # 90s, then a RE-QUERY, because "wait-tx gave up" is not "the transaction did not land".  At
+        # 30s on a loaded two-core box this reported a failure for a send that was merely slow.  The
+        # re-query distinguishes the two: if the transaction is genuinely absent it was dropped from
+        # the mempool rather than executed, and the balance below will show it.
+        if ! qadenad_alias query wait-tx "$hash" --timeout 90s > /dev/null 2>&1; then
+            if ! qadenad_alias query tx "$hash" > /dev/null 2>&1; then
+                echo "  reclaim tx $hash never made it into a block (dropped, not executed)"
+                failures=$((failures + 1)); continue
+            fi
+            echo "  reclaim tx $hash landed late, after wait-tx gave up"
+        fi
 
         reclaimed=$((reclaimed + surplus))
     done
