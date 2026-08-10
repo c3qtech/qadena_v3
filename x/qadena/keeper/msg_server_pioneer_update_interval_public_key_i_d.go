@@ -27,7 +27,7 @@ func (k msgServer) PioneerUpdateIntervalPublicKeyID(goCtx context.Context, msg *
 		return nil, types.ErrInvalidEnclave
 	}
 
-	_, found := k.GetIntervalPublicKeyID(ctx, msg.NodeID, msg.NodeType)
+	current, found := k.GetIntervalPublicKeyID(ctx, msg.NodeID, msg.NodeType)
 	if found {
 		common.ContextDebug(ctx, "...update...")
 	} else {
@@ -40,6 +40,20 @@ func (k msgServer) PioneerUpdateIntervalPublicKeyID(goCtx context.Context, msg *
 		NodeType:          msg.NodeType,
 		ExternalIPAddress: msg.ExternalIPAddress,
 		RemoteReport:      msg.RemoteReport,
+		// Carried over explicitly.  The record was previously rebuilt from the message alone, and
+		// the message carries neither of these, so a rotation wiped them.  The existing record was
+		// read and then used only for a debug log.
+		//
+		// Latent rather than live today: the enclave only ever sends this for SS, Pioneer, Jar and
+		// Regulator nodes, and only a service provider record populates these two fields.  It stays
+		// a loaded gun until something rotates a srv-prv key -- at which point that provider would
+		// silently stop being a service provider, because ServiceProviderType is what
+		// AppendAuthorizeUser and AuthenticateServiceProvider match on.
+		//
+		// Named fields, not a blanket "keep whatever was non-empty" merge: DeactivateServiceProvider
+		// deliberately overwrites ServiceProviderType, and a generic merge would break it.
+		ServiceProviderType: current.ServiceProviderType,
+		HomePioneerID:       current.HomePioneerID,
 	}
 
 	k.Keeper.SetIntervalPublicKeyID(ctx, intervalPublicKeyId)
