@@ -166,20 +166,34 @@ echo "========================="
 #
 # This is the shape the bug was first reproduced in -- it failed on the first attempt against the
 # unfixed chain.
+#
+# The rotator tolerates individual failures so a transient one does not abort the run -- but that
+# tolerance is exactly how a suite ends up passing while testing nothing.  It counts its successes
+# to a file, and the key is re-read at the end, so "the rotations stopped happening" is a FAILURE
+# here rather than a silent green.
 echo "forcing rotations every 2s in the background"
+rotate_count_file=$(mktemp)
+echo 0 > "$rotate_count_file"
 (
+    n=0
     while true; do
-        qadenad_alias enclave update-ss-interval-key > /dev/null 2>&1 || true
+        if qadenad_alias enclave update-ss-interval-key > /dev/null 2>&1; then
+            n=$((n + 1))
+            echo "$n" > "$rotate_count_file"
+        fi
         sleep 2
     done
 ) &
 ROTATOR=$!
+
+before_load=$(ss_pubkid)
 
 # Stop the rotator no matter how we leave, or it outlives the script and quietly rotates the key
 # under every suite that runs after this one.
 cleanup() {
     kill $ROTATOR 2>/dev/null || true
     wait $ROTATOR 2>/dev/null || true
+    rm -f "$rotate_count_file" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
@@ -223,8 +237,31 @@ else
     echo "SKIPPED the dsvs leg: $dsvsprovider is not provisioned in this run"
 fi
 
+echo "-------------------------"
+echo "confirm the key really was rotating throughout"
+echo "-------------------------"
+# Without this the suite is worth very little.  Every transaction above could have been issued
+# against a perfectly stable key -- if the rotator had been failing, or the enclave had quietly
+# stopped accepting the command, everything would still have passed and reported green while
+# exercising none of the behaviour under test.
+rotations=$(cat "$rotate_count_file" 2>/dev/null || echo 0)
+after_load=$(ss_pubkid)
+
 cleanup
 trap - EXIT INT TERM
+
+echo "rotations forced during the load: $rotations"
+echo "key before load: $before_load"
+echo "key after load:  $after_load"
+
+[ "$rotations" -ge 3 ] \
+    || fail "only $rotations rotations were forced during the load phase.
+       The transactions above therefore proved little: they may never have straddled a
+       rotation at all."
+[ "$after_load" != "$before_load" ] \
+    || fail "the SS interval key is unchanged after $rotations forced rotations.
+       Nothing above can have straddled a rotation, so this run tested nothing."
+echo "the key moved while those transactions were in flight"
 
 echo "========================="
 echo "SS KEY ROTATION TESTS PASSED"
