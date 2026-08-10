@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
+	"runtime/pprof"
 	"slices"
 	"strconv"
 	"sync"
@@ -240,6 +241,44 @@ func setMemoryLimitFromHeapSize() {
 // between them is garbage not yet returned.  A heapAlloc that climbs run over run is a leak; a
 // heapSys that climbs while heapAlloc stays flat is the collector falling behind, which is what
 // happened here.
+// dumpHeapProfileOnSignal writes a pprof heap profile whenever the enclave is sent SIGUSR1.
+//
+// memstats says HOW MUCH is on the heap; this says WHAT.  The distinction matters -- a working set
+// that grows with chain state and a leak look identical in a single number, and the only way to tell
+// them apart is to see which allocation sites hold the bytes.
+//
+// A signal and a file rather than net/http/pprof, for two reasons.  It costs nothing when unused,
+// where an HTTP listener is a permanently open port on a process that holds every private key on the
+// node.  And it works unchanged under SGX: enclave.json mounts the host filesystem, so the profile
+// lands somewhere readable, whereas serving HTTP from inside an enclave is a different problem.
+//
+//	kill -USR1 $(pgrep -f qadenad_enclave)
+//	go tool pprof -top ~/qadena/logs/enclave-heap-<stamp>.pprof
+func dumpHeapProfileOnSignal(homePath string) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGUSR1)
+
+	for range ch {
+		// A profile of freshly-collected memory is the honest one: without this the dump also
+		// counts garbage the collector simply has not reached yet, which is exactly the confusion
+		// this is meant to resolve.
+		runtime.GC()
+
+		path := homePath + "/logs/enclave-heap-" + time.Now().UTC().Format("20060102T150405Z") + ".pprof"
+		f, err := os.Create(path)
+		if err != nil {
+			c.LoggerError(logger, "could not create heap profile "+path+": "+err.Error())
+			continue
+		}
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			c.LoggerError(logger, "could not write heap profile: "+err.Error())
+		} else {
+			c.LoggerInfo(logger, "wrote heap profile to "+path)
+		}
+		f.Close()
+	}
+}
+
 func reportMemStats() {
 	var m runtime.MemStats
 	for {
@@ -7115,6 +7154,35 @@ func main() {
 	// of correctness -- which is why it is worth watching the heap BEFORE it runs out.
 	// Cheap: one line every reportMemStatsInterval, no allocation beyond the ReadMemStats struct.
 	go reportMemStats()
+
+	// DEBUG BUILDS ONLY.  A heap profile is a channel out of the enclave, and an enclave whose
+	// memory can be dumped to the host filesystem on request is not an enclave -- the entire
+	// property it provides is that the host cannot see inside it.  A pprof profile carries
+	// allocation sites and sizes rather than key material, but the enclave holds every private key
+	// on the node, and "this particular dump only leaks structure" is not a line worth defending
+	// once the mechanism exists.  Whoever can signal the process chooses when it writes.
+	//
+	// So it is wired only when NOT running as a real enclave, which is the same flag every runtime
+	// script already branches on: run_realenclave.sh passes --realenclave, run_enclave.sh does not.
+	//
+	// KNOWN GAP, accepted deliberately.  This is a runtime gate, not a compile-time one:
+	// build_enclave.sh builds both variants from identical source with no build tag (only ego-go vs
+	// go), so the profiling code is still PRESENT in the signed SGX binary and merely unreachable
+	// through the flag.  Anyone able to start the process could `ego run` that same signed binary
+	// without --realenclave -- same measurement -- and dump the heap.  Closing it properly means
+	// `//go:build !sgxrelease` here and `-tags sgxrelease` on the SGX build line, so the code is
+	// absent from the binary and the measurement itself attests to that.  Not done: it changes the
+	// enclave measurement and therefore needs an upgrade.
+	//
+	// reportMemStats above is deliberately NOT gated.  It emits aggregate counters -- heapAlloc,
+	// heapSys, numGC -- which reveal nothing about what is in memory, and losing them in production
+	// is what made the out-of-memory that forked the chain take a crash dump and four discarded
+	// hypotheses to diagnose.  Totals in production, breakdowns only in debug.
+	if *realEnclave {
+		c.LoggerInfo(logger, "real enclave: heap profiling disabled (SIGUSR1 ignored)")
+	} else {
+		go dumpHeapProfileOnSignal(*homePath)
+	}
 
 	c.LoggerDebug(logger, "port "+strconv.Itoa(*port))
 	c.LoggerDebug(logger, "RealEnclave "+strconv.FormatBool(*realEnclave))
