@@ -287,7 +287,22 @@ set_min_gas_price() {
         export minimum_gas_prices
         return
     fi
-    minimum_gas_prices="$(dasel -f $QADENAHOME/config/config.yml 'validators.first().app.minimum-gas-prices')aqdn"
+    #
+    # THE DENOM IS ONLY APPENDED IF IT IS NOT ALREADY THERE.  config.yml carries a full coin string
+    # ("500000000aqdn"), not a bare number, so appending unconditionally produced
+    #
+    #     expected only native token aqdn for fee, but got 54683000000000aqdnaqdn
+    #
+    # and every transaction using $minimum_gas_prices was rejected at broadcast.  It hid well: this
+    # branch only runs when the feemarket query fails, which is exactly what happens when
+    # regression.sh sources this file at the start of a --from-genesis run -- before the chain it is
+    # about to build exists.  So the fallback, and therefore the bug, is guaranteed on precisely the
+    # runs that build a new chain, and absent on every run against a live one.
+    minimum_gas_prices="$(dasel -f $QADENAHOME/config/config.yml 'validators.first().app.minimum-gas-prices')"
+    case "$minimum_gas_prices" in
+        *aqdn) ;;
+        *) minimum_gas_prices="${minimum_gas_prices}aqdn" ;;
+    esac
 
     export minimum_gas_prices
     #echo "Found minimum gas prices: $minimum_gas_prices"

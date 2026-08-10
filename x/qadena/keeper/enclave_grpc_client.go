@@ -1369,14 +1369,51 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 	return nil
 }
 
+// haltOnEnclaveFailure stops this node when an enclave call fails during EndBlock.
+//
+// WHY A PANIC IS THE CORRECT RESPONSE, and logging is not.
+//
+// EndBlock is where the enclave's state is copied into the chain's: wallets, credentials, recover
+// keys and suspicious transactions.  Those writes are part of the block, so they are part of the app
+// hash.  If the enclave cannot be reached the sync returns an error and NO writes happen -- and the
+// old code logged that and carried on, committing a block whose state is missing everything the
+// enclave would have contributed.  A healthy peer computes a different app hash for the same block,
+// which is a fork.
+//
+// That is not hypothetical.  A node's enclave died of an out-of-memory (see the memory limit note in
+// cmd/qadenad_enclave/enclave.go) and this is what followed:
+//
+//	prevote step: consensus deems this block invalid; prevoting nil
+//	  err="wrong Block.Header.AppHash. Expected 48905948..., got 2DBD2B2C..."  height=61068
+//	CONSENSUS FAILURE!!!
+//
+// The peer halted, correctly.  The node with the dead enclave held 99% of the stake, finalised the
+// bad block alone, and kept producing for another 12,000 blocks on state nothing else agreed with.
+// Nothing reported a problem, because nothing else was looking: with a lopsided stake split the
+// chain keeps making blocks regardless.  test_peer_agreement.sh is the only thing that catches it,
+// and only when a second validator exists to disagree.
+//
+// Halting is strictly better.  A validator that cannot compute correct state must not publish state
+// at all: the chain continues without it if the remaining validators hold more than 2/3, an operator
+// sees a stopped node instead of silent corruption, and the node can rejoin once its enclave is back.
+// A panic in EndBlock is how the SDK expresses that -- it stops this node without touching the block.
+func haltOnEnclaveFailure(sdkctx sdk.Context, step string, err error) {
+	if err == nil {
+		return
+	}
+
+	c.ContextError(sdkctx, "enclave "+step+" failed during EndBlock: "+err.Error())
+	panic("qadena: enclave " + step + " failed during EndBlock at height " +
+		strconv.FormatInt(sdkctx.BlockHeight(), 10) + ": " + err.Error() +
+		" -- halting rather than committing a block without the enclave's state, which would fork the chain")
+}
+
 func (k Keeper) EnclaveEndBlock(sdkctx sdk.Context) {
 	//  fmt.Println("qadena module EndBlock")
 	err, changedWallets := k.EnclaveSyncWallets(sdkctx)
 	checkSync := false
 
-	if err != nil {
-		c.ContextError(sdkctx, err.Error())
-	}
+	haltOnEnclaveFailure(sdkctx, "wallet sync", err)
 
 	for _, wallet := range changedWallets {
 		k.SetWalletNoEnclave(sdkctx, *wallet)
@@ -1385,9 +1422,7 @@ func (k Keeper) EnclaveEndBlock(sdkctx sdk.Context) {
 
 	err, changedCredentials, removedCredentials := k.EnclaveSyncCredentials(sdkctx)
 
-	if err != nil {
-		c.ContextError(sdkctx, err.Error())
-	}
+	haltOnEnclaveFailure(sdkctx, "credential sync", err)
 
 	for _, credential := range changedCredentials {
 		k.SetCredentialNoEnclave(sdkctx, *credential)
@@ -1401,9 +1436,7 @@ func (k Keeper) EnclaveEndBlock(sdkctx sdk.Context) {
 
 	err, changedRecoverKeys := k.EnclaveSyncRecoverKeys(sdkctx)
 
-	if err != nil {
-		c.ContextError(sdkctx, err.Error())
-	}
+	haltOnEnclaveFailure(sdkctx, "recover key sync", err)
 
 	for _, recoverKey := range changedRecoverKeys {
 		k.SetRecoverKey(sdkctx, *recoverKey)
@@ -1412,9 +1445,7 @@ func (k Keeper) EnclaveEndBlock(sdkctx sdk.Context) {
 
 	err, newSuspiciousTransactions := k.EnclaveSyncSuspiciousTransactions(sdkctx)
 
-	if err != nil {
-		c.ContextError(sdkctx, err.Error())
-	}
+	haltOnEnclaveFailure(sdkctx, "suspicious transaction sync", err)
 
 	for _, st := range newSuspiciousTransactions {
 		k.AppendSuspiciousTransaction(sdkctx, *st)

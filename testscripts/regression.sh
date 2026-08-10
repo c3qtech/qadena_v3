@@ -211,7 +211,17 @@ summarize() {
         i=$((i + 1))
     done
     echo "----------------------------------------------------------------------"
-    if [ $failed -eq 0 ]; then
+    # A run that never started is NOT a pass.  Every preflight refusal -- stop_qadena.sh failing, a
+    # leftover process, an unreachable chain -- calls summarize before exiting, and with no suites
+    # recorded the "all passed" branch printed
+    #
+    #     ALL 0 SUITES PASSED
+    #
+    # for a run that had done nothing at all.  Read by a human in a hurry, or by anything grepping
+    # for PASSED, that is the most dangerous line the runner can emit.
+    if [ ${#names[@]} -eq 0 ]; then
+        echo "  NO SUITES RAN -- the run stopped before any test started (see above)"
+    elif [ $failed -eq 0 ]; then
         echo "  ALL ${#names[@]} SUITES PASSED"
     else
         echo "  $failed of ${#names[@]} SUITES FAILED"
@@ -884,7 +894,20 @@ if [ "$from_genesis" = "true" ]; then
 
     # Independently confirmed, because "stop succeeded" and "nothing is running" are not the same
     # claim -- a supervisor can respawn a process after the script has finished checking.
-    leftover=$(pgrep -af "qadenad|run_enclave.sh|run_signerenclave.sh|ego-host" 2>/dev/null | grep -v "regression.sh" || true)
+    #
+    # `ps -eo pid,args`, NOT `pgrep -af`.  BSD pgrep (macOS) has no -a, so it printed bare PIDs with
+    # no command line -- and the `grep -v regression.sh` below then had nothing to match on and could
+    # not exclude anything, including this script's own process.  The check duly tripped on itself:
+    #
+    #     processes are still alive after stop_qadena.sh:
+    #     40504
+    #     a --from-genesis run cannot proceed with a live node or a respawn loop
+    #
+    # with no command shown, because there was none to show.  ps -eo pid,args prints the full command
+    # on both platforms, so the self-filter works and a real leftover is named rather than numbered.
+    leftover=$(ps -eo pid,args 2>/dev/null \
+        | grep -E "qadenad|run_enclave\.sh|run_signerenclave\.sh|ego-host" \
+        | grep -v "grep" | grep -v "regression\.sh" || true)
     if [ -n "$leftover" ]; then
         echo "processes are still alive after stop_qadena.sh:"
         echo "$leftover"
