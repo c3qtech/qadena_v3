@@ -51,22 +51,37 @@ firstname="ENF"
 birthdate="2025-Jan-01"
 phone="+6320000000"
 
-with_contracts=false
+# Contracts are ON by default; with_contracts is RESOLVED after parsing, not during it, so that the
+# flags do not depend on the order they were typed in.  (When --contracts-only set with_contracts
+# directly, "--no-contracts --contracts-only" resolved to a contradiction the checker never saw,
+# while the reverse order caught it.)
+no_contracts=false
 force_contracts=false
+contracts_only=false
 
 # Captured at top level: inside a zsh function $0 is the FUNCTION's name, so using it directly in
 # usage() prints "Usage: usage [...]".
 me="$0"
 
 usage() {
-    echo "Usage: $me [--pioneer <pioneer>] [--with-contracts] [--force-contracts]"
+    echo "Usage: $me [--pioneer <pioneer>] [--no-contracts] [--contracts-only] [--force-contracts]"
     echo ""
-    echo "  --with-contracts   also compile and deploy the ENF notarial book contract:"
-    echo "                     optimizer.sh, then enf_cli.sh setup-enf / upload / instantiate."
-    echo "                     Chain-only -- it does NOT register the contract with the"
-    echo "                     app-server, which does not exist yet at this point."
+    echo "  By default this does BOTH halves: the chain setup, then compile and deploy of the"
+    echo "  ENF notarial book contract (optimizer.sh, then enf_cli.sh setup-enf / upload /"
+    echo "  instantiate).  Chain-side only -- it does NOT register the contract with the"
+    echo "  app-server, which does not exist yet at this point; the stacks/enf Makefile does"
+    echo "  that after 'make up'."
+    echo ""
+    echo "  --no-contracts     do the chain setup only and stop before the contract."
+    echo "  --contracts-only   skip the chain setup and deploy the contract only.  THIS is how"
+    echo "                     to add contracts to a chain that was already set up -- the chain"
+    echo "                     half is not re-runnable, so re-running the whole script on a"
+    echo "                     chain it has already prepared fails partway through."
+    echo "                     --only-contracts is accepted as an alias."
     echo "  --force-contracts  upload and instantiate even when enf_state.json already"
     echo "                     records a contract address, replacing it with a fresh one."
+    echo "  --with-contracts   accepted and ignored -- contracts are the default now.  Kept so"
+    echo "                     existing invocations and docs do not break."
 }
 
 # accept 1 parameter, the pioneer name
@@ -82,12 +97,23 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --with-contracts)
-            with_contracts=true
+            # No-op: this is the default.  Still accepted because it is in every doc, comment and
+            # shell history that predates the switch, and failing on it would be pure friction.
+            shift
+            ;;
+        --no-contracts)
+            no_contracts=true
+            shift
+            ;;
+        --contracts-only|--only-contracts)
+            # Both spellings: --no-contracts / --with-contracts put the noun last, so that is the
+            # order the hand reaches for, and having one of them be an "unknown option" that exits 1
+            # is a pointless way to lose a run.
+            contracts_only=true
             shift
             ;;
         --force-contracts)
             force_contracts=true
-            with_contracts=true
             shift
             ;;
         --help)
@@ -102,23 +128,65 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# --with-contracts runs docker and a wasm toolchain at the very END of a long chain setup.  Finding
+if [ "$no_contracts" = "true" ]; then
+    if [ "$contracts_only" = "true" ]; then
+        echo "FAILED: --no-contracts and --contracts-only are contradictory"
+        usage
+        exit 1
+    fi
+    if [ "$force_contracts" = "true" ]; then
+        echo "FAILED: --no-contracts and --force-contracts are contradictory"
+        usage
+        exit 1
+    fi
+    with_contracts=false
+else
+    with_contracts=true
+fi
+
+# The contract half runs docker and a wasm toolchain at the very END of a long chain setup.  Finding
 # out then that docker is absent means redoing all of it, so establish it now.
 enfdir="$qadenabuild/enf-smart-contracts"
 if [ "$with_contracts" = "true" ]; then
     [ -x "$enfdir/enf_cli.sh" ] || { echo "FAILED: no enf_cli.sh at $enfdir"; exit 1; }
     [ -f "$enfdir/optimizer.sh" ] || { echo "FAILED: no optimizer.sh at $enfdir"; exit 1; }
     command -v docker > /dev/null 2>&1 || {
-        echo "FAILED: --with-contracts needs docker to compile the contract (cosmwasm/optimizer)."
-        echo "        Install docker, or drop --with-contracts and run enf-smart-contracts/optimizer.sh"
+        echo "FAILED: deploying the contract needs docker (cosmwasm/optimizer compiles inside it)."
+        echo "        Install docker, or pass --no-contracts and run enf-smart-contracts/optimizer.sh"
         echo "        and enf_cli.sh by hand once it is available."
         exit 1; }
     docker info > /dev/null 2>&1 || {
         echo "FAILED: docker is installed but the daemon is not reachable; the contract compiles inside it."
         exit 1; }
     command -v jq > /dev/null 2>&1 || { echo "FAILED: jq is required to read enf_state.json"; exit 1; }
-    echo "--with-contracts: docker is available, will deploy the contract after the chain setup"
+    echo "contracts: docker is available, the contract will be deployed"
 fi
+
+# --contracts-only presupposes the chain half already ran.  Check that here rather than letting
+# enf_cli.sh setup-enf discover it: create_user.sh needs the create-wallet sponsor to pay for the
+# ENF deployer's wallet and the identity provider to issue its credentials, and when either is
+# missing it fails deep inside a sub-script with a message that says nothing about this flag.
+if [ "$contracts_only" = "true" ]; then
+    for required_key in "$createwalletsponsorname" "$identityprovidername"; do
+        qadenad_alias keys show "$required_key" > /dev/null 2>&1 || {
+            echo "FAILED: --contracts-only, but '$required_key' is not in the keyring."
+            echo "        That key is made by the chain setup, so this chain has not had it run."
+            echo "        Run $me (no flags) instead -- it does both halves."
+            exit 1; }
+    done
+    echo "--contracts-only: chain setup already ran, skipping straight to the contract"
+fi
+
+# ---------------------------------------------------------------------------------------------
+# The chain half.  Skipped entirely by --contracts-only.
+# ---------------------------------------------------------------------------------------------
+#
+# THIS SECTION IS NOT RE-RUNNABLE.  Individual pieces guard themselves -- the key blocks below,
+# setup_treasury.sh, enf_cli.sh setup-enf -- but the governance steps do not: step_1.sh/step_2.sh
+# submit fresh service-provider proposals, and the deposit/vote here then run against proposals
+# that have already passed.  That is why adding contracts to an already-prepared chain is
+# --contracts-only and not a second full run.
+if [ "$contracts_only" != "true" ]; then
 
 # check if "treasury" key exists by "qadenad "
 if qadenad_alias keys show treasury > /dev/null 2>&1; then
@@ -195,8 +263,10 @@ $qadenaproviderscripts/query_service_provider_proposal.sh $enfdsvsproposal_id --
 
 $veritasscripts/step_3.sh
 
+fi  # end of the chain half
+
 # ---------------------------------------------------------------------------------------------
-# --with-contracts: compile and deploy the ENF notarial book, chain-side only
+# Compile and deploy the ENF notarial book, chain-side only (skipped by --no-contracts)
 # ---------------------------------------------------------------------------------------------
 #
 # WHERE THE LINE IS DRAWN, AND WHY.  enf_cli.sh's `setup` chains setup-enf -> upload -> instantiate
@@ -211,7 +281,7 @@ $veritasscripts/step_3.sh
 # GET /v1/enf/setup_enf returning {"configured","contractAddress","runtimeReady"}, and the stacks/enf
 # Makefile calls `enf_cli.sh setup-backend` after `up` only when configured is false.
 #
-#   start chain -> setup_enf.sh --with-contracts -> bring up the ENF stack -> Makefile registers
+#   start chain -> setup_enf.sh -> bring up the ENF stack -> Makefile registers
 #
 contract_address=""
 if [ "$with_contracts" = "true" ]; then
@@ -308,44 +378,53 @@ fi
 
 echo "These go into env-enf-dev"
 
+# extract_ephem_keys.sh writes these files into the CALLER'S CWD, not anywhere derived from
+# $SCRIPT_DIR -- so on a full run they are here because step_3.sh just put them here, but under
+# --contracts-only they are only here if this run happens to share a cwd with the run that made
+# them.  A bare `cat` on a missing one dies under `set -e`, which would kill the script at the very
+# last step -- after a successful deploy, before ENF_NOTARIAL_CONTRACT_ADDRESS is ever printed.
+# Print a marker instead, which is also more visible than a cat error buried in this output.
+emit_key_var() {
+    local var="$1" file="$2"
+    if [ -f "$file" ]; then
+        echo "$var='`cat $file`'"
+    else
+        echo "$var=<MISSING: no $file in $PWD>"
+        echo "WARNING: $file not found in $PWD -- rerun from the directory the setup wrote it to" >&2
+    fi
+}
+
 # echo the contents of each of the names and keys
-echo "SEC_DSVS_EPH_USERNAME='`cat $dsvsname-names.base64`'"
-echo "SEC_DSVS_EPH_PRIVATE_KEY='`cat $dsvsname-keys.base64`'"
+emit_key_var SEC_DSVS_EPH_USERNAME "$dsvsname-names.base64"
+emit_key_var SEC_DSVS_EPH_PRIVATE_KEY "$dsvsname-keys.base64"
 
 echo ""
 
-echo "SEC_DSVS_EPH_CREDENTIAL_USERNAME='`cat $dsvsname-credential-names.base64`'"
-echo "SEC_DSVS_EPH_CREDENTIAL_PRIVATE_KEY='`cat $dsvsname-credential-keys.base64`'"
+emit_key_var SEC_DSVS_EPH_CREDENTIAL_USERNAME "$dsvsname-credential-names.base64"
+emit_key_var SEC_DSVS_EPH_CREDENTIAL_PRIVATE_KEY "$dsvsname-credential-keys.base64"
 
 echo ""
 
-# SEC_DSVS_SRV_PRV_USERNAME
-echo "SEC_DSVS_SRV_PRV_USERNAME='`cat $dsvsprovidername-names.base64`'"
-# SEC_DSVS_SRV_PRV_PRIVATE_KEY
-echo "SEC_DSVS_SRV_PRV_PRIVATE_KEY='`cat $dsvsprovidername-keys.base64`'"
+emit_key_var SEC_DSVS_SRV_PRV_USERNAME "$dsvsprovidername-names.base64"
+emit_key_var SEC_DSVS_SRV_PRV_PRIVATE_KEY "$dsvsprovidername-keys.base64"
 
 echo ""
 
-# SEC_IDENTITY_SRV_PRV_USERNAME
-echo "SEC_IDENTITY_SRV_PRV_USERNAME='`cat $identityprovidername-names.base64`'"
-# SEC_IDENTITY_SRV_PRV_PRIVATE_KEY
-echo "SEC_IDENTITY_SRV_PRV_PRIVATE_KEY='`cat $identityprovidername-keys.base64`'"
+emit_key_var SEC_IDENTITY_SRV_PRV_USERNAME "$identityprovidername-names.base64"
+emit_key_var SEC_IDENTITY_SRV_PRV_PRIVATE_KEY "$identityprovidername-keys.base64"
 
 echo ""
 
-#SEC_CREATE_WALLET_SPONSOR_USERNAME
-echo "SEC_CREATE_WALLET_SPONSOR_USERNAME='`cat $createwalletsponsorname-names.base64`'"
-# SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY
-echo "SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY='`cat $createwalletsponsorname-keys.base64`'"
+emit_key_var SEC_CREATE_WALLET_SPONSOR_USERNAME "$createwalletsponsorname-names.base64"
+emit_key_var SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY "$createwalletsponsorname-keys.base64"
 
 echo ""
 
-# REUSABLE_EKYC_APP_NAME
 # These two come from the ekycph identity provider, not from ENF's own.  See the comment on the
 # setup_ekycph.sh block above: without that provider on the chain, these are empty and wallet
 # creation fails inside the app-server with nothing pointing back here.
-echo "REUSABLE_EKYC_APP_NAME='`cat $ekycphidentityprovidername-names.base64`'"
-echo "REUSABLE_EKYC_APP_PRIVATE_KEY='`cat $ekycphidentityprovidername-keys.base64`'"
+emit_key_var REUSABLE_EKYC_APP_NAME "$ekycphidentityprovidername-names.base64"
+emit_key_var REUSABLE_EKYC_APP_PRIVATE_KEY "$ekycphidentityprovidername-keys.base64"
 
 if [ -n "$contract_address" ]; then
     echo ""
@@ -354,7 +433,11 @@ fi
 
 echo ""
 echo "======================================================================"
-echo "chain setup complete"
+if [ "$contracts_only" = "true" ]; then
+    echo "contract deployment complete (chain setup was skipped)"
+else
+    echo "chain setup complete"
+fi
 echo "======================================================================"
 if [ "$with_contracts" = "true" ]; then
     echo "Deployed: $contract_address"
@@ -368,9 +451,14 @@ if [ "$with_contracts" = "true" ]; then
     echo "is not running yet at this point, and waiting for it here would turn an obvious failure"
     echo "into a timeout at the end of a long setup."
 else
+    # --contracts-only, NOT a bare re-run: everything above has already happened on this chain, and
+    # the governance steps in the chain half would run a second time against proposals that have
+    # already passed.  Telling somebody to re-run the whole script here sends them into a failure
+    # twenty minutes deep, which is exactly the advice this line used to give.
     echo ""
     echo "STILL TO DO, OUTSIDE THIS SCRIPT:"
-    echo "  1. Deploy the contract:  $0 --with-contracts"
+    echo "  1. Deploy the contract:  $me --contracts-only"
     echo "     (or by hand: cd enf-smart-contracts && ./optimizer.sh && ./enf_cli.sh setup)"
+    echo "     Do NOT just re-run $me -- the chain setup above is not re-runnable."
     echo "  2. Bring up the ENF stack (stacks/enf: make up)."
 fi

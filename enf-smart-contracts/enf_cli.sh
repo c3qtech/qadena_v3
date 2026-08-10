@@ -178,7 +178,7 @@ setup_backend() {
   if ! qadenad_alias --node "$QADENA_NODE" query wasm contract "$addr" > /dev/null 2>&1; then
     echo "Contract $addr is not on this chain (node $QADENA_NODE)."
     echo "  enf_state.json is stale -- most likely the chain was reinstalled."
-    echo "  Run:  ./enf_cli.sh clean  then  setup_enf.sh --with-contracts"
+    echo "  Run:  ./enf_cli.sh clean  then  setup_enf.sh --contracts-only"
     exit 1
   fi
   [[ -n "$qadenatestscripts" && -x "$qadenatestscripts/extract_ephem_keys.sh" ]] || {
