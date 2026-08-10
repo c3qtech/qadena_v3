@@ -217,6 +217,11 @@ const memoryLimitPercent = 75
 // run, rare enough to be free.
 const reportMemStatsInterval = 60 * time.Second
 
+// IAVL node cache size, in NODES.  See the note at SetIAVLCacheSize for why the SDK's 500,000
+// default is wrong for an enclave with a fixed heap, and why a small cache costs nothing given that
+// GetStoreHash scans the whole tree on most blocks.
+const iavlCacheNodes = 20000
+
 func setMemoryLimitFromHeapSize() {
 	var cfg struct {
 		HeapSize int64 `json:"heapSize"`
@@ -7287,6 +7292,36 @@ func main() {
 	}
 
 	stateStore := store.NewCommitMultiStore(db, cosmossdkiolog.NewNopLogger(), storemetrics.NewNoOpMetrics())
+
+	// BOUND THE IAVL NODE CACHE.  The SDK default is 500,000 NODES -- a count, with no byte limit --
+	// chosen for a full node with gigabytes of RAM.  This is an enclave with a fixed heap, and the
+	// difference is not academic:
+	//
+	//   a cached node costs 240B fixed (160B struct: five slice headers and three pointers; 32B
+	//   hash; ~48B key) plus its sealed value, so 500,000 of them is 162MB at 100B values, 353MB at
+	//   500B, and 591MB at 1KB
+	//
+	// The store grows about 1MB per regression run -- measured at 0.92MB/run over 172 runs on one
+	// node and 1.10MB/run over 10 here -- which puts cache saturation somewhere around run 155-206.
+	// A node whose enclave ran out of memory did so at run ~172, with iavl.(*Node).clone visibly
+	// growing in its heap profile.
+	//
+	// TWO REASONS THE DEFAULT IS ESPECIALLY WRONG HERE.
+	//
+	// Cached nodes are LIVE, so debug.SetMemoryLimit above cannot rescue this: the collector is not
+	// permitted to drop them and would simply thrash against a limit it cannot meet.  A bigger heap
+	// buys runs, not safety.
+	//
+	// And the cache earns nothing at this size, because GetStoreHash iterates all nine prefixes on
+	// nearly every state-changing block.  A full scan walks an LRU end to end and evicts it
+	// wholesale, so a large cache is pure cost with no hit-rate benefit -- it is tuned for random
+	// access, and this workload is dominated by sequential ones.
+	//
+	// What a cache IS worth here is the handful of wallets, credentials and history rows a single
+	// block touches repeatedly.  That working set is thousands of nodes, not hundreds of thousands.
+	// 20,000 covers it with room to spare and caps this contribution at roughly 9-25MB.
+	stateStore.SetIAVLCacheSize(iavlCacheNodes)
+
 	stateStore.MountStoreWithDB(storeKey, storetypes.StoreTypeIAVL, db)
 	//	stateStore.MountStoreWithDB(memStoreKey, sdk.StoreTypeMemory, nil)
 
