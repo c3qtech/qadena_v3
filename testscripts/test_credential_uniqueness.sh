@@ -71,8 +71,32 @@ fail() {
     exit 1
 }
 
+# KEEP THE OUTPUT.  This discarded stdout AND stderr and then reported only the command, so a
+# failure said "expected success: <cmd>" and nothing about why -- the chain's codespace, code and
+# raw_log went to /dev/null at precisely the moment they were needed.  An intermittent failure that
+# destroys its own explanation is the most expensive kind: it has to be reproduced before it can be
+# read, and it may not reproduce.
+#
+# expect_reject_code below already captures 2>&1 for exactly this reason; this is the same rigour
+# applied to the success path.  A broadcast can also fail with exit 0 and a non-zero .code in the
+# JSON, so the code is checked rather than just the exit status.
 expect_ok() {
-    "$@" > /dev/null 2>&1 || fail "expected success: $*"
+    local out rc
+    out=$("$@" 2>&1) && rc=0 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        fail "expected success: $*
+       exit $rc, output:
+$(echo "$out" | tail -5 | sed 's/^/         /')"
+    fi
+    # Accepted into the mempool is not executed.  A non-zero code here is a rejection wearing a
+    # success exit status.
+    local code
+    code=$(echo "$out" | grep -oE '"?code"?:? *[0-9]+' | head -1 | grep -oE '[0-9]+$')
+    if [ -n "$code" ] && [ "$code" != "0" ]; then
+        fail "expected success but the chain returned code $code: $*
+       output:
+$(echo "$out" | tail -5 | sed 's/^/         /')"
+    fi
 }
 
 # expect_reject_code <expected-code> <cmd...>
