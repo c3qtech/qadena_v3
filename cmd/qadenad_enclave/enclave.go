@@ -3,6 +3,8 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"sync"
@@ -195,6 +197,60 @@ var signerID string
 
 //go:embed version.txt
 var version string
+
+// The enclave's own configuration, embedded so the heap size the GC is told about is the same
+// number ego signed the enclave with.  Holding that constant in two places is how they drift, and
+// a GC limit above the real heap is worse than none: it would pace against memory that does not
+// exist and still die at the same allocation.
+//
+//go:embed enclave.json
+var enclaveConfigJSON []byte
+
+// Fraction of the enclave heap the GC is allowed to fill before it collects hard.  The remainder
+// covers the runtime's own bookkeeping and leaves room for one large transient to land -- the
+// allocation that killed a node was a single 64MB argon2 buffer, so the headroom has to exceed the
+// biggest single allocation the enclave makes, not just a rounding margin.
+const memoryLimitPercent = 75
+
+// How often the enclave reports its heap.  Frequent enough to show a trend within one regression
+// run, rare enough to be free.
+const reportMemStatsInterval = 60 * time.Second
+
+func setMemoryLimitFromHeapSize() {
+	var cfg struct {
+		HeapSize int64 `json:"heapSize"`
+	}
+	if err := json.Unmarshal(enclaveConfigJSON, &cfg); err != nil || cfg.HeapSize <= 0 {
+		// Leave the default rather than guess: a wrong limit is worse than none.
+		c.LoggerError(logger, "could not read heapSize from the embedded enclave.json; GC left unpaced")
+		return
+	}
+
+	limit := cfg.HeapSize * memoryLimitPercent / 100 * 1024 * 1024
+	debug.SetMemoryLimit(limit)
+	c.LoggerInfo(logger, "enclave heap "+strconv.FormatInt(cfg.HeapSize, 10)+"MB, GC soft limit "+
+		strconv.FormatInt(limit/1024/1024, 10)+"MB")
+}
+
+// reportMemStats logs the heap periodically.  The enclave had NO memory observability at all, which
+// is why diagnosing the out-of-memory above meant reading a crash dump and eliminating hypotheses
+// one at a time: the fatal error names the allocation that failed, never the one holding the heap.
+//
+// heapAlloc is live data; heapSys is what the runtime has taken from the enclave heap; the gap
+// between them is garbage not yet returned.  A heapAlloc that climbs run over run is a leak; a
+// heapSys that climbs while heapAlloc stays flat is the collector falling behind, which is what
+// happened here.
+func reportMemStats() {
+	var m runtime.MemStats
+	for {
+		time.Sleep(reportMemStatsInterval)
+		runtime.ReadMemStats(&m)
+		c.LoggerInfo(logger, fmt.Sprintf(
+			"memstats heapAlloc=%dMB heapSys=%dMB heapIdle=%dMB heapReleased=%dMB nextGC=%dMB numGC=%d goroutines=%d",
+			m.HeapAlloc>>20, m.HeapSys>>20, m.HeapIdle>>20, m.HeapReleased>>20, m.NextGC>>20,
+			m.NumGC, runtime.NumGoroutine()))
+	}
+}
 
 var keyUpdateFrequency int64 = 555
 
@@ -997,7 +1053,7 @@ func (s *qadenaServer) ExportPrivateKey(ctx context.Context, in *types.MsgExport
 	}
 	c.LoggerDebug(logger, "ExportPrivateKey "+c.PrettyPrint(in))
 
-	_, _, _, privK, _, err := c.GetAddressByName(clientCtx, in.PubKID, ArmorPassPhrase)
+	_, _, _, privK, err := c.GetAddressByNameNoArmor(clientCtx, in.PubKID)
 	if err != nil {
 		return nil, err
 	}
@@ -1200,7 +1256,7 @@ func (s *qadenaServer) GenerateSecretShare(nodeID string, nodeType string) (msgP
 		return
 	}
 	var walletID, intervalPubK, intervalPrivK string
-	walletID, _, intervalPubK, intervalPrivK, _, err = c.GetAddressByName(clientCtx, mnemonic, ArmorPassPhrase)
+	walletID, _, intervalPubK, intervalPrivK, err = c.GetAddressByNameNoArmor(clientCtx, mnemonic)
 
 	pioneers := s.getAllPioneers()
 
@@ -1765,7 +1821,7 @@ func (s *qadenaServer) updateIsValidator() bool {
 	c.LoggerDebug(logger, "is a proposer, but not yet a validator from the standpoint of the enclave")
 	// we need to update the interval public key with the external IP address
 	//
-	pwalletID, pwalletAddr, _, _, _, err := c.GetAddressByName(clientCtx, s.getPrivateEnclaveParamsPioneerID(), ArmorPassPhrase)
+	pwalletID, pwalletAddr, _, _, err := c.GetAddressByNameNoArmor(clientCtx, s.getPrivateEnclaveParamsPioneerID())
 	report, err := s.getRemoteReport(strings.Join([]string{
 		pwalletAddr.String(),
 		pwalletID,
@@ -1854,7 +1910,7 @@ func (s *qadenaServer) AddAsValidator(ctx context.Context, in *types.MsgAddAsVal
 	//  fmt.Println("err " + err.Error().Error())
 	//  fmt.Println("res", res)
 
-	pwalletID, pwalletAddr, _, _, _, err := c.GetAddressByName(clientCtx, s.getPrivateEnclaveParamsPioneerID(), ArmorPassPhrase)
+	pwalletID, pwalletAddr, _, _, err := c.GetAddressByNameNoArmor(clientCtx, s.getPrivateEnclaveParamsPioneerID())
 
 	msgs := make([]sdk.Msg, 0)
 
@@ -2644,7 +2700,7 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 	//  fmt.Println("err " + err.Error().Error())
 	//  fmt.Println("res", res)
 
-	pwalletID, pwalletAddr, _, _, _, err = c.GetAddressByName(queryClientCtx, s.getPrivateEnclaveParamsPioneerID(), ArmorPassPhrase)
+	pwalletID, pwalletAddr, _, _, err = c.GetAddressByNameNoArmor(queryClientCtx, s.getPrivateEnclaveParamsPioneerID())
 
 	if err != nil {
 		return nil, err
@@ -4841,7 +4897,7 @@ func (s *qadenaServer) validateEnclaveIdentities() {
 			c.LoggerDebug(logger, "enclave identity is INVALID", identity)
 		}
 
-		pwalletID, pwalletAddr, _, _, _, err := c.GetAddressByName(clientCtx, s.getPrivateEnclaveParamsPioneerID(), ArmorPassPhrase)
+		pwalletID, pwalletAddr, _, _, err := c.GetAddressByNameNoArmor(clientCtx, s.getPrivateEnclaveParamsPioneerID())
 		report, err := s.getRemoteReport(strings.Join([]string{
 			identity.UniqueID,
 			identity.SignerID,
@@ -7033,6 +7089,33 @@ func main() {
 
 	c.LoggerInfo(logger, "Enclave starting", version, signerID, uniqueID)
 
+	// TELL THE GARBAGE COLLECTOR HOW MUCH MEMORY IT ACTUALLY HAS.
+	//
+	// enclave.json fixes the heap at heapSize MB and the enclave CANNOT grow past it -- an
+	// allocation that does not fit is a fatal error, not a request to the OS.  Go's collector knows
+	// nothing about that: by default it paces off GOGC, letting the heap roughly double over live
+	// data before collecting, on the assumption that more memory is always available.
+	//
+	// It is not, and a node died of it: 487MB of mostly-uncollected garbage, 24 goroutines and a
+	// few hundred small records live, then one 64MB argon2 buffer that had nowhere to go --
+	//
+	//     runtime: out of memory: cannot allocate 67108864-byte block (510984192 in use)
+	//     fatal error: out of memory
+	//
+	// A soft limit fixes the pacing: as the heap approaches it the collector runs harder rather
+	// than waiting for a ratio that will never be reached in time.  Set below the enclave heap so
+	// there is room for the runtime's own overhead and for a large transient to land.
+	//
+	// setMemoryLimitFromHeapSize keeps this in step with enclave.json rather than restating the
+	// number here, because two places holding the same constant is how they drift.
+	setMemoryLimitFromHeapSize()
+
+	// A dead enclave now HALTS the node rather than forking the chain (haltOnEnclaveFailure in
+	// x/qadena/keeper/enclave_grpc_client.go), so running out of memory costs availability instead
+	// of correctness -- which is why it is worth watching the heap BEFORE it runs out.
+	// Cheap: one line every reportMemStatsInterval, no allocation beyond the ReadMemStats struct.
+	go reportMemStats()
+
 	c.LoggerDebug(logger, "port "+strconv.Itoa(*port))
 	c.LoggerDebug(logger, "RealEnclave "+strconv.FormatBool(*realEnclave))
 	c.LoggerDebug(logger, "homePath "+*homePath)
@@ -7246,7 +7329,7 @@ func main() {
 			os.Exit(10)
 		}
 
-		_, _, tmpPubK, tmpPrivK, _, err := c.GetAddressByName(clientCtx, types.EnclaveKeyringName, ArmorPassPhrase)
+		_, _, tmpPubK, tmpPrivK, err := c.GetAddressByNameNoArmor(clientCtx, types.EnclaveKeyringName)
 		if err != nil {
 			c.LoggerError(logger, "couldn't get address for "+types.EnclaveKeyringName+" "+err.Error())
 			os.Exit(10)

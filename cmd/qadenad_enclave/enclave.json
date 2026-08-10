@@ -2,7 +2,7 @@
     "exe": "qadenad_enclave",
     "key": "private.pem",
     "debug": true,
-    "heapSize": 512,
+    "heapSize": 1024,
     "productID": 1,
     "securityVersion": 2,
     "mounts": [

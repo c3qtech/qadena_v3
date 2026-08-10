@@ -390,9 +390,26 @@ func IsBech32Address(address string) bool {
 	return err == nil
 }
 
-func GetAddressByName(ctx client.Context, name string, passphrase string) (walletID string, walletAddr sdktypes.AccAddress, pubK string, privK string, armorPrivK string, err error) {
-	var privKHex string
-	walletID, _, pubK, privKHex, err = GetAddress(ctx, name)
+// GetAddressByNameNoArmor resolves a key WITHOUT producing the armored copy.
+//
+// ARMORING IS NOT FREE, and it is not a formatting step.  ExportPrivKeyArmor encrypts the key with
+// argon2id, a password KDF deliberately hardened to cost 64MB of memory and a lot of CPU per call
+// (cosmos-sdk/crypto/armor.go: argon2Memory).  That is the right price for writing a key to disk
+// where an attacker may grind it offline; it is pure waste for a caller that already holds the key
+// and throws the armored copy away.
+//
+// Most callers do throw it away -- 8 of the 14 in this repo took `_` for it.  One of those was
+// GenerateSecretShare, on the per-interval UpdateHeight path, inside a 512MB enclave heap.  Its
+// 64MB buffer was the allocation that could not be placed when a node ran out of memory:
+//
+//	runtime: out of memory: cannot allocate 67108864-byte block (510984192 in use)
+//
+// The enclave then produced a wrong app hash instead of halting, and the chain forked.
+//
+// So the armoring is opt-in now.  GetAddressByName still returns it for the callers that write keys
+// out; everything else uses this and pays nothing.
+func GetAddressByNameNoArmor(ctx client.Context, name string) (walletID string, walletAddr sdktypes.AccAddress, pubK string, privK string, err error) {
+	walletID, _, pubK, privK, err = GetAddress(ctx, name)
 
 	if err != nil {
 		fmt.Println("couldn't get address for", name, err)
@@ -405,7 +422,16 @@ func GetAddressByName(ctx client.Context, name string, passphrase string) (walle
 		return
 	}
 
-	privK = privKHex
+	return
+}
+
+// GetAddressByName is GetAddressByNameNoArmor plus the armored private key.  Use it only when the
+// armored form is actually consumed -- see the note above on what it costs.
+func GetAddressByName(ctx client.Context, name string, passphrase string) (walletID string, walletAddr sdktypes.AccAddress, pubK string, privK string, armorPrivK string, err error) {
+	walletID, walletAddr, pubK, privK, err = GetAddressByNameNoArmor(ctx, name)
+	if err != nil {
+		return
+	}
 
 	armorPrivK, err = ctx.Keyring.ExportPrivKeyArmor(name, passphrase)
 	if err != nil {
