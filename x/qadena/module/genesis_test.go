@@ -44,13 +44,24 @@ func TestGenesis(t *testing.T) {
 			},
 		},
 		IntervalPublicKeyIDList: []types.IntervalPublicKeyID{
+			// Distinct, non-empty PubKIDs: the by-PubKID index is keyed on this alone, so leaving
+			// them empty made both entries collide on the key "/" and the second tripped the
+			// duplicate-PubKID panic.
 			{
 				NodeID:   "0",
 				NodeType: "0",
+				PubKID:   "pubkid0",
 			},
 			{
 				NodeID:   "1",
 				NodeType: "1",
+				PubKID:   "pubkid1",
+				// A record that has already rotated once.  Export -> import has to preserve this:
+				// SetIntervalPublicKeyID derives PreviousPubKID from the store on a rotation, but a
+				// genesis import is a FIRST write with no prior record to derive from, so the value
+				// has to survive as supplied.  If it did not, every chain restarted from an exported
+				// genesis would silently lose the rotation grace for one interval.
+				PreviousPubKID: "pubkid1-previous",
 			},
 		},
 		PioneerJarList: []types.PioneerJar{
@@ -106,6 +117,10 @@ func TestGenesis(t *testing.T) {
 	}
 
 	k, ctx := keepertest.QadenaKeeper(t)
+	// InitGenesis writes through the keeper's Set* methods, every one of which forwards to the
+	// enclave over gRPC.  There is no enclave here and the client is a nil package-level var, so
+	// this panicked before reaching a single assertion.  The forward is skipped in CheckTx.
+	ctx = ctx.WithIsCheckTx(true)
 	qadena.InitGenesis(ctx, k, genesisState)
 	got := qadena.ExportGenesis(ctx, k)
 	require.NotNil(t, got)

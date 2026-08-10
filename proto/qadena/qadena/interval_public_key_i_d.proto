@@ -11,5 +11,15 @@ message IntervalPublicKeyID {
   string serviceProviderType = 5;  
   bytes remoteReport = 6;  
   string homePioneerID = 7;
+
+  // The key this record replaced.  A VShare bound to it stays acceptable until the NEXT rotation
+  // overwrites this pointer, so the grace period expires on its own -- no height arithmetic, and
+  // nothing to prune.  Empty on a first write and on records written before this field existed,
+  // which simply means "no grace yet"; the first rotation after an upgrade fills it in.
+  //
+  // Derived only by SetIntervalPublicKeyID from what is already in the store, never taken from a
+  // message, so every validator computes the same value and no caller can nominate a key of its
+  // choosing.
+  string previousPubKID = 8;
 }
 

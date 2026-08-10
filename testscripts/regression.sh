@@ -991,6 +991,11 @@ run_test "suspicious"  "$qadenatestscripts/test_suspicious.sh"
 run_test "bank-scan"   "$qadenatestscripts/test_bank_restriction.sh"
 run_test "params"      "$qadenatestscripts/test_params_validation.sh"
 run_test "uniqueness"  "$qadenatestscripts/test_credential_uniqueness.sh"
+# Immediately after uniqueness because that is the suite the rotation race kept breaking: a VShare
+# bound just before the SS interval key rotated was rejected as invalid (qadena code 1142).  This
+# forces rotations rather than waiting 555 blocks for one.  Skips loudly on real SGX, where the
+# enclave refuses a forced rotation.
+run_test "ss-rotation" "$qadenatestscripts/test_ss_key_rotation.sh"
 run_test "dsvs"        "$qadenatestscripts/test_dsvs.sh"
 run_test "wasm"        "$qadenatestscripts/test_wasm.sh"
 run_test "evm"         "$qadenatestscripts/test_evm.sh"

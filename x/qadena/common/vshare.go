@@ -43,6 +43,15 @@ type VSharePubKInfo struct {
 	PubK     string
 	NodeID   string
 	NodeType string
+	// AltPubK, when non-empty, is ALSO accepted for this (NodeID, NodeType).  It is set only when
+	// building an EXPECTATION -- it carries the immediately-previous interval public key, so that a
+	// transaction which read the current key and was delivered just after a rotation is not
+	// rejected for having read the truth one block too early.
+	//
+	// The ENCRYPT path ignores it entirely: newVShareBindData reads only PubK, so an alternate can
+	// never become a recipient of anything.  It widens WHICH key satisfies an expectation, never
+	// WHOSE -- FindVSharePubKInfo re-checks NodeID and NodeType against the alternate too.
+	AltPubK string
 }
 
 type VSharedSecret struct {
@@ -461,7 +470,25 @@ func (data *VShareBindData) FindB64Address(bech32addr string) string {
 	return ""
 }
 
+// FindVSharePubKInfo reports whether the bind encrypts to the expected recipient.  The expectation
+// is satisfied by PubK or, when the caller supplied one, by AltPubK -- the key that PubK replaced at
+// the last rotation.  See VSharePubKInfo.AltPubK for why that widening is safe.
+//
+// Note this is a membership test, not an equality test: a bind may name recipients beyond those
+// expected.  What holds the whole scheme together is VShareBVerify, which proves that every
+// recipient the bind DOES name shares one secret over this exact ciphertext -- a property of the
+// bind alone, independent of whatever set we compare against here.  So accepting either of two keys
+// cannot weaken the proof; it only changes which of the bind's own recipients must be present.
 func (data *VShareBindData) FindVSharePubKInfo(pubK VSharePubKInfo) bool {
+	if data.findVSharePubK(pubK.PubK, pubK.NodeID, pubK.NodeType) {
+		return true
+	}
+	// The rotation grace window.  NodeID and NodeType are re-checked against the alternate, so a
+	// stale key is accepted only in the same role its replacement would have filled.
+	return pubK.AltPubK != "" && data.findVSharePubK(pubK.AltPubK, pubK.NodeID, pubK.NodeType)
+}
+
+func (data *VShareBindData) findVSharePubK(pubKB64 string, nodeID string, nodeType string) bool {
 	if data == nil {
 		return false
 	}
@@ -469,7 +496,7 @@ func (data *VShareBindData) FindVSharePubKInfo(pubK VSharePubKInfo) bool {
 		return false
 	}
 
-	pubkbytes, err := base64.StdEncoding.DecodeString(pubK.PubK)
+	pubkbytes, err := base64.StdEncoding.DecodeString(pubKB64)
 
 	if err != nil {
 		fmt.Println("Error decoding pubK!")
@@ -484,12 +511,12 @@ func (data *VShareBindData) FindVSharePubKInfo(pubK VSharePubKInfo) bool {
 		return false
 	}
 
-	if data.Data[0].Y.ECPoint.Equal(pubkECPoint) && data.Data[0].Y.NodeID == pubK.NodeID && data.Data[0].Y.NodeType == pubK.NodeType && data.Data[1].Y.ECPoint.Equal(pubkECPoint) && data.Data[1].Y.NodeID == pubK.NodeID && data.Data[1].Y.NodeType == pubK.NodeType {
+	if data.Data[0].Y.ECPoint.Equal(pubkECPoint) && data.Data[0].Y.NodeID == nodeID && data.Data[0].Y.NodeType == nodeType && data.Data[1].Y.ECPoint.Equal(pubkECPoint) && data.Data[1].Y.NodeID == nodeID && data.Data[1].Y.NodeType == nodeType {
 		return true
 	}
 
 	for j := 0; j < len(data.Data[0].Cc); j++ {
-		if data.Data[0].Cc[j].ECPoint.Equal(pubkECPoint) && data.Data[0].Cc[j].NodeID == pubK.NodeID && data.Data[0].Cc[j].NodeType == pubK.NodeType && data.Data[1].Cc[j].ECPoint.Equal(pubkECPoint) && data.Data[1].Cc[j].NodeID == pubK.NodeID && data.Data[1].Cc[j].NodeType == pubK.NodeType {
+		if data.Data[0].Cc[j].ECPoint.Equal(pubkECPoint) && data.Data[0].Cc[j].NodeID == nodeID && data.Data[0].Cc[j].NodeType == nodeType && data.Data[1].Cc[j].ECPoint.Equal(pubkECPoint) && data.Data[1].Cc[j].NodeID == nodeID && data.Data[1].Cc[j].NodeType == nodeType {
 			return true
 		}
 	}

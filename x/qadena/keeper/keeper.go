@@ -132,21 +132,38 @@ func (k Keeper) DUMMY_KEEPER_METHOD_DSVS() {
 
 // common funcs for keepers
 
-// called from various Qadena MsgServer
-func MsgServerGetIntervalPublicKey(ctx sdk.Context, qadenaKeeper Keeper, intervalNodeID string, intervalNodeType string) (pubKID string, pubK string, serviceProviderType string, err error) {
+// GetIntervalPublicKeyWithPrevious resolves an interval key and, when the record names one, the key
+// it replaced at the last rotation.
+//
+// previousPubK is what makes the rotation grace period possible: a transaction whose VShare was
+// built moments before a rotation still names the old key, and rejecting it would fail a perfectly
+// well-formed transaction over timing alone.  It is read from consensus state -- the record's
+// PreviousPubKID, filled in by SetIntervalPublicKeyID -- rather than from history, because pruning
+// settings, uptime and state-sync method all differ between validators, so "what was the key N
+// blocks ago" is not a question every node can answer the same way.
+//
+// A previous id with no matching PublicKey row is NOT an error: previousPubK comes back empty and
+// the caller simply gets no grace, which is exactly the behaviour before this existed.
+func (k Keeper) GetIntervalPublicKeyWithPrevious(ctx sdk.Context, intervalNodeID string, intervalNodeType string) (pubKID string, pubK string, previousPubK string, serviceProviderType string, err error) {
 	// find the interval ss pubk
-	intervalPubKID, found := qadenaKeeper.GetIntervalPublicKeyID(ctx, intervalNodeID, intervalNodeType)
+	intervalPubKID, found := k.GetIntervalPublicKeyID(ctx, intervalNodeID, intervalNodeType)
 
 	if !found {
 		err = types.ErrPubKIDNotExists
 		return
 	}
 
-	intervalPubK, found := qadenaKeeper.GetPublicKey(ctx, intervalPubKID.PubKID, types.TransactionPubKType)
+	intervalPubK, found := k.GetPublicKey(ctx, intervalPubKID.PubKID, types.TransactionPubKType)
 
 	if !found {
 		err = types.ErrPubKIDNotExists
 		return
+	}
+
+	if intervalPubKID.PreviousPubKID != "" {
+		if prev, prevFound := k.GetPublicKey(ctx, intervalPubKID.PreviousPubKID, types.TransactionPubKType); prevFound {
+			previousPubK = prev.PubK
+		}
 	}
 
 	pubKID = intervalPubKID.PubKID
@@ -174,7 +191,9 @@ func MsgServerAppendRequiredChainCCPubK(ctx sdk.Context, ccPubK []c.VSharePubKIn
 		return nil, fmt.Errorf("Logic error")
 	}
 	if !excludeSSIntervalPubK {
-		ssIntervalPubKID, ssIntervalPubK, _, err := MsgServerGetIntervalPublicKey(ctx, qadenaKeeper, types.SSNodeID, types.SSNodeType)
+		// The SS interval key rotates every 555 blocks, so this is the one that actually needs the
+		// grace: AltPubK lets a VShare bound just before a rotation still satisfy the expectation.
+		ssIntervalPubKID, ssIntervalPubK, ssPreviousPubK, _, err := qadenaKeeper.GetIntervalPublicKeyWithPrevious(ctx, types.SSNodeID, types.SSNodeType)
 
 		if err != nil {
 			c.ContextError(ctx, "Couldn't get interval public key")
@@ -183,6 +202,7 @@ func MsgServerAppendRequiredChainCCPubK(ctx sdk.Context, ccPubK []c.VSharePubKIn
 
 		ccPubK = append(ccPubK, c.VSharePubKInfo{
 			PubK:     ssIntervalPubK,
+			AltPubK:  ssPreviousPubK,
 			NodeID:   types.SSNodeID,
 			NodeType: types.SSNodeType,
 		})
@@ -200,7 +220,7 @@ func MsgServerAppendRequiredChainCCPubK(ctx sdk.Context, ccPubK []c.VSharePubKIn
 
 		c.ContextDebug(ctx, "jarID", "jarID", jarID)
 
-		jarIntervalPubKID, jarIntervalPubK, _, err := MsgServerGetIntervalPublicKey(ctx, qadenaKeeper, jarID, types.JarNodeType)
+		jarIntervalPubKID, jarIntervalPubK, jarPreviousPubK, _, err := qadenaKeeper.GetIntervalPublicKeyWithPrevious(ctx, jarID, types.JarNodeType)
 
 		if err != nil {
 			c.ContextError(ctx, "Couldn't get jar interval public key", "jarID", jarID, "nodeType", types.JarNodeType)
@@ -209,8 +229,12 @@ func MsgServerAppendRequiredChainCCPubK(ctx sdk.Context, ccPubK []c.VSharePubKIn
 
 		c.ContextDebug(ctx, "jarIntervalPubKID", "id", jarIntervalPubKID, "pubk", jarIntervalPubK)
 
+		// Nothing rotates a jar key on a timer today, so this is empty in practice.  It is set
+		// anyway so the rule is "an interval key expectation carries its predecessor" rather than a
+		// special case for SS that whoever adds jar rotation would have to remember to copy.
 		ccPubK = append(ccPubK, c.VSharePubKInfo{
 			PubK:     jarIntervalPubK,
+			AltPubK:  jarPreviousPubK,
 			NodeID:   jarID,
 			NodeType: types.JarNodeType,
 		})
@@ -223,11 +247,11 @@ func MsgServerAppendAuthorizeUser(ctx sdk.Context, ccPubK []c.VSharePubKInfo, qa
 	// make sure that the creator has the required service provider
 	serviceProviderFound := false
 	for _, serviceProviderID := range creatorWallet.ServiceProviderID {
-		_, pubK, intervalServiceProviderType, err := MsgServerGetIntervalPublicKey(ctx, qadenaKeeper, serviceProviderID, types.ServiceProviderNodeType)
+		_, pubK, previousPubK, intervalServiceProviderType, err := qadenaKeeper.GetIntervalPublicKeyWithPrevious(ctx, serviceProviderID, types.ServiceProviderNodeType)
 
 		if err == nil {
 			if serviceProviderType == intervalServiceProviderType {
-				ccPubK = append(ccPubK, c.VSharePubKInfo{PubK: pubK, NodeID: serviceProviderID, NodeType: types.ServiceProviderNodeType})
+				ccPubK = append(ccPubK, c.VSharePubKInfo{PubK: pubK, AltPubK: previousPubK, NodeID: serviceProviderID, NodeType: types.ServiceProviderNodeType})
 
 				serviceProviderFound = true
 				break
@@ -244,7 +268,7 @@ func MsgServerAppendAuthorizeUser(ctx sdk.Context, ccPubK []c.VSharePubKInfo, qa
 // find any service providers that are optional
 func MsgServerAppendOptionalServiceProvidersCCPubK(ctx sdk.Context, ccPubK []c.VSharePubKInfo, qadenaKeeper Keeper, serviceProviderID []string, optionalServiceProviderType []string) ([]c.VSharePubKInfo, error) {
 	for i := range serviceProviderID {
-		_, pubK, serviceProviderType, err := MsgServerGetIntervalPublicKey(ctx, qadenaKeeper, serviceProviderID[i], types.ServiceProviderNodeType)
+		_, pubK, previousPubK, serviceProviderType, err := qadenaKeeper.GetIntervalPublicKeyWithPrevious(ctx, serviceProviderID[i], types.ServiceProviderNodeType)
 		if err != nil {
 			c.ContextError(ctx, "Couldn't get service provider interval public key", "serviceProviderID", serviceProviderID[i], "nodeType", types.ServiceProviderNodeType)
 			return nil, err
@@ -255,6 +279,7 @@ func MsgServerAppendOptionalServiceProvidersCCPubK(ctx sdk.Context, ccPubK []c.V
 			if serviceProviderType == optionalServiceProviderType[j] {
 				ccPubK = append(ccPubK, c.VSharePubKInfo{
 					PubK:     pubK,
+					AltPubK:  previousPubK,
 					NodeID:   serviceProviderID[i],
 					NodeType: types.ServiceProviderNodeType,
 				})

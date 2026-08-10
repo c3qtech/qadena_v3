@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -17,7 +18,7 @@ import (
 	cmdcfg "github.com/c3qtech/qadena_v3/cmd/config"
 	qadenakr "github.com/c3qtech/qadena_v3/crypto/keyring"
 
-	// cryptocodec "github.com/cosmos/cosmos-sdk/crypto/codec"
+	evmcryptocodec "github.com/cosmos/evm/crypto/codec"
 
 	//	qadenaflags "/github.com/c3qtech/qadena_v3/x/qadena/client/flags"
 	"github.com/cosmos/cosmos-sdk/client"
@@ -33,11 +34,15 @@ import (
 	//ecies "github.com/ecies/go/v2"
 )
 
+var registerDenomsOnce sync.Once
+
 // GenerateKeys generates a specified number of public and private keys.
 func GenerateKeys(t *testing.T, count int) ([]string, []string) {
 	EnvPrefix := "QADENA"
 
-	cmdcfg.RegisterDenoms()
+	// Same one-shot hazard as setupConfig: the SDK's denom table rejects a re-registration with
+	// "denom qdn already registered", so the second caller of GenerateKeys would panic.
+	registerDenomsOnce.Do(cmdcfg.RegisterDenoms)
 
 	chainID := "qadena_1000-1"
 
@@ -46,11 +51,21 @@ func GenerateKeys(t *testing.T, count int) ([]string, []string) {
 
 	legacyAmino := amino.NewLegacyAmino()
 	interfaceRegistry := codectypes.NewInterfaceRegistry()
+
+	// The keyring stores eth_secp256k1 keys, and a registry that knows no crypto types cannot read
+	// them back: every CreatePublicKey below failed with "unable to unmarshal item.Data: Bytes left
+	// over in UnmarshalBinaryLengthPrefixed", GenerateKeys returned empty slices, and each caller
+	// then panicked indexing past the end.  That made every test in this package that needs a key
+	// unrunnable.  ProvideClientContext (cmd/qadenad/cmd/root.go) and the enclave both perform this
+	// registration; a test client context has to do the same to be a client context at all.
+	if cmdcfg.QadenaUsesEthSecP256k1 {
+		evmcryptocodec.RegisterInterfaces(interfaceRegistry)
+		legacyAmino = amino.NewLegacyAmino()
+		evmcryptocodec.RegisterCrypto(legacyAmino)
+	}
+
 	marshaler := amino.NewProtoCodec(interfaceRegistry)
 	txConfig := authtx.NewTxConfig(marshaler, authtx.DefaultSignModes)
-
-	//enccodec.RegisterLegacyAminoCodec(legacyAmino)
-	//enccodec.RegisterInterfaces(interfaceRegistry)
 
 	clientCtx := client.Context{}.
 		WithCodec(marshaler).
@@ -87,6 +102,16 @@ func GenerateKeys(t *testing.T, count int) ([]string, []string) {
 		"palace friend deposit baby crunch flag airport mistake enlist island auction phrase double truck coffee salad hidden story orange couch useful feature electric crush",
 		"join total tent make bone program uncle pitch prize body night snake chest mass switch glad opera security evidence catch maid behave gloom ahead",
 		"wealth scatter potato bacon glass any present reopen box patrol divide erase tube matter half maze sugar tackle trial duty river eight fragile arctic",
+		// A fifth identity, so a test can hold a key that is deliberately absent from a bind --
+		// TestFindVSharePubKInfoAcceptsPreviousIntervalKey needs one to stand in for the key a
+		// rotation installed, alongside the four it actually encrypts to.
+		"shiver industry photo slab uniform damage tuition seek second donor december dizzy conduct brush crunch rule connect surge raise bulk lazy silent soccer female",
+	}
+
+	if count > len(accountMnemonic) {
+		// Indexing past the end used to panic with a bare "index out of range", which says nothing
+		// about the fixture being the limit.
+		t.Fatalf("GenerateKeys: asked for %d keys but only %d mnemonics are defined", count, len(accountMnemonic))
 	}
 
 	pubKeys := make([]string, count)
@@ -125,16 +150,26 @@ func GenerateKeys(t *testing.T, count int) ([]string, []string) {
 	return pubKeys, privKeys
 }
 
+var setupConfigOnce sync.Once
+
+// setupConfig installs the bech32 prefixes and coin type on the SDK's process-wide config.  Every
+// test that touches an address calls it, but the config can only be written once -- Seal() makes
+// each later SetBech32Prefixes panic with "Config is sealed".  It survived only because the tests
+// that call it happened to be the ones failing earlier for other reasons; adding one more caller
+// was enough to make an unrelated test panic mid-run.  sync.Once makes the second call a no-op,
+// which is the intent anyway: the config it would set is identical.
 func setupConfig() {
-	// set the address prefixes
-	config := sdk.GetConfig()
-	cmdcfg.SetBech32Prefixes(config)
-	// TODO fix
-	// if err := cmdcfg.EnableObservability(); err != nil {
-	// 	panic(err)
-	// }
-	cmdcfg.SetBip44CoinType(config)
-	config.Seal()
+	setupConfigOnce.Do(func() {
+		// set the address prefixes
+		config := sdk.GetConfig()
+		cmdcfg.SetBech32Prefixes(config)
+		// TODO fix
+		// if err := cmdcfg.EnableObservability(); err != nil {
+		// 	panic(err)
+		// }
+		cmdcfg.SetBip44CoinType(config)
+		config.Seal()
+	})
 }
 
 func TestAddress(t *testing.T) {

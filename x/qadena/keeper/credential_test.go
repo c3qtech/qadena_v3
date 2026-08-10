@@ -17,6 +17,8 @@ import (
 var _ = strconv.IntSize
 
 func createNCredential(keeper keeper.Keeper, ctx context.Context, n int) []types.Credential {
+	// The keeper forwards this write to the enclave; see testCtx.
+	ctx = testCtx(ctx)
 	items := make([]types.Credential, n)
 	for i := range items {
 		items[i].CredentialID = strconv.Itoa(i)

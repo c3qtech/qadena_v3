@@ -17,6 +17,8 @@ import (
 var _ = strconv.IntSize
 
 func createNProtectKey(keeper keeper.Keeper, ctx context.Context, n int) []types.ProtectKey {
+	// The keeper forwards this write to the enclave; see testCtx.
+	ctx = testCtx(ctx)
 	items := make([]types.ProtectKey, n)
 	for i := range items {
 		items[i].WalletID = strconv.Itoa(i)

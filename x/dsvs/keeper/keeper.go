@@ -70,25 +70,19 @@ func (k Keeper) Logger() log.Logger {
 
 // common funcs
 // called from various DSVS MsgServer
-func DSVSMsgServerGetIntervalPublicKey(ctx sdk.Context, qadenaKeeper types.QadenaKeeper, intervalNodeID string, intervalNodeType string) (pubKID string, pubK string, serviceProviderType string, err error) {
-	// find the interval ss pubk
-	intervalPubKID, found := qadenaKeeper.GetIntervalPublicKeyID(ctx, intervalNodeID, intervalNodeType)
-
-	if !found {
+// This was a line-for-line copy of the qadena keeper's lookup.  It now delegates, so the rotation
+// grace period is defined once rather than in two places that could drift apart -- and drifting
+// apart here means dsvs and qadena disagreeing about whether a transaction is valid, which is a
+// consensus split, not a style problem.
+//
+// The error is translated rather than passed through: qadena and dsvs each register their own
+// ErrPubKIDNotExists, and leaking qadena's would change the codespace on every dsvs failure that
+// goes through here.
+func DSVSMsgServerGetIntervalPublicKeyWithPrevious(ctx sdk.Context, qadenaKeeper types.QadenaKeeper, intervalNodeID string, intervalNodeType string) (pubKID string, pubK string, previousPubK string, serviceProviderType string, err error) {
+	pubKID, pubK, previousPubK, serviceProviderType, err = qadenaKeeper.GetIntervalPublicKeyWithPrevious(ctx, intervalNodeID, intervalNodeType)
+	if err != nil {
 		err = types.ErrPubKIDNotExists
-		return
 	}
-
-	intervalPubK, found := qadenaKeeper.GetPublicKey(ctx, intervalPubKID.PubKID, qadenatypes.TransactionPubKType)
-
-	if !found {
-		err = types.ErrPubKIDNotExists
-		return
-	}
-
-	pubKID = intervalPubKID.PubKID
-	pubK = intervalPubK.PubK
-	serviceProviderType = intervalPubKID.ServiceProviderType
 	return
 }
 
@@ -111,7 +105,9 @@ func DSVSMsgServerAppendRequiredChainCCPubK(ctx sdk.Context, ccPubK []c.VSharePu
 		return nil, fmt.Errorf("Logic error")
 	}
 	if !excludeSSIntervalPubK {
-		ssIntervalPubKID, ssIntervalPubK, _, err := DSVSMsgServerGetIntervalPublicKey(ctx, qadenaKeeper, qadenatypes.SSNodeID, qadenatypes.SSNodeType)
+		// AltPubK carries the key this one replaced, so a document bound moments before a rotation
+		// is still accepted.  See common.VSharePubKInfo.
+		ssIntervalPubKID, ssIntervalPubK, ssPreviousPubK, _, err := DSVSMsgServerGetIntervalPublicKeyWithPrevious(ctx, qadenaKeeper, qadenatypes.SSNodeID, qadenatypes.SSNodeType)
 
 		if err != nil {
 			c.ContextError(ctx, "Couldn't get interval public key")
@@ -120,6 +116,7 @@ func DSVSMsgServerAppendRequiredChainCCPubK(ctx sdk.Context, ccPubK []c.VSharePu
 
 		ccPubK = append(ccPubK, c.VSharePubKInfo{
 			PubK:     ssIntervalPubK,
+			AltPubK:  ssPreviousPubK,
 			NodeID:   qadenatypes.SSNodeID,
 			NodeType: qadenatypes.SSNodeType,
 		})
@@ -137,7 +134,7 @@ func DSVSMsgServerAppendRequiredChainCCPubK(ctx sdk.Context, ccPubK []c.VSharePu
 
 		c.ContextDebug(ctx, "jarID", "jarID", jarID)
 
-		jarIntervalPubKID, jarIntervalPubK, _, err := DSVSMsgServerGetIntervalPublicKey(ctx, qadenaKeeper, jarID, qadenatypes.JarNodeType)
+		jarIntervalPubKID, jarIntervalPubK, jarPreviousPubK, _, err := DSVSMsgServerGetIntervalPublicKeyWithPrevious(ctx, qadenaKeeper, jarID, qadenatypes.JarNodeType)
 
 		if err != nil {
 			c.ContextError(ctx, "Couldn't get jar interval public key", "jarID", jarID, "nodeType", qadenatypes.JarNodeType)
@@ -148,6 +145,7 @@ func DSVSMsgServerAppendRequiredChainCCPubK(ctx sdk.Context, ccPubK []c.VSharePu
 
 		ccPubK = append(ccPubK, c.VSharePubKInfo{
 			PubK:     jarIntervalPubK,
+			AltPubK:  jarPreviousPubK,
 			NodeID:   jarID,
 			NodeType: qadenatypes.JarNodeType,
 		})
@@ -160,11 +158,11 @@ func DSVSMsgServerAppendAuthorizeUser(ctx sdk.Context, ccPubK []c.VSharePubKInfo
 	// make sure that the creator has the required service provider
 	serviceProviderFound := false
 	for _, serviceProviderID := range creatorWallet.ServiceProviderID {
-		_, pubK, intervalServiceProviderType, err := DSVSMsgServerGetIntervalPublicKey(ctx, qadenaKeeper, serviceProviderID, qadenatypes.ServiceProviderNodeType)
+		_, pubK, previousPubK, intervalServiceProviderType, err := DSVSMsgServerGetIntervalPublicKeyWithPrevious(ctx, qadenaKeeper, serviceProviderID, qadenatypes.ServiceProviderNodeType)
 
 		if err == nil {
 			if serviceProviderType == intervalServiceProviderType {
-				ccPubK = append(ccPubK, c.VSharePubKInfo{PubK: pubK, NodeID: serviceProviderID, NodeType: qadenatypes.ServiceProviderNodeType})
+				ccPubK = append(ccPubK, c.VSharePubKInfo{PubK: pubK, AltPubK: previousPubK, NodeID: serviceProviderID, NodeType: qadenatypes.ServiceProviderNodeType})
 
 				serviceProviderFound = true
 				break

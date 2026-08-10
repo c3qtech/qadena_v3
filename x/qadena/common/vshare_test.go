@@ -43,10 +43,10 @@ func TestNewVShareBindData(t *testing.T) {
 
 	// Nodes who will be cc'd for the dstEWalletID
 	ccPubK := []VSharePubKInfo{
-		{pubKeys[0], "", ""},
-		{pubKeys[1], "", ""},
-		{pubKeys[2], "jar1", types.JarNodeType},
-		{pubKeys[3], types.SSNodeID, types.SSNodeType},
+		{PubK: pubKeys[0], NodeID: "", NodeType: ""},
+		{PubK: pubKeys[1], NodeID: "", NodeType: ""},
+		{PubK: pubKeys[2], NodeID: "jar1", NodeType: types.JarNodeType},
+		{PubK: pubKeys[3], NodeID: types.SSNodeID, NodeType: types.SSNodeType},
 	}
 
 	/*
@@ -87,10 +87,10 @@ func TestVShareEncryptDecrypt(t *testing.T) {
 
 	// nodes who will be cc'd for the dstEWalletID
 	ccPubK := []VSharePubKInfo{
-		{pubKeys[0], "", ""},
-		{pubKeys[1], "", ""},
-		{pubKeys[2], "jar1", types.JarNodeType},
-		{pubKeys[3], types.SSNodeID, types.SSNodeType},
+		{PubK: pubKeys[0], NodeID: "", NodeType: ""},
+		{PubK: pubKeys[1], NodeID: "", NodeType: ""},
+		{PubK: pubKeys[2], NodeID: "jar1", NodeType: types.JarNodeType},
+		{PubK: pubKeys[3], NodeID: types.SSNodeID, NodeType: types.SSNodeType},
 	}
 
 	plainText := "hello world this is a test"
@@ -131,9 +131,110 @@ func TestVShareEncryptDecrypt(t *testing.T) {
 			t.Errorf("bind.GetJarID() = %s; want jar1", bind.GetJarID())
 		}
 
-		expectedPubKID := "qadena100n3u3zz8e83jex0wp6j5len75de9hz4gtsa6x"
+		// Derived from the fourth mnemonic in GenerateKeys.  The previous literal here
+		// (qadena100n3u3zz8e83jex0wp6j5len75de9hz4gtsa6x) predates the move to eth_secp256k1 and
+		// had gone stale unnoticed, because GenerateKeys itself was broken and this test could not
+		// run at all.  Confirmed against the real keyring rather than by copying what the code now
+		// emits:
+		//     qadenad keys add x --recover --keyring-backend test   (same mnemonic)
+		//     -> qadena1swplxwyw4vduynhg9l8en392tcg2pdx08z56z9
+		expectedPubKID := "qadena1swplxwyw4vduynhg9l8en392tcg2pdx08z56z9"
 		if bind.GetSSIntervalPubKID() != expectedPubKID {
 			t.Errorf("bind.GetSSIntervalPubKID() = %s; want %s", bind.GetSSIntervalPubKID(), expectedPubKID)
 		}
+	}
+}
+
+// The SS interval key rotates every 555 blocks, and a transaction bound to the key that was current
+// when the client built it can land one block after the rotation.  The chain then expects the NEW
+// key and the bind carries the OLD one, which used to be a flat rejection (qadena code 1142) even
+// though the transaction was perfectly well formed.  AltPubK is the grace: the expectation is
+// satisfied by either key.
+//
+// What must NOT widen is whose key it is.  The last two cases below are the ones that matter -- an
+// alternate that is not in the bind must still fail, and an alternate that IS in the bind must still
+// fail when it is claimed for the wrong node.
+func TestFindVSharePubKInfoAcceptsPreviousIntervalKey(t *testing.T) {
+	setupConfig()
+
+	pubKeys, _ := GenerateKeys(t, 5)
+
+	// oldSSKey is the key the client read and bound to.  newSSKey and unrelatedKey are deliberately
+	// NOT recipients of anything -- newSSKey stands in for the key the rotation installed, and
+	// unrelatedKey for one a further rotation installed after that.  strangerKey IS a recipient,
+	// but as jar1, which is what makes the identity check below meaningful.
+	oldSSKey, strangerKey := pubKeys[2], pubKeys[1]
+	newSSKey, unrelatedKey := pubKeys[3], pubKeys[4]
+
+	ccPubK := []VSharePubKInfo{
+		{PubK: pubKeys[0], NodeID: "", NodeType: ""},
+		{PubK: strangerKey, NodeID: "jar1", NodeType: types.JarNodeType},
+		{PubK: oldSSKey, NodeID: types.SSNodeID, NodeType: types.SSNodeType},
+	}
+
+	sci := types.EncryptableSingleContactInfoDetails{Contact: "hello world this is a test"}
+
+	testVShareEncryption = false
+	encVShare, bind := ProtoMarshalAndVShareBEncrypt(ccPubK, &sci)
+	testVShareEncryption = false
+
+	if bind == nil {
+		t.Fatalf("ProtoMarshalAndVShareBEncrypt() failed")
+	}
+
+	cases := []struct {
+		name   string
+		expect VSharePubKInfo
+		want   bool
+	}{
+		{
+			// No rotation happened: the ordinary path, and proof the grace did not disturb it.
+			name:   "current key, no alternate",
+			expect: VSharePubKInfo{PubK: oldSSKey, NodeID: types.SSNodeID, NodeType: types.SSNodeType},
+			want:   true,
+		},
+		{
+			// The race itself: the chain expects the new key, the bind carries the old one.
+			name:   "rotated away, previous key offered as alternate",
+			expect: VSharePubKInfo{PubK: newSSKey, AltPubK: oldSSKey, NodeID: types.SSNodeID, NodeType: types.SSNodeType},
+			want:   true,
+		},
+		{
+			// Two rotations deep: the bind names neither the current key nor the one before it.
+			// The grace is one deep on purpose -- without this bound the rule would decay into
+			// "accept any key this node has ever seen".
+			name:   "neither key is in the bind",
+			expect: VSharePubKInfo{PubK: newSSKey, AltPubK: unrelatedKey, NodeID: types.SSNodeID, NodeType: types.SSNodeType},
+			want:   false,
+		},
+		{
+			// strangerKey IS a recipient of this bind -- but as jar1, not as the SS node.  If the
+			// alternate skipped the identity check, this would pass and any cc'd party could stand
+			// in for the SS node.
+			name:   "alternate is in the bind but under another identity",
+			expect: VSharePubKInfo{PubK: newSSKey, AltPubK: strangerKey, NodeID: types.SSNodeID, NodeType: types.SSNodeType},
+			want:   false,
+		},
+		{
+			// The old behaviour, unchanged: no alternate means no grace.
+			name:   "rotated away, no alternate offered",
+			expect: VSharePubKInfo{PubK: newSSKey, NodeID: types.SSNodeID, NodeType: types.SSNodeType},
+			want:   false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := bind.FindVSharePubKInfo(tc.expect); got != tc.want {
+				t.Errorf("FindVSharePubKInfo() = %v; want %v", got, tc.want)
+			}
+		})
+	}
+
+	// Widening the expectation must not weaken the proof.  VShareBVerify is a property of the bind
+	// alone -- it shows every recipient the bind names shares one secret over this ciphertext -- so
+	// it has to still hold regardless of what we compared against above.
+	if !bind.VShareBVerify(encVShare) {
+		t.Errorf("VShareBVerify() failed after the alternate-key checks")
 	}
 }

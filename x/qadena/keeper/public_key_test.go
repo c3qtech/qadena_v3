@@ -17,6 +17,8 @@ import (
 var _ = strconv.IntSize
 
 func createNPublicKey(keeper keeper.Keeper, ctx context.Context, n int) []types.PublicKey {
+	// The keeper forwards this write to the enclave; see testCtx.
+	ctx = testCtx(ctx)
 	items := make([]types.PublicKey, n)
 	for i := range items {
 		items[i].PubKID = strconv.Itoa(i)

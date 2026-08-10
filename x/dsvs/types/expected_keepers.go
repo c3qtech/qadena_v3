@@ -14,6 +14,9 @@ type QadenaKeeper interface {
 	EnclaveValidateAuthorizedSignatory(ctx sdk.Context, creator string, signatory *qadenatypes.VShareSignatory, currentSignatory []*qadenatypes.VShareSignatory) (bool, error)
 	EnclaveValidateAuthorizedSigner(ctx sdk.Context, creator string, signer *qadenatypes.VShareSignatory, requiredSignatories []*qadenatypes.VShareSignatory, completedSignatories []*qadenatypes.VShareSignatory) (bool, error)
 	GetIntervalPublicKeyID(ctx context.Context, nodeID string, nodeType string) (qadenatypes.IntervalPublicKeyID, bool)
+	// Resolves an interval key together with the key it replaced at the last rotation, so a dsvs
+	// document signed just before a rotation is still validated against the key it was bound to.
+	GetIntervalPublicKeyWithPrevious(ctx sdk.Context, nodeID string, nodeType string) (pubKID string, pubK string, previousPubK string, serviceProviderType string, err error)
 	GetIntervalPublicKeyIDByPubKID(ctx context.Context, pubKID string) (qadenatypes.IntervalPublicKeyID, bool)
 	AuthenticateServiceProvider(ctx sdk.Context, pubKID string, serviceProviderType string) error // returns nil if the pubKID is valid for the serviceProviderType
 	GetPioneerJar(ctx context.Context, pioneerID string) (qadenatypes.PioneerJar, bool)

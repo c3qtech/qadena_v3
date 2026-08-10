@@ -17,6 +17,8 @@ import (
 var _ = strconv.IntSize
 
 func createNPioneerJar(keeper keeper.Keeper, ctx context.Context, n int) []types.PioneerJar {
+	// The keeper forwards this write to the enclave; see testCtx.
+	ctx = testCtx(ctx)
 	items := make([]types.PioneerJar, n)
 	for i := range items {
 		items[i].PioneerID = strconv.Itoa(i)

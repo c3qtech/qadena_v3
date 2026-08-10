@@ -711,7 +711,7 @@ func (s *qadenaServer) getSSPrivK(pubKID string) string {
 
 func (s *qadenaServer) getEnclavePubK(pioneerID string) (enclavePubK string, found bool) {
 	var pioneerWalletID string
-	pioneerWalletID, _, found = s.getIntervalPublicKeyId(pioneerID, types.PioneerNodeType)
+	pioneerWalletID, _, _, found = s.getIntervalPublicKeyId(pioneerID, types.PioneerNodeType)
 	if !found {
 		c.LoggerError(logger, "BAD!  Couldn't find walletID for pioneerID "+pioneerID)
 		return
@@ -1334,7 +1334,7 @@ func (s *qadenaServer) GenerateSecretShare(nodeID string, nodeType string) (msgP
 	gShares := make([]*types.Share, 0)
 
 	for i, share := range shares {
-		pioneerWalletID, _, found := s.getIntervalPublicKeyId(pioneers[i], types.PioneerNodeType)
+		pioneerWalletID, _, _, found := s.getIntervalPublicKeyId(pioneers[i], types.PioneerNodeType)
 		if !found {
 			c.LoggerError(logger, "BAD!  Couldn't find walletID for pioneerID "+pioneers[i])
 			err = types.ErrKeyNotFound
@@ -2397,7 +2397,7 @@ func (s *qadenaServer) QueryGetRecoverKey(goCtx context.Context, in *types.Query
 			// check if the walletID is a pioneerID
 			shareWalletID := rShare.WalletID
 			encShareWalletPubK := rShare.EncWalletPubKShare
-			_, _, found := s.getIntervalPublicKeyId(shareWalletID, types.PioneerNodeType)
+			_, _, _, found := s.getIntervalPublicKeyId(shareWalletID, types.PioneerNodeType)
 			if !found {
 				c.LoggerDebug(logger, "not a PioneerID "+shareWalletID)
 				continue
@@ -3498,6 +3498,36 @@ func (s *qadenaServer) containsWalletID(d []string, creator string) bool {
 	return false
 }
 
+// resolveSSIntervalPubKIDForBind picks the SS interval key a bind was actually encrypted to.
+//
+// This is the SECOND place a rotation can bite, and the grace in FindVSharePubKInfo does not reach
+// it: the untrusted decrypt path looks up the CURRENT SS key and insists the bind names it, so a
+// bind built moments before a rotation would be refused here even after the validator accepted it.
+// Trying the previous key too keeps the two in agreement.
+//
+// Returns found=false when the bind names neither key, which is the same refusal as before.
+func (s *qadenaServer) resolveSSIntervalPubKIDForBind(bindData *c.VShareBindData) (b64Address string, ssIntervalPubKID string, found bool) {
+	current, previous, _, ok := s.getIntervalPublicKeyId(types.SSNodeID, types.SSNodeType)
+	if !ok {
+		return "", "", false
+	}
+
+	if addr := bindData.FindB64Address(current); addr != "" {
+		return addr, current, true
+	}
+
+	// The grace window.  getSSPrivK is keyed by pubKID and interval private keys are never
+	// discarded, so the old key is still usable for decryption.
+	if previous != "" {
+		if addr := bindData.FindB64Address(previous); addr != "" {
+			c.LoggerDebug(logger, "bind names the previous ss interval key "+previous+", still within the rotation grace")
+			return addr, previous, true
+		}
+	}
+
+	return "", "", false
+}
+
 func (s *qadenaServer) decryptSignatory(in *types.VShareSignatory, trusted bool) *types.EncryptableSignatory {
 	if s.RealEnclave {
 		c.LoggerDebug(logger, "decryptSignatory")
@@ -3516,17 +3546,12 @@ func (s *qadenaServer) decryptSignatory(in *types.VShareSignatory, trusted bool)
 		b64Address, ssIntervalPubKID = bindData.FindB64AddressAndBech32AddressByNodeIDAndType(types.SSNodeID, types.SSNodeType)
 		c.LoggerDebug(logger, "trustedssIntervalPubKID "+b64Address+" "+ssIntervalPubKID)
 	} else {
-		// get ss interval public key id
-		ssIntervalPubKID, _, found = s.getIntervalPublicKeyId(types.SSNodeID, types.SSNodeType)
+		// get ss interval public key id, accepting the one it replaced if this bind was built just
+		// before a rotation
+		b64Address, ssIntervalPubKID, found = s.resolveSSIntervalPubKIDForBind(bindData)
 
 		if !found {
-			return nil
-		}
-
-		b64Address = bindData.FindB64Address(ssIntervalPubKID)
-
-		if b64Address == "" {
-			c.LoggerError(logger, "bindData does not contain the ssIntervalPubKID")
+			c.LoggerError(logger, "bindData does not contain the current or previous ssIntervalPubKID")
 			return nil
 		}
 	}
@@ -3568,17 +3593,12 @@ func (s *qadenaServer) decryptAuthorizedSignatory(in *types.VShareSignatory, tru
 		b64Address, ssIntervalPubKID = bindData.FindB64AddressAndBech32AddressByNodeIDAndType(types.SSNodeID, types.SSNodeType)
 		c.LoggerDebug(logger, "trustedssIntervalPubKID "+b64Address+" "+ssIntervalPubKID)
 	} else {
-		// get ss interval public key id
-		ssIntervalPubKID, _, found = s.getIntervalPublicKeyId(types.SSNodeID, types.SSNodeType)
+		// get ss interval public key id, accepting the one it replaced if this bind was built just
+		// before a rotation
+		b64Address, ssIntervalPubKID, found = s.resolveSSIntervalPubKIDForBind(bindData)
 
 		if !found {
-			return nil
-		}
-
-		b64Address = bindData.FindB64Address(ssIntervalPubKID)
-
-		if b64Address == "" {
-			c.LoggerError(logger, "bindData does not contain the ssIntervalPubKID")
+			c.LoggerError(logger, "bindData does not contain the current or previous ssIntervalPubKID")
 			return nil
 		}
 	}
@@ -3932,7 +3952,7 @@ func (s *qadenaServer) SignRecoverKey(ctx context.Context, in *types.MsgSignReco
 		for _, recoverShare := range protectKey.RecoverShare {
 			// check if recoverShare.WalletID is a bech32 address
 			if !c.IsBech32Address(recoverShare.WalletID) {
-				walletID, _, foundPioneerID := s.getIntervalPublicKeyId(recoverShare.WalletID, types.PioneerNodeType)
+				walletID, _, _, foundPioneerID := s.getIntervalPublicKeyId(recoverShare.WalletID, types.PioneerNodeType)
 				if foundPioneerID {
 					// it's a canonical name
 					if walletID == in.Creator {
@@ -3941,7 +3961,7 @@ func (s *qadenaServer) SignRecoverKey(ctx context.Context, in *types.MsgSignReco
 					}
 				} else {
 					// check if service provider
-					walletID, _, foundServiceProviderID := s.getIntervalPublicKeyId(recoverShare.WalletID, types.ServiceProviderNodeType)
+					walletID, _, _, foundServiceProviderID := s.getIntervalPublicKeyId(recoverShare.WalletID, types.ServiceProviderNodeType)
 					if foundServiceProviderID {
 						// it's a canonical name
 						if walletID == in.Creator {
@@ -4272,7 +4292,10 @@ func (s *qadenaServer) setPublicKeyNoNotify(in types.PublicKey) {
 	store.Set(types.PublicKeyKey(in.PubKID, in.PubKType), b)
 }
 
-func (s *qadenaServer) getIntervalPublicKeyId(nodeID string, nodeType string) (keyID string, serviceProviderType string, found bool) {
+// previousKeyID is the key this record replaced at the last rotation, empty when there has not been
+// one.  The record is mirrored from the chain verbatim, so both sides read the same value -- which
+// is what lets the enclave and the chain agree about a VShare that straddles a rotation.
+func (s *qadenaServer) getIntervalPublicKeyId(nodeID string, nodeType string) (keyID string, previousKeyID string, serviceProviderType string, found bool) {
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.IntervalPublicKeyIDKeyPrefix))
 
 	b := store.Get(types.IntervalPublicKeyIDKey(
@@ -4289,6 +4312,7 @@ func (s *qadenaServer) getIntervalPublicKeyId(nodeID string, nodeType string) (k
 		c.LoggerDebug(logger, "getIntervalPublicKeyId", c.PrettyPrint(ipki))
 		found = true
 		keyID = ipki.PubKID
+		previousKeyID = ipki.PreviousPubKID
 		serviceProviderType = ipki.ServiceProviderType
 	}
 
@@ -5307,9 +5331,16 @@ func (s *qadenaServer) setRecoverKeyByOriginalWalletID(walletID string, in *type
 }
 
 // called from various Qadena MsgServer
-func (s *qadenaServer) enclaveGetIntervalPublicKey(intervalNodeID string, intervalNodeType string) (pubKID string, pubK string, serviceProviderType string, err error) {
+// previousPubK is the key this one replaced, and is what the rotation grace period is built on: a
+// VShare bound moments before a rotation still names the old key, and refusing it would fail a
+// well-formed transaction over timing alone.  A previous id with no PublicKey row behind it is not
+// an error -- previousPubK comes back empty and the caller simply gets no grace.
+//
+// The chain's Keeper.GetIntervalPublicKeyWithPrevious does exactly this; the two must stay in step,
+// because they validate the same VShares and a disagreement is a fork.
+func (s *qadenaServer) enclaveGetIntervalPublicKey(intervalNodeID string, intervalNodeType string) (pubKID string, pubK string, previousPubK string, serviceProviderType string, err error) {
 	// find the interval ss pubk
-	intervalPubKID, spType, found := s.getIntervalPublicKeyId(intervalNodeID, intervalNodeType)
+	intervalPubKID, previousPubKID, spType, found := s.getIntervalPublicKeyId(intervalNodeID, intervalNodeType)
 
 	if !found {
 		err = types.ErrPubKIDNotExists
@@ -5321,6 +5352,12 @@ func (s *qadenaServer) enclaveGetIntervalPublicKey(intervalNodeID string, interv
 	if !found {
 		err = types.ErrPubKIDNotExists
 		return
+	}
+
+	if previousPubKID != "" {
+		if prev, prevFound := s.getPublicKey(previousPubKID, types.TransactionPubKType); prevFound {
+			previousPubK = prev
+		}
 	}
 
 	pubKID = intervalPubKID
@@ -5348,7 +5385,9 @@ func (s *qadenaServer) enclaveAppendRequiredChainCCPubK(ccPubK []c.VSharePubKInf
 		return nil, fmt.Errorf("Logic error")
 	}
 	if !excludeSSIntervalPubK {
-		ssIntervalPubKID, ssIntervalPubK, _, err := s.enclaveGetIntervalPublicKey(types.SSNodeID, types.SSNodeType)
+		// AltPubK carries the key this one replaced, so a VShare bound just before a rotation still
+		// satisfies the expectation.  See common.VSharePubKInfo.
+		ssIntervalPubKID, ssIntervalPubK, ssPreviousPubK, _, err := s.enclaveGetIntervalPublicKey(types.SSNodeID, types.SSNodeType)
 
 		if err != nil {
 			c.LoggerError(logger, "Couldn't get interval public key")
@@ -5357,6 +5396,7 @@ func (s *qadenaServer) enclaveAppendRequiredChainCCPubK(ccPubK []c.VSharePubKInf
 
 		ccPubK = append(ccPubK, c.VSharePubKInfo{
 			PubK:     ssIntervalPubK,
+			AltPubK:  ssPreviousPubK,
 			NodeID:   types.SSNodeID,
 			NodeType: types.SSNodeType,
 		})
@@ -5374,7 +5414,7 @@ func (s *qadenaServer) enclaveAppendRequiredChainCCPubK(ccPubK []c.VSharePubKInf
 
 		c.LoggerDebug(logger, "jarID", jarID)
 
-		jarIntervalPubKID, jarIntervalPubK, _, err := s.enclaveGetIntervalPublicKey(jarID, types.JarNodeType)
+		jarIntervalPubKID, jarIntervalPubK, jarPreviousPubK, _, err := s.enclaveGetIntervalPublicKey(jarID, types.JarNodeType)
 
 		if err != nil {
 			c.LoggerError(logger, "Couldn't get jar interval public key", jarID, types.JarNodeType)
@@ -5385,6 +5425,7 @@ func (s *qadenaServer) enclaveAppendRequiredChainCCPubK(ccPubK []c.VSharePubKInf
 
 		ccPubK = append(ccPubK, c.VSharePubKInfo{
 			PubK:     jarIntervalPubK,
+			AltPubK:  jarPreviousPubK,
 			NodeID:   jarID,
 			NodeType: types.JarNodeType,
 		})
@@ -5396,7 +5437,7 @@ func (s *qadenaServer) enclaveAppendRequiredChainCCPubK(ccPubK []c.VSharePubKInf
 // find any service providers that are optional
 func (s *qadenaServer) enclaveAppendOptionalServiceProvidersCCPubK(ccPubK []c.VSharePubKInfo, serviceProviderID []string, optionalServiceProviderType []string) ([]c.VSharePubKInfo, error) {
 	for i := range serviceProviderID {
-		_, pubK, serviceProviderType, err := s.enclaveGetIntervalPublicKey(serviceProviderID[i], types.ServiceProviderNodeType)
+		_, pubK, previousPubK, serviceProviderType, err := s.enclaveGetIntervalPublicKey(serviceProviderID[i], types.ServiceProviderNodeType)
 		if err != nil {
 			c.LoggerError(logger, "Couldn't get service provider interval public key", serviceProviderID[i], types.ServiceProviderNodeType)
 			return nil, err
@@ -5407,6 +5448,7 @@ func (s *qadenaServer) enclaveAppendOptionalServiceProvidersCCPubK(ccPubK []c.VS
 			if serviceProviderType == optionalServiceProviderType[j] {
 				ccPubK = append(ccPubK, c.VSharePubKInfo{
 					PubK:     pubK,
+					AltPubK:  previousPubK,
 					NodeID:   serviceProviderID[i],
 					NodeType: types.ServiceProviderNodeType,
 				})
@@ -6556,7 +6598,7 @@ func (s *qadenaServer) createSuspiciousTransaction(ctx context.Context, reason s
 		return types.ErrGenericScan
 	}
 
-	regulatorPubKID, _, found := s.getIntervalPublicKeyId(regulatorID, types.RegulatorNodeType)
+	regulatorPubKID, _, _, found := s.getIntervalPublicKeyId(regulatorID, types.RegulatorNodeType)
 	if !found {
 		c.LoggerError(logger, "couldn't find regulator pubkid for regulator ID", regulatorID)
 		return types.ErrGenericScan

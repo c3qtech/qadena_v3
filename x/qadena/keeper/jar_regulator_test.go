@@ -17,6 +17,8 @@ import (
 var _ = strconv.IntSize
 
 func createNJarRegulator(keeper keeper.Keeper, ctx context.Context, n int) []types.JarRegulator {
+	// The keeper forwards this write to the enclave; see testCtx.
+	ctx = testCtx(ctx)
 	items := make([]types.JarRegulator, n)
 	for i := range items {
 		items[i].JarID = strconv.Itoa(i)

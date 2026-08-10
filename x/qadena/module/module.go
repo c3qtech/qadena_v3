@@ -184,7 +184,18 @@ func (am AppModule) ExportGenesis(ctx sdk.Context, cdc codec.JSONCodec) json.Raw
 // 2: MsgUpdateCredential, Credential.updateGeneration and the update params.  No migration
 // handler is needed -- the new proto fields read as their zero values on existing rows -- but the
 // version has to move so an upgrade is visible.
-func (AppModule) ConsensusVersion() uint64 { return 2 }
+// 3: IntervalPublicKeyID.previousPubKID, which records the key a rotation replaced so a VShare
+// bound moments before that rotation is still accepted.  Consensus-breaking because it changes
+// which transactions validate, and because the enclave mirrors this record byte for byte -- chain
+// and enclave binaries have to move together.  Again no state rewrite: an existing row reads
+// previousPubKID as "", meaning no grace yet, and the first rotation after the upgrade fills it in.
+//
+// No RegisterMigration handler accompanies this, matching the v1->v2 step.  Chains are stood up
+// from genesis rather than upgraded in place, so RunMigrations is never asked to bridge these
+// versions.  Whoever first runs a real in-place upgrade will need to register handlers for every
+// step at that point -- RunMigrations refuses outright when a module's version has moved and it has
+// registered none.
+func (AppModule) ConsensusVersion() uint64 { return 3 }
 
 // BeginBlock contains the logic that is automatically triggered at the beginning of each block.
 // The begin block implementation is optional.

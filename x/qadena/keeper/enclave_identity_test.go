@@ -17,6 +17,8 @@ import (
 var _ = strconv.IntSize
 
 func createNEnclaveIdentity(keeper keeper.Keeper, ctx context.Context, n int) []types.EnclaveIdentity {
+	// The keeper forwards this write to the enclave; see testCtx.
+	ctx = testCtx(ctx)
 	items := make([]types.EnclaveIdentity, n)
 	for i := range items {
 		items[i].UniqueID = strconv.Itoa(i)
