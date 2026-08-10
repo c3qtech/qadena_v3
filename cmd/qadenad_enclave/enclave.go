@@ -4361,8 +4361,14 @@ func (s *qadenaServer) setIntervalPublicKeyIdNoNotify(in types.IntervalPublicKey
 	if current != nil {
 		var currentIntervalPublicKeyID types.IntervalPublicKeyID
 		s.Cdc.MustUnmarshal(current, &currentIntervalPublicKeyID)
-		// remove the old one by PubKID, so we don't keep growing the kvstore
-		storeByPubKID.Delete(types.IntervalPublicKeyIDByPubKIDKey(in.PubKID))
+		// Remove the old one by PubKID, so we don't keep growing the kvstore.
+		//
+		// This passed in.PubKID -- the NEW key, which is not in the index yet and gets written back
+		// at the end of this function -- so it was a no-op and every rotated-away entry stayed
+		// forever.  The chain's copy had the mirror-image mistake (correct key, wrong store), which
+		// is why the two sides leaked in step and never diverged.  They must be fixed together; see
+		// the matching note in x/qadena/keeper/interval_public_key_i_d.go.
+		storeByPubKID.Delete(types.IntervalPublicKeyIDByPubKIDKey(currentIntervalPublicKeyID.PubKID))
 	} else {
 		// make sure we don't have a duplicate one stored by PubKID
 		current = storeByPubKID.Get(types.IntervalPublicKeyIDByPubKIDKey(in.PubKID))

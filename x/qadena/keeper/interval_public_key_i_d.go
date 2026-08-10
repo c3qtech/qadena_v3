@@ -45,8 +45,24 @@ func (k Keeper) SetIntervalPublicKeyID(ctx context.Context, intervalPublicKeyID 
 			intervalPublicKeyID.PreviousPubKID = currentIntervalPublicKeyID.PreviousPubKID
 		}
 
-		// remove the old one by PubKID, so we don't keep growing the kvstore
-		store.Delete(types.IntervalPublicKeyIDByPubKIDKey(
+		// Remove the old one by PubKID, so we don't keep growing the kvstore.
+		//
+		// This deleted from `store` -- the PRIMARY index -- while building a key for the reverse
+		// one.  A reverse key is "<pubKID>/" and a primary key is "<nodeID>/<nodeType>/", so it
+		// could never match anything: an unconditional no-op that left every rotated-away entry in
+		// the reverse index forever.  The enclave's mirror had the opposite half of the same
+		// mistake (right store, but it passed the NEW pubKID, which is not in the index yet and is
+		// written back two lines later), so both sides leaked identically and therefore agreed.
+		//
+		// Fixing only one side would have turned that shared accident into a silent consensus
+		// divergence on an authorization path -- GetIntervalPublicKeyIDByPubKID feeds
+		// AuthenticateServiceProvider -- which is why both moved together.
+		//
+		// Safe because no service provider record can ever change its PubKID: AddServiceProvider
+		// refuses a nodeID that already exists, DeactivateServiceProvider rewrites the same PubKID,
+		// and the rotation handler is only ever sent SS, Pioneer, Jar and Regulator records.  So no
+		// stale srv-prv entry can exist to stop resolving.
+		storeByPubKID.Delete(types.IntervalPublicKeyIDByPubKIDKey(
 			currentIntervalPublicKeyID.PubKID,
 		))
 	} else {

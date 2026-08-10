@@ -99,6 +99,50 @@ func TestIntervalPublicKeyIDRotationRecordsPrevious(t *testing.T) {
 	require.Equal(t, "keyB", set("keyC").PreviousPubKID)
 }
 
+// The by-PubKID index is a reverse lookup that has to track the primary one.  Its cleanup on
+// rotation deleted from the wrong store and so never removed anything: the index grew without bound
+// and, worse, kept resolving keys that had been rotated away -- and it feeds
+// AuthenticateServiceProvider, an authorization decision.
+//
+// The enclave's mirror of this code had the opposite half of the same mistake, so the two agreed by
+// coincidence.  This test pins the chain's half; the enclave's is exercised by the store-hash
+// comparison in a live run.
+func TestIntervalPublicKeyIDRotationPrunesTheReverseIndex(t *testing.T) {
+	k, ctx := keepertest.QadenaKeeper(t)
+	ctx = testCtx(ctx)
+
+	set := func(pubKID string) {
+		k.SetIntervalPublicKeyID(ctx, types.IntervalPublicKeyID{
+			NodeID:   types.SSNodeID,
+			NodeType: types.SSNodeType,
+			PubKID:   pubKID,
+		})
+	}
+
+	set("keyA")
+	if _, found := k.GetIntervalPublicKeyIDByPubKID(ctx, "keyA"); !found {
+		t.Fatalf("keyA should resolve by PubKID while it is current")
+	}
+
+	set("keyB")
+
+	if _, found := k.GetIntervalPublicKeyIDByPubKID(ctx, "keyA"); found {
+		t.Errorf("keyA still resolves by PubKID after being rotated away -- the reverse index is not being pruned")
+	}
+	if got, found := k.GetIntervalPublicKeyIDByPubKID(ctx, "keyB"); !found {
+		t.Errorf("keyB does not resolve by PubKID after replacing keyA")
+	} else if got.PubKID != "keyB" {
+		t.Errorf("by-PubKID lookup of keyB returned PubKID %q", got.PubKID)
+	}
+
+	// Rewriting the same key must not delete the entry it is about to write.  DeactivateServiceProvider
+	// does exactly this, and the delete runs before the set.
+	set("keyB")
+	if _, found := k.GetIntervalPublicKeyIDByPubKID(ctx, "keyB"); !found {
+		t.Errorf("keyB stopped resolving after its record was rewritten unchanged")
+	}
+}
+
 func TestIntervalPublicKeyIDGetAll(t *testing.T) {
 	keeper, ctx := keepertest.QadenaKeeper(t)
 	items := createNIntervalPublicKeyID(keeper, ctx, 10)
