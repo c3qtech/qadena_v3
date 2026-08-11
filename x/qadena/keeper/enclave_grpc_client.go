@@ -778,7 +778,14 @@ func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
 func (k Keeper) EnclaveInvokeEndBlock(sdkctx sdk.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
 	defer cancel()
-	_, _ = EnclaveGRPCClient.EndBlock(ctx, &types.MsgEndBlock{})
+	// This RPC is what makes the enclave's block durable -- its handler commits the enclave's
+	// store.  The error used to be discarded here while the four Sync* calls above halt the node
+	// on failure, which is exactly backwards: an enclave that cannot COMMIT is at least as
+	// dangerous as one that cannot sync, because the next block then executes against enclave
+	// state that was never persisted, and an enclave restart replays from a version this chain
+	// has already moved past.  Same failure, same answer: halt this node, not the chain.
+	_, err := EnclaveGRPCClient.EndBlock(ctx, &types.MsgEndBlock{})
+	haltOnEnclaveFailure(sdkctx, "end block", err)
 }
 
 func (k Keeper) EnclaveSyncWallets(sdkctx sdk.Context) (error, []*types.Wallet) {
@@ -1408,8 +1415,20 @@ func haltOnEnclaveFailure(sdkctx sdk.Context, step string, err error) {
 		" -- halting rather than committing a block without the enclave's state, which would fork the chain")
 }
 
+// EnclaveEndBlock drains the enclave's pending changes into the chain's stores and then tells the
+// enclave to commit.
+//
+// INVARIANT: an enclave->chain row must be delivered at the height that PRODUCED it, never later.
+//
+// The rows drained here are written into block state, so they are part of this block's app hash --
+// and at least one of them is height-ordered on the chain side (AppendSuspiciousTransaction
+// auto-increments its ID).  A node that delivered a row at height H+1 which its peers delivered at
+// H would compute a different app hash for both blocks: a fork, of exactly the kind
+// test_peer_agreement.sh exists to catch.  So there is no such thing as "retry the delivery next
+// block".  Either the row lands in the block that produced it, or that block must be re-executed
+// from scratch -- which is why an enclave failure anywhere below is a halt (haltOnEnclaveFailure),
+// and why enclave rollback re-executes blocks rather than re-delivering their rows.
 func (k Keeper) EnclaveEndBlock(sdkctx sdk.Context) {
-	//  fmt.Println("qadena module EndBlock")
 	err, changedWallets := k.EnclaveSyncWallets(sdkctx)
 	checkSync := false
 

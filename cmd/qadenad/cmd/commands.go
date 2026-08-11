@@ -73,6 +73,11 @@ func initRootCmd(
 		addModuleInitFlags,
 	)
 
+	// Replace the SDK's rollback command (registered by evmserver.AddCommands just above) with
+	// ours, which keeps the enclave's state in lockstep with the chain's -- see rollback.go for
+	// why a chain-only rollback is unrecoverable on this chain.
+	replaceRollbackCmd(rootCmd, sdkAppCreator, app.DefaultNodeHome)
+
 	// add Cosmos EVM key commands
 	rootCmd.AddCommand(
 		evmcosmoscmd.KeyCommands(app.DefaultNodeHome, true),
