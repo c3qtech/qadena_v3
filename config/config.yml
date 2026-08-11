@@ -192,9 +192,16 @@ genesis:
         # suite.  Mainnet is 7 days / 1 day -- see config/launch-config.yml.
         voting_period: "300s"
         expedited_voting_period: "30s"
-        # Tally params match launch and are genuinely exercised: treasury delegates 10,000,000qdn
-        # against pioneer1's 100,000qdn self-bond, so its yes vote carries ~99% -- clearing quorum,
-        # threshold and the expedited threshold on real numbers rather than by default.
+        # Tally params match launch and are genuinely exercised: setup_prerequisites.sh delegates
+        # 10,000,000qdn from the treasury, so the treasury's yes vote carries ~99% of bonded stake --
+        # clearing quorum, threshold and the expedited threshold on real numbers rather than by
+        # default.  The treasury holds 2B qdn at genesis but UNBONDED, which carries no voting power
+        # at all, so without that delegation its vote counts zero and proposals fail quorum.
+        #
+        # That 10,000,000 is split evenly across the bonded validators, NOT concentrated on
+        # pioneer1.  The treasury's governance power is unchanged either way -- a delegator votes
+        # with the sum of its delegations -- but concentrating it would also hand one validator
+        # >2/3 of CONSENSUS power, letting it finalise blocks over a peer's nil prevote.
         quorum: "0.334"
         threshold: "0.5"
         veto_threshold: "0.334"

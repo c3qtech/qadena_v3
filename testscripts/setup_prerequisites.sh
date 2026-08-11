@@ -81,6 +81,10 @@ sponsoramount="100000qdn"
 
 # treasury holds 2B qdn at genesis but no delegation, so it has no voting power until it stakes.
 # Without this the proposals reach the voting period and then fail quorum.
+#
+# This is a TOTAL, split evenly across the bonded validators at the call site below -- it is not the
+# amount any single validator receives.  See the rationale there: concentrating it on one validator
+# hands that validator >2/3 of consensus power and lets it finalise blocks over a peer's objection.
 stakeamount="10000000qdn"
 
 # ephemeral wallets per provider.  Nothing in the test suite addresses <provider>-eph*, so the
@@ -263,22 +267,50 @@ echo "========================="
 if [ "$skip_stake" = "true" ]; then
     echo "skipping stake (--skip-stake); assuming $treasury already has voting power"
 else
-    # Staking is the one step with no natural skip condition -- gov_stake_from_treasury.sh just
-    # delegates again -- so check first.  Any existing delegation means the treasury can already
-    # vote, which is all this step is for.
+    # SPLIT ACROSS EVERY BONDED VALIDATOR, not just $pioneer.
+    #
+    # Giving the whole delegation to one validator also gives it >2/3 of CONSENSUS voting power,
+    # which lets it finalise blocks alone: a peer that disagrees prevotes nil and is simply
+    # outvoted.  That is not hypothetical.  With 10,000,000 on pioneer1 against pioneer2's 100,000
+    # self-bond the split was 99.02%/0.98%, and when pioneer1's enclave died it committed 31,675
+    # blocks that pioneer2 had explicitly rejected -- pioneer2's nil prevote could not stop it.
+    # Keeping every validator under 2/3 means a disagreement HALTS the chain instead of forking it.
+    #
+    # Governance is unaffected.  A delegator's voting power is the SUM of its delegations across all
+    # validators, so the treasury still votes with the full $stakeamount and still clears quorum,
+    # threshold and the expedited threshold exactly as before.  Splitting changes who can produce
+    # blocks, not who can pass proposals.
+    #
+    # The check is PER VALIDATOR rather than "does the treasury have any delegation at all", so
+    # re-running this after a second validator joins tops up the newcomer instead of skipping
+    # everything.  That re-run matters: on a two-node bring-up this script runs long before
+    # convert_to_validator.sh exists, so the first pass necessarily sees one validator.
     treasuryaddr=$(qadenad_alias keys show "$treasury" -a --keyring-backend test) \
         || fail "could not resolve $treasury address"
-    # same set -e guard as balance_of: a treasury with no delegations makes the query fail
-    delegated=$(qadenad_alias query staking delegations "$treasuryaddr" --output json 2>/dev/null \
-        | jq -r '[.delegation_responses[]?.balance.amount // 0 | tonumber] | add // 0' 2>/dev/null) || delegated=""
 
-    if [ "${delegated:-0}" != "0" ]; then
-        echo "$treasury already has $delegated staked, skipping"
-    else
-        echo "staking $stakeamount from $treasury to $pioneer"
-        $qadenatestscripts/gov_stake_from_treasury.sh "$pioneer" "$stakeamount" \
-            || fail "could not stake from $treasury to $pioneer"
-    fi
+    valopers=($(qadenad_alias query staking validators --output json 2>/dev/null \
+        | jq -r '.validators[]? | select(.status == "BOND_STATUS_BONDED") | .operator_address')) \
+        || fail "could not list validators"
+    [ ${#valopers[@]} -gt 0 ] || fail "no bonded validators to stake to"
+
+    # integer division; any remainder is simply not delegated, which cannot affect the outcome
+    stakenum=${stakeamount%qdn}
+    share=$(( stakenum / ${#valopers[@]} ))
+    [ "$share" -gt 0 ] || fail "$stakeamount split ${#valopers[@]} ways rounds to zero"
+    echo "splitting $stakeamount across ${#valopers[@]} validator(s): ${share}qdn each"
+
+    for valoper in "${valopers[@]}"; do
+        # same set -e guard as balance_of: no delegation to this validator makes the query fail
+        already=$(qadenad_alias query staking delegation "$treasuryaddr" "$valoper" --output json 2>/dev/null \
+            | jq -r '.delegation_response.balance.amount // 0' 2>/dev/null) || already=""
+        if [ "${already:-0}" != "0" ]; then
+            echo "$treasury already has $already staked to $valoper, skipping"
+        else
+            echo "staking ${share}qdn from $treasury to $valoper"
+            $qadenatestscripts/gov_stake_from_treasury.sh "$valoper" "${share}qdn" \
+                || fail "could not stake from $treasury to $valoper"
+        fi
+    done
 fi
 
 echo "========================="

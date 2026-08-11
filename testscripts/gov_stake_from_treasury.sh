@@ -40,10 +40,21 @@ echo "Staking from treasury"
 echo "-------------------------"
 echo "Staking $amount to validator $validator from treasury"
 
-qadena_address=$(qadenad_alias keys show $validator -a)
-echo "Qadena address: $qadena_address"
-qadena_validator_address=$(qadenad_alias keys show $validator --bech val -a)
-echo "Qadena validator address: $qadena_validator_address"
+# ACCEPTS A KEY NAME **OR** A qadenavaloper... ADDRESS.
+#
+# The key-name form resolves through the local keyring, which only ever holds this node's own
+# pioneer key -- so it cannot name a peer validator at all.  That is fine while one validator holds
+# every delegation, and useless the moment the stake is split across the whole validator set (see
+# the call site in setup_prerequisites.sh).  The address form is how a peer gets named.
+if [[ $validator == qadenavaloper* ]]; then
+    qadena_validator_address="$validator"
+    echo "Qadena validator address (given directly): $qadena_validator_address"
+else
+    qadena_address=$(qadenad_alias keys show $validator -a)
+    echo "Qadena address: $qadena_address"
+    qadena_validator_address=$(qadenad_alias keys show $validator --bech val -a)
+    echo "Qadena validator address: $qadena_validator_address"
+fi
 
 result=$(qadenad_alias tx staking delegate $qadena_validator_address $amount --from treasury -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"
