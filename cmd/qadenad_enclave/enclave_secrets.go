@@ -33,6 +33,8 @@ package main
 // remain lookupable, nondeterministic MustSeal for values (see the accessors in enclave.go).
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 
 	storetypes "cosmossdk.io/store/types"
@@ -142,4 +144,39 @@ func (s *qadenaServer) exportSealedSecretsTable(pfx string) (tableMap map[string
 		tableMap[fixedKey] = val.GetS()
 	}
 	return
+}
+
+// atomicWriteFile writes via temp-file + fsync + rename so the destination always holds either
+// the previous content or the new content, never a torn write.  Used for the sealed params file,
+// whose corruption is unrecoverable (it holds SealedTableSharedSecret).
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	// fsync the directory so the rename itself survives a power cut
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }

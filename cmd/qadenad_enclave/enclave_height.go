@@ -50,6 +50,13 @@ const (
 	// binary against a newer node's data, which must also refuse rather than mangle it.
 	enclaveSchemaVersion uint32 = 1
 
+	// Version retention, matching the chain's pruning "default" window so the enclave can follow
+	// any rollback the chain itself can perform.  The hv index is pruned one interval TIGHTER
+	// than the versions (see EndBlock), so an indexed height is always backed by a live version
+	// -- a stale entry would send RollbackToHeight into a deep IAVL failure instead of a refusal.
+	enclaveRetainVersions uint64 = 362880
+	enclavePruneInterval  uint64 = 100
+
 	qmetaSchemaKey          = "qmeta/schema"
 	qmetaConfirmedHeightKey = "qmeta/confirmed_height"
 	qmetaHVPrefix           = "qmeta/hv/"
@@ -162,6 +169,28 @@ func (s *qadenaServer) earliestIndexedHeight() int64 {
 // deleted version would send a later rollback into a deep IAVL failure instead of a refusal.
 func (s *qadenaServer) deleteHeightIndexAbove(height int64) {
 	it, err := s.MetaDB.Iterator(qmetaHVKey(height+1), storetypes.PrefixEndBytes([]byte(qmetaHVPrefix)))
+	if err != nil {
+		panic("qadena enclave: cannot iterate height->version index: " + err.Error())
+	}
+	var doomed [][]byte
+	for ; it.Valid(); it.Next() {
+		k := make([]byte, len(it.Key()))
+		copy(k, it.Key())
+		doomed = append(doomed, k)
+	}
+	it.Close()
+	for _, k := range doomed {
+		if err := s.MetaDB.DeleteSync(k); err != nil {
+			panic("qadena enclave: cannot prune height->version index: " + err.Error())
+		}
+	}
+}
+
+// deleteHeightIndexBelow removes every index entry for heights strictly less than the target.
+// Called from EndBlock as versions fall out of the pruning window; the range is almost always a
+// single entry.
+func (s *qadenaServer) deleteHeightIndexBelow(height int64) {
+	it, err := s.MetaDB.Iterator([]byte(qmetaHVPrefix), qmetaHVKey(height))
 	if err != nil {
 		panic("qadena enclave: cannot iterate height->version index: " + err.Error())
 	}

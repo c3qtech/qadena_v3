@@ -79,6 +79,7 @@ import (
 	"cosmossdk.io/store"
 	storemetrics "cosmossdk.io/store/metrics"
 	"cosmossdk.io/store/prefix"
+	pruningtypes "cosmossdk.io/store/pruning/types"
 	storetypes "cosmossdk.io/store/types"
 
 	tmdb "github.com/cosmos/cosmos-db"
@@ -769,9 +770,15 @@ func (s *qadenaServer) saveEnclaveParams() bool {
 		return false
 	}
 
-	err = os.WriteFile(s.HomePath+"/enclave_config/enclave_params_"+uniqueID+".json", b, 0644)
+	// ATOMIC, deliberately.  This file holds SealedTableSharedSecret -- the key for every
+	// stable-sealed row in the enclave's stores.  A plain WriteFile to the live path can be
+	// interrupted mid-write, and a truncated file here does not fail gracefully: it fails
+	// UNSEALABLY, taking every sealed key with it, permanently.  Temp file, fsync, rename --
+	// the rename is atomic on POSIX, so the live path always holds either the old blob or the
+	// new one, never a torn one.
+	err = atomicWriteFile(s.HomePath+"/enclave_config/enclave_params_"+uniqueID+".json", b, 0644)
 	if testSeal {
-		err = os.WriteFile(s.HomePath+"/enclave_config/enclave_params_backup.json", b2, 0644)
+		err = atomicWriteFile(s.HomePath+"/enclave_config/enclave_params_backup.json", b2, 0644)
 	}
 
 	if err != nil {
@@ -7012,7 +7019,13 @@ func (s *qadenaServer) senderJurisdictions(srcWalletID string) ([]string, error)
 func (s *qadenaServer) GetStoreHash(ctx context.Context, gsh *types.MsgGetStoreHash) (*types.GetStoreHashReply, error) {
 	c.LoggerDebug(logger, "GetStoreHash")
 
-	s.commitCache()
+	// READ-ONLY, deliberately.  This used to call s.commitCache() first, which promoted a
+	// partially executed transaction's writes into the store -- a write side effect on a read
+	// RPC, reachable from enclaveSynchronizeStores at startup.  It was also unnecessary: every
+	// caller invokes this either before any transaction has executed (BeginBlock) or after every
+	// transaction has completed (EndBlock's drain path), so all hash-relevant writes are already
+	// promoted by TransactionComplete.  Hashing ServerCtx without flushing observes exactly the
+	// committed-plus-completed state both sides mean to compare.
 
 	storeHashes := []*types.StoreHash{}
 
@@ -7104,6 +7117,12 @@ func (s *qadenaServer) EndBlock(ctx context.Context, tc *types.MsgEndBlock) (*ty
 	lastCommitID := cms.LastCommitID()
 	commitID := cms.Commit()
 	s.setHeightVersion(tc.Height, commitID.Version)
+
+	// prune the height->version index one interval tighter than the version window, so every
+	// surviving entry is guaranteed to point at a version pruning has not yet taken
+	if cutoff := tc.Height - int64(enclaveRetainVersions-enclavePruneInterval); cutoff > 0 {
+		s.deleteHeightIndexBelow(cutoff)
+	}
 
 	if string(commitID.Hash) != string(lastCommitID.Hash) {
 		c.LoggerDebug(logger, "has changed")
@@ -7427,6 +7446,15 @@ func main() {
 	// block touches repeatedly.  That working set is thousands of nodes, not hundreds of thousands.
 	// 20,000 covers it with room to spare and caps this contribution at roughly 9-25MB.
 	stateStore.SetIAVLCacheSize(iavlCacheNodes)
+
+	// EXPLICIT retention, matching the chain's pruning "default" window (362,880 versions).
+	// Before this the enclave inherited PruningNothing -- every version ever committed was
+	// retained, which is the only reason rollback worked at all, and also why enclave_data grew
+	// without bound.  Retention is now a decision: the enclave can follow any rollback the chain
+	// itself can perform, and nothing older survives to bloat the store.  The height->version
+	// index is pruned in step at EndBlock (see enclaveRetainVersions there), slightly tighter
+	// than the version window so an indexed height always maps to a live version.
+	stateStore.SetPruning(pruningtypes.NewCustomPruningOptions(enclaveRetainVersions, enclavePruneInterval))
 
 	stateStore.MountStoreWithDB(storeKey, storetypes.StoreTypeIAVL, db)
 	//	stateStore.MountStoreWithDB(memStoreKey, sdk.StoreTypeMemory, nil)
