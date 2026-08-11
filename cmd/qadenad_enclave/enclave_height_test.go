@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"testing"
+	"time"
 
 	cosmossdkiolog "cosmossdk.io/log"
 	"cosmossdk.io/store"
@@ -441,4 +442,116 @@ func TestRollbackReleasesCredentialUniquenessSlot(t *testing.T) {
 	endBlock(t, s, 201)
 	_, found = s.getCredentialByHash("identity-hash-1")
 	require.True(t, found)
+}
+
+// ---- confidentiality: nothing this branch moved or added may store secrets in the clear ----
+
+// TestSecretTablesAreStillSealed guards against a refactor silently dropping MustSeal /
+// MustSealStable.  It matters more than it looks: the enclave's leveldb files live on a hostfs
+// mount and are NOT encrypted at rest by anything else -- per-value sealing is the only
+// confidentiality those tables have.  Moving the SS tables into a separate DB (enclave_secrets)
+// changed WHERE they are written, and this asserts it did not change WHETHER they are sealed.
+//
+// In simulation mode sealing degrades to prefix concatenation, so "sealed" here means "the bytes
+// on disk are not the plaintext" -- enough to catch a dropped seal, which is the regression this
+// guards.
+func TestSecretTablesAreStillSealed(t *testing.T) {
+	s := newTestEnclaveServer(t)
+
+	s.setOwnersAndShare("pubkid-secret", []string{"pioneer1"}, "SHARE-PLAINTEXT-MARKER")
+	s.setPrivKCache("pubkid-secret", "PRIVK-PLAINTEXT-MARKER")
+
+	// the raw bytes in the secrets DB must contain neither the plaintext value nor a plaintext key
+	rawDump := ""
+	it, err := s.SecretsDB.Iterator(nil, nil)
+	require.NoError(t, err)
+	for ; it.Valid(); it.Next() {
+		rawDump += string(it.Key()) + "|" + string(it.Value()) + "\n"
+	}
+	it.Close()
+
+	// KEYS are stable-sealed, and that IS real even in simulation (MustSealStable is AES-GCM
+	// with a fixed nonce, not a prefix), so the bare pubKID must not be readable.
+	require.NotContains(t, rawDump, "Enclave/SSIntervalShares/value/pubkid-secret", "the share's key is stored unsealed")
+	require.NotContains(t, rawDump, "Enclave/SSIntervalPrivK/value/pubkid-secret", "the privK's key is stored unsealed")
+
+	// VALUES: in simulation MustSeal degrades to prefixing with the signer id, so the plaintext
+	// IS readable here -- by design, and the reason a debug enclave must never hold real data.
+	// What this test can still prove, and the regression it exists to catch, is that the value
+	// went THROUGH MustSeal at all: a dropped seal would store the bare protobuf, with no
+	// prefix.  Under --realenclave the same call is ecrypto.SealWithProductKey and the value is
+	// genuinely encrypted; that cannot be asserted from a simulation build.
+	require.Contains(t, rawDump, signerID+"\n", "the SS share/privK values did not go through MustSeal")
+
+	// and they still read back correctly through the accessors
+	share, found := s.getShare("pubkid-secret")
+	require.True(t, found)
+	require.Equal(t, "SHARE-PLAINTEXT-MARKER", share)
+	privk, found := s.getPrivKCache("pubkid-secret")
+	require.True(t, found)
+	require.Equal(t, "PRIVK-PLAINTEXT-MARKER", privk)
+
+	// the AML window stayed in the versioned store, but it is sealed there and must stay sealed
+	s.setScanTransferHistory("sender-secret", types.EncryptableScanTransferHistory{
+		Transfers: []*types.EncryptableScanTransfer{
+			{UnixTime: 1, DestinationWalletID: "DEST-PLAINTEXT-MARKER"},
+		},
+	})
+	endBlock(t, s, 1)
+
+	treeDump := ""
+	tit, err := s.MetaDB.Iterator(nil, nil)
+	require.NoError(t, err)
+	for ; tit.Valid(); tit.Next() {
+		treeDump += string(tit.Value())
+	}
+	tit.Close()
+	// same simulation caveat as above: assert the seal was APPLIED, not that the result is
+	// opaque -- only a real SGX build makes it opaque
+	require.Contains(t, treeDump, signerID+"\n", "the AML window did not go through MustSeal")
+}
+
+// TestOutboxSuspiciousTransactionRoundTrip covers the one genuinely new thing this branch WRITES
+// to the store: the outbox.  Two properties at once --
+//
+//  1. the encrypted-to-the-regulator fields survive the outbox's JSON encoding byte for byte
+//     (a silent corruption here would hand the regulator an undecryptable report), and
+//  2. nothing in the outbox row is plaintext that was not already public.  The Enc*RegulatorPubK
+//     fields are sealed to the regulator before they ever reach this struct; the remaining
+//     fields (id, jarID, reason, creator, kinds) are stored on the CHAIN in the clear, so
+//     writing them unsealed here leaks nothing that a block explorer does not already show.
+func TestOutboxSuspiciousTransactionRoundTrip(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	endBlock(t, s, 1)
+
+	secret := []byte{0x00, 0xff, 0x10, 0x42, 0xde, 0xad, 0xbe, 0xef}
+	st := types.SuspiciousTransaction{
+		Id:                                 7,
+		JarID:                              "jar1",
+		RegulatorPubKID:                    "reg-pubkid",
+		Reason:                             "threshold",
+		Time:                               time.Unix(1700000000, 0).UTC(),
+		EncSourcePersonalInfoRegulatorPubK: secret,
+		EncEAmountRegulatorPubK:            secret,
+		Creator:                            "qadena1creator",
+	}
+
+	s.pendingSuspiciousTransactions = []types.SuspiciousTransaction{st}
+	_, err := s.TransactionComplete(context.Background(), &types.MsgTransactionComplete{Success: true})
+	require.NoError(t, err)
+
+	got := outboxGet[types.SuspiciousTransaction](s, outboxSuspiciousKey)
+	require.Len(t, got, 1)
+	require.Equal(t, secret, got[0].EncSourcePersonalInfoRegulatorPubK, "encrypted payload corrupted by the outbox round trip")
+	require.Equal(t, secret, got[0].EncEAmountRegulatorPubK)
+	require.Equal(t, st.Id, got[0].Id)
+	require.Equal(t, st.JarID, got[0].JarID)
+	require.True(t, st.Time.Equal(got[0].Time), "timestamp corrupted by the outbox round trip")
+
+	// and it drains to the chain intact
+	endBlock(t, s, 2)
+	reply, err := s.SyncSuspiciousTransactions(context.Background(), &types.MsgSyncSuspiciousTransactions{Clear: true})
+	require.NoError(t, err)
+	require.Len(t, reply.SuspiciousTransactions, 1)
+	require.Equal(t, secret, reply.SuspiciousTransactions[0].EncSourcePersonalInfoRegulatorPubK)
 }

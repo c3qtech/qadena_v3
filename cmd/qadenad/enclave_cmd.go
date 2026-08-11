@@ -64,6 +64,7 @@ rollback        - Roll the enclave's store back to a chain height`,
 		newUpdateSSIntervalKeyCmd(),
 		newEnclaveHeightCmd(),
 		newEnclaveRollbackCmd(),
+		newEnclaveStoreHashCmd(),
 	)
 
 	return cmd
@@ -87,6 +88,40 @@ func newEnclaveHeightCmd() *cobra.Command {
 			}
 			fmt.Printf("preparedHeight:  %d\nconfirmedHeight: %d\nlatestVersion:   %d\nearliestHeight:  %d\nschemaVersion:   %d\n",
 				r.PreparedHeight, r.ConfirmedHeight, r.LatestVersion, r.EarliestHeight, r.SchemaVersion)
+			return nil
+		},
+	}
+}
+
+// newEnclaveStoreHashCmd exposes the enclave's per-store hashes.
+//
+// This is the primitive that answers "did the ENCLAVE actually roll back?", as opposed to "did
+// its watermark move".  Capture it before a transaction, roll back past that transaction, and
+// capture it again: identical hashes prove the enclave's STATE reverted, not merely its
+// bookkeeping.
+//
+// It works on a REAL SGX enclave as well as a debug one, which export-private-state does not --
+// it returns hashes of the stores, never their contents, so nothing sealed leaves the enclave.
+// These are the same nine mirror prefixes the chain compares against its own copies at startup.
+func newEnclaveStoreHashCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "store-hash",
+		Short: "Show the enclave's per-store hashes (works on real SGX; reveals no contents)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			enclaveClient, err := getEnclaveConnection(cmd)
+			if err != nil {
+				return err
+			}
+			grpcctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			r, err := enclaveClient.GetStoreHash(grpcctx, &types.MsgGetStoreHash{})
+			if err != nil {
+				return err
+			}
+			for _, h := range r.GetHashes() {
+				fmt.Printf("%s %s\n", h.GetHash(), h.GetKey())
+			}
 			return nil
 		},
 	}

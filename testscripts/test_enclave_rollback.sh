@@ -89,6 +89,13 @@ pioneer_addr=$(qadenad_alias keys show pioneer1 -a --keyring-backend test) || fa
 bal_before=$(pioneer_balance)
 [ "$bal_before" != "0" ] || fail "pioneer1 has no balance to measure against"
 
+# THE ENCLAVE'S OWN STATE, fingerprinted.  Everything else here measures the CHAIN; this is the
+# only thing that proves the ENCLAVE rolled back rather than merely moving its watermark.
+# GetStoreHash returns hashes of the nine mirror stores, never their contents, so it works on a
+# real SGX enclave too -- unlike export-private-state.
+hash_before=$(qadenad_alias enclave store-hash 2>/dev/null | sort)
+[ -n "$hash_before" ] || fail "cannot read the enclave's store hashes"
+
 result=$(qadenad_alias tx bank send treasury "$pioneer_addr" 3qdn --yes --keyring-backend test \
     --gas-prices "$minimum_gas_prices" --gas auto --gas-adjustment "$gas_adjustment" --output json) \
     || fail "tx broadcast failed"
@@ -109,6 +116,12 @@ rm -f "$txfile"
 bal_after=$(pioneer_balance)
 [ "$bal_after" != "$bal_before" ] || fail "balance did not change after the send"
 echo "tx $txhash landed at height $h_tx; balance $bal_before -> $bal_after"
+
+# a bank send moves wallet state, so the enclave's mirrors must have moved with it.  If they did
+# not, the comparison after the rollback would be vacuous -- it would "match" because nothing
+# ever changed, and the suite would pass without testing anything.
+hash_after=$(qadenad_alias enclave store-hash 2>/dev/null | sort)
+[ "$hash_after" != "$hash_before" ] || fail "the enclave's store hashes did not change across the transaction -- the post-rollback comparison would prove nothing"
 
 # ---- 2. roll chain and enclave back to the height before the tx ----
 target=$((h_tx - 1))
@@ -147,7 +160,15 @@ bal_now=$(pioneer_balance)
 if [ "$peer_count" -eq 0 ]; then
     # solo: the transaction is gone for good
     [ "$bal_now" = "$bal_before" ] || fail "solo rollback did not revert the balance: before=$bal_before now=$bal_now"
-    echo "solo: tx at $h_tx erased, balance reverted to $bal_before"
+
+    # and the ENCLAVE's state reverted with it -- the assertion this whole branch exists for.
+    # Watermarks and balances could both look right while the enclave still held the
+    # transaction's state; only the store hashes rule that out.
+    hash_now=$(qadenad_alias enclave store-hash 2>/dev/null | sort)
+    [ "$hash_now" = "$hash_before" ] || fail "the ENCLAVE did not roll back: its store hashes differ from before the transaction
+before: $hash_before
+now:    $hash_now"
+    echo "solo: tx at $h_tx erased, balance reverted to $bal_before, ENCLAVE store hashes match pre-transaction"
 else
     # networked minority: the peers still hold the block, so we must have re-synced INTO it
     [ "$bal_now" = "$bal_after" ] || fail "re-sync did not restore the transaction: expected $bal_after, got $bal_now

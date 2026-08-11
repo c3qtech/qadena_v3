@@ -1,23 +1,23 @@
 {
   "permissions": {
     "allow": [
-      "Bash(ssh -o ConnectTimeout=25 alvillarica@192.168.86.120 ' *)",
-      "Bash(ssh -o ConnectTimeout=25 alvillarica@192.168.86.140 '~/qadena/bin/qadenad --home /tmp/qclient --node tcp://localhost:26657 query qadena list-scanned-contract-whitelist --height 17823 --output json 2>/dev/null | jq -r \"[.scannedContractWhitelist[].address] | join\\(\\\\\",\\\\\"\\)\" | cut -c1-60')",
-      "Bash(awk 'NR>=1400 && NR<=1425' x/qadena/keeper/enclave_grpc_client.go)",
-      "Bash(awk -F: '$1<1413')",
-      "Bash(ssh -o ConnectTimeout=20 alvillarica@192.168.86.140 '~/qadena/bin/qadenad --home /tmp/qclient --node tcp://localhost:26657 query qadena list-suspicious-transaction --output json 2>/dev/null | jq -r \".SuspiciousTransaction | length\"')",
-      "Bash(ssh -o ConnectTimeout=20 alvillarica@192.168.86.120 '~/qadena/bin/qadenad --home /tmp/qclient --node tcp://localhost:26657 query qadena list-suspicious-transaction --output json 2>/dev/null | jq -r \".SuspiciousTransaction | length\"')",
-      "Bash(ssh -o ConnectTimeout=20 alvillarica@192.168.86.140 '~/qadena/bin/qadenad --home /tmp/qclient --node tcp://localhost:26657 query qadena list-suspicious-transaction --output json 2>/dev/null | jq -S \".SuspiciousTransaction[0]\"')",
-      "Bash(ssh -o ConnectTimeout=20 alvillarica@192.168.86.120 '~/qadena/bin/qadenad --home /tmp/qclient --node tcp://localhost:26657 query qadena list-suspicious-transaction --output json 2>/dev/null | jq -S \".SuspiciousTransaction[0]\"')",
-      "Bash(gofmt -l x/qadena/common/encrypt.go)",
-      "Bash(sed -n '/^func ProtoMarshalAndBEncrypt/,/^}/p' x/qadena/common/encrypt.go)",
-      "Bash(sed -n '/^func MarshalAndBEncrypt/,/^}/p' x/qadena/common/encrypt.go)",
-      "Bash(gofmt -w x/qadena/common/encrypt.go cmd/qadenad_enclave/enclave.go)",
+      "Bash(ssh -o ConnectTimeout=15 alvillarica@192.168.86.120 *)",
+      "Bash(ssh -o ConnectTimeout=20 alvillarica@192.168.86.120 *)",
+      "Bash(ssh -o ConnectTimeout=25 alvillarica@192.168.86.120 *)",
+      "Bash(ssh -o ConnectTimeout=60 alvillarica@192.168.86.120 *)",
+      "Bash(ssh -o ConnectTimeout=15 alvillarica@192.168.86.140 *)",
+      "Bash(ssh -o ConnectTimeout=20 alvillarica@192.168.86.140 *)",
+      "Bash(ssh -o ConnectTimeout=25 alvillarica@192.168.86.140 *)",
+      "Bash(ssh -o ConnectTimeout=60 alvillarica@192.168.86.140 *)",
+      "Bash(scp -o ConnectTimeout=15 *)",
+      "Bash(scp -o ConnectTimeout=25 *)",
       "Bash(git stash *)",
-      "Bash(chmod +x testscripts/test_peer_agreement.sh)",
-      "Bash(zsh -n testscripts/test_peer_agreement.sh)",
-      "Bash(ssh -o ConnectTimeout=20 alvillarica@192.168.86.120 'cd ~/qv3 && git stash list > /dev/null; true')",
-      "Bash(./testscripts/test_peer_agreement.sh)"
+      "Bash(ssh -o ConnectTimeout=25 alvillarica@192.168.86.120 'echo \"=== current validator set ===\"; curl -s -m5 localhost:26657/validators | jq -r \".result.validators[] | \\\\\"  power=\\\\\\(.voting_power\\)\\\\\"\"; echo \"=== .140 pioneer2 balance ===\"; sudo /home/alvillarica/qadena/bin/qadenad --home /home/alvillarica/qadena query bank balances qadena1a5knngq8xzh8typ5jj0qqvgf2rdkdr80ks3vts --output json | jq -r \".balances[]|select\\(.denom==\\\\\"aqdn\\\\\"\\).amount\"')",
+      "Bash(ssh -o ConnectTimeout=25 alvillarica@192.168.86.140 'echo \"=== .140 enclave memory \\(healthy, 61067 blocks\\) ===\"; ps -eo pid,rss,vsz,etime,cmd | grep -E \"[e]go-host.*qadenad_enclave\" | awk \"{printf \\\\\"  pid=%s rss=%.0fMB vsz=%.0fMB uptime=%s\\\\n\\\\\", \\\\$1, \\\\$2/1024, \\\\$3/1024, \\\\$4}\"; echo \"=== signer enclave ===\"; ps -eo pid,rss,etime,cmd | grep -E \"[e]go-host.*signer_enclave\" | awk \"{printf \\\\\"  pid=%s rss=%.0fMB uptime=%s\\\\n\\\\\", \\\\$1, \\\\$2/1024, \\\\$3}\"')",
+      "Bash(./buildscripts/build_enclave.sh --title IAVLCAP)",
+      "Bash(ssh -o ConnectTimeout=15 -o BatchMode=yes 192.168.86.120 'bash -lc \" *)",
+      "Bash(ssh -o ConnectTimeout=15 -o BatchMode=yes 192.168.86.140 'df -h /home | tail -1; echo \"--- top space users in home ---\"; du -sh ~/* 2>/dev/null | sort -rh | head -8; echo \"--- logs ---\"; du -sh ~/qadena/logs 2>/dev/null')",
+      "Bash(awk -F: '$1>4160 && $1<4230')"
     ]
   }
 }

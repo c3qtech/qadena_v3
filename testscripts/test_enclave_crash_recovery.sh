@@ -43,27 +43,48 @@ else
 fi
 [ -n "$enclave_pid" ] || fail "cannot find the enclave process"
 
-qadenad_pid=$(pgrep -f "qadenad --home.*start" | head -1)
-[ -n "$qadenad_pid" ] || fail "cannot find the qadenad process"
-
 echo "stalling enclave pid $enclave_pid at chain height $h0"
 kill -STOP "$enclave_pid" || fail "cannot SIGSTOP the enclave"
 
-# ---- 1. the node must halt, not keep committing ----
-halted=0
-for i in {1..45}; do
-    if ! kill -0 "$qadenad_pid" 2>/dev/null; then halted=1; break; fi
+# ---- 1. the node must stop COMMITTING -- which is not the same as the process exiting ----
+#
+# haltOnEnclaveFailure panics.  That panic propagates into CometBFT's consensus receiveRoutine,
+# whose deferred recover logs "CONSENSUS FAILURE!!!", stops the WAL, and returns -- killing the
+# consensus reactor while leaving the PROCESS ALIVE, still serving RPC.  That is exactly what
+# .140 did during the 2026-08-09 incident: up for a day with a dead reactor.
+#
+# So the safety property to assert is that the chain STOPS ADVANCING, not that qadenad exits.
+# An earlier version of this suite checked for process death and failed against entirely correct
+# behaviour -- a false alarm that would have sent someone hunting a bug that was not there.
+frozen_at=""
+for i in {1..30}; do
     sleep 2
+    h=$(chain_height)
+    [ -n "$h" ] || continue          # RPC may blip; absence is not progress
+    if [ -n "$frozen_at" ] && [ "$h" = "$frozen_at" ]; then
+        # two consecutive reads at the same height, well past the 1.5s block time
+        break
+    fi
+    frozen_at="$h"
 done
 
-if [ $halted -ne 1 ]; then
-    kill -CONT "$enclave_pid" 2>/dev/null || true
-    fail "qadenad kept running for 90s against a stalled enclave -- the fork-instead-of-halt bug is back"
-fi
-echo "node halted against the stalled enclave, as designed"
+[ -n "$frozen_at" ] || fail "could not read the chain height while the enclave was stalled"
 
-# a halted node must not have kept committing: whatever height it reached, it must be close to
-# where the stall began (one or two in-flight blocks are legitimate)
+h_final=$(chain_height)
+[ "$h_final" = "$frozen_at" ] || fail "chain is STILL ADVANCING against a stalled enclave ($frozen_at -> $h_final) -- the fork-instead-of-halt bug is back"
+
+# it must have stopped near where the stall began, not run on for dozens of blocks
+advanced=$((h_final - h0))
+[ "$advanced" -le 5 ] || fail "chain advanced $advanced blocks after the enclave stalled before stopping; expected it to halt within a block or two"
+
+# and the halt must be the one we mean, not some unrelated stall
+logfile="$QADENAHOME/logs/qadena.log"
+if [ -f "$logfile" ]; then
+    grep -a "halting rather than committing a block without the enclave's state" "$logfile" > /dev/null \
+        || fail "the chain stopped, but haltOnEnclaveFailure's message is not in the log -- it stopped for some other reason"
+fi
+echo "chain halted at $h_final ($advanced block(s) after the stall began), with haltOnEnclaveFailure in the log"
+
 kill -CONT "$enclave_pid" 2>/dev/null || true
 
 # ---- 2. recovery: restart everything, reconciliation sorts the watermarks out ----
