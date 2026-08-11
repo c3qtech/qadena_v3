@@ -139,14 +139,11 @@ type qadenaServer struct {
 	privateEnclaveParams PrivateEnclaveParams
 	sharedEnclaveParams  types.EncryptableSharedEnclaveParams
 
-	// for tracking what's changed within a block
-	changedWallets     []string
-	changedCredentials []CredentialKey
-	// credentials the enclave deleted, which have no other way to reach the chain --
-	// SetCredentialNoEnclave can only write
-	removedCredentials []CredentialKey
-	//changedEnclaveIdentities []string // uniqueid
-	changedRecoverKeys []string
+	// The per-block enclave->chain delivery queues (changed wallets/credentials/recover keys,
+	// removed credentials, committed suspicious transactions) live in VERSIONED state under
+	// EnclaveOutboxKeyPrefix, not here -- see enclave_outbox.go.  As RAM they were lost on
+	// restart and cleared before the block that consumed them was durable; in the tree they
+	// commit, abort and roll back with the block itself.
 
 	// The AML rolling window used to live here as transactionMap, an in-memory map. It now lives in
 	// the KV store under EnclaveScanTransferHistoryKeyPrefix, because as process memory it was lost
@@ -154,7 +151,7 @@ type qadenaServer struct {
 	// and survived the rollback of the very transfer that added to it.
 
 	// Reports filed by the transaction currently executing, held back until it is known to have
-	// SUCCEEDED.  TransactionComplete promotes them into newSuspiciousTransactions on success and
+	// SUCCEEDED.  TransactionComplete promotes them into the suspicious outbox on success and
 	// discards them on failure, mirroring exactly what it already does with the KV cache.
 	//
 	// Without this a report outlives the transaction that produced it: a bank send that crosses the
@@ -163,8 +160,6 @@ type qadenaServer struct {
 	// that never happened.  It also makes the report SET depend on where a mid-loop failure landed,
 	// which is a consensus hazard and not merely bad evidence.
 	pendingSuspiciousTransactions []types.SuspiciousTransaction
-
-	newSuspiciousTransactions []types.SuspiciousTransaction
 
 	HomePath    string
 	RealEnclave bool
@@ -5172,7 +5167,7 @@ func (s *qadenaServer) setWalletNoNotify(in types.Wallet) {
 
 func (s *qadenaServer) setWallet(in types.Wallet) {
 	s.setWalletNoNotify(in)
-	s.changedWallets = append(s.changedWallets, in.WalletID)
+	outboxAppend(s, outboxWalletsKey, in.WalletID)
 }
 
 func (s *qadenaServer) setCredentialNoNotify(credID string, credType string, credential types.Credential) {
@@ -5196,13 +5191,12 @@ func (s *qadenaServer) removeCredentialNoNotify(credID string, credType string) 
 	// Note the removal so SyncCredentials can mirror it to the chain.  Unlike setCredential there is
 	// no NoNotify/notify pair here: a deletion that the chain never hears about leaves the two
 	// copies permanently disagreeing, and no caller wants that.
-	s.removedCredentials = append(s.removedCredentials, CredentialKey{credID, credType})
+	outboxAppend(s, outboxRemovedCredentialsKey, outboxCredentialKey{CredentialID: credID, CredentialType: credType})
 }
 
 func (s *qadenaServer) setCredential(credID string, credType string, credential types.Credential) {
 	s.setCredentialNoNotify(credID, credType, credential)
-	credKey := CredentialKey{credID, credType}
-	s.changedCredentials = append(s.changedCredentials, credKey)
+	outboxAppend(s, outboxChangedCredentialsKey, outboxCredentialKey{CredentialID: credID, CredentialType: credType})
 }
 
 func (s *qadenaServer) getCredential(credentialID string, credentialType string) (types.Credential, bool) {
@@ -5355,7 +5349,7 @@ func (s *qadenaServer) setRecoverKeyByOriginalWalletIDNoNotify(walletID string, 
 
 func (s *qadenaServer) setRecoverKeyByOriginalWalletID(walletID string, in *types.RecoverKey) {
 	s.setRecoverKeyByOriginalWalletIDNoNotify(walletID, in)
-	s.changedRecoverKeys = append(s.changedRecoverKeys, walletID)
+	outboxAppend(s, outboxRecoverKeysKey, walletID)
 }
 
 // called from various Qadena MsgServer
@@ -5492,7 +5486,7 @@ func (s *qadenaServer) SyncWallets(ctx context.Context, in *types.MsgSyncWallets
 
 	wallets := []*types.Wallet{}
 
-	for _, changedWallet := range s.changedWallets {
+	for _, changedWallet := range outboxGet[string](s, outboxWalletsKey) {
 		c.LoggerDebug(logger, "Wallet changed "+changedWallet)
 		wallet, found := s.getWallet(changedWallet)
 		if found {
@@ -5500,9 +5494,13 @@ func (s *qadenaServer) SyncWallets(ctx context.Context, in *types.MsgSyncWallets
 		}
 	}
 
+	// The clear goes through the transaction cache (outboxSet), so it becomes durable exactly
+	// when the block that consumed these rows commits at EndBlock -- a crash before that commit
+	// leaves the queue intact for the block's re-execution.  Same guard as before: an entry
+	// whose row did not resolve keeps the queue alive for retry.
 	if in.Clear && len(wallets) > 0 {
-		c.LoggerDebug(logger, "Clearing s.changedWallets")
-		s.changedWallets = nil
+		c.LoggerDebug(logger, "Clearing wallets outbox")
+		outboxSet[string](s, outboxWalletsKey, nil)
 	}
 
 	return &types.SyncWalletsReply{Wallets: wallets}, nil
@@ -5536,9 +5534,9 @@ func (s *qadenaServer) SyncCredentials(ctx context.Context, in *types.MsgSyncCre
 
 	credentials := []*types.Credential{}
 
-	for _, changedCredential := range s.changedCredentials {
+	for _, changedCredential := range outboxGet[outboxCredentialKey](s, outboxChangedCredentialsKey) {
 		c.LoggerDebug(logger, "Credential changed "+c.PrettyPrint(changedCredential))
-		credential, found := s.getCredential(changedCredential.credentialID, changedCredential.credentialType)
+		credential, found := s.getCredential(changedCredential.CredentialID, changedCredential.CredentialType)
 		if found {
 			credentials = append(credentials, &credential)
 		}
@@ -5546,28 +5544,30 @@ func (s *qadenaServer) SyncCredentials(ctx context.Context, in *types.MsgSyncCre
 
 	removed := []*types.CredentialRef{}
 
-	for _, removedCredential := range s.removedCredentials {
-		// Re-check the store rather than trusting the note we made.  A rolled-back transaction
-		// (TransactionComplete with success=false) restores the row but leaves this list alone, and
-		// reporting a deletion the enclave no longer believes in would delete it on chain for good.
-		if _, found := s.getCredential(removedCredential.credentialID, removedCredential.credentialType); found {
+	removedQueue := outboxGet[outboxCredentialKey](s, outboxRemovedCredentialsKey)
+	for _, removedCredential := range removedQueue {
+		// Re-check the store rather than trusting the note we made.  Now that the queue lives in
+		// the transaction cache a rolled-back removal discards its own entry, so this guard
+		// should never fire -- it stays as defence in depth, because reporting a deletion the
+		// enclave no longer believes in would delete it on chain for good.
+		if _, found := s.getCredential(removedCredential.CredentialID, removedCredential.CredentialType); found {
 			c.LoggerDebug(logger, "Credential removal was rolled back "+c.PrettyPrint(removedCredential))
 			continue
 		}
 		removed = append(removed, &types.CredentialRef{
-			CredentialID:   removedCredential.credentialID,
-			CredentialType: removedCredential.credentialType,
+			CredentialID:   removedCredential.CredentialID,
+			CredentialType: removedCredential.CredentialType,
 		})
 	}
 
 	if in.Clear && len(credentials) > 0 {
-		c.LoggerDebug(logger, "Clearing changedCredentials")
-		s.changedCredentials = nil
+		c.LoggerDebug(logger, "Clearing changed-credentials outbox")
+		outboxSet[outboxCredentialKey](s, outboxChangedCredentialsKey, nil)
 	}
 
-	if in.Clear && len(s.removedCredentials) > 0 {
-		c.LoggerDebug(logger, "Clearing removedCredentials")
-		s.removedCredentials = nil
+	if in.Clear && len(removedQueue) > 0 {
+		c.LoggerDebug(logger, "Clearing removed-credentials outbox")
+		outboxSet[outboxCredentialKey](s, outboxRemovedCredentialsKey, nil)
 	}
 
 	return &types.SyncCredentialsReply{Credentials: credentials, RemovedCredentials: removed}, nil
@@ -5578,7 +5578,7 @@ func (s *qadenaServer) SyncRecoverKeys(ctx context.Context, in *types.MsgSyncRec
 
 	recoverKeys := []*types.RecoverKey{}
 
-	for _, changedRecoverKey := range s.changedRecoverKeys {
+	for _, changedRecoverKey := range outboxGet[string](s, outboxRecoverKeysKey) {
 		c.LoggerDebug(logger, "RecoverKey changed "+changedRecoverKey)
 		recoverKey, found := s.getRecoverKeyByOriginalWalletID(changedRecoverKey)
 		if found {
@@ -5586,11 +5586,9 @@ func (s *qadenaServer) SyncRecoverKeys(ctx context.Context, in *types.MsgSyncRec
 		}
 	}
 
-	//  c.LoggerDebug(logger, "changed " + c.PrettyPrint(recoverKeys))
-
 	if in.Clear && len(recoverKeys) > 0 {
-		c.LoggerDebug(logger, "Clearing changedRecoverKeys")
-		s.changedRecoverKeys = nil
+		c.LoggerDebug(logger, "Clearing recover-keys outbox")
+		outboxSet[string](s, outboxRecoverKeysKey, nil)
 	}
 
 	return &types.SyncRecoverKeysReply{RecoverKeys: recoverKeys}, nil
@@ -5601,17 +5599,18 @@ func (s *qadenaServer) SyncSuspiciousTransactions(ctx context.Context, in *types
 
 	// display count of new suspicious transactions
 
-	c.LoggerDebug(logger, "# newSuspiciousTransactions "+strconv.Itoa(len(s.newSuspiciousTransactions)))
+	queue := outboxGet[types.SuspiciousTransaction](s, outboxSuspiciousKey)
+	c.LoggerDebug(logger, "# suspicious outbox "+strconv.Itoa(len(queue)))
 
 	suspiciousTransactions := []*types.SuspiciousTransaction{}
 
-	for _, newSuspiciousTransaction := range s.newSuspiciousTransactions {
-		suspiciousTransactions = append(suspiciousTransactions, &newSuspiciousTransaction)
+	for i := range queue {
+		suspiciousTransactions = append(suspiciousTransactions, &queue[i])
 	}
 
-	if in.Clear && len(s.newSuspiciousTransactions) > 0 {
-		c.LoggerDebug(logger, "Clearing newSuspiciousTransactions")
-		s.newSuspiciousTransactions = nil
+	if in.Clear && len(queue) > 0 {
+		c.LoggerDebug(logger, "Clearing suspicious outbox")
+		outboxSet[types.SuspiciousTransaction](s, outboxSuspiciousKey, nil)
 	}
 
 	return &types.SyncSuspiciousTransactionsReply{SuspiciousTransactions: suspiciousTransactions}, nil
@@ -6681,7 +6680,7 @@ func (s *qadenaServer) createSuspiciousTransaction(ctx context.Context, reason s
 		c.LoggerError(logger, "no shared enclave secret to derive report encryption from")
 		return types.ErrGenericEnclave
 	}
-	seq := len(s.pendingSuspiciousTransactions) + len(s.newSuspiciousTransactions)
+	seq := len(s.pendingSuspiciousTransactions) + len(outboxGet[types.SuspiciousTransaction](s, outboxSuspiciousKey))
 	baseCtx := fmt.Sprintf("suspicious|%s|%s|%s|%s|%s|%d",
 		jarID, regulatorPubKID, tf.Time, reason, eSuspiciousAmount.Nonce, seq)
 
@@ -6735,7 +6734,7 @@ func (s *qadenaServer) createSuspiciousTransaction(ctx context.Context, reason s
 		}
 	}
 
-	// PENDING, not committed.  TransactionComplete moves this into newSuspiciousTransactions only if
+	// PENDING, not committed.  TransactionComplete moves this into the suspicious outbox only if
 	// the transaction succeeds -- a report must never outlive the movement of value it describes.
 	s.pendingSuspiciousTransactions = append(s.pendingSuspiciousTransactions, st)
 	return nil
@@ -7036,14 +7035,15 @@ func (s *qadenaServer) TransactionComplete(ctx context.Context, tc *types.MsgTra
 	c.LoggerDebug(logger, "transaction complete "+strconv.FormatBool(tc.Success))
 
 	if tc.Success {
-		c.LoggerDebug(logger, "CacheCtx.Write")
-		s.CacheCtxWrite()
-		// Reports become real at exactly the moment the transaction's state writes do.  Appended
-		// only here, so a report can never describe value that did not move.
+		// Reports become real at exactly the moment the transaction's state writes do: appended
+		// into the outbox THROUGH the cache, then promoted together with them by the write below.
+		// A report can never describe value that did not move.
 		if len(s.pendingSuspiciousTransactions) > 0 {
 			c.LoggerDebug(logger, "committing "+strconv.Itoa(len(s.pendingSuspiciousTransactions))+" suspicious transaction(s)")
-			s.newSuspiciousTransactions = append(s.newSuspiciousTransactions, s.pendingSuspiciousTransactions...)
+			outboxAppend(s, outboxSuspiciousKey, s.pendingSuspiciousTransactions...)
 		}
+		c.LoggerDebug(logger, "CacheCtx.Write")
+		s.CacheCtxWrite()
 	} else {
 		c.LoggerDebug(logger, "Rollback CacheContext")
 		s.CacheCtx, s.CacheCtxWrite = s.ServerCtx.CacheContext()
@@ -7636,8 +7636,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	cs.changedWallets = make([]string, 0)
-	cs.newSuspiciousTransactions = make([]types.SuspiciousTransaction, 0)
 	cs.pendingSuspiciousTransactions = make([]types.SuspiciousTransaction, 0)
 
 	// No suspicious-transaction threshold is computed here any more.  It is per-sender now -- the

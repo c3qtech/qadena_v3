@@ -324,17 +324,34 @@ func (s *qadenaServer) RollbackToHeight(ctx context.Context, in *types.MsgRollba
 	// it holds the rootmulti pointer, which RollbackToVersion mutates in place)
 	s.CacheCtx, s.CacheCtxWrite = s.ServerCtx.CacheContext()
 
-	// The in-RAM change queues describe blocks that have just been unwound; the re-executed
-	// blocks will rebuild them.  Holding them across the rollback would deliver rows for state
-	// that no longer exists.
-	s.changedWallets = nil
-	s.changedCredentials = nil
-	s.removedCredentials = nil
-	s.changedRecoverKeys = nil
+	// The delivery queues live in the versioned outbox (enclave_outbox.go), so the rollback we
+	// just performed has already restored them to exactly what the unwound blocks must
+	// re-deliver on re-execution.  Only the intra-transaction pending list is RAM, and any
+	// transaction it belonged to no longer exists.
 	s.pendingSuspiciousTransactions = nil
-	s.newSuspiciousTransactions = nil
 
 	reply.RolledBack = true
 	c.LoggerInfo(logger, fmt.Sprintf("RollbackToHeight: done -- now at height %d, version %d", s.getPreparedHeight(), s.latestVersion()))
 	return reply, nil
+}
+
+// ConfirmHeight is the second phase of the two-phase commit: the chain calls it AFTER
+// BaseApp.Commit has made the block durable (the app.Commit override in app/app.go).  All it
+// does is advance the confirmed watermark -- the state itself became durable at the EndBlock
+// prepare.  The prepared==confirmed pair is what startup reconciliation later reads to decide
+// whether a crash landed in the window between the enclave's commit and the chain's.
+func (s *qadenaServer) ConfirmHeight(ctx context.Context, in *types.MsgConfirmHeight) (*types.ConfirmHeightReply, error) {
+	prepared := s.getPreparedHeight()
+	if in.Height != prepared {
+		// Confirming a height we did not prepare would assert durability of state this store
+		// does not hold.  A mismatch here means chain and enclave have already diverged; the
+		// chain halts on this error and reconciliation sorts it out at restart.
+		return nil, fmt.Errorf("cannot confirm height %d: the enclave's prepared height is %d", in.Height, prepared)
+	}
+	confirmed := s.getConfirmedHeight()
+	if in.Height < confirmed {
+		return nil, fmt.Errorf("cannot confirm height %d: already confirmed through %d", in.Height, confirmed)
+	}
+	s.setConfirmedHeight(in.Height)
+	return &types.ConfirmHeightReply{ConfirmedHeight: in.Height}, nil
 }

@@ -8,6 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
+
+	abci "github.com/cometbft/cometbft/abci/types"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	_ "cosmossdk.io/api/cosmos/tx/config/v1" // import for side-effects
 	"cosmossdk.io/core/address"
@@ -620,6 +625,50 @@ func New(
 	}
 
 	return app, nil
+}
+
+// Commit shadows BaseApp.Commit to add the second phase of the chain<->enclave two-phase commit.
+//
+// Dispatch: CometBFT calls the app through server.NewCometABCIWrapper(app), which stores the
+// servertypes.ABCI INTERFACE whose dynamic type is *App -- so this method, not the promoted
+// BaseApp.Commit, is what consensus invokes.
+//
+// The enclave's own durable commit (the PREPARE) happened during EndBlock.  Once BaseApp.Commit
+// returns, the block is durable on the chain side too, and ConfirmHeight advances the enclave's
+// confirmed watermark to match.  The window between those two commits is precisely the crash
+// window that used to be unrepairable: comet's handshake sees appHeight == storeHeight and will
+// NOT replay the block, so without an explicit confirm/rollback protocol the enclave's extra
+// state was a permanent, invisible divergence.  With the watermarks, startup reconciliation
+// (EnclaveBeginBlock) detects prepared > confirmed == chain and rolls the enclave back one
+// height automatically.
+//
+// This runs AFTER consensus execution, so nothing here touches block state or the app hash --
+// a node-local watermark only.  On persistent failure the node halts: producing further blocks
+// with an unconfirmable enclave re-opens the divergence this exists to close.
+func (app *App) Commit() (*abci.ResponseCommit, error) {
+	res, err := app.BaseApp.Commit()
+	if err != nil {
+		return res, err
+	}
+
+	height := app.BaseApp.LastBlockHeight()
+	var cerr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		if cerr = app.QadenaKeeper.EnclaveConfirmHeight(height); cerr == nil {
+			return res, nil
+		}
+		if status.Code(cerr) == codes.Unimplemented {
+			// an old enclave binary against a new chain binary; retrying cannot help
+			panic("qadena: the running enclave does not implement ConfirmHeight -- qadenad and qadenad_enclave must be upgraded together: " + cerr.Error())
+		}
+		time.Sleep(time.Duration(attempt) * time.Second)
+	}
+	// The block IS committed; only the enclave's watermark is behind.  That exact state is what
+	// startup reconciliation repairs (case B: confirm the prepared height) -- so halting here is
+	// safe, and continuing is not.
+	panic("qadena: enclave ConfirmHeight failed after the chain committed height " +
+		fmt.Sprintf("%d", height) + ": " + cerr.Error() +
+		" -- halting; on restart, reconciliation confirms or rolls back as needed")
 }
 
 // LegacyAmino returns App's amino codec.

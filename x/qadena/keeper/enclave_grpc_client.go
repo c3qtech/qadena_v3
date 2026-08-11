@@ -811,6 +811,16 @@ func (k Keeper) EnclaveGetHeight(sdkctx sdk.Context) (*types.GetEnclaveHeightRep
 // fast-node index, so a deep rollback legitimately takes minutes.
 const EnclaveRollbackTimeout = 30 * time.Minute
 
+// EnclaveConfirmHeight tells the enclave the chain has durably committed the given height -- the
+// second phase of the two-phase commit, called from the app.Commit override in app/app.go AFTER
+// BaseApp.Commit returns.  Runs outside any block, so it takes no sdk.Context.
+func (k Keeper) EnclaveConfirmHeight(height int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	defer cancel()
+	_, err := EnclaveGRPCClient.ConfirmHeight(ctx, &types.MsgConfirmHeight{Height: height})
+	return err
+}
+
 // EnclaveRollbackToHeight rewinds the enclave's versioned store to the given chain height.
 // Refusals (enclave behind the target, height below the rollback horizon) come back as errors;
 // "already at that height" and dry runs come back as a reply with RolledBack=false.
