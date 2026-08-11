@@ -806,6 +806,25 @@ func (k Keeper) EnclaveGetHeight(sdkctx sdk.Context) (*types.GetEnclaveHeightRep
 	return r, nil
 }
 
+// EnclaveRollbackTimeout bounds a RollbackToHeight call.  Deliberately NOT c.DebugTimeout: the
+// enclave's LoadVersionForOverwriting deletes every version above the target and rebuilds the
+// fast-node index, so a deep rollback legitimately takes minutes.
+const EnclaveRollbackTimeout = 30 * time.Minute
+
+// EnclaveRollbackToHeight rewinds the enclave's versioned store to the given chain height.
+// Refusals (enclave behind the target, height below the rollback horizon) come back as errors;
+// "already at that height" and dry runs come back as a reply with RolledBack=false.
+func (k Keeper) EnclaveRollbackToHeight(sdkctx sdk.Context, height int64, dryRun bool) (*types.RollbackToHeightReply, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), EnclaveRollbackTimeout)
+	defer cancel()
+	r, err := EnclaveGRPCClient.RollbackToHeight(ctx, &types.MsgRollbackToHeight{Height: height, DryRun: dryRun})
+	if err != nil {
+		c.ContextError(sdkctx, "error returned by RollbackToHeight on enclave "+err.Error())
+		return nil, err
+	}
+	return r, nil
+}
+
 func (k Keeper) EnclaveSyncWallets(sdkctx sdk.Context) (error, []*types.Wallet) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
 	defer cancel()

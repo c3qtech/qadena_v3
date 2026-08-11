@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
@@ -44,7 +45,9 @@ sync-enclave    - Sync enclave for use by new full/validator nodes
 export-private-key - Export private key (for demo purposes)
 remove-private-key - Remove private key from cache (for debug)
 export-private-state - Export enclave state (for debug)
-update-ss-interval-key - Update SS interval key`,
+update-ss-interval-key - Update SS interval key
+height          - Show the enclave's height watermarks
+rollback        - Roll the enclave's store back to a chain height`,
 	}
 
 	cmd.PersistentFlags().String("addr", "localhost:50051", "the address to connect to")
@@ -59,8 +62,73 @@ update-ss-interval-key - Update SS interval key`,
 		newRemovePrivateKeyCmd(),
 		newExportPrivateStateCmd(),
 		newUpdateSSIntervalKeyCmd(),
+		newEnclaveHeightCmd(),
+		newEnclaveRollbackCmd(),
 	)
 
+	return cmd
+}
+
+func newEnclaveHeightCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "height",
+		Short: "Show the enclave's height watermarks (prepared/confirmed), version, rollback horizon and schema",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			enclaveClient, err := getEnclaveConnection(cmd)
+			if err != nil {
+				return err
+			}
+			grpcctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			r, err := enclaveClient.GetEnclaveHeight(grpcctx, &types.MsgGetEnclaveHeight{})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("preparedHeight:  %d\nconfirmedHeight: %d\nlatestVersion:   %d\nearliestHeight:  %d\nschemaVersion:   %d\n",
+				r.PreparedHeight, r.ConfirmedHeight, r.LatestVersion, r.EarliestHeight, r.SchemaVersion)
+			return nil
+		},
+	}
+}
+
+func newEnclaveRollbackCmd() *cobra.Command {
+	var dryRun bool
+	cmd := &cobra.Command{
+		Use:   "rollback [height]",
+		Short: "Roll the enclave's store back to the state it committed for a chain height",
+		Long: `Roll the enclave's versioned store back to the state it committed for the given chain
+height.  The secrets DB (SS interval keys) is never touched.
+
+ONLY run this with qadenad STOPPED: rolling back under a live chain corrupts the block in
+flight.  Normally this command is not needed at all -- 'qadenad rollback' rolls chain and
+enclave together -- it exists for recovery situations where the two must be moved separately.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			height, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid height %q: %w", args[0], err)
+			}
+			enclaveClient, err := getEnclaveConnection(cmd)
+			if err != nil {
+				return err
+			}
+			// a deep rollback rebuilds the IAVL fast-node index; give it real time
+			grpcctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			defer cancel()
+			r, err := enclaveClient.RollbackToHeight(grpcctx, &types.MsgRollbackToHeight{Height: height, DryRun: dryRun})
+			if err != nil {
+				return err
+			}
+			if r.RolledBack {
+				fmt.Printf("rolled back: height %d (version %d) -> height %d (version %d)\n", r.FromHeight, r.FromVersion, r.ToHeight, r.ToVersion)
+			} else {
+				fmt.Printf("not rolled back: %s\n", r.Reason)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report what would happen without touching anything")
 	return cmd
 }
 

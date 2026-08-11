@@ -242,3 +242,99 @@ func (s *qadenaServer) GetEnclaveHeight(ctx context.Context, in *types.MsgGetEnc
 	c.LoggerDebug(logger, "GetEnclaveHeight "+c.PrettyPrint(reply))
 	return reply, nil
 }
+
+// RollbackToHeight rewinds the enclave's versioned store to the state it committed for the given
+// chain height.  The secrets DB (enclave_secrets.go) is untouched by construction -- it is not
+// part of the tree this operates on -- which is exactly the asymmetry the split exists for.
+//
+// Refusals are gRPC ERRORS so no caller can mistake "did not roll back" for success; the two
+// benign outcomes (already at the height, dry run) return a reply with RolledBack=false and a
+// Reason instead.
+//
+// CONCURRENCY: this must not run while a block is executing.  Both callers guarantee that -- the
+// CLI path runs with qadenad down (so nothing drives the enclave), and the startup
+// reconciliation path runs from BeginBlock before any transaction of the first block executes.
+func (s *qadenaServer) RollbackToHeight(ctx context.Context, in *types.MsgRollbackToHeight) (*types.RollbackToHeightReply, error) {
+	prepared := s.getPreparedHeight()
+	fromVersion := s.latestVersion()
+
+	reply := &types.RollbackToHeightReply{
+		FromHeight:  prepared,
+		ToHeight:    in.Height,
+		FromVersion: fromVersion,
+	}
+
+	if in.Height <= 0 {
+		return nil, fmt.Errorf("invalid rollback target height %d", in.Height)
+	}
+
+	if in.Height > prepared {
+		// The enclave is BEHIND the requested height.  There is nothing here to roll back, and
+		// pretending otherwise would hide the real situation: it is the CHAIN that must come back
+		// to the enclave (or further), not the enclave forward.
+		return nil, fmt.Errorf("enclave is at height %d, behind the requested %d: nothing to roll back -- roll the chain back to %d or below instead", prepared, in.Height, prepared)
+	}
+
+	if in.Height == prepared {
+		// idempotent no-op: the chain-side rollback command may be run repeatedly
+		reply.ToVersion = fromVersion
+		reply.Reason = fmt.Sprintf("already at height %d", prepared)
+		c.LoggerInfo(logger, "RollbackToHeight: "+reply.Reason)
+		return reply, nil
+	}
+
+	v, found := s.getHeightVersion(in.Height)
+	if !found {
+		// Never guess.  A missing entry means either the height is below the rollback horizon or
+		// it was never an EndBlock commit on this store; both are refusals by name.
+		return nil, fmt.Errorf("no version is indexed for height %d (rollback horizon is height %d): cannot roll back to a height this store never committed", in.Height, s.earliestIndexedHeight())
+	}
+
+	reply.ToVersion = v
+
+	if in.DryRun {
+		reply.Reason = fmt.Sprintf("dry run: would roll back from height %d (version %d) to height %d (version %d)", prepared, fromVersion, in.Height, v)
+		c.LoggerInfo(logger, "RollbackToHeight: "+reply.Reason)
+		return reply, nil
+	}
+
+	cms, ok := s.ServerCtx.MultiStore().(storetypes.CommitMultiStore)
+	if !ok {
+		return nil, fmt.Errorf("enclave multistore is not a CommitMultiStore; cannot roll back")
+	}
+
+	c.LoggerInfo(logger, fmt.Sprintf("RollbackToHeight: rolling back from height %d (version %d) to height %d (version %d)", prepared, fromVersion, in.Height, v))
+
+	// LoadVersionForOverwriting deletes every version above v and rebuilds the fast-node index,
+	// so a deep rollback takes real time -- callers use a generous timeout, not c.DebugTimeout
+	if err := cms.RollbackToVersion(v); err != nil {
+		return nil, fmt.Errorf("rollback to version %d (height %d) failed: %w", v, in.Height, err)
+	}
+
+	// prune index entries whose versions no longer exist -- a stale entry would send a later
+	// rollback into a deep IAVL failure instead of a refusal by name
+	s.deleteHeightIndexAbove(in.Height)
+
+	// the chain cannot have durably committed beyond where we now are; clamp the watermark
+	if s.getConfirmedHeight() > in.Height {
+		s.setConfirmedHeight(in.Height)
+	}
+
+	// the old transaction cache wraps a tree that no longer exists (ServerCtx itself is fine:
+	// it holds the rootmulti pointer, which RollbackToVersion mutates in place)
+	s.CacheCtx, s.CacheCtxWrite = s.ServerCtx.CacheContext()
+
+	// The in-RAM change queues describe blocks that have just been unwound; the re-executed
+	// blocks will rebuild them.  Holding them across the rollback would deliver rows for state
+	// that no longer exists.
+	s.changedWallets = nil
+	s.changedCredentials = nil
+	s.removedCredentials = nil
+	s.changedRecoverKeys = nil
+	s.pendingSuspiciousTransactions = nil
+	s.newSuspiciousTransactions = nil
+
+	reply.RolledBack = true
+	c.LoggerInfo(logger, fmt.Sprintf("RollbackToHeight: done -- now at height %d, version %d", s.getPreparedHeight(), s.latestVersion()))
+	return reply, nil
+}
