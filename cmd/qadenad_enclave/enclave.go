@@ -126,6 +126,12 @@ type qadenaServer struct {
 	Cdc           *amino.ProtoCodec
 	StoreKey      storetypes.StoreKey
 
+	// The same goleveldb that backs the multistore, held directly for the raw (non-IAVL)
+	// height-bookkeeping keys under qmeta/ -- confirmedHeight and the height->version index must
+	// live OUTSIDE the tree so a tree rollback cannot rewrite them.  See enclave_height.go.
+	// The interface type (not *tmdb.GoLevelDB) so unit tests can hand in a MemDB.
+	MetaDB tmdb.DB
+
 	privateEnclaveParams PrivateEnclaveParams
 	sharedEnclaveParams  types.EncryptableSharedEnclaveParams
 
@@ -324,6 +330,13 @@ const (
 	// a different verdict.  Being in the store also means it survives restarts and, because writes
 	// go through CacheCtx, that a rolled-back transfer leaves no entry behind.
 	EnclaveScanTransferHistoryKeyPrefix = "Enclave/ScanTransferHistory/value/"
+	// The last chain height whose writes this store has committed, stamped INSIDE the IAVL
+	// version so it travels with the tree: roll the tree back and the stamp rolls back with it,
+	// making every committed version self-describing.  See enclave_height.go for the full model.
+	// Deliberately ABSENT from GetStoreHash's key list -- it is node-local bookkeeping (each
+	// node's enclave may sit at a different height during recovery) and must never enter a
+	// cross-node store comparison.
+	EnclavePreparedHeightKeyPrefix = "Enclave/PreparedHeight/value/"
 )
 
 func EnclaveKeyKey(k string) []byte {
@@ -2875,6 +2888,12 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 	}
 
 	// commit db
+	//
+	// This commit deliberately gets NO qmeta/hv/ entry and NO PreparedHeight stamp: it happens
+	// while seeding a new node, outside any block, so the version it consumes belongs to no chain
+	// height.  This is not an omission -- it is the reason heights are MAPPED to versions instead
+	// of equated with them (see enclave_height.go): the height->version index simply never
+	// mentions out-of-band versions, and no rollback can ever target one.
 	c.LoggerDebug(logger, "CacheCtx.Write")
 	s.CacheCtxWrite()
 
@@ -7045,37 +7064,58 @@ func (s *qadenaServer) commitCache() {
 	}
 }
 
+// EndBlock is the enclave's per-block durable commit -- the PREPARE of the two-phase commit with
+// the chain.  It stamps the chain height into the version it commits (so the version is
+// self-describing and rollback can find it) and indexes height->version in qmeta/.  The chain
+// halts on any error returned here (haltOnEnclaveFailure): an enclave that cannot commit must
+// stop the node, not let it run ahead on state that was never persisted.
 func (s *qadenaServer) EndBlock(ctx context.Context, tc *types.MsgEndBlock) (*types.EndBlockReply, error) {
-	//	c.LoggerDebug(logger, "end block")
+	if tc.Height == 0 {
+		// A chain binary from before height bookkeeping sends the zero value.  Committing would
+		// stamp PreparedHeight=0 into every version forever, quietly disabling rollback; refuse
+		// instead, which halts the node with a message that names the actual problem.
+		return nil, fmt.Errorf("EndBlock carried no height: the chain binary predates enclave height bookkeeping; upgrade qadenad and qadenad_enclave together")
+	}
 
-	//  c.LoggerDebug(logger, "CacheCtx.Write")
+	prepared := s.getPreparedHeight()
+	if prepared != 0 && tc.Height <= prepared {
+		// A replayed or out-of-order EndBlock.  Committing it would map two different heights to
+		// one version (or rewind the stamp without rewinding the tree), corrupting the index that
+		// rollback depends on.  prepared==0 is exempt: a fresh enclave's first EndBlock may
+		// arrive at any height (a node seeded mid-chain by sync-enclave).
+		return nil, fmt.Errorf("EndBlock height %d is not beyond prepared height %d: refusing to commit a replayed or out-of-order block", tc.Height, prepared)
+	}
+
+	// the stamp goes through the cache so it lands in the same version as the block's writes
+	s.setPreparedHeight(tc.Height)
 	s.commitCache()
 
 	cms, ok := s.ServerCtx.MultiStore().(storetypes.CommitMultiStore)
-
-	if ok {
-		//    qadenaStore := cms.GetCommitKVStore(s.StoreKey)
-
-		lastCommitID := cms.LastCommitID()
-		commitID := cms.Commit()
-		if string(commitID.Hash) != string(lastCommitID.Hash) {
-			c.LoggerDebug(logger, "has changed")
-			c.LoggerDebug(logger, "LastCommitID "+c.PrettyPrint(lastCommitID))
-			c.LoggerDebug(logger, "CommitID "+c.PrettyPrint(commitID))
-
-			keys := []string{types.WalletKeyPrefix, types.CredentialKeyPrefix, types.JarRegulatorKeyPrefix, types.PublicKeyKeyPrefix, types.IntervalPublicKeyIDKeyPrefix, types.ProtectKeyKeyPrefix, types.RecoverKeyKeyPrefix}
-
-			for _, k := range keys {
-				h := c.StoreHashByStoreKey(s.ServerCtx, s.StoreKey, k)
-				c.LoggerDebug(logger, "key="+k+" hash="+c.DisplayHash(h))
-			}
-		}
-
-	} else {
-		c.LoggerError(logger, "Couldn't cast multistore to commitstore")
+	if !ok {
+		// pre-height-bookkeeping code logged this and returned success, which committed nothing
+		// while telling the chain everything was fine -- the exact silent divergence this whole
+		// mechanism exists to prevent
+		return nil, fmt.Errorf("enclave multistore is not a CommitMultiStore; cannot commit block %d", tc.Height)
 	}
 
-	return &types.EndBlockReply{}, nil
+	lastCommitID := cms.LastCommitID()
+	commitID := cms.Commit()
+	s.setHeightVersion(tc.Height, commitID.Version)
+
+	if string(commitID.Hash) != string(lastCommitID.Hash) {
+		c.LoggerDebug(logger, "has changed")
+		c.LoggerDebug(logger, "LastCommitID "+c.PrettyPrint(lastCommitID))
+		c.LoggerDebug(logger, "CommitID "+c.PrettyPrint(commitID))
+
+		keys := []string{types.WalletKeyPrefix, types.CredentialKeyPrefix, types.JarRegulatorKeyPrefix, types.PublicKeyKeyPrefix, types.IntervalPublicKeyIDKeyPrefix, types.ProtectKeyKeyPrefix, types.RecoverKeyKeyPrefix}
+
+		for _, k := range keys {
+			h := c.StoreHashByStoreKey(s.ServerCtx, s.StoreKey, k)
+			c.LoggerDebug(logger, "key="+k+" hash="+c.DisplayHash(h))
+		}
+	}
+
+	return &types.EndBlockReply{PreparedHeight: tc.Height, Version: commitID.Version}, nil
 }
 
 func setupConfig() {
@@ -7378,7 +7418,14 @@ func main() {
 	registry := codectypes.NewInterfaceRegistry()
 	cdc := amino.NewProtoCodec(registry)
 
-	stateStore.LoadLatestVersion()
+	// FATAL on error, deliberately.  This used to discard the error, and a failed or partial load
+	// then yielded an empty tree -- which the enclave would happily serve and COMMIT on top of,
+	// silently discarding its entire state.  Every recovery mechanism in enclave_height.go builds
+	// on this load being real; an enclave that cannot load its state must not run.
+	if err := stateStore.LoadLatestVersion(); err != nil {
+		c.LoggerError(logger, "cannot load enclave state store: "+err.Error())
+		return
+	}
 
 	cacheCtx, cacheCtxWrite := serverCtx.CacheContext()
 
@@ -7388,8 +7435,18 @@ func main() {
 		CacheCtx:      cacheCtx,
 		CacheCtxWrite: cacheCtxWrite,
 		Cdc:           cdc,
+		MetaDB:        db,
 		HomePath:      *homePath,
 		RealEnclave:   *realEnclave,
+	}
+
+	// Stamp or verify the on-disk schema before anything can write.  Skipped in upgrade mode,
+	// where the db handle is read-only and the process only ferries params between enclaves.
+	if *upgradeFromEnclave == "" && !enclaveUpgradeMode {
+		if err := cs.initSchema(); err != nil {
+			c.LoggerError(logger, "enclave store schema check failed: "+err.Error())
+			return
+		}
 	}
 
 	if *testRemoteReportLocally {

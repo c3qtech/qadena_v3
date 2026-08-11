@@ -131,13 +131,70 @@ service QadenaEnclave {
 
   // called on init
   rpc GetStoreHash (MsgGetStoreHash) returns (GetStoreHashReply) {}
+
+  // Height bookkeeping and rollback.  The enclave's IAVL versions are dense and cannot skip
+  // (rootmulti.Commit is previousVersion+1), so heights are mapped to versions rather than
+  // equated with them; these RPCs are how the chain reads and moves that mapping.
+  rpc GetEnclaveHeight (MsgGetEnclaveHeight) returns (GetEnclaveHeightReply) {}
+  rpc RollbackToHeight (MsgRollbackToHeight) returns (RollbackToHeightReply) {}
+  rpc ConfirmHeight (MsgConfirmHeight) returns (ConfirmHeightReply) {}
 }
 
 
 message MsgEndBlock {
+  // The chain height whose writes this commit makes durable.  The enclave stamps it into the
+  // committed version (preparedHeight) and indexes height->version for rollback.  0 means a
+  // chain binary that predates height bookkeeping; the enclave refuses to commit rather than
+  // stamping height 0 forever.
+  int64 height = 1;
 }
 
 message EndBlockReply {
+  int64 preparedHeight = 1;
+  int64 version = 2;
+}
+
+message MsgGetEnclaveHeight {
+}
+
+message GetEnclaveHeightReply {
+  // last height whose writes are committed in the enclave's store (stamped inside the IAVL
+  // version, so it rolls back with the tree)
+  int64 preparedHeight = 1;
+  // last height the CHAIN has durably committed, as confirmed to the enclave; advanced only by
+  // ConfirmHeight, stored outside the tree so a rollback cannot forge it
+  int64 confirmedHeight = 2;
+  // the store's own IAVL version counter (not a height; SyncEnclave commits consume versions
+  // that map to no height at all)
+  int64 latestVersion = 3;
+  // oldest height still present in the height->version index, i.e. the rollback horizon
+  int64 earliestHeight = 4;
+  // on-disk layout version of the enclave's stores
+  uint32 schemaVersion = 5;
+}
+
+message MsgRollbackToHeight {
+  int64 height = 1;
+  // report what would happen without touching anything
+  bool dryRun = 2;
+}
+
+message RollbackToHeightReply {
+  int64 fromHeight = 1;
+  int64 toHeight = 2;
+  int64 fromVersion = 3;
+  int64 toVersion = 4;
+  bool rolledBack = 5;
+  // set when rolledBack is false: why not (already at height, height unknown, below horizon...)
+  string reason = 6;
+}
+
+message MsgConfirmHeight {
+  int64 height = 1;
+}
+
+message ConfirmHeightReply {
+  int64 confirmedHeight = 1;
 }
 
 message QueryGetSubWalletIDByOriginalWalletIDResponse {

@@ -784,8 +784,26 @@ func (k Keeper) EnclaveInvokeEndBlock(sdkctx sdk.Context) {
 	// dangerous as one that cannot sync, because the next block then executes against enclave
 	// state that was never persisted, and an enclave restart replays from a version this chain
 	// has already moved past.  Same failure, same answer: halt this node, not the chain.
-	_, err := EnclaveGRPCClient.EndBlock(ctx, &types.MsgEndBlock{})
+	//
+	// The height rides along so the enclave can stamp the version it commits and index
+	// height->version for rollback (see enclave_height.go in cmd/qadenad_enclave).
+	_, err := EnclaveGRPCClient.EndBlock(ctx, &types.MsgEndBlock{Height: sdkctx.BlockHeight()})
 	haltOnEnclaveFailure(sdkctx, "end block", err)
+}
+
+// EnclaveGetHeight reads the enclave's height watermarks: prepared (last height whose writes its
+// store has committed), confirmed (last height the chain acknowledged as durable), plus its raw
+// IAVL version, rollback horizon and on-disk schema.  This is the basis for startup
+// reconciliation between chain and enclave.
+func (k Keeper) EnclaveGetHeight(sdkctx sdk.Context) (*types.GetEnclaveHeightReply, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	defer cancel()
+	r, err := EnclaveGRPCClient.GetEnclaveHeight(ctx, &types.MsgGetEnclaveHeight{})
+	if err != nil {
+		c.ContextError(sdkctx, "error returned by GetEnclaveHeight on enclave "+err.Error())
+		return nil, err
+	}
+	return r, nil
 }
 
 func (k Keeper) EnclaveSyncWallets(sdkctx sdk.Context) (error, []*types.Wallet) {
