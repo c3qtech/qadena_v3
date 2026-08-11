@@ -15,6 +15,10 @@ if [[ ! -d "$QADENAHOME/enclave_data" ]] ; then
     mkdir "$QADENAHOME/enclave_data"
 fi
 
+if [[ ! -d "$QADENAHOME/enclave_secrets" ]] ; then
+    mkdir "$QADENAHOME/enclave_secrets"
+fi
+
 CHAINID=$(jq -r '.chain_id' "$QADENAHOME/config/genesis.json")
 
 # enable core dumps

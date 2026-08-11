@@ -29,10 +29,10 @@ if [ "$#" -ne 1 ]; then
 fi
 
 if [ $all_flag -eq 0 ]; then
-    echo "zipping qadena, excluding config, data, keyring-test, enclave_config, and enclave_data..."
+    echo "zipping qadena, excluding config, data, keyring-test, enclave_config, enclave_data, and enclave_secrets..."
     cd $QADENAHOME/..
     rm -f /tmp/qadena.zip
-    zip -r /tmp/qadena.zip qadena -x "qadena/config/*" -x "qadena/data/*" -x "qadena/keyring-test/*" -x "qadena/enclave_config/*" -x "qadena/enclave_data/*"
+    zip -r /tmp/qadena.zip qadena -x "qadena/config/*" -x "qadena/data/*" -x "qadena/keyring-test/*" -x "qadena/enclave_config/*" -x "qadena/enclave_data/*" -x "qadena/enclave_secrets/*"
     zip -ur /tmp/qadena.zip qadena/config/config.yml qadena/config/node_params.json
     echo "Transferring qadena..."
     scp /tmp/qadena.zip $1:

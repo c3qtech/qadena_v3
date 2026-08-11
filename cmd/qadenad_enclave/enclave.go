@@ -132,6 +132,10 @@ type qadenaServer struct {
 	// The interface type (not *tmdb.GoLevelDB) so unit tests can hand in a MemDB.
 	MetaDB tmdb.DB
 
+	// A separate, UNVERSIONED goleveldb for state that must survive a rollback of the tree:
+	// SS interval shares/keys and the unvalidated-identity queue.  See enclave_secrets.go.
+	SecretsDB tmdb.DB
+
 	privateEnclaveParams PrivateEnclaveParams
 	sharedEnclaveParams  types.EncryptableSharedEnclaveParams
 
@@ -1178,10 +1182,11 @@ func (s *qadenaServer) ExportPrivateState(ctx context.Context, in *types.MsgExpo
 	state.PrivateEnclaveParams = s.privateEnclaveParams
 	state.SharedEnclaveParams = s.sharedEnclaveParams
 
-	state.EnclaveSSShareMap = s.exportSealedTable(EnclaveSSIntervalSharesKeyPrefix)
+	// these four live in the secrets DB, not the versioned store -- see enclave_secrets.go
+	state.EnclaveSSShareMap = s.exportSealedSecretsTable(EnclaveSSIntervalSharesKeyPrefix)
 	state.EnclaveSSOwnersMap = *s.getAllOwners() // EnclaveSSIntervalOwnersKeyPrefix
-	state.EnclavePubKCacheMap = s.exportTable(EnclaveSSIntervalPubKKeyPrefix)
-	state.EnclavePrivKCacheMap = s.exportSealedTable(EnclaveSSIntervalPrivKKeyPrefix)
+	state.EnclavePubKCacheMap = s.exportSecretsTable(EnclaveSSIntervalPubKKeyPrefix)
+	state.EnclavePrivKCacheMap = s.exportSealedSecretsTable(EnclaveSSIntervalPrivKKeyPrefix)
 
 	// export wallets
 	state.Wallets = s.getAllWallets()
@@ -4115,7 +4120,7 @@ func (s *qadenaServer) recoverKeyByCredential(ctx context.Context, in *types.Cre
 }
 
 func (s *qadenaServer) getOwners(pubKID string) (owners types.EncryptablePioneerIDs, found bool) {
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveSSIntervalOwnersKeyPrefix))
+	store := s.secrets(EnclaveSSIntervalOwnersKeyPrefix)
 
 	b := store.Get(EnclaveKeyKey(
 		pubKID))
@@ -4140,15 +4145,15 @@ func (s *qadenaServer) getOwners(pubKID string) (owners types.EncryptablePioneer
 }
 
 func (s *qadenaServer) getAllOwners() (ownersMap *types.EncryptableEnclaveSSOwnerMap) {
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveSSIntervalOwnersKeyPrefix))
+	store := s.secrets(EnclaveSSIntervalOwnersKeyPrefix)
 
 	ownersMap = new(types.EncryptableEnclaveSSOwnerMap)
 	// init Pioneers
 	ownersMap.Pioneers = make(map[string]*types.EncryptablePioneerIDs)
 
-	itr := store.Iterator(nil, nil)
-	for itr.Valid() {
-		fixedKey := string(itr.Key()[:len(itr.Key())-1])
+	// Keys() is a snapshot, so getOwners below re-acquires the secrets lock safely
+	for _, key := range store.Keys() {
+		fixedKey := string(key[:len(key)-1])
 		c.LoggerDebug(logger, "key "+fixedKey)
 		var found bool
 		owners, found := s.getOwners(fixedKey)
@@ -4157,15 +4162,13 @@ func (s *qadenaServer) getAllOwners() (ownersMap *types.EncryptableEnclaveSSOwne
 		} else {
 			ownersMap.Pioneers[fixedKey] = &owners
 		}
-		itr.Next()
 	}
-	itr.Close()
 
 	return
 }
 
 func (s *qadenaServer) getShare(pubKID string) (share string, found bool) {
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveSSIntervalSharesKeyPrefix))
+	store := s.secrets(EnclaveSSIntervalSharesKeyPrefix)
 
 	b := store.Get(s.MustSealStable(EnclaveKeyKey(pubKID)))
 
@@ -4189,7 +4192,7 @@ func (s *qadenaServer) getShare(pubKID string) (share string, found bool) {
 }
 
 func (s *qadenaServer) setAllOwners(ownersMap *types.EncryptableEnclaveSSOwnerMap) {
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveSSIntervalOwnersKeyPrefix))
+	store := s.secrets(EnclaveSSIntervalOwnersKeyPrefix)
 	for key, value := range ownersMap.Pioneers {
 		ownerArray := value
 		b := s.Cdc.MustMarshal(ownerArray)
@@ -4201,10 +4204,10 @@ func (s *qadenaServer) setOwnersAndShare(pubKID string, owners []string, share s
 	c.LoggerDebug(logger, "setOwnersAndShare", pubKID)
 	ownerArray := types.EnclaveStoreStringArray{A: owners}
 	shareString := types.EnclaveStoreString{S: share}
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveSSIntervalOwnersKeyPrefix))
+	store := s.secrets(EnclaveSSIntervalOwnersKeyPrefix)
 	b := s.Cdc.MustMarshal(&ownerArray)
 	store.Set(EnclaveKeyKey(pubKID), b)
-	store = prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveSSIntervalSharesKeyPrefix))
+	store = s.secrets(EnclaveSSIntervalSharesKeyPrefix)
 	b = s.Cdc.MustMarshal(&shareString)
 	store.Set(s.MustSealStable(EnclaveKeyKey(pubKID)), s.MustSeal(b))
 }
@@ -4444,7 +4447,7 @@ func (s *qadenaServer) SetSecretSharePrivateKey(ctx context.Context, in *types.S
 
 func (s *qadenaServer) setPrivKCache(pubKID string, privK string) {
 	privKString := types.EnclaveStoreString{S: privK}
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveSSIntervalPrivKKeyPrefix))
+	store := s.secrets(EnclaveSSIntervalPrivKKeyPrefix)
 	b := s.Cdc.MustMarshal(&privKString)
 	key := s.MustSealStable(EnclaveKeyKey(pubKID))
 	c.LoggerDebug(logger, "setPrivkCache key "+hex.EncodeToString(key))
@@ -4453,7 +4456,7 @@ func (s *qadenaServer) setPrivKCache(pubKID string, privK string) {
 }
 
 func (s *qadenaServer) removePrivKCache(pubKID string) {
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveSSIntervalPrivKKeyPrefix))
+	store := s.secrets(EnclaveSSIntervalPrivKKeyPrefix)
 	store.Delete(s.MustSealStable(EnclaveKeyKey(pubKID)))
 }
 
@@ -4463,7 +4466,7 @@ func (s *qadenaServer) getPrivKCache(pubKID string) (privK string, found bool) {
 		return "", false
 	}
 
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveSSIntervalPrivKKeyPrefix))
+	store := s.secrets(EnclaveSSIntervalPrivKKeyPrefix)
 
 	key := s.MustSealStable(EnclaveKeyKey(pubKID))
 	c.LoggerDebug(logger, "getPrivKCache key "+hex.EncodeToString(key))
@@ -4490,13 +4493,13 @@ func (s *qadenaServer) getPrivKCache(pubKID string) (privK string, found bool) {
 
 func (s *qadenaServer) setPubKCache(pubKID string, pubK string) {
 	pubKString := types.EnclaveStoreString{S: pubK}
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveSSIntervalPubKKeyPrefix))
+	store := s.secrets(EnclaveSSIntervalPubKKeyPrefix)
 	b := s.Cdc.MustMarshal(&pubKString)
 	store.Set(EnclaveKeyKey(pubKID), b)
 }
 
 func (s *qadenaServer) getPubKCache(pubKID string) (pubK string, found bool) {
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveSSIntervalPubKKeyPrefix))
+	store := s.secrets(EnclaveSSIntervalPubKKeyPrefix)
 
 	b := store.Get(EnclaveKeyKey(
 		pubKID))
@@ -4521,7 +4524,7 @@ func (s *qadenaServer) getPubKCache(pubKID string) (pubK string, found bool) {
 }
 
 func (s *qadenaServer) setAllPubKCache(pubKCacheMap EnclavePubKCacheMap) {
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveSSIntervalPubKKeyPrefix))
+	store := s.secrets(EnclaveSSIntervalPubKKeyPrefix)
 	for key, value := range pubKCacheMap {
 		pubKString := types.EnclaveStoreString{S: value}
 		b := s.Cdc.MustMarshal(&pubKString)
@@ -5051,7 +5054,7 @@ func (s *qadenaServer) validateEnclaveIdentities() {
 }
 
 func (s *qadenaServer) getUnvalidatedEnclaveIdentities() (arr types.EnclaveEnclaveIdentityArray) {
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveUnvalidatedEnclaveIdentityKeyPrefix))
+	store := s.secrets(EnclaveUnvalidatedEnclaveIdentityKeyPrefix)
 	b := store.Get(EnclaveKeyKey("unvalidated"))
 	if b == nil {
 		c.LoggerDebug(logger, "unvalidatedEnclaveIdentities nil")
@@ -5063,7 +5066,7 @@ func (s *qadenaServer) getUnvalidatedEnclaveIdentities() (arr types.EnclaveEncla
 }
 
 func (s *qadenaServer) setUnvalidatedEnclaveIdentities(arr types.EnclaveEnclaveIdentityArray) {
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveUnvalidatedEnclaveIdentityKeyPrefix))
+	store := s.secrets(EnclaveUnvalidatedEnclaveIdentityKeyPrefix)
 	b := s.Cdc.MustMarshal(&arr)
 	store.Set(EnclaveKeyKey("unvalidated"), b)
 	c.LoggerDebug(logger, "setUnvalidatedEnclaveIdentities "+c.PrettyPrint(arr))
@@ -7362,6 +7365,7 @@ func main() {
 	}
 
 	var db *tmdb.GoLevelDB
+	var secretsDB *tmdb.GoLevelDB
 
 	if *upgradeFromEnclave != "" || enclaveUpgradeMode {
 		var opts tmdbopt.Options
@@ -7371,10 +7375,24 @@ func main() {
 			c.LoggerError(logger, "Error creating read-only GoLevelDB", err)
 			return
 		}
+		var sopts tmdbopt.Options
+		sopts.ReadOnly = true
+		// ErrorIfMissing stays false: an upgrade from a pre-secrets-DB node has no
+		// enclave_secrets yet, and the upgrade path only ferries params anyway
+		secretsDB, err = tmdb.NewGoLevelDBWithOpts("secrets", *homePath+"/enclave_secrets", &sopts)
+		if err != nil {
+			c.LoggerError(logger, "Error creating read-only secrets GoLevelDB", err)
+			return
+		}
 	} else {
 		db, err = tmdb.NewGoLevelDB("enclave", *homePath+"/enclave_data", nil)
 		if err != nil {
 			c.LoggerError(logger, "Error creating GoLevelDB")
+			return
+		}
+		secretsDB, err = tmdb.NewGoLevelDB("secrets", *homePath+"/enclave_secrets", nil)
+		if err != nil {
+			c.LoggerError(logger, "Error creating secrets GoLevelDB")
 			return
 		}
 	}
@@ -7436,6 +7454,7 @@ func main() {
 		CacheCtxWrite: cacheCtxWrite,
 		Cdc:           cdc,
 		MetaDB:        db,
+		SecretsDB:     secretsDB,
 		HomePath:      *homePath,
 		RealEnclave:   *realEnclave,
 	}

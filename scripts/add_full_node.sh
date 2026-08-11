@@ -219,7 +219,7 @@ else
 	mkdir /tmp/qadena_config_backup
 	cp $QADENAHOME/config/*.toml /tmp/qadena_config_backup/
 
-	echo "Removing configuration directories from:  $QADENAHOME (config, data, keyring-test, enclave_config, enclave_data)"
+	echo "Removing configuration directories from:  $QADENAHOME (config, data, keyring-test, enclave_config, enclave_data, enclave_secrets)"
 	# public.pem IS NOT NODE STATE and is deliberately NOT removed here.  It is the enclave signer's
 	# public key, installed alongside the binaries by install.sh / install_release.sh, and nothing
 	# anywhere puts it back once deleted.
@@ -246,6 +246,10 @@ else
 	rm -rf $QADENAHOME/keyring-test
 	rm -rf $QADENAHOME/enclave_config
 	rm -rf $QADENAHOME/enclave_data
+	# enclave_secrets holds the SS interval shares and privK cache.  It is deleted IN LOCKSTEP
+	# with enclave_data: a secrets DB surviving next to a wiped tree would describe keys the
+	# fresh enclave never generated.
+	rm -rf $QADENAHOME/enclave_secrets
 
 	echo "Calling 'qadenad init'"
 	qadenad_alias init $PIONEER > /dev/null 2> /dev/null
