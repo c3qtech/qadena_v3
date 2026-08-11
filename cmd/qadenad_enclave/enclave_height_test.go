@@ -18,6 +18,7 @@ import (
 	amino "github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	sdktypes "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/require"
 
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
@@ -303,4 +304,141 @@ func TestGetStoreHashDoesNotMutate(t *testing.T) {
 	_, err = s.TransactionComplete(context.Background(), &types.MsgTransactionComplete{Success: false})
 	require.NoError(t, err)
 	require.Empty(t, getMirrorRow(s, "partial"))
+}
+
+// ---- boundary tests: the specific state classes a rollback must handle differently ----
+
+// TestRollbackAcrossSSKeyRotation is the 2026-08-09 incident shape.  The enclave died inside
+// GenerateSecretShare at block 61,050 (a 555-block rotation boundary), and the recovery question
+// was whether rolling the chain back would destroy key material whose public half was already on
+// chain.  It must not: the interval key ROW is a chain mirror and rolls back, while the SHARE and
+// PRIVATE KEY live in the secrets DB and survive -- because a re-executed block cannot regenerate
+// them (GenerateSecretShare is nondeterministic and runs outside block execution).
+func TestRollbackAcrossSSKeyRotation(t *testing.T) {
+	s := newTestEnclaveServer(t)
+
+	// pre-rotation state at height 554
+	s.setIntervalPublicKeyIdNoNotify(types.IntervalPublicKeyID{
+		NodeID: types.SSNodeID, NodeType: types.SSNodeType, PubKID: "ss-key-old",
+	})
+	s.setOwnersAndShare("ss-key-old", []string{"pioneer1"}, "share-old")
+	s.setPrivKCache("ss-key-old", "privk-old")
+	endBlock(t, s, 554)
+
+	// the rotation lands at 555: a new interval key on the mirror, new material in the secrets DB
+	s.setIntervalPublicKeyIdNoNotify(types.IntervalPublicKeyID{
+		NodeID: types.SSNodeID, NodeType: types.SSNodeType, PubKID: "ss-key-new",
+	})
+	s.setOwnersAndShare("ss-key-new", []string{"pioneer1"}, "share-new")
+	s.setPrivKCache("ss-key-new", "privk-new")
+	endBlock(t, s, 555)
+
+	// roll back across the rotation boundary
+	r, err := s.RollbackToHeight(context.Background(), &types.MsgRollbackToHeight{Height: 554})
+	require.NoError(t, err)
+	require.True(t, r.RolledBack)
+
+	// the chain-mirrored interval key reverted: the chain at 554 does not know ss-key-new, and an
+	// enclave that still claimed it would be ahead of the chain in exactly the way that cannot
+	// converge
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.IntervalPublicKeyIDKeyPrefix))
+	b := store.Get(types.IntervalPublicKeyIDKey(types.SSNodeID, types.SSNodeType))
+	require.NotNil(t, b)
+	var current types.IntervalPublicKeyID
+	s.Cdc.MustUnmarshal(b, &current)
+	require.Equal(t, "ss-key-old", current.PubKID, "the interval key mirror must roll back with the chain")
+
+	// BOTH keys' material survives.  The old one because the chain still references it; the NEW
+	// one because the rotation may already have been broadcast -- if the chain rolls forward
+	// through 555 again, or a peer encrypted a VShare to ss-key-new, losing privk-new would make
+	// that VShare permanently undecryptable.  Key material is cumulative; an unreferenced key is
+	// harmless, a missing one is not.
+	share, found := s.getShare("ss-key-old")
+	require.True(t, found)
+	require.Equal(t, "share-old", share)
+
+	share, found = s.getShare("ss-key-new")
+	require.True(t, found, "the rotated-in share must survive a rollback -- it cannot be regenerated")
+	require.Equal(t, "share-new", share)
+
+	privk, found := s.getPrivKCache("ss-key-new")
+	require.True(t, found, "the rotated-in private key must survive a rollback")
+	require.Equal(t, "privk-new", privk)
+}
+
+// TestRollbackAcrossAMLWindow covers the other half of the split: EnclaveScanTransferHistory is
+// SECRET but consensus-critical -- ScanTransaction's verdict decides whether a transfer is
+// rejected, so a node holding a different window would reach a different verdict and fork.  It
+// therefore stays VERSIONED and must unwind with the transfer that created it, unlike the SS keys
+// above.
+func TestRollbackAcrossAMLWindow(t *testing.T) {
+	s := newTestEnclaveServer(t)
+
+	usd := func(a int64) sdktypes.Coin { return sdktypes.NewInt64Coin("usd", a) }
+	qdn := func(a int64) sdktypes.Coin { return sdktypes.NewInt64Coin("aqdn", a) }
+
+	// height 100: one transfer in the window
+	s.setScanTransferHistory("sender-1", types.EncryptableScanTransferHistory{
+		Transfers: []*types.EncryptableScanTransfer{
+			{UnixTime: 1000, DestinationWalletID: "dest-a", USDCoinAmount: usd(4000), CoinAmount: qdn(1)},
+		},
+	})
+	endBlock(t, s, 100)
+
+	// height 101: a second transfer -- together they cross a reporting threshold
+	s.setScanTransferHistory("sender-1", types.EncryptableScanTransferHistory{
+		Transfers: []*types.EncryptableScanTransfer{
+			{UnixTime: 1000, DestinationWalletID: "dest-a", USDCoinAmount: usd(4000), CoinAmount: qdn(1)},
+			{UnixTime: 2000, DestinationWalletID: "dest-b", USDCoinAmount: usd(7000), CoinAmount: qdn(2)},
+		},
+	})
+	endBlock(t, s, 101)
+	require.Len(t, s.getScanTransferHistory("sender-1").Transfers, 2)
+
+	// unwinding 101 must unwind the transfer's contribution to the window: if it did not, this
+	// node would aggregate a movement of value that no longer happened and could reject a later
+	// transfer its peers accept
+	r, err := s.RollbackToHeight(context.Background(), &types.MsgRollbackToHeight{Height: 100})
+	require.NoError(t, err)
+	require.True(t, r.RolledBack)
+
+	h := s.getScanTransferHistory("sender-1")
+	require.Len(t, h.Transfers, 1, "the AML window must unwind with the transfer that created it")
+	require.Equal(t, "dest-a", h.Transfers[0].DestinationWalletID)
+}
+
+// TestRollbackReleasesCredentialUniquenessSlot covers the third class: the credential-hash index
+// is enclave-private and secret, but it GATES issuance -- a hash left behind by a rolled-back
+// credential would block that identity from ever being issued again, bricking it.  So it stays
+// versioned too.
+func TestRollbackReleasesCredentialUniquenessSlot(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	endBlock(t, s, 200)
+
+	// height 201 issues a credential and claims its uniqueness slot
+	s.setCredentialNoNotify("cred-1", types.PersonalInfoCredentialType, types.Credential{
+		CredentialID: "cred-1", CredentialType: types.PersonalInfoCredentialType,
+	})
+	s.setCredentialByHash("identity-hash-1", "cred-1")
+	endBlock(t, s, 201)
+
+	_, found := s.getCredentialByHash("identity-hash-1")
+	require.True(t, found, "the slot should be claimed while the credential exists")
+
+	// rolling back must release the slot along with the credential
+	r, err := s.RollbackToHeight(context.Background(), &types.MsgRollbackToHeight{Height: 200})
+	require.NoError(t, err)
+	require.True(t, r.RolledBack)
+
+	_, found = s.getCredentialByHash("identity-hash-1")
+	require.False(t, found, "a rolled-back credential must release its uniqueness slot, or the identity is bricked")
+
+	// and the identity can be issued again, as re-execution of 201 would do
+	s.setCredentialNoNotify("cred-1", types.PersonalInfoCredentialType, types.Credential{
+		CredentialID: "cred-1", CredentialType: types.PersonalInfoCredentialType,
+	})
+	s.setCredentialByHash("identity-hash-1", "cred-1")
+	endBlock(t, s, 201)
+	_, found = s.getCredentialByHash("identity-hash-1")
+	require.True(t, found)
 }

@@ -22,6 +22,8 @@
 #   evm           deploy / read / write / overwrite
 #   cadena        cadena-smart-contracts: the GAA -> PAP -> SARO -> NCA -> Obligation -> DV chain
 #   enf           enf-smart-contracts: the ENF notarial book (ENP registry + entries)
+#   enclave-rollback  send a tx, roll chain+enclave back past it, prove the state reverted
+#   enclave-crash     stall the enclave: the node must HALT, not fork, then recover
 #   credentials   update_credentials.sh                                    (--with-credentials)
 #   replenish     al's ENCRYPTED balance is topped back up before anything spends it
 #   peer-agreement   every peer computed the SAME app hash -- i.e. no fork
@@ -1002,9 +1004,21 @@ run_test "evm"         "$qadenatestscripts/test_evm.sh"
 run_test "cadena"      "$qadenatestscripts/test_cadena_contracts.sh"
 run_test "enf"         "$qadenatestscripts/test_enf_contracts.sh"
 
+# Chain+enclave rollback, and the crash that made it necessary.  Placed here, after every suite
+# that writes, for two reasons: the rollback suite wants real transactions behind it so the
+# state it erases is non-trivial, and both suites RESTART THE NODE -- run earlier, every later
+# suite would inherit a restarted chain and any flake in them would be blamed on the wrong thing.
+#
+# They restart the node but leave it running, so peer-agreement below still has a live chain to
+# compare.  Neither skips when the chain is down: a rollback bug is a fork bug, and a suite that
+# skips silently reports success while testing nothing.
+run_test "enclave-rollback"  "$qadenatestscripts/test_enclave_rollback.sh"
+run_test "enclave-crash"     "$qadenatestscripts/test_enclave_crash_recovery.sh"
+
 # LAST of the always-on suites, and deliberately after everything that writes: a fork shows up in
 # the app hash only once the suites have put transactions through.  Run early it would compare two
-# idle nodes and pass regardless.
+# idle nodes and pass regardless.  It is also the only thing that would notice if the rollback
+# suites above left this node disagreeing with a peer.
 run_test "peer-agreement" "$qadenatestscripts/test_peer_agreement.sh"
 
 # AFTER every suite that spends, and before the two opt-in ones.  The opt-in suites are excluded
