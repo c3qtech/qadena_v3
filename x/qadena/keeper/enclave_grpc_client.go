@@ -740,9 +740,95 @@ func (k Keeper) EnclaveClientBroadcastSecretSharePrivateKey(sdkctx sdk.Context, 
 
 var synchronizedWithEnclave = false
 
+// set by reconcileEnclaveHeight when startup found chain and enclave already at the same height
+// (cases A/B) -- in which case a store mismatch found afterwards is divergence, not seeding
+var enclaveHeightsAgreedAtStartup = false
+
+// reconcileEnclaveHeight compares the enclave's height watermarks against the chain's committed
+// height at startup and repairs what it can.  Runs once per process, from the first BeginBlock
+// (app.New cannot host it: InitEnclave runs there BEFORE app.Load, so the chain's committed
+// height is not yet known).
+//
+// With C = the chain's last committed height (header.Height - 1), the cases are:
+//
+//	A. prepared == C, confirmed == C   healthy; nothing to do.
+//	B. prepared == C, confirmed  < C   crash between the enclave's EndBlock prepare and the
+//	                                   chain's post-commit confirm.  The state is right on both
+//	                                   sides; only the watermark lags.  Confirm it.
+//	C. prepared  > C                   crash between the enclave's prepare and BaseApp.Commit,
+//	                                   or a chain-only rollback.  Comet will NOT replay the
+//	                                   divergent block (its handshake sees appHeight ==
+//	                                   storeHeight), so without this the enclave's extra state
+//	                                   is permanent and invisible.  Roll the enclave back to C;
+//	                                   the chain then re-executes forward normally.
+//	D. 0 < prepared < C                the enclave missed blocks the chain has already
+//	                                   committed.  They will never be replayed, so nothing can
+//	                                   be repaired in place: HALT, naming the remedy
+//	                                   (qadenad rollback --height <prepared>, which moves chain
+//	                                   and enclave together).  Deliberately NOT papered over
+//	                                   with enclaveSynchronizeStores -- that pushes only the
+//	                                   nine mirror prefixes and would leave every
+//	                                   enclave-private prefix (uniqueness index, AML window,
+//	                                   sub-wallet maps) silently stale while making the store
+//	                                   hashes agree, which is worse than halting because it
+//	                                   looks fixed.
+//	E. prepared == 0                   a fresh enclave (genesis, or seeded mid-chain by
+//	                                   sync-enclave).  Nothing to reconcile: its first EndBlock
+//	                                   adopts whatever height it arrives at (see the
+//	                                   prepared==0 exemption there), and the store push that
+//	                                   follows this call seeds the mirrors.  A WIPED enclave is
+//	                                   indistinguishable from a fresh one and gets the same
+//	                                   treatment, because re-seeding is also its correct
+//	                                   recovery -- what a wipe actually loses is the secrets DB,
+//	                                   which no reconciliation could recover anyway.
+func (k Keeper) reconcileEnclaveHeight(sdkCtx sdk.Context) {
+	chainHeight := k.headerService.GetHeaderInfo(sdkCtx).Height - 1
+
+	h, err := k.EnclaveGetHeight(sdkCtx)
+	haltOnEnclaveFailure(sdkCtx, "height reconciliation", err)
+
+	switch {
+	case h.PreparedHeight == 0:
+		// case E -- fresh (or wiped) enclave; first EndBlock adopts, store push seeds it
+		c.ContextInfo(sdkCtx, fmt.Sprintf("Qadena: enclave has no committed height; it will adopt chain height %d at its first EndBlock", chainHeight+1))
+
+	case h.PreparedHeight == chainHeight && h.ConfirmedHeight == chainHeight:
+		// case A -- healthy
+		enclaveHeightsAgreedAtStartup = true
+		c.ContextInfo(sdkCtx, fmt.Sprintf("Qadena: enclave is reconciled at height %d", chainHeight))
+
+	case h.PreparedHeight == chainHeight && h.ConfirmedHeight < chainHeight:
+		// case B -- crash in the confirm window; state agrees, watermark lags
+		enclaveHeightsAgreedAtStartup = true
+		c.ContextInfo(sdkCtx, fmt.Sprintf("Qadena: enclave prepared height %d was never confirmed (confirmed %d); confirming now", h.PreparedHeight, h.ConfirmedHeight))
+		err := k.EnclaveConfirmHeight(chainHeight)
+		haltOnEnclaveFailure(sdkCtx, "height reconciliation (confirm)", err)
+
+	case h.PreparedHeight > chainHeight:
+		// case C -- enclave ahead; roll it back and let the chain re-execute forward
+		c.ContextError(sdkCtx, fmt.Sprintf("Qadena: enclave is at height %d, AHEAD of the chain's %d -- rolling the enclave back", h.PreparedHeight, chainHeight))
+		r, err := k.EnclaveRollbackToHeight(sdkCtx, chainHeight, false)
+		haltOnEnclaveFailure(sdkCtx, "height reconciliation (rollback)", err)
+		if !r.RolledBack {
+			// "already at height" cannot happen on this branch; anything else here means the
+			// rollback did not happen and continuing would commit against divergent state
+			haltOnEnclaveFailure(sdkCtx, "height reconciliation (rollback)", fmt.Errorf("enclave did not roll back: %s", r.Reason))
+		}
+		c.ContextInfo(sdkCtx, fmt.Sprintf("Qadena: enclave rolled back from height %d to %d; the chain will re-execute forward", h.PreparedHeight, chainHeight))
+
+	default:
+		// case D -- enclave behind; the missing blocks will never be replayed
+		panic(fmt.Sprintf("qadena: the enclave is at height %d but this chain has already committed height %d; the missing blocks will not be replayed, so this cannot be repaired in place -- stop the node and run: qadenad rollback --height %d   (rolls chain and enclave back together)", h.PreparedHeight, chainHeight, h.PreparedHeight))
+	}
+}
+
 func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
 
 	if !synchronizedWithEnclave {
+		// Height reconciliation FIRST, store synchronization second: the store push is only
+		// meaningful once chain and enclave agree what height they are at -- pushing rows into an
+		// enclave that is ahead would make the hashes agree while its state stays wrong.
+		k.reconcileEnclaveHeight(sdkCtx)
 		err := k.enclaveSynchronizeStores(sdkCtx)
 		if err != nil {
 			c.ContextError(sdkCtx, "Qadena: enclaveSynchronizeStores failed: "+err.Error())
@@ -1418,6 +1504,15 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 	if checkSync {
 		c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores Checking Sync after chain->enclave synchronization")
 		k.displayStoresSync(sdkctx)
+
+		// A mismatch on a FRESH enclave is seeding, and expected.  A mismatch when chain and
+		// enclave already agreed on their height is neither: the same blocks produced different
+		// mirror state, which points at non-deterministic enclave execution, a partial wipe, or
+		// tampering.  The push above has made the hashes agree again, but hashes agreeing is not
+		// the same as the node being trustworthy -- say so, loudly and distinctly.
+		if enclaveHeightsAgreedAtStartup {
+			c.ContextError(sdkctx, "Qadena: ENCLAVE STORES DIVERGED AT AN AGREED HEIGHT -- the chain's copies were re-pushed, but this is not a normal reseed; investigate how this enclave's state came to differ before trusting this node")
+		}
 	}
 
 	return nil
