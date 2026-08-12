@@ -97,11 +97,25 @@ echo "topology: $peer_count peer(s), this node holds $my_power of $total_power v
 if [ "$peer_count" -gt 0 ] && [ "$total_power" -gt 0 ]; then
     # >= 1/3 is the threshold that matters: below it the network makes progress without us
     if [ $((my_power * 3)) -ge "$total_power" ]; then
-        fail "this node holds $my_power/$total_power voting power (>= 1/3) and has $peer_count peer(s).
-Rolling it back alone and restarting would re-produce blocks at heights its peers already hold --
-a fork manufactured by the test.  A rollback at this stake level is only safe as the coordinated
-all-node procedure in docs/HOWTO-CHAIN-RECOVERY.md; see TESTING-BACKLOG P0 #2 for the fixture
-that would automate it."
+        # SKIPPED, not failed, and the distinction is deliberate.
+        #
+        # Refusing here is correct: rolling this node back alone and restarting it would re-produce
+        # blocks at heights its peers already hold -- a fork manufactured by the test.  But that is
+        # a property of the TOPOLOGY, not a defect in the code under test, and it is the same shape
+        # as the two other loud skips in this suite: ss-rotation cannot force a rotation on SGX, and
+        # peer-agreement cannot compare anything on a single node.  Both say so and exit 0.
+        #
+        # Failing instead would make continuous regression permanently red from the moment a second
+        # node attaches -- and a suite that is always red is a suite everyone learns to ignore,
+        # which costs more than the coverage it was protecting.
+        echo "SKIPPED: this node holds $my_power/$total_power voting power (>= 1/3) and has $peer_count peer(s)."
+        echo "  Rolling it back alone and restarting would re-produce blocks at heights its peers"
+        echo "  already hold -- a fork manufactured by the test.  SOLO ROLLBACK IS THEREFORE UNTESTED"
+        echo "  in this run; it is covered whenever this node runs without peers."
+        echo "  A rollback at this stake level is only safe as the coordinated all-node procedure in"
+        echo "  docs/HOWTO-CHAIN-RECOVERY.md; see TESTING-BACKLOG P0 #2 for the fixture that would"
+        echo "  automate it, which is what should cover this topology."
+        exit 0
     fi
 fi
 
