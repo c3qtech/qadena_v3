@@ -84,9 +84,15 @@ This is written down because it was re-derived wrongly more than once, in both d
 **The params handoff happens before the node ever executes a block.** `add_full_node.sh` runs
 `qadenad enclave sync-enclave` while the enclave is up standalone and the full node has *not*
 started; `SyncEnclave` persists what it receives with `saveEnclaveParams()`, so it survives the
-enclave restart that follows. `delayed_init_enclave.sh` → `init_enclave.sh` → `init-enclave` is
-the **genesis** path and is never used when joining — its wait for `catching_up == false` is not
-a gate on joining, however much it looks like one.
+enclave restart that follows.
+
+`delayed_init_enclave.sh` **does** run on a joining node — `start_qadena.sh` →
+`restart_qadena.sh` → `run.sh` launches it on every start — but it is not what supplies the
+params, and its wait for `catching_up == false` gates only the `init-enclave` call it makes
+afterwards. It matters here for a different reason: it is also the block-sync watchdog, and it
+stops the node when height has not advanced. The first block a joining node executes can
+legitimately take minutes (see below), so that watchdog requires a *sustained* stall rather than
+a single 30-second window.
 
 | key material | how a joining node obtains it |
 |---|---|
@@ -133,6 +139,21 @@ Three mechanisms now stand between that and a running node:
 - If that fetch cannot happen, the node **halts** rather than continuing. `prepared == 0` with a
   chain that has committed history is the signal; it means either a state-synced node or an
   enclave directory wiped while the chain's was kept, and both need the same remedy.
+
+Expect the first block after a restore or a wipe to be **slow** — minutes, not milliseconds. It is
+blocking and synchronous by necessity: `BeginBlock` is the last point before the block's
+transactions read the AML window, so there is nowhere later to do the work. The mirror push that
+precedes it is often the slower half, since `ProtectKey` and `RecoverKey` each need an attested
+round trip per historical SS interval key. A joining node is block-syncing rather than voting at
+that point, so the delay costs catch-up time and nothing else. If it is interrupted, the import
+resumes from its recorded cursor rather than starting over.
+
+Which height is fetched is **not** a choice the node makes, and is worth knowing when reading logs:
+`statesync.trust_height` in `config.toml` is the light-client trust anchor, not the snapshot
+height. The snapshot height is discovered at runtime — peers advertise what they have, CometBFT
+picks the best — and the app first sees it in `OfferSnapshot`. The fetch then uses the chain's
+committed height, read off the header of the first block executed. `add_full_node.sh` therefore
+cannot pre-check whether a peer will be able to serve it; nothing knows the height that early.
 
 Two operational consequences worth knowing before an incident:
 

@@ -125,6 +125,12 @@ COUNTER=1
 MAX_COUNTER=90
 LAST_BLOCK_HEIGHT=0
 
+# Consecutive 30s windows with no block progress before the sync is declared stuck.  20 gives ~10
+# minutes, which tolerates a first block that is seeding the enclave or importing private state
+# from a peer while still catching a genuinely dead sync.
+STALL_STRIKES=0
+MAX_STALL_STRIKES=20
+
 while true ; do
     qadenad_alias status > $TMP_FILE_NAME 2> /dev/null
     RET=$?
@@ -152,12 +158,29 @@ while true ; do
                 # if !STATE_SYNC_ENABLED, Check progress every 30 seconds
                 if [[ $STATE_SYNC_ENABLED != true ]] ; then
                     if [[ $COUNTER -gt 30 && $CURRENT_BLOCK_HEIGHT -le $LAST_BLOCK_HEIGHT ]]; then
-                        echo "[delayed_init_enclave - E] No progress in block height after 30 seconds"
-                        echo "[delayed_init_enclave - E] Previous height: $LAST_BLOCK_HEIGHT, Current height: $CURRENT_BLOCK_HEIGHT"
-                        echo "[delayed_init_enclave - E] Stopping qadenad due to block sync stall"
-                        $qadenascripts/stop_qadena.sh --chain --enclave
-                        exit 1
+                        # A stalled height is not automatically a dead sync.  The FIRST block a node
+                        # executes can legitimately take minutes: if the enclave holds no private
+                        # state but the chain has history -- a wiped enclave_data/, or a re-join
+                        # with state-sync off -- BeginBlock fetches the AML window and identity
+                        # indexes from a peer before that block's transactions run, and the mirror
+                        # push before it does an attested round trip per historical SS interval key.
+                        # Height cannot advance while either is in flight, and killing the node
+                        # mid-import just means starting the whole thing over on the next attempt.
+                        #
+                        # So require the stall to PERSIST rather than acting on one window.  A truly
+                        # stuck sync stays stuck and is still caught, just later.
+                        STALL_STRIKES=$((STALL_STRIKES+1))
+                        if [[ $STALL_STRIKES -lt $MAX_STALL_STRIKES ]] ; then
+                            echo "[delayed_init_enclave - I] No block progress in the last 30s (${STALL_STRIKES}/${MAX_STALL_STRIKES}) -- the enclave may be seeding or importing private state; waiting"
+                        else
+                            echo "[delayed_init_enclave - E] No progress in block height for $((MAX_STALL_STRIKES * 30)) seconds"
+                            echo "[delayed_init_enclave - E] Previous height: $LAST_BLOCK_HEIGHT, Current height: $CURRENT_BLOCK_HEIGHT"
+                            echo "[delayed_init_enclave - E] Stopping qadenad due to block sync stall"
+                            $qadenascripts/stop_qadena.sh --chain --enclave
+                            exit 1
+                        fi
                     else
+                        STALL_STRIKES=0
                         echo "[delayed_init_enclave - I] qadenad is still catching up, making progress..."
                     fi
                 else
