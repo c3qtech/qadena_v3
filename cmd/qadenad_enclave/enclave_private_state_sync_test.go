@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strconv"
 	"testing"
 
@@ -372,4 +373,35 @@ func TestTransferredWindowProducesTheSameVerdict(t *testing.T) {
 	require.Equal(t,
 		len(c.PruneExpired(a.Transfers, cutoff)),
 		len(c.PruneExpired(b.Transfers, cutoff)))
+}
+
+// TestJarRegulatorMismatchIsRefused -- the params from sync-enclave arrive from a seed this node
+// cannot authenticate, so they are checked against consensus at the first opportunity instead.  The
+// mirror push delivers the chain's jar->regulator binding while we still hold what the seed said.
+func TestJarRegulatorMismatchIsRefused(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	s.setSharedEnclaveParamsJarInfo("jar1", "jarPubK", "jarPrivK", "jarArmorPrivK")
+	s.setSharedEnclaveParamsRegulatorInfo("regulator1", "rPubK", "rPrivK", "rArmorPrivK")
+
+	// the chain agrees -- accepted
+	_, err := s.SetJarRegulator(context.Background(), &types.JarRegulator{JarID: "jar1", RegulatorID: "regulator1"})
+	require.NoError(t, err)
+
+	// the chain says this jar answers to a different regulator -- the seed lied, or was not the
+	// seed we thought
+	_, err = s.SetJarRegulator(context.Background(), &types.JarRegulator{JarID: "jar1", RegulatorID: "regulator-impostor"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "disagree with chain state")
+
+	// a DIFFERENT jar's row says nothing about ours and must pass through untouched
+	_, err = s.SetJarRegulator(context.Background(), &types.JarRegulator{JarID: "jar2", RegulatorID: "regulator2"})
+	require.NoError(t, err)
+}
+
+// An uninitialised enclave holds no jar, so there is nothing to contradict; the push must not be
+// blocked before sync-enclave has run.
+func TestJarRegulatorCheckSkippedWhenUninitialised(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	_, err := s.SetJarRegulator(context.Background(), &types.JarRegulator{JarID: "jar1", RegulatorID: "regulator1"})
+	require.NoError(t, err)
 }

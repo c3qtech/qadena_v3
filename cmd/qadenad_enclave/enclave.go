@@ -2820,12 +2820,13 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 	//     including ones governance explicitly marked inactive -- which is precisely the judgment
 	//     the EnclaveIdentity table exists to make.
 	//
-	// So the params are accepted here and validated against CONSENSUS state instead, once we have
-	// some: see validateSyncedParamsAgainstChain, called from the first BeginBlock after
-	// enclaveSynchronizeStores has pulled JarRegulator/PublicKey/IntervalPublicKeyID.  A forged
-	// jar or regulator private key is provable there -- its public half will not match the one the
-	// chain has registered -- and that anchors the check in the chain the node is actually
-	// joining rather than in a trust list it cannot yet read.
+	// So the params are accepted here and checked against CONSENSUS state once we have some: see
+	// SetJarRegulator, which the mirror push reaches during the first BeginBlock and which compares
+	// the jar->regulator binding the chain records against the one this seed handed us.  That
+	// anchors the check in the chain the node is actually joining rather than in a trust list it
+	// cannot yet read.  It catches a seed that invented identities; a seed that supplied real
+	// identities with its own key material still gets through and surfaces later, when the first
+	// VShare fails to decrypt.
 	var fromRemoteEnclaveParams types.EncryptableSharedEnclaveParams
 	_, err = c.BDecryptAndProtoUnmarshal(s.getPrivateEnclaveParamsEnclavePrivK(), res.GetEncEnclaveParamsEnclavePubK(), &fromRemoteEnclaveParams)
 	if err != nil {
@@ -4977,6 +4978,36 @@ func (s *qadenaServer) getPioneerJar(pioneerID string) (pioneerJar string, found
 
 func (s *qadenaServer) SetJarRegulator(ctx context.Context, in *types.JarRegulator) (*types.SetJarRegulatorReply, error) {
 	c.LoggerDebug(logger, "SetJarRegulator "+c.PrettyPrint(in))
+
+	// CHECK THE PARAMS WE WERE HANDED AT SYNC TIME AGAINST CONSENSUS.
+	//
+	// SyncEnclave accepts the jar and regulator identities from a seed it cannot authenticate --
+	// there is no usable trust anchor at that point in a node's life, which is argued at length in
+	// that function.  This is where that debt is settled: a JarRegulator row is chain state, and it
+	// arrives here during the mirror push while we still hold what the seed told us.  If the seed
+	// invented a jar or pointed it at a regulator the chain does not agree with, the two disagree
+	// right here, and this is the earliest moment anything can notice.
+	//
+	// Scope, stated plainly: this catches FABRICATED IDENTIFIERS, not fabricated key material.  A
+	// MITM that supplied the real jarID and regulatorID with keys of its own passes this check and
+	// is caught later and less clearly, when the first VShare fails to decrypt.  Catching that
+	// would need the jar's public half on chain in a form comparable to what we hold, and it is
+	// not stored that way.
+	if ourJarID := s.getSharedEnclaveParamsJarID(); ourJarID != "" && in.JarID == ourJarID {
+		if ourRegulatorID := s.getSharedEnclaveParamsRegulatorID(); ourRegulatorID != "" && in.RegulatorID != ourRegulatorID {
+			c.LoggerError(logger, "SetJarRegulator: chain says jar "+in.JarID+" is regulated by "+in.RegulatorID+
+				", but this enclave was told "+ourRegulatorID)
+			return nil, fmt.Errorf(
+				"enclave params disagree with chain state: this enclave holds jar %q bound to regulator %q, but the chain records regulator %q for that jar.\n"+
+					"\n"+
+					"The params were supplied by whatever answered the sync-enclave query during add_full_node, over an\n"+
+					"unauthenticated chain RPC endpoint named by an operator-typed IP.  Treat this as a wrong seed address\n"+
+					"or an interposed one: re-run the join against a seed you can verify, rather than continuing with keys\n"+
+					"of unknown origin.",
+				ourJarID, ourRegulatorID, in.RegulatorID)
+		}
+	}
+
 	s.setJarRegulatorNoNotify(*in)
 	return &types.SetJarRegulatorReply{Status: true}, nil
 }
