@@ -77,6 +77,70 @@ cumulative, and an enclave holding a key the chain no longer references is harml
 is why `enclave_data/` cannot be reconstructed from chain state if it is ever lost. It is
 sealed to a machine-bound SGX key and cannot be copied between machines.
 
+### 2.2 How a node joins, and which key material it can and cannot obtain
+
+This is written down because it was re-derived wrongly more than once, in both directions.
+
+**The params handoff happens before the node ever executes a block.** `add_full_node.sh` runs
+`qadenad enclave sync-enclave` while the enclave is up standalone and the full node has *not*
+started; `SyncEnclave` persists what it receives with `saveEnclaveParams()`, so it survives the
+enclave restart that follows. `delayed_init_enclave.sh` → `init_enclave.sh` → `init-enclave` is
+the **genesis** path and is never used when joining — its wait for `catching_up == false` is not
+a gate on joining, however much it looks like one.
+
+| key material | how a joining node obtains it |
+|---|---|
+| own pioneer + enclave privK | derived locally in `preInitEnclave` |
+| `SealedTableSharedSecret` | minted locally; never transmitted, never portable |
+| jar + regulator privK / armorPrivK | **received** from the seed during `sync-enclave` |
+| SS interval owners map | received, and also rebuilt from chain (`PublicKey.Shares`) |
+| SS interval **private keys** | **not sent** — reconstructed from owners at runtime by `getSSPrivK` |
+
+The last row is the one that misleads. `QueryEnclaveSyncEnclave` deliberately does not send
+`SSIntervalShares`, and it is tempting to conclude a joining node can never decrypt historical
+VShares. It can: on a cache miss `getSSPrivK` looks up the owners, dials each owner's published
+IP, calls `QueryEnclaveSecretShare` and reconstructs by Shamir once it holds `getThreshold(n)`
+shares — and `getThreshold` returns **1** for 0–3 pioneers, so at small validator counts a single
+peer supplies the whole key. Withheld shares are not a permanent loss.
+
+The joiner is also, deliberately, left out of `getAllPioneers` until it validates: `preInitEnclave`
+sets its external address only when `isValidator`. That is a readiness gate, not a defect — a
+still-syncing node cannot serve share requests, and including it would raise `getThreshold` for
+every future key while adding an owner nobody can reach.
+
+Note while you are here that `QueryEnclaveSecretShare` authorises on `verifyRemoteReport` **alone**
+— it does not check that the caller is an owner, a registered pioneer, or known to the chain. That
+is defensible (the measurement is the trust boundary) but it is currently implicit, and anyone
+tightening it would break the very recovery path the table above depends on.
+
+**Block-sync joiners are correct. State-sync joiners need a transfer.** A node that block-syncs
+executes every block and therefore rebuilds every enclave-private table on the way. A node that
+state-syncs restores chain state at H without executing blocks 1..H, so the tables that only
+execution writes — the AML rolling window, the credential uniqueness index and its superseded
+aliases, the sub-wallet and recovery maps — would be empty. Nothing on chain encodes them.
+
+That is not a degraded mode: the AML window is a consensus input, so a node holding none of it
+reaches different accept/reject verdicts than the network and files different suspicious
+transactions. It forks, and silently, because the mirror hashes agree after the push.
+
+Three mechanisms now stand between that and a running node:
+
+- `App.OfferSnapshot` **rejects** a snapshot at a height no peer's enclave can serve, so CometBFT
+  tries the next one instead of restoring something unusable.
+- The first `BeginBlock` fetches the private tables from a peer — attested, paged, compressed,
+  committed a page at a time — **before** any transaction of that block executes, because the
+  window is read during execution.
+- If that fetch cannot happen, the node **halts** rather than continuing. `prepared == 0` with a
+  chain that has committed history is the signal; it means either a state-synced node or an
+  enclave directory wiped while the chain's was kept, and both need the same remedy.
+
+Two operational consequences worth knowing before an incident:
+
+- A state-synced node's `earliestIndexedHeight` is its join height. It **cannot** be rolled back
+  below that, so the §5 procedure has a floor on such nodes that other nodes do not have.
+- Case D's advice (`qadenad rollback --height N`) is impossible to follow on a state-synced node
+  whose target is below its join height. The panic names both remedies for that reason.
+
 ---
 
 ## 3. Step 1 — agree on the height H
@@ -215,6 +279,22 @@ grep -a "enclave_cmd - E" ~/qadena/logs/qadena-$(date +%Y-%m-%d).log | tail
 A persistent `OUT-OF-SYNC` line for a store after startup is the §2.1 gap biting. Do not
 continue past it.
 
+Three panics are now possible at the first block and each names its own remedy; none is a crash
+to be restarted through:
+
+- *"this enclave has no committed height, but the chain has already committed height N"* — the
+  §2.2 case. The node either state-synced or had its `enclave_data/` wiped while chain data was
+  kept. It halts rather than running with empty private tables.
+- *"seeding the enclave from chain state did not complete"* — the mirror push could not deliver
+  some rows, usually `ProtectKey`/`RecoverKey`, which decrypt a VShare with a historical SS
+  interval key before writing anything. Check that the pioneers owning the older interval keys are
+  reachable from this node, then restart; seeding runs again from the first block.
+- *"could not fetch enclave-private state at height N"* — the private-state transfer found no peer
+  that could serve H. Restarting is safe and resumes from the recorded cursor.
+
+The first two used to be silent: the store push logged an error and continued, and the fetch of
+private tables did not exist at all.
+
 > `test_peer_agreement.sh` exits 0 with "NOTHING COMPARED" on a single node. A green result
 > there proves nothing — it must run with at least two nodes up.
 
@@ -267,9 +347,20 @@ exercise consensus agreement, which is the entire point.
    halted node was never restarted — one `starting node` line in its entire log history. The
    reactor died while the process stayed alive. Recovery-by-restart is untested.
 4. **The full procedure end-to-end**, with a deliberately forked two-node setup.
+5. **Does a state-synced node actually agree with its peers?** State-sync a second node, put a
+   threshold-straddling transfer through, and check that exactly one suspicious transaction
+   reaches chain state and that `test_peer_agreement.sh` compares clean. This must be run **with
+   a negative control** — repeat it with the private-state import disabled and confirm the peers
+   *do* diverge. Without the control the suite cannot distinguish "fixed" from "the scenario never
+   happened", which is the same discipline as the rollback suite in `f52a1758`.
+   One trap specific to running both nodes on one host: product-key sealing *is* portable across
+   MRENCLAVE on the same CPU, so a `cp -r` of the first node's `enclave_data/` would make this
+   pass for the wrong reason. The second node's store must be built from nothing.
 
 Until (1) and (2) are answered, treat in-place rollback as **plausible but unproven**, and
-keep archives (§4) as the fallback.
+keep archives (§4) as the fallback. (5) is unproven likewise: the private-state transfer is
+covered by unit tests only — including a two-server re-seal round trip that asserts the stores'
+raw bytes differ while their digests match — but it has never run against two real nodes.
 
 ---
 
