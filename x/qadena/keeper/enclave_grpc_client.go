@@ -908,6 +908,24 @@ func (k Keeper) reconcileEnclaveHeight(sdkCtx sdk.Context) {
 // node if it cannot.  Halting is the whole point: the alternative is executing block H+1 against an
 // empty AML window, reaching different verdicts than the network, and forking silently.
 func (k Keeper) fetchEnclavePrivateState(sdkCtx sdk.Context, height int64) {
+	// THE HEIGHT MUST BE THE CHAIN'S LAST COMMITTED ONE -- the height state-sync stopped at, which
+	// is also the height block-sync is about to continue from.  Everything downstream depends on it:
+	// the peer pins its store to that version, the AML window is pruned relative to it, and this
+	// node's very next act is to execute height+1 against what arrives.
+	//
+	// Off by one in either direction is a silent fork rather than an error.  Fetching height-1 would
+	// leave out whatever block H did to the window; fetching height+1 would include a block this
+	// node is about to execute for itself, double-counting it.
+	//
+	// Asserted rather than assumed because the value is derived in reconcileEnclaveHeight and
+	// consumed here, with the store push in between -- two functions and a package-level variable
+	// apart, which is exactly the distance over which an invariant quietly stops holding.
+	if committed := k.headerService.GetHeaderInfo(sdkCtx).Height - 1; height != committed {
+		panic(fmt.Sprintf(
+			"qadena: private-state fetch height %d is not the chain's last committed height %d -- refusing to seed the enclave at the wrong height",
+			height, committed))
+	}
+
 	peers := k.enclavePrivateStatePeers(sdkCtx)
 	if len(peers) == 0 {
 		panic(fmt.Sprintf(

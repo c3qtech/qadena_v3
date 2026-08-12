@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"testing"
 
+	"cosmossdk.io/store/prefix"
+
 	"github.com/stretchr/testify/require"
 
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
@@ -404,4 +406,85 @@ func TestJarRegulatorCheckSkippedWhenUninitialised(t *testing.T) {
 	s := newTestEnclaveServer(t)
 	_, err := s.SetJarRegulator(context.Background(), &types.JarRegulator{JarID: "jar1", RegulatorID: "regulator1"})
 	require.NoError(t, err)
+}
+
+// TestTransferServesExactlyTheRequestedHeight is the property the whole handoff turns on.
+//
+// The joiner asks for the height chain state-sync stopped at, which is also the height block-sync
+// is about to continue from -- so what arrives must be the state AFTER executing that block and
+// before executing the next.  Off by one in either direction is a silent fork rather than an error:
+// one block short leaves out whatever that block did to the AML window, one block long includes a
+// block the joiner is about to execute for itself and double-counts it.
+func TestTransferServesExactlyTheRequestedHeight(t *testing.T) {
+	src := newTestEnclaveServer(t)
+
+	// a distinct, identifiable window at each of three consecutive heights
+	for h := int64(1); h <= 3; h++ {
+		src.setScanTransferHistory("wallet-a", types.EncryptableScanTransferHistory{
+			Transfers: []*types.EncryptableScanTransfer{
+				{UnixTime: 1000 + h, DestinationWalletID: "dest-at-height-" + strconv.FormatInt(h, 10)},
+			},
+		})
+		src.setCredentialByHash("hash-at-"+strconv.FormatInt(h, 10), "cred-"+strconv.FormatInt(h, 10))
+		endBlock(t, src, h)
+	}
+
+	for _, target := range []int64{1, 2, 3} {
+		t.Run("height-"+strconv.FormatInt(target, 10), func(t *testing.T) {
+			dst := newTestEnclaveServer(t)
+
+			// serve pinned to the target height, exactly as QueryEnclavePrivateState does
+			require.NoError(t, src.withHeightPinned(target, func() error {
+				var cursor privateStateCursor
+				for {
+					page, err := src.buildPrivateStatePage(target, 0, cursor, privateStatePageTargetBytes)
+					if err != nil {
+						return err
+					}
+					require.Equal(t, target, page.Height, "the page must carry the height it was built at")
+					for _, row := range page.Rows {
+						require.NoError(t, dst.applyPrivateStateRow(row))
+					}
+					if page.Done {
+						return nil
+					}
+					cursor, err = decodeCursor(page.NextCursor)
+					require.NoError(t, err)
+				}
+			}))
+
+			// the window must be the one written AT the target height, not before or after
+			got := dst.getScanTransferHistory("wallet-a")
+			require.Len(t, got.Transfers, 1)
+			require.Equal(t, "dest-at-height-"+strconv.FormatInt(target, 10), got.Transfers[0].DestinationWalletID,
+				"served the window from the wrong height")
+
+			// Probe the hash INDEX directly.  getCredentialByHash resolves on through to the
+			// Credential row, which lives in a mirror table the transfer deliberately does not
+			// carry -- it arrives from chain state via the store push -- so it would report
+			// not-found here even for an index row that transferred perfectly.
+			for h := target + 1; h <= 3; h++ {
+				require.False(t, credentialHashIndexHas(dst, "hash-at-"+strconv.FormatInt(h, 10)),
+					"a row first written at height %d leaked into a transfer pinned to height %d", h, target)
+			}
+			for h := int64(1); h <= target; h++ {
+				require.True(t, credentialHashIndexHas(dst, "hash-at-"+strconv.FormatInt(h, 10)),
+					"a row written at height %d is missing from a transfer pinned to height %d", h, target)
+			}
+
+			// and the digests agree at that height, which is the check a live node would run
+			var srcDigest map[string]string
+			require.NoError(t, src.withHeightPinned(target, func() error {
+				srcDigest = src.privateStateDigest(0)
+				return nil
+			}))
+			require.Equal(t, srcDigest, dst.privateStateDigest(0))
+		})
+	}
+}
+
+// credentialHashIndexHas reads the hash index alone, without following it to the Credential row.
+func credentialHashIndexHas(s *qadenaServer, credentialHash string) bool {
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveCredentialHashKeyPrefix))
+	return store.Get(s.MustSealStable(EnclaveKeyKey(credentialHash))) != nil
 }
