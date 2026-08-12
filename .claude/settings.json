@@ -17,7 +17,10 @@
       "Bash(./buildscripts/build_enclave.sh --title IAVLCAP)",
       "Bash(ssh -o ConnectTimeout=15 -o BatchMode=yes 192.168.86.120 'bash -lc \" *)",
       "Bash(ssh -o ConnectTimeout=15 -o BatchMode=yes 192.168.86.140 'df -h /home | tail -1; echo \"--- top space users in home ---\"; du -sh ~/* 2>/dev/null | sort -rh | head -8; echo \"--- logs ---\"; du -sh ~/qadena/logs 2>/dev/null')",
-      "Bash(awk -F: '$1>4160 && $1<4230')"
+      "Bash(awk -F: '$1>4160 && $1<4230')",
+      "Bash(~/qadena/bin/qadenad enclave *)",
+      "Bash(python3 -c ' *)",
+      "Bash(./testscripts/test_enclave_rollback.sh)"
     ]
   }
 }

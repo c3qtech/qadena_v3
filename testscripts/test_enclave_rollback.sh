@@ -63,6 +63,28 @@ enclave_watermark() {
     qadenad_alias enclave height 2>/dev/null | grep "$1" | awk '{print $2}'
 }
 
+# Does the ENCLAVE hold a wallet with this ID?  Read out of the enclave itself via
+# export-private-state -- not the chain, and not a hash: the actual record.
+#
+# DEBUG ENCLAVES ONLY.  export-private-state dumps sealed contents, so a real SGX enclave
+# refuses it; on SGX the store-hash comparison below is the available evidence.
+enclave_has_wallet() {
+    # .Wallets is an ARRAY of wallet objects keyed by walletID, not a map -- has() would error
+    local n
+    n=$(qadenad_alias enclave export-private-state 2>/dev/null \
+        | sed -n '/^{/,$p' \
+        | jq -r --arg w "$1" '[.Wallets[]? | select(.walletID==$w)] | length' 2>/dev/null)
+    [ "$n" = "1" ]
+}
+
+# Can we read the enclave's contents at all?  export-private-state dumps sealed state, so a real
+# SGX enclave refuses it.  Probe once, explicitly, rather than inferring it from a failed lookup
+# -- inferring would turn a BROKEN query into a silent skip, which is exactly how a suite ends up
+# reporting success while testing nothing.
+enclave_contents_readable() {
+    qadenad_alias enclave export-private-state 2>/dev/null | sed -n '/^{/,$p' | jq -e '.Wallets' > /dev/null 2>&1
+}
+
 [ -n "$(chain_height)" ] || fail "chain is not running -- this suite refuses to skip"
 
 # ---- topology ----
@@ -96,11 +118,22 @@ bal_before=$(pioneer_balance)
 hash_before=$(qadenad_alias enclave store-hash 2>/dev/null | sort)
 [ -n "$hash_before" ] || fail "cannot read the enclave's store hashes"
 
-result=$(qadenad_alias tx bank send treasury "$pioneer_addr" 3qdn --yes --keyring-backend test \
-    --gas-prices "$minimum_gas_prices" --gas auto --gas-adjustment "$gas_adjustment" --output json) \
-    || fail "tx broadcast failed"
-txhash=$(echo "$result" | jq -r .txhash)
-[ "$(echo "$result" | jq -r .code)" = "0" ] || fail "tx rejected at broadcast: $result"
+# A CREATE-WALLET, not a bank send: it writes a Wallet into the ENCLAVE, which is the state
+# whose disappearance proves the enclave rolled back.  A bank send moves only chain balances.
+test_wallet="rbtest$(date +%s)"
+test_mnemonic=$(qadenad_alias keys mnemonic --keyring-backend test) || fail "cannot generate a mnemonic"
+
+result=$(qadenad_alias tx qadena create-wallet "$test_wallet" pioneer1 \
+    --account-mnemonic="$test_mnemonic" create-wallet-sponsor --yes --keyring-backend test \
+    --gas-prices "$minimum_gas_prices" --gas auto --gas-adjustment "$gas_adjustment" --output json 2>&1) \
+    || fail "create-wallet broadcast failed"
+# create-wallet prints plain text BEFORE and AFTER the JSON tx response (homePioneerAddress,
+# sponsorAddress, then the fee-grant result), so neither head nor tail finds it -- take the
+# first line that actually starts a JSON object.
+result_json=$(printf '%s\n' "$result" | grep -m1 '^{') || true
+[ -n "$result_json" ] || fail "create-wallet produced no JSON response: $result"
+txhash=$(printf '%s' "$result_json" | jq -r .txhash)
+[ "$(printf '%s' "$result_json" | jq -r .code)" = "0" ] || fail "tx rejected at broadcast: $result_json"
 
 txfile=$(mktemp)
 landed=0
@@ -113,9 +146,19 @@ done
 h_tx=$(jq -r .height "$txfile")
 rm -f "$txfile"
 
-bal_after=$(pioneer_balance)
-[ "$bal_after" != "$bal_before" ] || fail "balance did not change after the send"
-echo "tx $txhash landed at height $h_tx; balance $bal_before -> $bal_after"
+wallet_id=$(qadenad_alias keys show "$test_wallet" -a --keyring-backend test 2>/dev/null) \
+    || fail "cannot resolve the new wallet's address"
+
+# THE POSITIVE HALF: the enclave must now hold this wallet.
+if enclave_contents_readable; then
+    can_read_enclave=1
+    enclave_has_wallet "$wallet_id" \
+        || fail "the create-wallet transaction landed at height $h_tx but the ENCLAVE does not hold wallet $wallet_id -- the later absence check would prove nothing"
+    echo "tx $txhash landed at height $h_tx; ENCLAVE now holds wallet $wallet_id"
+else
+    can_read_enclave=0
+    echo "tx $txhash landed at height $h_tx (SGX enclave: contents not readable, using store hashes only)"
+fi
 
 # a bank send moves wallet state, so the enclave's mirrors must have moved with it.  If they did
 # not, the comparison after the rollback would be vacuous -- it would "match" because nothing
@@ -159,7 +202,15 @@ bal_now=$(pioneer_balance)
 
 if [ "$peer_count" -eq 0 ]; then
     # solo: the transaction is gone for good
-    [ "$bal_now" = "$bal_before" ] || fail "solo rollback did not revert the balance: before=$bal_before now=$bal_now"
+    # THE NEGATIVE HALF, and the whole point: the wallet the transaction put INTO the enclave
+    # must no longer be there.  This is read from the enclave itself, so it cannot be satisfied
+    # by the chain having rolled back.
+    if [ "$can_read_enclave" -eq 1 ]; then
+        if enclave_has_wallet "$wallet_id"; then
+            fail "the ENCLAVE still holds wallet $wallet_id after rolling back past the block that created it -- the enclave did NOT roll back"
+        fi
+        echo "ENCLAVE no longer holds wallet $wallet_id -- enclave state reverted"
+    fi
 
     # and the ENCLAVE's state reverted with it -- the assertion this whole branch exists for.
     # Watermarks and balances could both look right while the enclave still held the
