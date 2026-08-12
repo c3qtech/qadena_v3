@@ -193,6 +193,7 @@ message MsgConfirmHeight {
   int64 height = 1;
 }
 
+
 message ConfirmHeightReply {
   int64 confirmedHeight = 1;
 }
@@ -245,6 +246,12 @@ message MsgRemovePrivateKey {
 }
 
 message MsgExportPrivateState {
+  // Dump the enclave's state AS OF this chain height instead of as of now.  0 means current.
+  //
+  // Made possible by height bookkeeping: the height is mapped to the IAVL version committed for
+  // it and the export reads that version.  This is the tool the 2026-08-09 fork had no answer
+  // to -- "what did this enclave actually hold at the height where the two nodes diverged?"
+  int64 height = 1;
 }
 
 message MsgUpdateSSIntervalKey {

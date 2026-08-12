@@ -660,3 +660,71 @@ func TestPruningKeepsSecretsIntact(t *testing.T) {
 	require.True(t, found, "pruning aged out an SS private key")
 	require.Equal(t, "privk-from-height-1", privk)
 }
+
+// TestExportPrivateStateAtHeight -- the as-of-height debug dump.  Height bookkeeping makes it
+// possible to ask "what did this enclave hold at height H?", which is precisely the question the
+// 2026-08-09 fork could not answer: two nodes disagreed about executing block 61,067 and there
+// was no way to inspect either enclave's state at that height.  Diffing two nodes' dumps at the
+// same height locates a divergence instead of inferring it.
+func TestExportPrivateStateAtHeight(t *testing.T) {
+	s := newTestEnclaveServer(t)
+
+	endBlock(t, s, 10)
+
+	// height 11 adds a wallet
+	s.setWalletNoNotify(types.Wallet{WalletID: "w-at-11"})
+	endBlock(t, s, 11)
+
+	// current dump has it
+	now, err := s.ExportPrivateState(context.Background(), &types.MsgExportPrivateState{})
+	require.NoError(t, err)
+	require.Contains(t, now.State, "w-at-11")
+
+	// as of height 11 it is there...
+	at11, err := s.ExportPrivateState(context.Background(), &types.MsgExportPrivateState{Height: 11})
+	require.NoError(t, err)
+	require.Contains(t, at11.State, "w-at-11")
+
+	// ...and as of height 10 it is not.  This is the whole point: a historical read, not the
+	// current state relabelled.
+	at10, err := s.ExportPrivateState(context.Background(), &types.MsgExportPrivateState{Height: 10})
+	require.NoError(t, err)
+	require.NotContains(t, at10.State, "w-at-11", "the as-of-height dump returned current state instead of the historical version")
+
+	// the server must be left pointing at the present, not pinned to the version it just read --
+	// a leaked swap would silently corrupt every subsequent block
+	after, err := s.ExportPrivateState(context.Background(), &types.MsgExportPrivateState{})
+	require.NoError(t, err)
+	require.Contains(t, after.State, "w-at-11", "the historical read leaked: the server is still pinned to an old version")
+
+	// and a height the enclave never committed is refused by name, not silently answered
+	_, err = s.ExportPrivateState(context.Background(), &types.MsgExportPrivateState{Height: 99})
+	require.Error(t, err)
+}
+
+// TestEnclavePruningOptionsMatchTheChain -- the enclave parses the same strategy names out of the
+// same app.toml the chain reads, so the two cannot drift.  A mismatch here is not cosmetic: an
+// enclave retaining less than the chain makes a rollback the chain accepts fail on the enclave.
+func TestEnclavePruningOptionsMatchTheChain(t *testing.T) {
+	def, err := enclavePruningOptions("default", 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(362880), def.KeepRecent)
+
+	nothing, err := enclavePruningOptions("nothing", 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), nothing.Interval, "nothing must disable pruning entirely")
+
+	custom, err := enclavePruningOptions("custom", 500, 10)
+	require.NoError(t, err)
+	require.Equal(t, uint64(500), custom.KeepRecent)
+	require.Equal(t, uint64(10), custom.Interval)
+
+	// case-insensitive, like the chain's own parser
+	_, err = enclavePruningOptions("DEFAULT", 0, 0)
+	require.NoError(t, err)
+
+	// and an unknown strategy is refused rather than silently defaulted -- silently defaulting
+	// is how the two sides would come to disagree without anyone noticing
+	_, err = enclavePruningOptions("aggressive", 0, 0)
+	require.Error(t, err)
+}

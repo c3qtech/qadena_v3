@@ -79,7 +79,6 @@ import (
 	"cosmossdk.io/store"
 	storemetrics "cosmossdk.io/store/metrics"
 	"cosmossdk.io/store/prefix"
-	pruningtypes "cosmossdk.io/store/pruning/types"
 	storetypes "cosmossdk.io/store/types"
 
 	tmdb "github.com/cosmos/cosmos-db"
@@ -1155,6 +1154,35 @@ func (s *qadenaServer) ExportPrivateState(ctx context.Context, in *types.MsgExpo
 	}
 
 	c.LoggerDebug(logger, "ExportPrivateState")
+
+	// AS-OF-HEIGHT dump.  Every accessor below reads through s.CacheCtx, so pointing that at a
+	// historical version makes the whole export read that version with no other change.  The
+	// swap is restored before returning, including on panic -- leaving the server pinned to an
+	// old version would silently corrupt every subsequent block.
+	//
+	// This is the tool the 2026-08-09 fork had no answer to: "what did this enclave hold at the
+	// height where the two nodes diverged?"  Diff two nodes' dumps at the same height and the
+	// divergence is located rather than inferred.
+	if in.Height > 0 {
+		v, found := s.getHeightVersion(in.Height)
+		if !found {
+			return nil, fmt.Errorf("no version is indexed for height %d (oldest retained is %d): the enclave never committed that height, or it has been pruned", in.Height, s.earliestIndexedHeight())
+		}
+		cms, ok := s.ServerCtx.MultiStore().(storetypes.CommitMultiStore)
+		if !ok {
+			return nil, fmt.Errorf("enclave multistore is not a CommitMultiStore")
+		}
+		historical, err := cms.CacheMultiStoreWithVersion(v)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read enclave state at height %d (version %d): %w", in.Height, v, err)
+		}
+		saved, savedWrite := s.CacheCtx, s.CacheCtxWrite
+		s.CacheCtx = s.ServerCtx.WithMultiStore(historical)
+		// the historical view is read-only; a write through it must never reach the real store
+		s.CacheCtxWrite = func() {}
+		defer func() { s.CacheCtx, s.CacheCtxWrite = saved, savedWrite }()
+		c.LoggerInfo(logger, fmt.Sprintf("ExportPrivateState reading height %d (version %d)", in.Height, v))
+	}
 
 	var state struct {
 		PrivateEnclaveParams                    PrivateEnclaveParams
@@ -7200,6 +7228,19 @@ func main() {
 
 	enclaveUpgradeModeArg := flag.Bool("upgrade-mode", false, "Enclave upgrade mode")
 	upgradeFromEnclave := flag.String("upgrade-from-enclave-unique-id", "", "Unique ID of old enclave running on this node")
+	// THE CHAIN'S OWN PRUNING WINDOW, passed in at startup by run_enclave.sh /
+	// run_realenclave.sh, which read it straight out of the same config/app.toml the chain
+	// reads.  The enclave must retain AT LEAST what the chain does: if it kept less, a rollback
+	// the chain accepted would fail on the enclave and leave the two at different heights --
+	// the one divergence nothing repairs in place.  Same flag names as the chain's, so there is
+	// no second vocabulary to learn.
+	//
+	// A FLAG rather than an RPC because of ordering: the enclave starts BEFORE qadenad and must
+	// have its retention set before LoadLatestVersion, so there is no window in which it runs
+	// on a guess.
+	pruningStrategy := flag.String("pruning", "default", "pruning strategy (default|nothing|everything|custom) -- must match the chain's")
+	pruningKeepRecent := flag.Uint64("pruning-keep-recent", 0, "versions to keep when --pruning=custom")
+	pruningInterval := flag.Uint64("pruning-interval", 0, "prune every N blocks when --pruning=custom")
 
 	flag.Parse()
 
@@ -7454,7 +7495,15 @@ func main() {
 	// itself can perform, and nothing older survives to bloat the store.  The height->version
 	// index is pruned in step at EndBlock (see enclaveRetainVersions there), slightly tighter
 	// than the version window so an indexed height always maps to a live version.
-	stateStore.SetPruning(pruningtypes.NewCustomPruningOptions(enclaveRetainVersions, enclavePruneInterval))
+	pruningOpts, perr := enclavePruningOptions(*pruningStrategy, *pruningKeepRecent, *pruningInterval)
+	if perr != nil {
+		c.LoggerError(logger, "invalid pruning configuration: "+perr.Error())
+		return
+	}
+	enclaveRetainVersions = pruningOpts.KeepRecent
+	enclavePruneInterval = pruningOpts.Interval
+	c.LoggerInfo(logger, fmt.Sprintf("enclave retention: strategy=%s keepRecent=%d interval=%d", *pruningStrategy, enclaveRetainVersions, enclavePruneInterval))
+	stateStore.SetPruning(pruningOpts)
 
 	stateStore.MountStoreWithDB(storeKey, storetypes.StoreTypeIAVL, db)
 	//	stateStore.MountStoreWithDB(memStoreKey, sdk.StoreTypeMemory, nil)

@@ -344,7 +344,8 @@ func newRemovePrivateKeyCmd() *cobra.Command {
 }
 
 func newExportPrivateStateCmd() *cobra.Command {
-	return &cobra.Command{
+	var height int64
+	cmd := &cobra.Command{
 		Use:   "export-private-state [pubKID]",
 		Short: "Export private state for a given pubKID",
 		Args:  cobra.ExactArgs(0),
@@ -356,7 +357,7 @@ func newExportPrivateStateCmd() *cobra.Command {
 
 			grpcctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			r2, err := enclaveClient.ExportPrivateState(grpcctx, &types.MsgExportPrivateState{})
+			r2, err := enclaveClient.ExportPrivateState(grpcctx, &types.MsgExportPrivateState{Height: height})
 			if err != nil {
 				c.LoggerError(logger, "could not export private state", err)
 				return err
@@ -375,6 +376,8 @@ func newExportPrivateStateCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().Int64Var(&height, "height", 0, "dump the enclave's state as of this chain height (0 = current)")
+	return cmd
 }
 
 func newUpdateSSIntervalKeyCmd() *cobra.Command {

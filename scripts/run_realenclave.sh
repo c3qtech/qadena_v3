@@ -75,6 +75,22 @@ CHAINID=$(jq -r '.chain_id' "$QADENAHOME/config/genesis.json")
 #
 # Same derivation as run_enclave.sh, so both modes agree with config.toml.
 log_level=$(grep "log_level" $QADENAHOME/config/config.toml | awk '{print $3}' | tr -d '"' | tr -d "'")
+
+# THE CHAIN'S PRUNING WINDOW, read from the same config/app.toml the chain reads and handed to
+# the enclave at startup.  The enclave must retain at least as much history as the chain, or a
+# rollback the chain accepts fails on the enclave and leaves the two at different heights.
+# Passed as a flag rather than an RPC because the enclave starts BEFORE qadenad and must have
+# its retention set before it loads its store.
+toml_value() {
+    grep "^$2[[:space:]]*=" "$1" 2>/dev/null | head -1 | cut -d= -f2- | tr -d ' "'"'"''
+}
+pruning_strategy=$(toml_value "$QADENAHOME/config/app.toml" "pruning")
+pruning_keep_recent=$(toml_value "$QADENAHOME/config/app.toml" "pruning-keep-recent")
+pruning_interval=$(toml_value "$QADENAHOME/config/app.toml" "pruning-interval")
+[[ -z $pruning_strategy ]] && pruning_strategy="default"
+[[ -z $pruning_keep_recent ]] && pruning_keep_recent=0
+[[ -z $pruning_interval ]] && pruning_interval=0
+echo "$(basename $0): chain pruning: $pruning_strategy keep-recent=$pruning_keep_recent interval=$pruning_interval"
 if [[ $log_level == "debug" ]] ; then
     log_level="debug"
 else
@@ -83,7 +99,7 @@ fi
 
 if [ $IS_UP -eq 1 ] ; then
    while true; do
-       ego run $qadenabin/qadenad_enclave --realenclave --home=$QADENAHOME --chain-id=$CHAINID --log-level $log_level
+       ego run $qadenabin/qadenad_enclave --realenclave --home=$QADENAHOME --chain-id=$CHAINID --log-level $log_level --pruning=$pruning_strategy --pruning-keep-recent=$pruning_keep_recent --pruning-interval=$pruning_interval
        ret=$?
        if [[ $ret -eq 20 || $ret -eq 10 || $ret -eq 1 || $ret -eq 2 ]]; then
            echo "run_realenclave.sh: qadenad_enclave exited with $ret"

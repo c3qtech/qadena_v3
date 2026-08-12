@@ -36,7 +36,10 @@ import (
 	"fmt"
 	"strconv"
 
+	"strings"
+
 	"cosmossdk.io/store/prefix"
+	pruningtypes "cosmossdk.io/store/pruning/types"
 	storetypes "cosmossdk.io/store/types"
 
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
@@ -389,4 +392,23 @@ func (s *qadenaServer) ConfirmHeight(ctx context.Context, in *types.MsgConfirmHe
 	}
 	s.setConfirmedHeight(in.Height)
 	return &types.ConfirmHeightReply{ConfirmedHeight: in.Height}, nil
+}
+
+// enclavePruningOptions mirrors the chain's server.GetPruningOptionsFromFlags so both sides read
+// the same strategy names out of the same config/app.toml and land on the same numbers.  Kept as
+// a small local function rather than importing the SDK's, which takes an AppOptions the enclave
+// has no reason to construct.
+func enclavePruningOptions(strategy string, keepRecent, interval uint64) (pruningtypes.PruningOptions, error) {
+	switch strings.ToLower(strategy) {
+	case pruningtypes.PruningOptionDefault, pruningtypes.PruningOptionNothing, pruningtypes.PruningOptionEverything:
+		return pruningtypes.NewPruningOptionsFromString(strings.ToLower(strategy)), nil
+	case pruningtypes.PruningOptionCustom:
+		opts := pruningtypes.NewCustomPruningOptions(keepRecent, interval)
+		if err := opts.Validate(); err != nil {
+			return opts, fmt.Errorf("invalid custom pruning options: %w", err)
+		}
+		return opts, nil
+	default:
+		return pruningtypes.PruningOptions{}, fmt.Errorf("unknown pruning strategy %q (expected default, nothing, everything or custom)", strategy)
+	}
 }
