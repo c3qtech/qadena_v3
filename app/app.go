@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	abci "github.com/cometbft/cometbft/abci/types"
@@ -96,6 +97,7 @@ import (
 
 	nameservicemodulekeeper "github.com/c3qtech/qadena_v3/x/nameservice/keeper"
 	qadenamodulekeeper "github.com/c3qtech/qadena_v3/x/qadena/keeper"
+	qadenatypes "github.com/c3qtech/qadena_v3/x/qadena/types"
 
 	dsvsmodulekeeper "github.com/c3qtech/qadena_v3/x/dsvs/keeper"
 	pricefeedmodulekeeper "github.com/c3qtech/qadena_v3/x/pricefeed/keeper"
@@ -188,6 +190,11 @@ type App struct {
 	interfaceRegistry codectypes.InterfaceRegistry
 
 	clientCtx client.Context
+
+	// Peers this node was told to state-sync from (config.toml statesync.rpc_servers), captured at
+	// construction because OfferSnapshot needs them BEFORE there is any chain state to read peers
+	// from.  Empty when state-sync is not configured, which is also when OfferSnapshot never runs.
+	stateSyncRPCServers []string
 
 	// keepers
 	AccountKeeper         authkeeper.AccountKeeper
@@ -579,6 +586,11 @@ func New(
 
 	app.RegisterUpgradeHandlers()
 
+	// Captured here rather than looked up later: OfferSnapshot runs before the node has any chain
+	// state, so the peers it can ask about enclave-private availability are exactly the ones the
+	// operator configured to state-sync from.
+	app.stateSyncRPCServers = parseStateSyncRPCServers(cast.ToString(appOpts.Get("statesync.rpc_servers")))
+
 	maxGasWanted := cast.ToUint64(appOpts.Get(evmsrvflags.EVMMaxTxGasWanted))
 
 	app.evmSetAnteHandler(app.txConfig, maxGasWanted)
@@ -669,6 +681,93 @@ func (app *App) Commit() (*abci.ResponseCommit, error) {
 	panic("qadena: enclave ConfirmHeight failed after the chain committed height " +
 		fmt.Sprintf("%d", height) + ": " + cerr.Error() +
 		" -- halting; on restart, reconciliation confirms or rolls back as needed")
+}
+
+// parseStateSyncRPCServers splits config.toml's comma-separated statesync.rpc_servers.
+func parseStateSyncRPCServers(raw string) []string {
+	var out []string
+	for _, s := range strings.Split(raw, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// OfferSnapshot shadows BaseApp.OfferSnapshot to refuse a chain snapshot this node's enclave could
+// never be seeded for.
+//
+// Dispatch is the same trick Commit uses above: CometBFT holds the servertypes.ABCI interface whose
+// dynamic type is *App, so this method rather than the promoted BaseApp one is what consensus calls.
+//
+// A chain snapshot carries chain stores only.  Accepting one at a height no peer can serve
+// enclave-private state for means downloading it, restoring it, and only then discovering at the
+// first BeginBlock that the private tables cannot be fetched -- at which point the node halts and
+// an operator has to intervene.  Rejecting here costs one round trip and lets CometBFT try the next
+// snapshot it was offered, which may well be at a servable height.
+//
+// REJECT, deliberately, not ABORT: ABORT tears down snapshot restoration entirely, and "this
+// particular height does not work" is not a reason to give up on all of them.
+func (app *App) OfferSnapshot(req *abci.RequestOfferSnapshot) (*abci.ResponseOfferSnapshot, error) {
+	if req == nil || req.Snapshot == nil {
+		return app.BaseApp.OfferSnapshot(req)
+	}
+	height := int64(req.Snapshot.Height)
+
+	// No peers configured means state-sync is not in use and this should not have been called;
+	// defer rather than invent a verdict.
+	if len(app.stateSyncRPCServers) == 0 {
+		return app.BaseApp.OfferSnapshot(req)
+	}
+
+	servable, reason := app.enclavePrivateStateServable(height)
+	if !servable {
+		app.Logger().Error("rejecting chain snapshot: no peer's enclave can supply private state at that height",
+			"height", height, "reason", reason,
+			"note", "the enclave-private tables (AML window, credential uniqueness index, sub-wallet maps) are not in a chain snapshot and cannot be rebuilt from chain data")
+		return &abci.ResponseOfferSnapshot{Result: abci.ResponseOfferSnapshot_REJECT}, nil
+	}
+
+	return app.BaseApp.OfferSnapshot(req)
+}
+
+// enclavePrivateStateServable asks the configured state-sync peers whether any of them can serve
+// enclave-private state at the given height.
+//
+// Unauthenticated on purpose.  It carries no secrets, and a peer that lies costs only a wasted
+// attempt: the transfer itself is attested and fails closed, so this is a liveness hint rather than
+// a security boundary.
+func (app *App) enclavePrivateStateServable(height int64) (bool, string) {
+	lastReason := "no peer answered"
+	for _, peer := range app.stateSyncRPCServers {
+		node := peer
+		if !strings.Contains(node, "://") {
+			node = "tcp://" + node
+		}
+		clientCtx := app.clientCtx.WithNodeURI(node)
+		rpcClient, err := client.NewClientFromNode(node)
+		if err != nil {
+			lastReason = fmt.Sprintf("%s: %v", peer, err)
+			continue
+		}
+		clientCtx = clientCtx.WithClient(rpcClient)
+
+		res, err := qadenatypes.NewQueryClient(clientCtx).EnclavePrivateStateAvailability(
+			context.Background(), &qadenatypes.QueryEnclavePrivateStateAvailabilityRequest{})
+		if err != nil {
+			lastReason = fmt.Sprintf("%s: %v", peer, err)
+			continue
+		}
+
+		// A peer can serve any height it still has indexed, which -- because the enclave commits
+		// every block while the chain snapshots every few thousand -- is very nearly always a
+		// superset of the heights the chain can offer.
+		if res.EarliestHeight <= height && height <= res.PreparedHeight {
+			return true, ""
+		}
+		lastReason = fmt.Sprintf("%s serves heights %d..%d", peer, res.EarliestHeight, res.PreparedHeight)
+	}
+	return false, lastReason
 }
 
 // LegacyAmino returns App's amino codec.
