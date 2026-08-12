@@ -77,6 +77,29 @@ var (
 	enclavePruneInterval  uint64 = 100
 )
 
+// hvPruneCutoff returns the height below which index entries can be dropped: one prune interval
+// tighter than the version window, so a surviving entry always points at a version the tree still
+// has.
+//
+// The arithmetic is done in int64, and the margin is floored, for a reason that is not obvious.
+// Both retention values are uint64 to match the SDK's PruningOptions, and a config whose
+// keep-recent is SMALLER than its prune interval is legal and shipped: pruning="everything" is
+// exactly that -- KeepRecent 2, Interval 10.  Subtracting those as uint64 underflows to ~1.8e19,
+// which casts to int64 -8 and turns the caller's cutoff into height+8.  That deletes the ENTIRE
+// index every block, including the entry EndBlock wrote moments before, after which every rollback
+// and every as-of-height export refuses by name at every height with no hint as to why.
+//
+// When there is no room for the full margin, keep at least one height of it rather than letting it
+// collapse to zero: a cutoff exactly equal to the retention boundary would leave the oldest
+// surviving index entry pointing at the version pruning is about to take.
+func hvPruneCutoff(height int64) int64 {
+	retain, interval := int64(enclaveRetainVersions), int64(enclavePruneInterval)
+	if margin := retain - 1; interval > margin {
+		interval = margin
+	}
+	return height - (retain - interval)
+}
+
 func qmetaHVKey(height int64) []byte {
 	return []byte(fmt.Sprintf("%s%020d", qmetaHVPrefix, height))
 }

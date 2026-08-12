@@ -2778,7 +2778,6 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 		return nil, err
 	}
 
-	// still need to validate the returned remote report
 	if s.RealEnclave {
 		c.LoggerDebug(logger, "SyncEnclave returned (redacted)")
 		c.LoggerDebug(logger, "private enclave params (redacted)")
@@ -2787,6 +2786,34 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 		c.LoggerDebug(logger, "private enclave params", c.PrettyPrint(s.privateEnclaveParams))
 	}
 
+	// NOTE ON THE MISSING REPLY-SIDE ATTESTATION CHECK, which is deliberate rather than forgotten.
+	//
+	// The handshake is authenticated in one direction: we prove ourselves to the seed above, and
+	// QueryEnclaveSyncEnclave verifies that report against an ACTIVE on-chain EnclaveIdentity
+	// before parting with any keys.  That is the direction that protects the secrets, and it is
+	// the one that matters.
+	//
+	// The seed does not prove itself back, and at this point in a node's life it cannot usefully
+	// be made to.  Verifying an attestation only establishes "a genuine SGX enclave with
+	// measurement X"; deciding whether X is one of OURS needs a trust anchor, and every anchor
+	// available here is wrong:
+	//
+	//   - the chain's EnclaveIdentity table is the right anchor, but it is empty -- add_full_node.sh
+	//     runs sync-enclave before the full node starts, and the guard at the top of this function
+	//     means we are always a node that has never synchronized;
+	//   - requiring the seed's measurement to equal ours refuses joins for the whole of any upgrade
+	//     window: old and new measurements are deliberately active at the same time and nodes
+	//     upgrade one at a time, so this rejects a valid seed merely for being the stale one;
+	//   - accepting any measurement with our MRSIGNER accepts every build the project ever signed,
+	//     including ones governance explicitly marked inactive -- which is precisely the judgment
+	//     the EnclaveIdentity table exists to make.
+	//
+	// So the params are accepted here and validated against CONSENSUS state instead, once we have
+	// some: see validateSyncedParamsAgainstChain, called from the first BeginBlock after
+	// enclaveSynchronizeStores has pulled JarRegulator/PublicKey/IntervalPublicKeyID.  A forged
+	// jar or regulator private key is provable there -- its public half will not match the one the
+	// chain has registered -- and that anchors the check in the chain the node is actually
+	// joining rather than in a trust list it cannot yet read.
 	var fromRemoteEnclaveParams types.EncryptableSharedEnclaveParams
 	_, err = c.BDecryptAndProtoUnmarshal(s.getPrivateEnclaveParamsEnclavePrivK(), res.GetEncEnclaveParamsEnclavePubK(), &fromRemoteEnclaveParams)
 	if err != nil {
@@ -7206,7 +7233,7 @@ func (s *qadenaServer) EndBlock(ctx context.Context, tc *types.MsgEndBlock) (*ty
 
 	// prune the height->version index one interval tighter than the version window, so every
 	// surviving entry is guaranteed to point at a version pruning has not yet taken
-	if cutoff := tc.Height - int64(enclaveRetainVersions-enclavePruneInterval); cutoff > 0 {
+	if cutoff := hvPruneCutoff(tc.Height); cutoff > 0 {
 		s.deleteHeightIndexBelow(cutoff)
 	}
 

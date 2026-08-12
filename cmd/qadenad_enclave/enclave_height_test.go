@@ -639,6 +639,71 @@ func TestPruningAdvancesTheRollbackHorizon(t *testing.T) {
 	require.Equal(t, "h"+strconv.FormatInt(horizon, 10), getMirrorRow(s, "row"))
 }
 
+// TestHVPruneCutoffNeverInverts pins the arithmetic directly, because the failure it guards is
+// invisible in the value it produces: both retention knobs are uint64 (to match the SDK's
+// PruningOptions), so keep-recent BELOW interval underflows the subtraction to ~1.8e19, which
+// casts to a small negative int64 and turns a "delete below" into a "delete everything".
+func TestHVPruneCutoffNeverInverts(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		keep, interval uint64
+		height, want   int64
+	}{
+		// the shipped default: full margin, cutoff one interval tighter than retention
+		{"default", 362880, 100, 400000, 400000 - (362880 - 100)},
+		// the test window used above, keep > interval: unchanged behaviour
+		{"keep above interval", 10, 5, 40, 35},
+		// pruning="everything": keep 2, interval 10.  Before the fix this produced height+8.
+		{"everything", 2, 10, 40, 39},
+		// keep == interval: the full margin would put the cutoff AT the height just committed, so
+		// it caps at retain-1 and the index holds a single height.  Safe, but it means a config
+		// with interval >= keep-recent silently has almost no rollback depth -- a config smell
+		// worth seeing in this table rather than discovering mid-incident.
+		{"keep equals interval", 10, 10, 40, 39},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldKeep, oldInterval := enclaveRetainVersions, enclavePruneInterval
+			enclaveRetainVersions, enclavePruneInterval = tc.keep, tc.interval
+			t.Cleanup(func() { enclaveRetainVersions, enclavePruneInterval = oldKeep, oldInterval })
+
+			got := hvPruneCutoff(tc.height)
+			require.Equal(t, tc.want, got)
+			require.Less(t, got, tc.height, "cutoff must stay BELOW the height just committed -- at or above it, EndBlock deletes the entry it just wrote")
+		})
+	}
+}
+
+// TestPruningSurvivesKeepRecentBelowInterval is the end-to-end form of the above, in the exact
+// shape a real operator produces by setting pruning="everything" (KeepRecent 2, Interval 10).
+//
+// The bug this pins was silent in the worst way: EndBlock wrote the height->version entry and then
+// deleted it one line later, every block, so the index was permanently empty.  Rollback and
+// as-of-height export then refused EVERY height by name -- a correct-looking refusal, with the
+// horizon reported as 0, and nothing anywhere saying pruning had eaten the index.
+func TestPruningSurvivesKeepRecentBelowInterval(t *testing.T) {
+	s := newPrunedTestEnclaveServer(t, 2, 10)
+
+	for h := int64(1); h <= 40; h++ {
+		setMirrorRow(s, "row", "h"+strconv.FormatInt(h, 10))
+		endBlock(t, s, h)
+	}
+
+	horizon := s.earliestIndexedHeight()
+	require.NotZero(t, horizon, "the height->version index was wiped -- EndBlock deleted the entry it had just written")
+	require.LessOrEqual(t, horizon, int64(40))
+
+	// the surviving entries must still be backed by live versions, same invariant as the
+	// keep>interval case: a refusal by name, never a deep IAVL failure
+	r, err := s.RollbackToHeight(context.Background(), &types.MsgRollbackToHeight{Height: horizon, DryRun: true})
+	require.NoError(t, err, "the oldest indexed height is not reachable -- the hv index outlived its versions")
+	require.Equal(t, horizon, r.ToHeight)
+
+	rr, err := s.RollbackToHeight(context.Background(), &types.MsgRollbackToHeight{Height: horizon})
+	require.NoError(t, err)
+	require.True(t, rr.RolledBack)
+	require.Equal(t, "h"+strconv.FormatInt(horizon, 10), getMirrorRow(s, "row"))
+}
+
 // TestPruningKeepsSecretsIntact -- pruning is a property of the VERSIONED store only.  The
 // secrets DB has no versions to prune, and key material must never be aged out: a share whose
 // public half is still referenced on chain is needed forever.
