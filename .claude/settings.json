@@ -20,7 +20,8 @@
       "Bash(awk -F: '$1>4160 && $1<4230')",
       "Bash(~/qadena/bin/qadenad enclave *)",
       "Bash(python3 -c ' *)",
-      "Bash(./testscripts/test_enclave_rollback.sh)"
+      "Bash(./testscripts/test_enclave_rollback.sh)",
+      "Bash(ssh -o ConnectTimeout=15 -o BatchMode=yes 192.168.86.140 'bash -lc \" *)"
     ]
   }
 }

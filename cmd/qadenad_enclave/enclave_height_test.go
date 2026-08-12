@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"cosmossdk.io/store"
 	storemetrics "cosmossdk.io/store/metrics"
 	"cosmossdk.io/store/prefix"
+	pruningtypes "cosmossdk.io/store/pruning/types"
 	storetypes "cosmossdk.io/store/types"
 	tmproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	tmdb "github.com/cosmos/cosmos-db"
@@ -554,4 +556,107 @@ func TestOutboxSuspiciousTransactionRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, reply.SuspiciousTransactions, 1)
 	require.Equal(t, secret, reply.SuspiciousTransactions[0].EncSourcePersonalInfoRegulatorPubK)
+}
+
+// ---- pruning: the retention window, and the horizon it creates ----
+
+// newPrunedTestEnclaveServer builds a server with a deliberately tiny retention window so
+// pruning triggers within a handful of blocks.  At the production 362,880 a test chain would run
+// for weeks before pruning fired once -- which is exactly how retention bugs reach production
+// unexercised.
+func newPrunedTestEnclaveServer(t *testing.T, keepRecent, interval uint64) *qadenaServer {
+	t.Helper()
+	oldKeep, oldInterval := enclaveRetainVersions, enclavePruneInterval
+	enclaveRetainVersions, enclavePruneInterval = keepRecent, interval
+	t.Cleanup(func() { enclaveRetainVersions, enclavePruneInterval = oldKeep, oldInterval })
+
+	if logger == nil {
+		logger = c.NewTMLogger("enclave-test")
+	}
+	storeKey := storetypes.NewKVStoreKey(types.StoreKey)
+	db := tmdb.NewMemDB()
+	stateStore := store.NewCommitMultiStore(db, cosmossdkiolog.NewNopLogger(), storemetrics.NewNoOpMetrics())
+	stateStore.SetIAVLCacheSize(iavlCacheNodes)
+	stateStore.SetPruning(pruningtypes.NewCustomPruningOptions(keepRecent, interval))
+	stateStore.MountStoreWithDB(storeKey, storetypes.StoreTypeIAVL, db)
+	require.NoError(t, stateStore.LoadLatestVersion())
+
+	serverCtx := sdk.NewContext(stateStore, tmproto.Header{}, false, logger)
+	cacheCtx, cacheCtxWrite := serverCtx.CacheContext()
+	registry := codectypes.NewInterfaceRegistry()
+
+	s := &qadenaServer{
+		StoreKey:      storeKey,
+		ServerCtx:     serverCtx,
+		CacheCtx:      cacheCtx,
+		CacheCtxWrite: cacheCtxWrite,
+		Cdc:           amino.NewProtoCodec(registry),
+		MetaDB:        db,
+		SecretsDB:     tmdb.NewMemDB(),
+		RealEnclave:   false,
+	}
+	s.setPrivateEnclaveParamsSealedTableSharedSecret(c.GenerateSharedSecret())
+	require.NoError(t, s.initSchema())
+	return s
+}
+
+// TestPruningAdvancesTheRollbackHorizon is the property the whole retention decision rests on:
+// pruning must move the rollback horizon, and the height->version index must move WITH it.  A
+// surviving index entry pointing at a pruned version would send RollbackToHeight into a deep
+// IAVL failure instead of a clean refusal -- an operator mid-incident would get a stack trace
+// where they needed "that height is below the horizon, the oldest you can reach is N".
+func TestPruningAdvancesTheRollbackHorizon(t *testing.T) {
+	// keep 10 versions, prune every 5
+	s := newPrunedTestEnclaveServer(t, 10, 5)
+
+	for h := int64(1); h <= 40; h++ {
+		setMirrorRow(s, "row", "h"+strconv.FormatInt(h, 10))
+		endBlock(t, s, h)
+	}
+
+	horizon := s.earliestIndexedHeight()
+	require.Greater(t, horizon, int64(1), "pruning never advanced the horizon -- retention is not being applied")
+	require.LessOrEqual(t, horizon, int64(40), "horizon overshot the current height")
+
+	// every SURVIVING index entry must still be rollback-able.  This is the invariant that the
+	// tighter hv cutoff exists to maintain; if it is wrong, the failure is a stack trace rather
+	// than a refusal.
+	r, err := s.RollbackToHeight(context.Background(), &types.MsgRollbackToHeight{Height: horizon, DryRun: true})
+	require.NoError(t, err, "the oldest indexed height is not actually reachable -- the hv index outlived its versions")
+	require.Equal(t, horizon, r.ToHeight)
+
+	// and a height BELOW the horizon must be refused BY NAME, not by exploding
+	_, err = s.RollbackToHeight(context.Background(), &types.MsgRollbackToHeight{Height: 1})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "horizon", "a below-horizon rollback must name the horizon, not fail obscurely")
+
+	// a real rollback to the horizon still works after pruning
+	rr, err := s.RollbackToHeight(context.Background(), &types.MsgRollbackToHeight{Height: horizon})
+	require.NoError(t, err)
+	require.True(t, rr.RolledBack)
+	require.Equal(t, horizon, s.getPreparedHeight())
+	require.Equal(t, "h"+strconv.FormatInt(horizon, 10), getMirrorRow(s, "row"))
+}
+
+// TestPruningKeepsSecretsIntact -- pruning is a property of the VERSIONED store only.  The
+// secrets DB has no versions to prune, and key material must never be aged out: a share whose
+// public half is still referenced on chain is needed forever.
+func TestPruningKeepsSecretsIntact(t *testing.T) {
+	s := newPrunedTestEnclaveServer(t, 10, 5)
+
+	s.setOwnersAndShare("old-key", []string{"pioneer1"}, "share-from-height-1")
+	s.setPrivKCache("old-key", "privk-from-height-1")
+
+	for h := int64(1); h <= 40; h++ {
+		endBlock(t, s, h)
+	}
+
+	require.Greater(t, s.earliestIndexedHeight(), int64(1), "pruning did not run; this test would prove nothing")
+
+	share, found := s.getShare("old-key")
+	require.True(t, found, "pruning aged out an SS share -- key material must never be pruned")
+	require.Equal(t, "share-from-height-1", share)
+	privk, found := s.getPrivKCache("old-key")
+	require.True(t, found, "pruning aged out an SS private key")
+	require.Equal(t, "privk-from-height-1", privk)
 }

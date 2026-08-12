@@ -50,13 +50,6 @@ const (
 	// binary against a newer node's data, which must also refuse rather than mangle it.
 	enclaveSchemaVersion uint32 = 1
 
-	// Version retention, matching the chain's pruning "default" window so the enclave can follow
-	// any rollback the chain itself can perform.  The hv index is pruned one interval TIGHTER
-	// than the versions (see EndBlock), so an indexed height is always backed by a live version
-	// -- a stale entry would send RollbackToHeight into a deep IAVL failure instead of a refusal.
-	enclaveRetainVersions uint64 = 362880
-	enclavePruneInterval  uint64 = 100
-
 	qmetaSchemaKey          = "qmeta/schema"
 	qmetaConfirmedHeightKey = "qmeta/confirmed_height"
 	qmetaHVPrefix           = "qmeta/hv/"
@@ -68,6 +61,19 @@ const (
 // qmetaHVKey zero-pads the height to 20 digits so lexicographic order equals numeric order --
 // which is what lets earliestIndexedHeight read the first key of a forward iterator and
 // deleteHeightIndexAbove use a simple range.
+// Version retention, matching the chain's pruning "default" window so the enclave can follow any
+// rollback the chain itself can perform.  The hv index is pruned one interval TIGHTER than the
+// versions (see EndBlock), so an indexed height is always backed by a live version -- a stale
+// entry would send RollbackToHeight into a deep IAVL failure instead of a refusal by name.
+//
+// VARIABLES, not constants, solely so tests can shrink the window: at 362,880 a test chain would
+// have to run for weeks before pruning triggered even once, which is precisely how retention
+// bugs reach production unexercised.  Nothing at runtime writes to these.
+var (
+	enclaveRetainVersions uint64 = 362880
+	enclavePruneInterval  uint64 = 100
+)
+
 func qmetaHVKey(height int64) []byte {
 	return []byte(fmt.Sprintf("%s%020d", qmetaHVPrefix, height))
 }
