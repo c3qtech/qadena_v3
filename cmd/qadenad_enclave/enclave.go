@@ -7391,6 +7391,23 @@ func main() {
 	pruningKeepRecent := flag.Uint64("pruning-keep-recent", 0, "versions to keep when --pruning=custom")
 	pruningInterval := flag.Uint64("pruning-interval", 0, "prune every N blocks when --pruning=custom")
 
+	// A STARTUP FLAG rather than an RPC, deliberately.  The node must already be stopped to add it,
+	// which makes the act unambiguous, and it adds no callable surface: nothing running can trigger
+	// a reset, locally or otherwise.
+	//
+	// Not debug-gated, unlike ExportPrivateState, because the risk is a different class entirely.
+	// That handler EMITS key material -- PioneerPrivK, JarPrivK, SealedTableSharedSecret -- as
+	// plaintext to any local caller, an exfiltration route with no cruder equivalent.  This one only
+	// deletes, and an operator can already do worse by hand with `rm -rf enclave_data/`, which takes
+	// the secrets DB and the height index with it.  A supported reset that clears exactly the right
+	// tables and leaves the markers consistent is the safer option, not the riskier one.
+	//
+	// Nor is what it clears unique to this node: every correct enclave holds the same logical
+	// private state, so a reset is recoverable from any peer through the private-state transfer.
+	// That is the opposite of key material, which is why this is not gated the same way.
+	resetPrivateState := flag.Bool("reset-private-state", false,
+		"clear the enclave's PRIVATE tables (AML window, credential hash index and aliases, sub-wallet and recovery maps) and exit, so the node re-fetches them from a peer on next start")
+
 	flag.Parse()
 
 	// configure logging level (defaults to info when flag omitted)
@@ -7692,6 +7709,14 @@ func main() {
 			c.LoggerError(logger, "enclave store schema check failed: "+err.Error())
 			return
 		}
+	}
+
+	if *resetPrivateState {
+		if err := cs.resetPrivateState(); err != nil {
+			c.LoggerError(logger, "reset-private-state failed: "+err.Error())
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
 
 	if *testRemoteReportLocally {

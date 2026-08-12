@@ -488,3 +488,54 @@ func credentialHashIndexHas(s *qadenaServer, credentialHash string) bool {
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveCredentialHashKeyPrefix))
 	return store.Get(s.MustSealStable(EnclaveKeyKey(credentialHash))) != nil
 }
+
+// TestResetPrivateStateClearsOnlyWhatItShould -- the recovery path for a node that cannot proceed
+// and cannot be repaired in place.  What it must NOT take is as important as what it clears: the
+// secrets DB holds SS shares that no peer can give back, and the height index is what makes
+// rollback possible at all.
+func TestResetPrivateStateClearsOnlyWhatItShould(t *testing.T) {
+	s := newTestEnclaveServer(t)
+
+	seedTransferSource(s, 6, 2, 10_000)
+	s.setCredentialByPCXY(&types.Credential{
+		CredentialID:   "cred-pcxy",
+		CredentialType: types.PersonalInfoCredentialType,
+	})
+	s.setOwnersAndShare("interval-key-1", []string{"pioneer1"}, "share-that-must-survive")
+	s.setPrivKCache("interval-key-1", "privk-that-must-survive")
+	endBlock(t, s, 9)
+
+	require.NoError(t, s.setPrivateStateProgress(privateStateProgress{Height: 9, Rows: 3, Pages: 1}))
+	s.setPrivateStateSyncHeight(9)
+
+	empty, _ := s.privateStateTablesAreEmpty()
+	require.False(t, empty, "fixture did not populate the private tables; the test would prove nothing")
+	horizonBefore := s.earliestIndexedHeight()
+
+	require.NoError(t, s.resetPrivateState())
+
+	// refresh the transaction cache so reads see the committed deletions
+	s.CacheCtx, s.CacheCtxWrite = s.ServerCtx.CacheContext()
+
+	empty, table := s.privateStateTablesAreEmpty()
+	require.True(t, empty, "%s still holds rows after a reset", table)
+
+	// markers gone, so the node re-enters the fresh case and re-fetches
+	require.Zero(t, s.privateStateSyncHeight())
+	p, err := s.privateStateProgress()
+	require.NoError(t, err)
+	require.Nil(t, p)
+
+	// SS key material must survive: no peer can give a share back
+	share, found := s.getShare("interval-key-1")
+	require.True(t, found, "reset destroyed an SS share -- that is unrecoverable, unlike the private tables")
+	require.Equal(t, "share-that-must-survive", share)
+	privk, found := s.getPrivKCache("interval-key-1")
+	require.True(t, found, "reset destroyed a reconstructed interval key")
+	require.Equal(t, "privk-that-must-survive", privk)
+
+	// the height index must survive: it is what makes rollback possible
+	require.Equal(t, horizonBefore, s.earliestIndexedHeight(), "reset moved the rollback horizon")
+	_, found = s.getHeightVersion(9)
+	require.True(t, found, "reset removed the height->version index")
+}

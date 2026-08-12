@@ -709,6 +709,67 @@ func (s *qadenaServer) commitPrivateStatePage(progress privateStateProgress) err
 	return nil
 }
 
+// resetPrivateState clears the transferred private tables and both import markers, so the node
+// re-enters the fresh case and fetches them again from a peer on its next start.
+//
+// The states this exists for: an import interrupted at a height no reachable peer can still serve,
+// an import completed at a height that turned out to be wrong, or a node whose enclave is behind a
+// chain with no history low enough to roll back to.  All three leave a node that cannot proceed and
+// cannot be repaired in place, and the alternative is an operator deleting enclave_data/ by hand --
+// which also destroys the secrets DB (SS shares, unrecoverable) and the height index.
+//
+// It deliberately does NOT touch: the secrets DB, enclave params, the height index, or the nine
+// chain-mirrored prefixes.  Those either cannot be re-obtained or are re-pushed from chain state
+// anyway.
+//
+// The counts are reported rather than the operation running silently, because "it printed 0 rows"
+// is how someone discovers they reset the wrong node.
+func (s *qadenaServer) resetPrivateState() error {
+	cms, ok := s.ServerCtx.MultiStore().(storetypes.CommitMultiStore)
+	if !ok {
+		return fmt.Errorf("enclave multistore is not a CommitMultiStore; cannot reset private state")
+	}
+
+	c.LoggerInfo(logger, "reset-private-state: clearing the enclave's private tables")
+
+	total := 0
+	for _, tbl := range privateStateTables {
+		store := prefix.NewStore(s.ServerCtx.KVStore(s.StoreKey), types.KeyPrefix(tbl.prefix))
+
+		// Collect first, delete second: deleting while iterating the same store is not something to
+		// rely on across store implementations.
+		var doomed [][]byte
+		itr := store.Iterator(nil, nil)
+		for ; itr.Valid(); itr.Next() {
+			k := make([]byte, len(itr.Key()))
+			copy(k, itr.Key())
+			doomed = append(doomed, k)
+		}
+		itr.Close()
+
+		for _, k := range doomed {
+			store.Delete(k)
+		}
+		total += len(doomed)
+		c.LoggerInfo(logger, fmt.Sprintf("reset-private-state: %s -- %d row(s) cleared", tbl.prefix, len(doomed)))
+	}
+
+	// Out-of-band commit, no qmeta/hv entry: this version belongs to no height, exactly as the
+	// import's own commits do.  There is no height to roll back to here, because these rows were
+	// never produced by executing a block.
+	cms.Commit()
+
+	if err := s.MetaDB.DeleteSync([]byte(qmetaPrivateSyncProgressKey)); err != nil {
+		return fmt.Errorf("cannot clear the private-state import progress marker: %w", err)
+	}
+	if err := s.MetaDB.DeleteSync([]byte(qmetaPrivateSyncHeightKey)); err != nil {
+		return fmt.Errorf("cannot clear the private-state import marker: %w", err)
+	}
+
+	c.LoggerInfo(logger, fmt.Sprintf("reset-private-state: done, %d row(s) cleared in total.  On the next start this enclave will fetch private state from a peer; it must be able to reach one that has been running since before the chain's current height.", total))
+	return nil
+}
+
 func (s *qadenaServer) privateStateProgress() (*privateStateProgress, error) {
 	b, err := s.MetaDB.Get([]byte(qmetaPrivateSyncProgressKey))
 	if err != nil {

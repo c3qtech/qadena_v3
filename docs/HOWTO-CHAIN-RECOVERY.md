@@ -292,6 +292,23 @@ to be restarted through:
 - *"could not fetch enclave-private state at height N"* — the private-state transfer found no peer
   that could serve H. Restarting is safe and resumes from the recorded cursor.
 
+If a node is stuck in a way restarting cannot fix — an import interrupted at a height no reachable
+peer still serves, an import completed at the wrong height, or an enclave behind a chain with no
+history low enough to roll back to — clear the private tables and let it re-fetch:
+
+```bash
+$qadenascripts/stop_qadena.sh --chain --enclave
+$qadenabin/qadenad_enclave --home $QADENAHOME --reset-private-state   # add --realenclave under SGX
+$qadenascripts/start_qadena.sh
+```
+
+It clears only the private tables and the two import markers, reporting a row count per table. It
+does **not** touch the secrets DB, the enclave params, the height index, or the nine mirrored
+prefixes. Prefer it to deleting `enclave_data/` by hand, which also destroys the SS shares — those
+are per-node and unrecoverable, whereas the private tables can be fetched from any correct peer.
+The node must be able to reach a peer that has been running since before the chain's current
+height, or it will halt again on the next start.
+
 The first two used to be silent: the store push logged an error and continued, and the fetch of
 private tables did not exist at all.
 
