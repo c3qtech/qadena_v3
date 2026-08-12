@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -727,4 +728,58 @@ func TestEnclavePruningOptionsMatchTheChain(t *testing.T) {
 	// is how the two sides would come to disagree without anyone noticing
 	_, err = enclavePruningOptions("aggressive", 0, 0)
 	require.Error(t, err)
+}
+
+// TestSaveEnclaveParamsIfChanged pins the behaviour that lets the periodic SS-key rotation stop
+// rewriting enclave_params_<uniqueID>.json every 555 blocks.
+//
+// Why it matters: that file holds SealedTableSharedSecret -- the key to every stable-sealed row
+// in both stores -- and has no backup (enclave_params_backup.json is gated on testSeal, a
+// hard-coded false).  Every rewrite is a window in which a crash leaves it torn and those rows
+// permanently unreadable.  MustSeal draws a fresh nonce per call, so identical content produced
+// different bytes on every write: the risk was being taken for no change at all.
+//
+// The rotation still CALLS save; it just no longer writes when nothing moved.  If some future
+// path does start mutating params during a rotation, the comparison notices and the write
+// happens -- which is why this is a conditional save rather than a deleted call.  The repo's
+// history is squashed, so the original reason for that call cannot be fully recovered, and
+// deleting it on the strength of a history that cannot be read would have been the riskier move.
+func TestSaveEnclaveParamsIfChanged(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	dir := t.TempDir()
+	s.HomePath = dir
+	require.NoError(t, os.MkdirAll(dir+"/enclave_config", 0755))
+
+	path := dir + "/enclave_config/enclave_params_" + uniqueID + ".json"
+
+	// first save of a process always writes: lastSavedEnclaveParams is not persisted, so after a
+	// restart the enclave has nothing to compare against.  Erring toward one redundant write is
+	// the safe direction; erring toward a skipped one would lose real changes.
+	lastSavedEnclaveParams = nil
+	require.True(t, s.saveEnclaveParamsIfChanged())
+	first, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NotEmpty(t, first)
+
+	// second call with nothing changed must NOT rewrite -- byte-identical file, same mtime
+	before, err := os.Stat(path)
+	require.NoError(t, err)
+	require.True(t, s.saveEnclaveParamsIfChanged())
+	second, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, first, second, "an unchanged save rewrote the file")
+	after, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, before.ModTime(), after.ModTime(), "an unchanged save touched the file")
+
+	// a REAL change must still be written.  This is the case that keeps the call rather than
+	// deleting it: whatever the original intent was, it survives.
+	s.setPrivateEnclaveParamsPioneerIsValidator(true)
+	require.True(t, s.saveEnclaveParamsIfChanged())
+	third, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NotEqual(t, first, third, "a genuine params change was not written")
+
+	// and the unconditional save still works, for the paths that always mean it
+	require.True(t, s.saveEnclaveParams())
 }

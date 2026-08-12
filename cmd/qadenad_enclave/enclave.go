@@ -736,6 +736,39 @@ func (s *qadenaServer) getEnclavePubK(pioneerID string) (enclavePubK string, fou
 	return
 }
 
+// lastSavedEnclaveParams is the PLAINTEXT marshalling of the params as last written, used only
+// to decide whether a write is needed.  Comparing plaintext rather than the sealed bytes is the
+// whole point: MustSeal draws a fresh nonce every call, so two seals of identical content differ
+// and a ciphertext comparison would never match.
+//
+// Not persisted.  After a restart it is empty, so the first save of a process always writes --
+// which is the safe direction: at worst one redundant write per process, never a skipped one.
+var lastSavedEnclaveParams []byte
+
+// saveEnclaveParamsIfChanged writes the params file only when its contents would actually differ.
+//
+// Callers on a periodic path use this instead of saveEnclaveParams.  enclave_params_<uniqueID>.json
+// holds SealedTableSharedSecret -- the key to every stable-sealed row in both stores, with no
+// backup -- so every rewrite is a window in which a crash leaves it torn and those rows
+// permanently unreadable.  A rewrite that changes nothing is that risk taken for no reason.
+func (s *qadenaServer) saveEnclaveParamsIfChanged() bool {
+	ep := storedEnclaveParams{
+		PrivateEnclaveParams: s.privateEnclaveParams,
+		SharedEnclaveParams:  s.sharedEnclaveParams,
+	}
+	b, err := json.Marshal(ep)
+	if err != nil {
+		// fall through to the unconditional save, which reports the error properly
+		c.LoggerError(logger, "saveEnclaveParamsIfChanged marshal error "+err.Error())
+		return s.saveEnclaveParams()
+	}
+	if lastSavedEnclaveParams != nil && bytes.Equal(lastSavedEnclaveParams, b) {
+		c.LoggerDebug(logger, "enclave params unchanged, not rewriting")
+		return true
+	}
+	return s.saveEnclaveParams()
+}
+
 func (s *qadenaServer) saveEnclaveParams() bool {
 	ep := storedEnclaveParams{
 		PrivateEnclaveParams: s.privateEnclaveParams,
@@ -756,6 +789,10 @@ func (s *qadenaServer) saveEnclaveParams() bool {
 		c.LoggerError(logger, "saveEnclaveParams marshal error "+err.Error())
 		return false
 	}
+
+	// remember the PLAINTEXT we are about to seal, so saveEnclaveParamsIfChanged can tell a
+	// real change from a re-seal of identical content
+	plaintext := append([]byte(nil), b...)
 
 	c.LoggerDebug(logger, "sealing with product key (encrypting)")
 	b, err = s.SealWithProductKey(b)
@@ -784,6 +821,8 @@ func (s *qadenaServer) saveEnclaveParams() bool {
 		c.LoggerError(logger, "err writing file "+err.Error())
 		return false
 	}
+
+	lastSavedEnclaveParams = plaintext
 
 	c.LoggerDebug(logger, "saved")
 
@@ -1899,8 +1938,27 @@ func (s *qadenaServer) updateSSIntervalKey() bool {
 		return false
 	}
 
-	// seal it
-	status := s.saveEnclaveParams()
+	// seal it -- but only if the params actually changed.
+	//
+	// This call persists nothing today: the rotation's durable writes all go through addSSShare
+	// -> setOwnersAndShare / setPrivKCache / setPubKCache, none of which touch
+	// privateEnclaveParams or sharedEnclaveParams.  That holds at the repo root commit and at
+	// every commit since.  The history is SQUASHED, though, so an earlier version may well have
+	// needed it -- which is why the call stays rather than being deleted on the strength of a
+	// history that cannot be fully read.
+	//
+	// What is removed is the needless REWRITE.  This runs every keyUpdateFrequency (555) blocks
+	// -- roughly every 14 minutes at 1.5s blocks -- and enclave_params_<uniqueID>.json holds
+	// SealedTableSharedSecret, the key to every stable-sealed row in both stores, with no backup
+	// (enclave_params_backup.json is gated on testSeal, a hard-coded false).  Every rewrite is a
+	// window in which a crash leaves that file torn and every sealed row permanently unreadable.
+	// MustSeal draws a fresh nonce per call, so the bytes differed on every write even though the
+	// plaintext never did: ~100 needless exposures a day, forever.
+	//
+	// saveEnclaveParamsIfChanged keeps whatever the original intent was -- if some future path
+	// does start mutating params during a rotation, it saves, automatically -- while writing
+	// nothing when there is nothing to write.
+	status := s.saveEnclaveParamsIfChanged()
 	if !status {
 		c.LoggerError(logger, "couldn't save enclave parms")
 		return false
