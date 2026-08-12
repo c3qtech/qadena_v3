@@ -745,6 +745,13 @@ var synchronizedWithEnclave = false
 // (cases A/B) -- in which case a store mismatch found afterwards is divergence, not seeding
 var enclaveHeightsAgreedAtStartup = false
 
+// set by reconcileEnclaveHeight for case F, and acted on by EnclaveBeginBlock once the mirror push
+// has seeded the tables the fetch depends on
+var (
+	needsPrivateStateSync  = false
+	privateStateSyncHeight int64
+)
+
 // reconcileEnclaveHeight compares the enclave's height watermarks against the chain's committed
 // height at startup and repairs what it can.  Runs once per process, from the first BeginBlock
 // (app.New cannot host it: InitEnclave runs there BEFORE app.Load, so the chain's committed
@@ -839,31 +846,14 @@ func (k Keeper) reconcileEnclaveHeight(sdkCtx sdk.Context) {
 		c.ContextInfo(sdkCtx, fmt.Sprintf("Qadena: enclave has no committed height; it will adopt chain height %d at its first EndBlock", chainHeight+1))
 
 	case verdictHaltNoHistory:
-		// case F -- fresh or wiped enclave, chain already has history.  The store push cannot
-		// seed the private tables, and executing blocks against empty ones forks the network.
-		panic(fmt.Sprintf(
-			"qadena: this enclave has no committed height, but the chain has already committed height %d.\n"+
-				"\n"+
-				"The enclave cannot be seeded from here.  The store synchronization that would follow copies\n"+
-				"only the nine chain-mirrored prefixes; every enclave-PRIVATE table stays empty -- the AML\n"+
-				"rolling window, the credential uniqueness index and its superseded aliases, the sub-wallet and\n"+
-				"recovery maps.  Executing blocks against an empty AML window produces different accept/reject\n"+
-				"verdicts than the rest of the network, and files different suspicious transactions into chain\n"+
-				"state.  That is a fork, and nothing about it is visible until the app hashes diverge.\n"+
-				"\n"+
-				"Two ways a node reaches this state:\n"+
-				"\n"+
-				"  1. It joined by STATE-SYNC, which restores chain state at a height without executing the\n"+
-				"     blocks beneath it.  Re-join with state-sync disabled (statesync.enable = false in\n"+
-				"     config.toml) so the node block-syncs from genesis and rebuilds the private tables by\n"+
-				"     executing every block.\n"+
-				"\n"+
-				"  2. The enclave's data directory was wiped or replaced while the chain's data directory was\n"+
-				"     kept.  Restore both from the same point, or discard the chain data as well and re-join.\n"+
-				"\n"+
-				"Refusing to start is deliberate: a node that continued from here would look healthy, and its\n"+
-				"store hashes would even agree after the push, while its private state was empty.",
-			chainHeight))
+		// case F -- fresh or wiped enclave, chain already has history.  The private tables can be
+		// fetched from a peer, but NOT from here: that needs EnclaveIdentity (to attest the peer)
+		// and IntervalPublicKeyID (to find one), and both arrive with the store push that runs
+		// after this function.  So record the need and let EnclaveBeginBlock act on it once the
+		// mirrors are seeded; if the fetch fails or is impossible, that is where the node halts.
+		needsPrivateStateSync = true
+		privateStateSyncHeight = chainHeight
+		c.ContextError(sdkCtx, fmt.Sprintf("Qadena: enclave holds no private state but the chain has committed height %d -- will fetch it from a peer before executing block %d", chainHeight, chainHeight+1))
 
 	case verdictHealthy:
 		// case A -- healthy
@@ -914,6 +904,70 @@ func (k Keeper) reconcileEnclaveHeight(sdkCtx sdk.Context) {
 	}
 }
 
+// fetchEnclavePrivateState pulls the enclave-private tables at height H from a peer, and HALTS the
+// node if it cannot.  Halting is the whole point: the alternative is executing block H+1 against an
+// empty AML window, reaching different verdicts than the network, and forking silently.
+func (k Keeper) fetchEnclavePrivateState(sdkCtx sdk.Context, height int64) {
+	peers := k.enclavePrivateStatePeers(sdkCtx)
+	if len(peers) == 0 {
+		panic(fmt.Sprintf(
+			"qadena: this enclave holds no private state at height %d and no peer is reachable to supply it.\n"+
+				"\n"+
+				"No IntervalPublicKeyID record carries an external address, so there is nobody to ask.  Start\n"+
+				"the node with at least one reachable pioneer that has been running since before height %d, or\n"+
+				"re-join with state-sync disabled so this node block-syncs and rebuilds the private tables by\n"+
+				"executing every block.", height, height))
+	}
+
+	// The window and the block time come from OUR chain state, not the peer's: policy reaches an
+	// enclave per-message from the chain, so a peer asked for a historical view has no window value
+	// of its own.  Using the current header's time is right rather than approximate -- block time
+	// only moves forward, so an entry outside the window now is one the very next scan of that
+	// wallet would drop before computing anything.
+	params := k.GetParams(sdkCtx)
+	header := k.headerService.GetHeaderInfo(sdkCtx)
+
+	reply, err := k.EnclaveSyncPrivateState(sdkCtx, &types.MsgSyncPrivateState{
+		Height:        height,
+		WindowSeconds: params.SuspiciousTransactionWindowSeconds,
+		BlockTimeUnix: header.Time.Unix(),
+		Peers:         peers,
+	})
+	if err != nil {
+		panic(fmt.Sprintf(
+			"qadena: could not fetch enclave-private state at height %d: %v\n"+
+				"\n"+
+				"Continuing would execute block %d against an empty AML window, which reaches different\n"+
+				"accept/reject verdicts than the rest of the network and forks.  Check that a pioneer running\n"+
+				"since before height %d is reachable from this node, then restart -- the import resumes from\n"+
+				"where it stopped.  Failing that, re-join with state-sync disabled.",
+			height, err, height+1, height))
+	}
+
+	c.ContextInfo(sdkCtx, fmt.Sprintf("Qadena: imported enclave-private state at height %d from %s (%d rows, %d pages)",
+		reply.GetHeight(), reply.GetServedBy(), reply.GetRows(), reply.GetPages()))
+}
+
+// enclavePrivateStatePeers lists peer chain RPC endpoints that might serve private state.
+//
+// Ordered DETERMINISTICALLY.  The content served is height-pinned and therefore identical from any
+// correct peer, so which one answers cannot change the result -- but a stable order makes a failure
+// reproducible, which is worth more during an incident than any load spreading would be.
+func (k Keeper) enclavePrivateStatePeers(sdkCtx sdk.Context) []string {
+	seen := map[string]bool{}
+	var peers []string
+	for _, ipki := range k.GetAllIntervalPublicKeyID(sdkCtx) {
+		addr := ipki.ExternalIPAddress
+		if addr == "" || seen[addr] {
+			continue
+		}
+		seen[addr] = true
+		peers = append(peers, addr)
+	}
+	sort.Strings(peers)
+	return peers
+}
+
 func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
 
 	if !synchronizedWithEnclave {
@@ -925,6 +979,15 @@ func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
 		if err != nil {
 			c.ContextError(sdkCtx, "Qadena: enclaveSynchronizeStores failed: "+err.Error())
 		} else {
+			// Private-state import goes HERE and nowhere else in this function.  It has to follow
+			// the store push, which seeds EnclaveIdentity (needed to attest a peer) and
+			// IntervalPublicKeyID (needed to find one), and it has to precede any transaction of
+			// this block, because the AML window is read during execution.  BeginBlock is the only
+			// point that satisfies both.
+			if needsPrivateStateSync {
+				k.fetchEnclavePrivateState(sdkCtx, privateStateSyncHeight)
+				needsPrivateStateSync = false
+			}
 			synchronizedWithEnclave = true
 		}
 	} else {
@@ -988,6 +1051,13 @@ func (k Keeper) EnclaveGetHeight(sdkctx sdk.Context) (*types.GetEnclaveHeightRep
 // enclave's LoadVersionForOverwriting deletes every version above the target and rebuilds the
 // fast-node index, so a deep rollback legitimately takes minutes.
 const EnclaveRollbackTimeout = 30 * time.Minute
+
+// EnclavePrivateStateSyncTimeout bounds a whole private-state import.  Also not c.DebugTimeout: the
+// enclave pulls the AML window and identity indexes from a peer a page at a time over the network,
+// committing each page, so a real import is many round trips rather than one local call.  Cutting
+// it short mid-transfer would not corrupt anything -- the import resumes from its recorded cursor --
+// but it would stall the node's join behind a needless retry.
+const EnclavePrivateStateSyncTimeout = 60 * time.Minute
 
 // EnclaveConfirmHeight tells the enclave the chain has durably committed the given height -- the
 // second phase of the two-phase commit, called from the app.Commit override in app/app.go AFTER
@@ -1228,6 +1298,49 @@ func (k Keeper) EnclaveQuerySyncEnclave(sdkctx sdk.Context, msg *types.QueryEncl
 	}
 
 	return nil, r
+}
+
+func (k Keeper) EnclaveQueryPrivateState(sdkctx sdk.Context, msg *types.QueryEnclavePrivateStateRequest) (error, *types.QueryEnclavePrivateStateResponse) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	defer cancel()
+
+	r, err := EnclaveGRPCClient.QueryEnclavePrivateState(ctx, msg)
+	if err != nil {
+		c.ContextError(sdkctx, "error returned by QueryEnclavePrivateState on enclave "+err.Error())
+		return err, nil
+	}
+
+	return nil, r
+}
+
+func (k Keeper) EnclaveQueryPrivateStateAvailability(sdkctx sdk.Context, msg *types.QueryEnclavePrivateStateAvailabilityRequest) (error, *types.QueryEnclavePrivateStateAvailabilityResponse) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	defer cancel()
+
+	r, err := EnclaveGRPCClient.QueryEnclavePrivateStateAvailability(ctx, msg)
+	if err != nil {
+		c.ContextError(sdkctx, "error returned by QueryEnclavePrivateStateAvailability on enclave "+err.Error())
+		return err, nil
+	}
+
+	return nil, r
+}
+
+// EnclaveSyncPrivateState asks the local enclave to pull the private tables at a height from peers.
+//
+// The deadline is separate from and much longer than c.DebugTimeout: this is a bulk transfer of
+// potentially many pages over the network, not a single local call, and inheriting the ordinary
+// per-call timeout would abort a legitimate import partway through.
+func (k Keeper) EnclaveSyncPrivateState(sdkctx sdk.Context, msg *types.MsgSyncPrivateState) (*types.SyncPrivateStateReply, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), EnclavePrivateStateSyncTimeout)
+	defer cancel()
+
+	r, err := EnclaveGRPCClient.SyncPrivateState(ctx, msg)
+	if err != nil {
+		c.ContextError(sdkctx, "error returned by SyncPrivateState on enclave "+err.Error())
+		return nil, err
+	}
+	return r, nil
 }
 
 func (k Keeper) EnclaveQueryValidateEnclaveIdentity(sdkctx sdk.Context, msg *types.QueryEnclaveValidateEnclaveIdentityRequest) (error, *types.QueryEnclaveValidateEnclaveIdentityResponse) {

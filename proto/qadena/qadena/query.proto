@@ -150,8 +150,18 @@ service Query {
   // Queries a list of EnclaveSecretShare items.
   rpc EnclaveSecretShare (QueryEnclaveSecretShareRequest) returns (QueryEnclaveSecretShareResponse) {
     option (google.api.http).get = "/qadena/qadena/enclave_secret_share/{remoteReport}/{enclavePubK}/{pubKID}";
-  
+
   }
+
+  // Serves this node's enclave-private tables at a height to an attested peer enclave.  No REST
+  // gateway route: the request carries an opaque binary cursor that has no sane URL encoding, and
+  // the only intended caller is another enclave over gRPC.
+  rpc EnclavePrivateState (QueryEnclavePrivateStateRequest) returns (QueryEnclavePrivateStateResponse) {}
+
+  // Which heights this node's enclave can serve private state for.  Unattested on purpose: it
+  // carries no secrets, and a peer that lies about its range costs the caller only a wasted
+  // attempt -- the transfer itself fails closed.
+  rpc EnclavePrivateStateAvailability (QueryEnclavePrivateStateAvailabilityRequest) returns (QueryEnclavePrivateStateAvailabilityResponse) {}
   
   // Queries a list of EnclaveRecoverKeyShare items.
   rpc EnclaveRecoverKeyShare (QueryEnclaveRecoverKeyShareRequest) returns (QueryEnclaveRecoverKeyShareResponse) {
@@ -410,6 +420,34 @@ message QueryEnclaveSyncEnclaveRequest {
 message QueryEnclaveSyncEnclaveResponse {
   bytes remoteReport                = 1;
   bytes  encEnclaveParamsEnclavePubK = 2;
+}
+
+message QueryEnclavePrivateStateRequest {
+  bytes  remoteReport  = 1;
+  string enclavePubK   = 2;
+  int64  height        = 3;
+  int64  windowSeconds = 4;
+  int64  blockTimeUnix = 5;
+  // opaque; empty starts at the beginning.  Carries a PLAINTEXT logical key, because MustSeal is
+  // nondeterministic and stable-sealed ordering is per-node, so a sealed key would not be a stable
+  // position -- the server re-seals it with its own secret to seek.
+  bytes  cursor        = 6;
+  uint32 maxBytes      = 7;
+}
+
+message QueryEnclavePrivateStateResponse {
+  bytes remoteReport = 1;
+  // gzip(EnclavePrivateStatePage) encrypted to the requester's enclavePubK.  The remoteReport
+  // above certifies exactly these bytes.
+  bytes encPrivateStatePagePubK = 2;
+}
+
+message QueryEnclavePrivateStateAvailabilityRequest {}
+
+message QueryEnclavePrivateStateAvailabilityResponse {
+  int64  earliestHeight = 1;
+  int64  preparedHeight = 2;
+  uint32 schemaVersion  = 3;
 }
 
 message QueryEnclaveSecretShareRequest {

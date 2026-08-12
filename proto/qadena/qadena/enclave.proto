@@ -67,6 +67,19 @@ service QadenaEnclave {
   rpc RemovePrivateKey (MsgRemovePrivateKey) returns (RemovePrivateKeyReply) {}
   rpc UpdateSSIntervalKey (MsgUpdateSSIntervalKey) returns (UpdateSSIntervalKeyReply) {}
 
+  // Fetch this enclave's PRIVATE tables as of a height, for a peer that joined by state-sync and
+  // therefore never executed the blocks that would have produced them.  Attested and paged.
+  //
+  // Deliberately NOT a mode of ExportPrivateState: that one hands PioneerPrivK, JarPrivK and
+  // SealedTableSharedSecret to an unauthenticated local caller, and its debug gate is the only
+  // thing standing between those and total key exfiltration.  Nothing should ever be able to reach
+  // that handler over the network.
+  rpc QueryEnclavePrivateState (QueryEnclavePrivateStateRequest) returns (QueryEnclavePrivateStateResponse) {}
+  rpc QueryEnclavePrivateStateAvailability (QueryEnclavePrivateStateAvailabilityRequest) returns (QueryEnclavePrivateStateAvailabilityResponse) {}
+
+  // local: pull the private tables at a height from peers, then commit them atomically
+  rpc SyncPrivateState (MsgSyncPrivateState) returns (SyncPrivateStateReply) {}
+
   // these are called from the chain by an enclave
   rpc QueryEnclaveSyncEnclave (QueryEnclaveSyncEnclaveRequest) returns (QueryEnclaveSyncEnclaveResponse) {}
   rpc QueryEnclaveSecretShare (QueryEnclaveSecretShareRequest) returns (QueryEnclaveSecretShareResponse) {}
@@ -243,6 +256,57 @@ message MsgExportPrivateKey {
 
 message MsgRemovePrivateKey {
   string pubKID = 1;
+}
+
+// ---- private-state transfer, for a node that joined by state-sync ----
+//
+// SIZE.  Every hop runs on grpc-go defaults -- 4 MiB receive, no overrides anywhere -- and the
+// tightest one is the SERVING node's qadenad receiving its own enclave's reply over the unix
+// socket.  The reply then travels back as CometBFT RPC JSON, where bytes are base64 and inflate by
+// 4/3.  Pages are therefore budgeted on the FINAL CIPHERTEXT at 1 MiB, which lands near 1.4 MiB
+// once base64-encoded and leaves generous headroom under 4 MiB on every hop.
+//
+// COMPRESSION happens BEFORE encryption, which is the only order that helps: ciphertext is
+// high-entropy and does not compress.  The window compresses well -- wallet IDs and denoms repeat
+// across every entry -- which is what keeps realistic transfers inside one or two pages.  The
+// tradeoff, stated rather than hidden: compressing attacker-influenceable content and then
+// encrypting it leaks a little through ciphertext LENGTH, since someone who can make transfers and
+// watch page sizes learns something about how compressible the rest of the window is.  That is
+// judged acceptable here -- this is a bulk transfer that happens once at join, not a repeated
+// oracle -- but it is the reason page sizes should not become a per-request tunable.
+
+message MsgSyncPrivateState {
+  int64 height = 1;
+  // AML window and block time AS OF height, taken from the requester's restored chain state.  The
+  // serving enclave cannot supply these: policy reaches the enclave per-message from the chain
+  // (SuspiciousPolicyFromParams), so an enclave asked for a historical view holds no window value
+  // of its own.
+  int64 windowSeconds = 2;
+  int64 blockTimeUnix = 3;
+  // peer chain RPC endpoints, tried in order
+  repeated string peers = 4;
+}
+
+message SyncPrivateStateReply {
+  bool  status    = 1;
+  int64 height    = 2;
+  uint64 rows     = 3;
+  uint32 pages    = 4;
+  string servedBy = 5;
+}
+
+// EnclavePrivateStatePage is the DECRYPTED payload.  It never exists outside an enclave.
+message EnclavePrivateStatePage {
+  int64 height = 1;
+  repeated EnclavePrivateStateRow rows = 2;
+  bytes nextCursor = 3;
+  bool  done = 4;
+}
+
+message EnclavePrivateStateRow {
+  string table = 1; // the store prefix this row belongs to
+  string key   = 2; // PLAINTEXT logical key; the receiver re-seals with its own secret
+  bytes  value = 3; // PLAINTEXT marshalled value
 }
 
 message MsgExportPrivateState {
