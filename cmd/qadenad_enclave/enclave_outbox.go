@@ -60,6 +60,27 @@ type outboxCredentialKey struct {
 	CredentialType string `json:"type"`
 }
 
+// outboxDump is every queue at once, for the debug export.  A fork diagnosis needs to know what
+// the enclave was holding to hand the chain but had not yet delivered -- an outbox that is
+// non-empty at a height where the peer's is empty is a divergence in itself.
+type outboxDump struct {
+	Wallets            []string
+	ChangedCredentials []outboxCredentialKey
+	RemovedCredentials []outboxCredentialKey
+	RecoverKeys        []string
+	Suspicious         []types.SuspiciousTransaction
+}
+
+func exportOutbox(s *qadenaServer) outboxDump {
+	return outboxDump{
+		Wallets:            outboxGet[string](s, outboxWalletsKey),
+		ChangedCredentials: outboxGet[outboxCredentialKey](s, outboxChangedCredentialsKey),
+		RemovedCredentials: outboxGet[outboxCredentialKey](s, outboxRemovedCredentialsKey),
+		RecoverKeys:        outboxGet[string](s, outboxRecoverKeysKey),
+		Suspicious:         outboxGet[types.SuspiciousTransaction](s, outboxSuspiciousKey),
+	}
+}
+
 // outboxGet reads a queue.  Reads go through the transaction cache like every other versioned
 // read, so a queue entry appended earlier in the same transaction is visible.
 func outboxGet[T any](s *qadenaServer, key string) []T {

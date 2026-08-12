@@ -104,6 +104,50 @@ func qmetaHVKey(height int64) []byte {
 	return []byte(fmt.Sprintf("%s%020d", qmetaHVPrefix, height))
 }
 
+// withHeightPinned runs fn with s.CacheCtx pointed at the store as it stood at the given height,
+// then restores it.  A height of 0 or less means "current view" and fn simply runs.
+//
+// This works because every accessor in the enclave reads through s.CacheCtx, so repointing that
+// one field makes an entire read path historical with no other change and no duplicated accessors.
+//
+// Two properties the callers depend on:
+//
+//   - The restore is deferred, so it happens on panic as well as on return.  Leaving the server
+//     pinned to an old version would silently corrupt every subsequent block -- reads would answer
+//     from the past while writes went to the present.
+//   - CacheCtxWrite is replaced with a no-op for the duration.  The historical view is read-only,
+//     and a write through it must never reach the real store.  Callers must not rely on writes
+//     inside fn persisting; nothing here does.
+//
+// A height that was never committed, or has been pruned, is refused BY NAME with the current
+// horizon -- an operator mid-incident needs "the oldest I can reach is N", not an IAVL stack trace.
+func (s *qadenaServer) withHeightPinned(height int64, fn func() error) error {
+	if height <= 0 {
+		return fn()
+	}
+
+	v, found := s.getHeightVersion(height)
+	if !found {
+		return fmt.Errorf("no version is indexed for height %d (oldest retained is %d): the enclave never committed that height, or it has been pruned", height, s.earliestIndexedHeight())
+	}
+	cms, ok := s.ServerCtx.MultiStore().(storetypes.CommitMultiStore)
+	if !ok {
+		return fmt.Errorf("enclave multistore is not a CommitMultiStore")
+	}
+	historical, err := cms.CacheMultiStoreWithVersion(v)
+	if err != nil {
+		return fmt.Errorf("cannot read enclave state at height %d (version %d): %w", height, v, err)
+	}
+
+	saved, savedWrite := s.CacheCtx, s.CacheCtxWrite
+	s.CacheCtx = s.ServerCtx.WithMultiStore(historical)
+	s.CacheCtxWrite = func() {}
+	defer func() { s.CacheCtx, s.CacheCtxWrite = saved, savedWrite }()
+
+	c.LoggerInfo(logger, fmt.Sprintf("reading enclave state at height %d (version %d)", height, v))
+	return fn()
+}
+
 // ---- preparedHeight: versioned, inside the tree ----
 
 func (s *qadenaServer) getPreparedHeight() int64 {

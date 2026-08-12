@@ -1194,35 +1194,24 @@ func (s *qadenaServer) ExportPrivateState(ctx context.Context, in *types.MsgExpo
 
 	c.LoggerDebug(logger, "ExportPrivateState")
 
-	// AS-OF-HEIGHT dump.  Every accessor below reads through s.CacheCtx, so pointing that at a
-	// historical version makes the whole export read that version with no other change.  The
-	// swap is restored before returning, including on panic -- leaving the server pinned to an
-	// old version would silently corrupt every subsequent block.
-	//
-	// This is the tool the 2026-08-09 fork had no answer to: "what did this enclave hold at the
-	// height where the two nodes diverged?"  Diff two nodes' dumps at the same height and the
-	// divergence is located rather than inferred.
-	if in.Height > 0 {
-		v, found := s.getHeightVersion(in.Height)
-		if !found {
-			return nil, fmt.Errorf("no version is indexed for height %d (oldest retained is %d): the enclave never committed that height, or it has been pruned", in.Height, s.earliestIndexedHeight())
-		}
-		cms, ok := s.ServerCtx.MultiStore().(storetypes.CommitMultiStore)
-		if !ok {
-			return nil, fmt.Errorf("enclave multistore is not a CommitMultiStore")
-		}
-		historical, err := cms.CacheMultiStoreWithVersion(v)
-		if err != nil {
-			return nil, fmt.Errorf("cannot read enclave state at height %d (version %d): %w", in.Height, v, err)
-		}
-		saved, savedWrite := s.CacheCtx, s.CacheCtxWrite
-		s.CacheCtx = s.ServerCtx.WithMultiStore(historical)
-		// the historical view is read-only; a write through it must never reach the real store
-		s.CacheCtxWrite = func() {}
-		defer func() { s.CacheCtx, s.CacheCtxWrite = saved, savedWrite }()
-		c.LoggerInfo(logger, fmt.Sprintf("ExportPrivateState reading height %d (version %d)", in.Height, v))
+	// AS-OF-HEIGHT dump.  This is the tool the 2026-08-09 fork had no answer to: "what did this
+	// enclave hold at the height where the two nodes diverged?"  Diff two nodes' dumps at the same
+	// height and the divergence is located rather than inferred.
+	var reply *types.ExportPrivateStateReply
+	err := s.withHeightPinned(in.Height, func() error {
+		var e error
+		reply, e = s.exportPrivateStateFromCurrentView()
+		return e
+	})
+	if err != nil {
+		return nil, err
 	}
+	return reply, nil
+}
 
+// exportPrivateStateFromCurrentView dumps whatever s.CacheCtx currently points at.  Split from
+// ExportPrivateState so the height pin wraps it rather than being interleaved with it.
+func (s *qadenaServer) exportPrivateStateFromCurrentView() (*types.ExportPrivateStateReply, error) {
 	var state struct {
 		PrivateEnclaveParams                    PrivateEnclaveParams
 		SharedEnclaveParams                     types.EncryptableSharedEnclaveParams
@@ -1246,6 +1235,17 @@ func (s *qadenaServer) ExportPrivateState(ctx context.Context, in *types.MsgExpo
 		EnclavePubKCacheMap                     EnclavePubKCacheMap
 		AuthorizedSignatories                   []dsvstypes.AuthorizedSignatory
 		EnclaveIdentityMap                      []types.EnclaveIdentity
+
+		// Added because their absence is exactly what made the 2026-08-09 fork undiagnosable.
+		// ScanTransferHistory is a CONSENSUS INPUT -- the AML window decides whether a transfer is
+		// refused and whether a suspicious transaction is filed -- so two nodes disagreeing about a
+		// block cannot be explained without it.  The outbox and the height watermarks say what the
+		// enclave was about to hand the chain and which height it believed it was at.
+		ScanTransferHistoryMap map[string][]*types.EncryptableScanTransfer
+		Outbox                 outboxDump
+		PreparedHeight         int64
+		ConfirmedHeight        int64
+		EarliestIndexedHeight  int64
 	}
 
 	state.PrivateEnclaveParams = s.privateEnclaveParams
@@ -1296,6 +1296,18 @@ func (s *qadenaServer) ExportPrivateState(ctx context.Context, in *types.MsgExpo
 	state.AuthorizedSignatories = s.getAllDSVSAuthorizedSignatories()
 
 	state.EnclaveIdentityMap = s.getAllEnclaveIdentities()
+
+	state.ScanTransferHistoryMap = s.exportScanTransferHistoryTable()
+	state.Outbox = exportOutbox(s)
+
+	// The watermarks are read from the CURRENT view even under a height pin: preparedHeight lives
+	// inside the tree and so rolls back with it (giving the pinned height), while confirmedHeight
+	// and the index horizon are raw MetaDB keys outside the tree and always report now.  That
+	// asymmetry is intentional -- confirmedHeight is the record of what the network has, which a
+	// historical read must not be able to un-say -- but it means these three are not all "as of H".
+	state.PreparedHeight = s.getPreparedHeight()
+	state.ConfirmedHeight = s.getConfirmedHeight()
+	state.EarliestIndexedHeight = s.earliestIndexedHeight()
 
 	//	state.CredentialIDByPCXYMap = credentialIDByPCXYMap
 
@@ -4698,6 +4710,27 @@ func (s *qadenaServer) getCredentialIdentityHistory(credentialID string) (histor
 
 	s.Cdc.MustUnmarshal(s.MustUnseal(b), &history)
 	return history, true
+}
+
+// exportScanTransferHistoryTable walks the whole AML window, one entry per sender.
+//
+// It cannot use exportSealedTable: that helper decodes every value as an EnclaveStoreString, and
+// this table's value is a repeated proto message.  Feeding it here would not fail loudly, it would
+// decode to an empty string and quietly report an empty window -- the exact wrong answer for the
+// one table a fork diagnosis depends on.
+func (s *qadenaServer) exportScanTransferHistoryTable() map[string][]*types.EncryptableScanTransfer {
+	out := make(map[string][]*types.EncryptableScanTransfer)
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveScanTransferHistoryKeyPrefix))
+	itr := store.Iterator(nil, nil)
+	defer itr.Close()
+	for ; itr.Valid(); itr.Next() {
+		key := s.MustUnsealStable(itr.Key())
+		srcWalletID := string(key[:len(key)-1]) // strip EnclaveKeyKey's trailing separator
+		var history types.EncryptableScanTransferHistory
+		s.Cdc.MustUnmarshal(s.MustUnseal(itr.Value()), &history)
+		out[srcWalletID] = history.Transfers
+	}
+	return out
 }
 
 func (s *qadenaServer) setScanTransferHistory(srcWalletID string, history types.EncryptableScanTransferHistory) {
