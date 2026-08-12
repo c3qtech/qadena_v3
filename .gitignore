@@ -35,6 +35,11 @@ ekyc_project/wso2am-4.2.0/repository/logs
 cmd/qadenad_enclave/reproducible_build_signer_id.txt
 cmd/qadenad_enclave/reproducible_build_unique_id.txt
 cmd/qadenad_enclave/qadenad_enclave
+# `go build ./cmd/qadenad_enclave/` writes the binary into the CURRENT directory, so a build run
+# from the repo root leaves a 77MB artifact there.  It was committed three times before anyone
+# noticed; ignored by absolute path so `git add -A` can never sweep it up again.
+/qadenad_enclave
+/qadenad
 cmd/qadenad_enclave/qadenad_enclave.unsigned
 cmd/qadenad_enclave/enclave_params.json
 # The signer enclave's generated files, which were missed when it was added -- the qadenad_enclave
