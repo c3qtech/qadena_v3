@@ -9,6 +9,7 @@ import (
 
 	//	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -772,39 +773,111 @@ var enclaveHeightsAgreedAtStartup = false
 //	                                   sub-wallet maps) silently stale while making the store
 //	                                   hashes agree, which is worse than halting because it
 //	                                   looks fixed.
-//	E. prepared == 0                   a fresh enclave (genesis, or seeded mid-chain by
-//	                                   sync-enclave).  Nothing to reconcile: its first EndBlock
-//	                                   adopts whatever height it arrives at (see the
-//	                                   prepared==0 exemption there), and the store push that
-//	                                   follows this call seeds the mirrors.  A WIPED enclave is
-//	                                   indistinguishable from a fresh one and gets the same
-//	                                   treatment, because re-seeding is also its correct
-//	                                   recovery -- what a wipe actually loses is the secrets DB,
-//	                                   which no reconciliation could recover anyway.
+//	E. prepared == 0, C == 0           a genuinely fresh enclave on a chain that has committed
+//	                                   nothing.  Nothing to reconcile: its first EndBlock adopts
+//	                                   whatever height it arrives at (see the prepared==0
+//	                                   exemption there), and the store push that follows this
+//	                                   call seeds the mirrors.  A node joining by BLOCK-SYNC
+//	                                   arrives here -- its chain starts at 0 and it rebuilds
+//	                                   every private table by executing each block.
+//	F. prepared == 0, C  > 0           a fresh or wiped enclave on a chain that ALREADY HAS
+//	                                   HISTORY.  HALT.  The store push seeds only the nine
+//	                                   mirrors; every enclave-private table stays empty, and an
+//	                                   empty AML window reaches different accept/reject verdicts
+//	                                   than the rest of the network -- a silent fork.  Reached
+//	                                   by a state-synced node (restores state at H without
+//	                                   executing 1..H) or by an enclave data directory wiped
+//	                                   while the chain's was kept.
+//
+//	                                   This case is what the enclave private-state transfer
+//	                                   will eventually service: fetch the private tables at C
+//	                                   from a peer, then continue.  Until then the only correct
+//	                                   move is to refuse to start.
+//
+// heightVerdict is the classification half of reconcileEnclaveHeight, split out from the acting
+// half so it can be tested without a header service, a gRPC client or a live enclave behind it.
+// The distinction that most needs pinning is fresh-vs-stranded: a node joining by BLOCK-SYNC and a
+// node restored by STATE-SYNC both arrive with prepared == 0, and the only thing separating "seed
+// me normally" from "you are about to fork" is whether the chain already has committed history.
+type heightVerdict int
+
+const (
+	verdictFresh         heightVerdict = iota // E: nothing anywhere yet; seed normally
+	verdictHealthy                            // A: prepared == confirmed == chain
+	verdictConfirmOnly                        // B: state agrees, confirm watermark lags
+	verdictRollback                           // C: enclave ahead of the chain
+	verdictHaltNoHistory                      // F: fresh enclave, chain already has history
+	verdictHaltBehind                         // D: enclave behind; blocks will never replay
+)
+
+func classifyEnclaveHeight(prepared, confirmed, chainHeight int64) heightVerdict {
+	switch {
+	case prepared == 0 && chainHeight == 0:
+		return verdictFresh
+	case prepared == 0:
+		return verdictHaltNoHistory
+	case prepared == chainHeight && confirmed == chainHeight:
+		return verdictHealthy
+	case prepared == chainHeight && confirmed < chainHeight:
+		return verdictConfirmOnly
+	case prepared > chainHeight:
+		return verdictRollback
+	default:
+		return verdictHaltBehind
+	}
+}
+
 func (k Keeper) reconcileEnclaveHeight(sdkCtx sdk.Context) {
 	chainHeight := k.headerService.GetHeaderInfo(sdkCtx).Height - 1
 
 	h, err := k.EnclaveGetHeight(sdkCtx)
 	haltOnEnclaveFailure(sdkCtx, "height reconciliation", err)
 
-	switch {
-	case h.PreparedHeight == 0:
-		// case E -- fresh (or wiped) enclave; first EndBlock adopts, store push seeds it
+	switch classifyEnclaveHeight(h.PreparedHeight, h.ConfirmedHeight, chainHeight) {
+	case verdictFresh:
+		// case E -- fresh enclave, chain with no history; first EndBlock adopts, store push seeds
 		c.ContextInfo(sdkCtx, fmt.Sprintf("Qadena: enclave has no committed height; it will adopt chain height %d at its first EndBlock", chainHeight+1))
 
-	case h.PreparedHeight == chainHeight && h.ConfirmedHeight == chainHeight:
+	case verdictHaltNoHistory:
+		// case F -- fresh or wiped enclave, chain already has history.  The store push cannot
+		// seed the private tables, and executing blocks against empty ones forks the network.
+		panic(fmt.Sprintf(
+			"qadena: this enclave has no committed height, but the chain has already committed height %d.\n"+
+				"\n"+
+				"The enclave cannot be seeded from here.  The store synchronization that would follow copies\n"+
+				"only the nine chain-mirrored prefixes; every enclave-PRIVATE table stays empty -- the AML\n"+
+				"rolling window, the credential uniqueness index and its superseded aliases, the sub-wallet and\n"+
+				"recovery maps.  Executing blocks against an empty AML window produces different accept/reject\n"+
+				"verdicts than the rest of the network, and files different suspicious transactions into chain\n"+
+				"state.  That is a fork, and nothing about it is visible until the app hashes diverge.\n"+
+				"\n"+
+				"Two ways a node reaches this state:\n"+
+				"\n"+
+				"  1. It joined by STATE-SYNC, which restores chain state at a height without executing the\n"+
+				"     blocks beneath it.  Re-join with state-sync disabled (statesync.enable = false in\n"+
+				"     config.toml) so the node block-syncs from genesis and rebuilds the private tables by\n"+
+				"     executing every block.\n"+
+				"\n"+
+				"  2. The enclave's data directory was wiped or replaced while the chain's data directory was\n"+
+				"     kept.  Restore both from the same point, or discard the chain data as well and re-join.\n"+
+				"\n"+
+				"Refusing to start is deliberate: a node that continued from here would look healthy, and its\n"+
+				"store hashes would even agree after the push, while its private state was empty.",
+			chainHeight))
+
+	case verdictHealthy:
 		// case A -- healthy
 		enclaveHeightsAgreedAtStartup = true
 		c.ContextInfo(sdkCtx, fmt.Sprintf("Qadena: enclave is reconciled at height %d", chainHeight))
 
-	case h.PreparedHeight == chainHeight && h.ConfirmedHeight < chainHeight:
+	case verdictConfirmOnly:
 		// case B -- crash in the confirm window; state agrees, watermark lags
 		enclaveHeightsAgreedAtStartup = true
 		c.ContextInfo(sdkCtx, fmt.Sprintf("Qadena: enclave prepared height %d was never confirmed (confirmed %d); confirming now", h.PreparedHeight, h.ConfirmedHeight))
 		err := k.EnclaveConfirmHeight(chainHeight)
 		haltOnEnclaveFailure(sdkCtx, "height reconciliation (confirm)", err)
 
-	case h.PreparedHeight > chainHeight:
+	case verdictRollback:
 		// case C -- enclave ahead; roll it back and let the chain re-execute forward
 		c.ContextError(sdkCtx, fmt.Sprintf("Qadena: enclave is at height %d, AHEAD of the chain's %d -- rolling the enclave back", h.PreparedHeight, chainHeight))
 		r, err := k.EnclaveRollbackToHeight(sdkCtx, chainHeight, false)
@@ -817,8 +890,27 @@ func (k Keeper) reconcileEnclaveHeight(sdkCtx sdk.Context) {
 		c.ContextInfo(sdkCtx, fmt.Sprintf("Qadena: enclave rolled back from height %d to %d; the chain will re-execute forward", h.PreparedHeight, chainHeight))
 
 	default:
-		// case D -- enclave behind; the missing blocks will never be replayed
-		panic(fmt.Sprintf("qadena: the enclave is at height %d but this chain has already committed height %d; the missing blocks will not be replayed, so this cannot be repaired in place -- stop the node and run: qadenad rollback --height %d   (rolls chain and enclave back together)", h.PreparedHeight, chainHeight, h.PreparedHeight))
+		// case D -- enclave behind; the missing blocks will never be replayed.
+		//
+		// Two remedies, because the first one is not always possible: `qadenad rollback` needs the
+		// chain to still hold state at the target height, and a node that joined by state-sync has
+		// no history below the height it joined at.  Detecting which case applies would mean
+		// reaching the block store's base height from inside the keeper, which there is no clean
+		// path to -- so name both and let the operator see which one their node can do.
+		panic(fmt.Sprintf(
+			"qadena: the enclave is at height %d but this chain has already committed height %d.\n"+
+				"\n"+
+				"The missing blocks will not be replayed, so this cannot be repaired in place.  Stop the node,\n"+
+				"then either:\n"+
+				"\n"+
+				"  * roll chain and enclave back together, if this node still holds chain state at %d:\n"+
+				"        qadenad rollback --height %d\n"+
+				"\n"+
+				"  * or, if it does not -- a node that joined by state-sync has no history below its join\n"+
+				"    height -- discard this node's chain AND enclave data and re-join from scratch.  Do not\n"+
+				"    discard only one of them: that produces the fresh-enclave-on-an-established-chain state,\n"+
+				"    which halts for the same underlying reason.",
+			h.PreparedHeight, chainHeight, h.PreparedHeight, h.PreparedHeight))
 	}
 }
 
@@ -1401,6 +1493,19 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 
 	checkSync := false
 
+	// Push failures, counted per prefix.  Every one of these call sites used to discard the error.
+	// That is not a theoretical loss: SetProtectKey and SetRecoverKey decrypt a vshare with a
+	// HISTORICAL SS interval private key before they write anything, and obtaining one means an
+	// attested round trip to each owner (getSSPrivK).  When that fails -- an owner unreachable, the
+	// deadline on this whole call exhausted, a key whose owners have all rotated away -- the
+	// handler returns early, so the enclave silently loses both the mirror row AND the derived
+	// index the handler builds as a side effect (setProtectSubWalletIDByOriginalWalletID,
+	// setRecoverOriginalWalletIDByNewWalletID).
+	//
+	// A half-seeded enclave that reports success is the exact failure mode this whole branch
+	// exists to eliminate, so collect the failures and refuse to proceed with them.
+	pushFailures := map[string]int{}
+
 	for _, sh := range storeHashes.GetHashes() {
 		h := c.StoreHashByKVStoreService(sdkctx, k.storeService, sh.Key)
 		switch sh.Key {
@@ -1410,7 +1515,9 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 				wallets := k.GetAllWallet(sdkctx)
 				//    fmt.Println("wallets", list)
 				for _, wallet := range wallets {
-					k.EnclaveClientSetWallet(sdkctx, wallet)
+					if err := k.EnclaveClientSetWallet(sdkctx, wallet); err != nil {
+						pushFailures[sh.Key]++
+					}
 					checkSync = true
 				}
 			} else {
@@ -1422,7 +1529,9 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				credentials := k.GetAllCredential(sdkctx)
 				for _, credential := range credentials {
-					k.EnclaveClientSetCredential(sdkctx, credential)
+					if err := k.EnclaveClientSetCredential(sdkctx, credential); err != nil {
+						pushFailures[sh.Key]++
+					}
 					checkSync = true
 				}
 			} else {
@@ -1434,7 +1543,9 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 				publicKeys := k.GetAllPublicKey(sdkctx)
 				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores synchronizing PublicKeys", publicKeys)
 				for _, publicKey := range publicKeys {
-					k.EnclaveClientSetPublicKey(sdkctx, publicKey)
+					if err := k.EnclaveClientSetPublicKey(sdkctx, publicKey); err != nil {
+						pushFailures[sh.Key]++
+					}
 					checkSync = true
 				}
 			} else {
@@ -1445,7 +1556,9 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				jarRegulators := k.GetAllJarRegulator(sdkctx)
 				for _, jarRegulator := range jarRegulators {
-					k.EnclaveClientSetJarRegulator(sdkctx, jarRegulator)
+					if err := k.EnclaveClientSetJarRegulator(sdkctx, jarRegulator); err != nil {
+						pushFailures[sh.Key]++
+					}
 					checkSync = true
 				}
 			} else {
@@ -1456,7 +1569,9 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				intervalPublicKeyIDs := k.GetAllIntervalPublicKeyID(sdkctx)
 				for _, intervalPublicKeyID := range intervalPublicKeyIDs {
-					k.EnclaveClientSetIntervalPublicKeyId(sdkctx, intervalPublicKeyID)
+					if err := k.EnclaveClientSetIntervalPublicKeyId(sdkctx, intervalPublicKeyID); err != nil {
+						pushFailures[sh.Key]++
+					}
 					checkSync = true
 				}
 			} else {
@@ -1467,7 +1582,9 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				protectKeys := k.GetAllProtectKey(sdkctx)
 				for _, protectKey := range protectKeys {
-					k.EnclaveClientSetProtectKey(sdkctx, protectKey)
+					if err := k.EnclaveClientSetProtectKey(sdkctx, protectKey); err != nil {
+						pushFailures[sh.Key]++
+					}
 					checkSync = true
 				}
 			} else {
@@ -1478,7 +1595,9 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				recoverKeys := k.GetAllRecoverKey(sdkctx)
 				for _, recoverKey := range recoverKeys {
-					k.EnclaveClientSetRecoverKey(sdkctx, recoverKey)
+					if err := k.EnclaveClientSetRecoverKey(sdkctx, recoverKey); err != nil {
+						pushFailures[sh.Key]++
+					}
 					checkSync = true
 				}
 			} else {
@@ -1489,7 +1608,9 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				enclaveIdentities := k.GetAllEnclaveIdentity(sdkctx)
 				for _, enclaveIdentity := range enclaveIdentities {
-					k.EnclaveClientSetEnclaveIdentity(sdkctx, enclaveIdentity)
+					if err := k.EnclaveClientSetEnclaveIdentity(sdkctx, enclaveIdentity); err != nil {
+						pushFailures[sh.Key]++
+					}
 					checkSync = true
 				}
 			} else {
@@ -1499,6 +1620,31 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 			c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores Ignoring key="+sh.Key+" in Qadena module")
 		}
 
+	}
+
+	if len(pushFailures) > 0 {
+		// not "for k := range" -- k is the Keeper receiver here
+		prefixes := make([]string, 0, len(pushFailures))
+		for prefix := range pushFailures {
+			prefixes = append(prefixes, prefix)
+		}
+		sort.Strings(prefixes)
+		detail := ""
+		for _, p := range prefixes {
+			detail += fmt.Sprintf("\n    %s: %d row(s) rejected", p, pushFailures[p])
+		}
+		panic(fmt.Sprintf(
+			"qadena: seeding the enclave from chain state did not complete.%s\n"+
+				"\n"+
+				"These rows are now missing from the enclave, and so are the private indexes their handlers\n"+
+				"build as a side effect.  ProtectKey and RecoverKey are the usual casualties: both decrypt a\n"+
+				"vshare with a historical SS interval private key before writing, and that key has to be\n"+
+				"reconstructed from its owners over the network.\n"+
+				"\n"+
+				"Check that the pioneers owning the older interval keys are reachable from this node, then\n"+
+				"restart it -- seeding runs again from the first block.  Continuing instead would leave this\n"+
+				"enclave silently short of rows that the rest of the network has.",
+			detail))
 	}
 
 	if checkSync {

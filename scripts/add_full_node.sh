@@ -363,18 +363,26 @@ else
 			TRUSTHASH2=`jq -r '.result.block_id.hash' $QADENAHOME/config/block.2`
 			
 			if [[ $TRUSTHEIGHT == $TRUSTHEIGHT2 && $TRUSTHASH == $TRUSTHASH2 ]] ; then
-				echo "Great, same same, we can trust height/hash, modifying config.toml"
+				echo "Trust height/hash agree across both seeds."
+				echo ""
+				echo "NOT enabling state-sync, deliberately.  State-sync restores CHAIN state at a height"
+				echo "without executing the blocks beneath it -- but this chain's enclave holds private state"
+				echo "that only block execution produces: the AML rolling window, the credential uniqueness"
+				echo "index and its superseded aliases, and the sub-wallet/recovery maps.  A snapshot carries"
+				echo "none of it, and there is no path to rebuild it from chain data."
+				echo ""
+				echo "A node that state-synced would run with an EMPTY AML window, reach different"
+				echo "accept/reject verdicts than the rest of the network on threshold-straddling transfers,"
+				echo "and fork.  The node now refuses to start in that state rather than doing so silently."
+				echo ""
+				echo "Falling back to block-sync: slower, and correct -- every private table is rebuilt by"
+				echo "executing every block.  Re-enable this once the enclave private-state transfer ships."
+				echo ""
 
-				dasel put -v true '.statesync.enable' -f $QADENAHOME/config/config.toml
-
-				new_rpc_servers="$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657,$GENESIS_PIONEER_SECOND_IP_ADDRESS:26657"
-				dasel put -v "$new_rpc_servers" '.statesync.rpc_servers' -f $QADENAHOME/config/config.toml
-
-				new_trust_height="$TRUSTHEIGHT"
-				dasel put -v "$new_trust_height" '.statesync.trust_height' -f $QADENAHOME/config/config.toml
-				
-				new_trust_hash="$TRUSTHASH"
-				dasel put -v "$new_trust_hash" '.statesync.trust_hash' -f $QADENAHOME/config/config.toml
+				# Left in place, unset, so the values above are visibly available to whoever re-enables
+				# this.  Do NOT set .statesync.enable without that transfer: see the case-F halt in
+				# reconcileEnclaveHeight (x/qadena/keeper/enclave_grpc_client.go).
+				:
 			else
 				echo "Trust height and trust hash do not match"
 				exit 1
