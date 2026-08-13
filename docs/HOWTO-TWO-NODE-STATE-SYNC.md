@@ -226,6 +226,70 @@ necessity — `BeginBlock` is the last point before the block's transactions rea
 
 ---
 
+### 4.1 A green run that proves nothing looks exactly like one that proves everything
+
+This has now happened three times during this work, by three different mechanisms. Read this section
+before believing any positive result.
+
+**The state must exist AT THE SNAPSHOT HEIGHT, not at the tip.** Observed on the ARM pair: a joiner
+state-synced to snapshot 12000 and logged
+
+```
+imported private state at height 12000 from <peer>: 0 rows over 1 pages
+```
+
+No panic, no error, and the node then executed 12001+ normally, rebuilt every table itself, caught up
+and agreed with its peer. Perfect-looking, and it tested nothing — the chain's wallets and protect
+keys were created around 12965, while the newest retained snapshot was 12000.
+
+The gap is structural, not bad luck: snapshots exist only at multiples of `snapshot-interval`, and
+only `snapshot-keep-recent` of them survive, so the newest offered snapshot can be up to
+`interval × keep-recent` behind the tip — **6000 blocks at the defaults**. A chain can look richly
+stateful when you measure it and still offer only snapshots from before any of that existed.
+
+So assert **both**, and read the height from the log rather than assuming which snapshot was picked
+(the joiner chooses among those offered):
+
+```sh
+# the height the joiner actually accepted
+grep -a "Snapshot accepted" $QADENAHOME/logs/qadena-*.log
+
+# on the PRIMARY: was there anything to send at that height?
+qadenad --home $QADENAHOME enclave export-private-state --height <accepted> \
+  | jq '{scan: (.ScanTransferHistoryMap|length), hash: (.CredentialHashMap|length)}'
+
+# on the JOINER: did the transfer actually move anything?
+grep -a "imported private state at height" $QADENAHOME/logs/qadena-*.log
+```
+
+`0 rows` with an empty export is **not a pass** — it is "the scenario never happened". `0 rows` with
+a non-empty export is a real bug.
+
+The other two instances of this shape, for calibration: a `qadena_status` change was verified green
+via a code path the change did not touch, and an unfixed build passed a state-sync run on a chain
+whose `list-protect-key` was 0. In all three the check was green for a reason other than the one
+under test.
+
+### 4.2 Two things that will cost you an afternoon
+
+**`comet reset-state` does NOT prepare a node for state-sync.** It leaves `application.db` behind and
+the restore aborts with `multistore restore: import failed: found database at version N, must be 0`.
+Remove `data/` wholesale.
+
+**After a panic, qadenad is dead but the enclave and signer_enclave survive.** `is_qadena_running`
+therefore still reports true, and `start_qadena.sh` answers "Qadena is already running" and does
+nothing at all. Run `stop_qadena.sh --all` before restarting. Nothing in the output tells you this.
+
+**Re-joining cannot reuse the pioneer name.** `add_full_node.sh` aborts with "The Pioneer pioneer2
+already exists" because the registration from the first join is still on chain — and the guard runs
+*after* it has wiped `data/`, `enclave_config/`, `enclave_data/` and `keyring-test`, so a failed
+re-join leaves the node un-joined and keyless. Either use a fresh pioneer name and fund a new key, or
+skip `add_full_node.sh` entirely for a re-join: wipe `data/` and `enclave_data/`, **keep**
+`enclave_config/`, and restart. The params are already valid and the pioneer is already registered,
+so re-registering is precisely the step you do not want.
+
+---
+
 ## 5. The negative control — do not skip this
 
 A green result here means nothing on its own. If the scenario never actually occurred, a passing
