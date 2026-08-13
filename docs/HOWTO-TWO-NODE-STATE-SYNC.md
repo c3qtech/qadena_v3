@@ -25,56 +25,51 @@ those depend on real hardware. A debug build is a legitimate environment for thi
 degraded stand-in — so a result you get here is a result about the feature, and **a failure here is
 a defect to report, not a reason to stop.**
 
-That matters for how you read the next question.
+### How enclave identity works on a debug build
 
-**Does `verifyRemoteReport` succeed between two DEBUG (non-SGX) enclaves?**
+Attestation between two debug enclaves **works by design**, and it is worth understanding the
+mechanism because the failure mode below hinges on it:
 
-Everything here depends on it: the private-state transfer, `sync-enclave`, and `getSSPrivK`'s
-cross-node share fetch all refuse a peer whose report does not verify. And there is a specific
-reason to doubt it on a debug build:
+- `uniqueID` and `signerID` are not empty on a debug build — they are `go:embed`-ed placeholders
+  from `cmd/qadenad_enclave/test_unique_id.txt` and `test_signer_id.txt` (currently `unique047` and
+  `signer051`). The real-hardware measurements only *overwrite* them inside `if *realEnclave`.
+- A debug report is the literal string `TRUST-ME:<uniqueID>:<signerID>:<hash>:<data>`, so it carries
+  those placeholders.
+- `buildscripts/build_enclave.sh` rewrites `enclaveIdentityList` in `genesis.json` with whatever ids
+  the build produced — the placeholders on a debug build, the real measurements on SGX.
+- So `getEnclaveIdentity("unique047", "signer051", …)` finds an active row and verification
+  succeeds.
 
-- `uniqueID` and `signerID` are package vars in `cmd/qadenad_enclave/enclave.go` assigned **only**
-  inside `if *realEnclave`. On a debug build they stay `""`.
-- A debug report is the literal string `TRUST-ME:<uniqueID>:<signerID>:<hash>:<data>`
-  (`getRemoteReport`), so it carries **empty** ids.
-- `verifyRemoteReportInternal` ends at `getEnclaveIdentity(localUniqueID, signerID, false)`, which
-  looks up `EnclaveIdentityKey(uniqueID)` and requires `ActiveStatus`.
-- But `init_enclave.sh` registers the identity as `SIGNER_ID="*"` / `UNIQUE_ID="*"` on a debug
-  build, and **there is no wildcard matching anywhere in the enclave code** — `"*"` is stored and
-  compared as a literal.
+(The `SIGNER_ID="*"` / `UNIQUE_ID="*"` you will see in `init_enclave.sh` on a debug build is a
+different thing — arguments to the enclave's own `init-enclave` registration, not the genesis
+identity. Do not be misled by it, as an earlier draft of this document was.)
 
-So a lookup of `""` against a row keyed `"*"` plausibly misses, and every enclave-to-enclave call
-fails closed. It may well be that two-node debug has simply never been exercised.
+### The check that actually matters: do the two machines agree on the placeholder?
 
-Check it before investing in a full bring-up:
+This is the debug analogue of SGX's "measurement must match genesis", and it is the thing to verify
+before investing in a bring-up.
+
+`build_enclave.sh --update-test-unique-id` **increments** those files (`unique047` → `unique048`,
+and bumps `version.txt`). So two machines that were built at different times, or from trees where
+that flag was used, can carry **different placeholder ids** — and the joiner's enclave will then
+present an id the chain has never registered. Every enclave-to-enclave call fails closed:
+`sync-enclave`, `getSSPrivK`'s share fetch, and the private-state transfer alike.
 
 ```sh
-# on node A, with both nodes up and peered
-qadenad --home $QADENAHOME query qadena list-enclave-identity -o json | jq '.enclaveIdentity[]'
-# what did the chain actually record -- "*", "", or something else?
+# on BOTH machines -- these must be identical
+cat cmd/qadenad_enclave/test_unique_id.txt cmd/qadenad_enclave/test_signer_id.txt
+
+# and the chain must record that same pair
+jq '.app_state.qadena.enclaveIdentityList' $QADENAHOME/config/genesis.json
 ```
 
-Then force a real cross-node attested call and watch node B's log:
+If they differ, rebuild the joiner from the **same tree** as the primary (or copy the two files
+across and rebuild) — do not edit genesis to match a stray binary.
 
-```sh
-# any of these exercise verifyRemoteReport across nodes
-qadenad --home $QADENAHOME query qadena enclave-secret-share ...   # getSSPrivK path
-grep -a "remote report\|couldn't find an active enclave identity" $QADENAHOME/logs/qadena-*.log
-```
-
-**If attestation does NOT work between debug enclaves, that is your first finding — report it as a
-bug, do not work around it.** Since the feature is meant to work regardless of SGX, an identity
-lookup that cannot match on a debug build is a defect in the debug identity path, and it blocks
-every enclave-to-enclave call (`sync-enclave`, `getSSPrivK`'s share fetch, and the private-state
-transfer alike). Two-node debug may simply never have been exercised.
-
-Do not patch it silently to get the test moving: whether `""` should match `"*"`, or the debug
-build should report the wildcard as its own id, or the chain should register `""` — that is a
-design decision with security consequences, and it belongs to the owner. Write up what you
-observed, propose the options, and let them choose.
-
-Record the answer at the top of your notes either way. It is the single highest-value fact here,
-and it is worth finding on day one rather than after a full bring-up.
+If attestation still fails once those agree, *that* is a finding worth reporting: the feature is
+meant to work without SGX, so a debug-only identity failure is a defect, not an environment limit.
+Do not paper over it — capture the log line (`couldn't find an active enclave identity for uniqueID`
+is the one to grep for) and report it.
 
 ---
 
@@ -89,11 +84,14 @@ and debug builds can prove things SGX **cannot**:
 | `enclave update-ss-interval-key` | refused | **works** — `test_ss_key_rotation.sh` actually runs |
 | rollback evidence | store hashes only | **wallet present → absent**, the direct proof |
 | build | 3 reproducible docker builds, ~30 min, needs ego+docker | plain `go build`, minutes |
-| measurement must match genesis | **yes**, strictly | no (wildcards) — so no package-transfer dance |
+| identity must match genesis | **yes** — real MRENCLAVE | **yes** — the embedded placeholder (§0) |
 
-The last row is the big operational saving: on SGX the joiner must be installed from a package
-**built on the primary**, because `EnclaveIdentity` is keyed by measurement. On debug you can build
-on each machine independently.
+The last row is NOT a difference in kind, only in what has to match. On SGX the joiner must be
+installed from a package **built on the primary**, because the measurement is a hash of the binary
+and `EnclaveIdentity` is keyed by it. On debug you may build on each machine separately — but only
+from the SAME TREE, because the embedded placeholder ids must still match what genesis recorded
+(§0). Building independently from trees where `--update-test-unique-id` was used gives you two
+different ids and every enclave-to-enclave call fails closed.
 
 The first row is the big testing win: **you can diff the two nodes' private state directly**, which
 is impossible on SGX. Use it — see §5.
@@ -113,8 +111,9 @@ thing already covered elsewhere.
 
 There is a harness that encodes the traps: `testscripts/two_node_bringup.sh`. Read its header
 comment before doing anything by hand; every trap in it cost real time to find. Run
-`--help` for the phase list. It was written against SGX nodes, so on debug expect phase 1's
-measurement check to need adjusting (measurements are empty/wildcard).
+`--help` for the phase list. It was written against SGX nodes: its phase 1 reads measurements with
+`ego uniqueid`, which does not exist on a debug build, so that check needs swapping for the
+placeholder comparison in §0.
 
 Broad shape:
 
@@ -264,7 +263,8 @@ canonical `privateStateDigest` that prunes before hashing.
 
 Whatever happens, record:
 
-- **The §0 answer** — does debug-to-debug attestation work? Everything else is downstream of it.
+- **The §0 check** — did both machines carry the same embedded placeholder ids, and did genesis
+  record them? Everything enclave-to-enclave is downstream of that.
 - Whether `OfferSnapshot` accepted or rejected, and at what height.
 - Whether the import ran, how many rows/pages, and how long the first block took.
 - **The negative control result.** Without it, the positive result is not evidence.
