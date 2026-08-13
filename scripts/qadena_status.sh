@@ -70,36 +70,57 @@ is_enclave_id() { [[ -n "$1" && "$1" != *ERROR* && "$1" != *[[:space:]]* ]] }
 #      matters on a node installed from a release package -- those have no ego and no source tree.
 #
 #   3. Ask the binary: `<binary> -unique-id`.  This is the DEBUG answer -- the enclave prints its
-#      embedded placeholder -- and it is tried LAST for a reason.  An ego-signed binary invoked
-#      without -realenclave also prints the placeholder rather than its measurement, so asking first
-#      would report a debug id for a real SGX enclave.  By the time we get here ego has failed AND no
-#      64-hex sibling exists, which on an SGX node it always would: install.sh keeps
-#      qadenad_enclave.<measurement> beside the live binary whether or not ego is present.
+#      embedded placeholder -- and it is tried after the sibling for a reason.  An ego-signed binary
+#      invoked without -realenclave also prints the placeholder rather than its measurement, so
+#      asking earlier would report a debug id for a real SGX enclave.  By the time we get here ego
+#      has failed AND no 64-hex sibling exists, which on an SGX node one always would.
+#
+#   4. The sibling filename again, now accepting a debug placeholder -- for a binary that will not
+#      answer for itself.  signer_enclave has no -unique-id flag, but install.sh still names its
+#      copy signer_enclave.<placeholder>.
+#
+# NEVER NAME A LOCAL `path` IN ZSH.  `path` is tied to `PATH` as its array form, so `local path="$1"`
+# REPLACES THE COMMAND SEARCH PATH with the binary's own name for the rest of the function, after
+# which no external command resolves at all.  That is why route 1 could never have run: `command -v
+# ego` was being asked on a PATH whose single entry was not a directory, so it answered "no" on a
+# machine that had ego installed.  Routes 2 and 4 are pure shell and need no PATH, so the function
+# still returned an answer and the breakage stayed invisible until route 3 tried to run `tail`.
 measurement_of() {
-    local path="$1" out="" sib=""
+    local bin="$1" out="" sib=""
 
     if command -v ego > /dev/null 2>&1; then
-        out=$(ego uniqueid "$path" 2>/dev/null)
+        out=$(ego uniqueid "$bin" 2>/dev/null)
         if [ $? -eq 0 ] && is_measurement "$out"; then
             printf "%s" "$out"
             return 0
         fi
     fi
 
-    for sib in "$path".*(N); do
+    for sib in "$bin".*(N); do
         if is_measurement "${sib##*.}"; then
             printf "%s" "${sib##*.}"
             return 0
         fi
     done
 
-    if [ -x "$path" ]; then
-        out=$("$path" -unique-id 2>/dev/null | tail -1)
-        if is_enclave_id "$out" && ! is_measurement "$out"; then
-            printf "%s (debug)" "$out"
+    # Both spellings: qadenad_enclave takes -unique-id, signer_enclave takes -query-unique-id.  The
+    # wrong one exits 2 with usage on stderr and produces no stdout, so a miss is unmistakable.
+    if [ -x "$bin" ]; then
+        for flg in -unique-id -query-unique-id; do
+            out=$("$bin" "$flg" 2>/dev/null | tail -1)
+            if is_enclave_id "$out" && ! is_measurement "$out"; then
+                printf "%s (debug)" "$out"
+                return 0
+            fi
+        done
+    fi
+
+    for sib in "$bin".*(N); do
+        if is_enclave_id "${sib##*.}"; then
+            printf "%s (debug)" "${sib##*.}"
             return 0
         fi
-    fi
+    done
 
     printf "(no identity -- not an ego-signed binary, and it would not report one)"
     return 1
@@ -123,11 +144,13 @@ signer_id_of() {
         fi
     fi
     if [ -n "$2" ] && [ -x "$2" ]; then
-        out=$("$2" -signer-id 2>/dev/null | tail -1)
-        if is_enclave_id "$out" && ! is_measurement "$out"; then
-            printf "%s (debug)" "$out"
-            return 0
-        fi
+        for flg in -signer-id -query-signer-id; do
+            out=$("$2" "$flg" 2>/dev/null | tail -1)
+            if is_enclave_id "$out" && ! is_measurement "$out"; then
+                printf "%s (debug)" "$out"
+                return 0
+            fi
+        done
     fi
     printf "(unavailable -- ego not installed)"
     return 1
