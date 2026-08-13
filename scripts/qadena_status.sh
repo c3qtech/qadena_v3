@@ -43,6 +43,19 @@ info() { printf "       %s\n" "$1" }
 # output, which is NOT distinguishable by exit status alone (see below).
 is_measurement() { [[ "$1" =~ ^[0-9a-f]{64}$ ]] }
 
+# is_enclave_id -- a measurement OR a debug placeholder.
+#
+# A DEBUG BUILD'S IDENTITY IS NOT NOTHING.  It is a go:embed-ed label like "unique047" from
+# cmd/qadenad_enclave/test_unique_id.txt, buildscripts/build_enclave.sh writes that same label into
+# genesis.json's enclaveIdentityList, and getEnclaveIdentity looks it up by that exact string.  It is
+# the debug analogue of MRENCLAVE and it fails closed the same way when two nodes disagree.
+#
+# So treating "not 64 hex" as "no identity" printed "(no measurement)" on exactly the machines where
+# the question -- is this node running the binary the chain expects? -- has to be answered by hand.
+# Shape-checked rather than pattern-matched to "unique*": the placeholder text is whatever the build
+# tree says, and ego's failures announce themselves with ERROR.
+is_enclave_id() { [[ -n "$1" && "$1" != *ERROR* && "$1" != *[[:space:]]* ]] }
+
 # measurement_of <binary> -- the MRENCLAVE of an ego-signed binary, or a reason it is unavailable.
 #
 # Two ways to get it, in order of preference:
@@ -56,9 +69,12 @@ is_measurement() { [[ "$1" =~ ^[0-9a-f]{64}$ ]] }
 #      qadenad_enclave.<measurement> next to the live binary.  This needs no tooling at all, which
 #      matters on a node installed from a release package -- those have no ego and no source tree.
 #
-# Neither is available on a debug (non-SGX) build, which has no measurement to report.  Say so
-# rather than printing an empty column: a blank there reads as "unknown", and the whole point of
-# showing it is to answer "is this node running the binary the chain expects?"
+#   3. Ask the binary: `<binary> -unique-id`.  This is the DEBUG answer -- the enclave prints its
+#      embedded placeholder -- and it is tried LAST for a reason.  An ego-signed binary invoked
+#      without -realenclave also prints the placeholder rather than its measurement, so asking first
+#      would report a debug id for a real SGX enclave.  By the time we get here ego has failed AND no
+#      64-hex sibling exists, which on an SGX node it always would: install.sh keeps
+#      qadenad_enclave.<measurement> beside the live binary whether or not ego is present.
 measurement_of() {
     local path="$1" out="" sib=""
 
@@ -77,18 +93,39 @@ measurement_of() {
         fi
     done
 
-    printf "(no measurement -- debug build, or ego unavailable)"
+    if [ -x "$path" ]; then
+        out=$("$path" -unique-id 2>/dev/null | tail -1)
+        if is_enclave_id "$out" && ! is_measurement "$out"; then
+            printf "%s (debug)" "$out"
+            return 0
+        fi
+    fi
+
+    printf "(no identity -- not an ego-signed binary, and it would not report one)"
     return 1
 }
 
-# signer_id_of <public.pem> -- MRSIGNER, which unlike MRENCLAVE is stable across releases.  A node
-# whose signer differs from the chain's is running somebody else's build entirely.
+# signer_id_of <public.pem> [enclave-binary] -- MRSIGNER, which unlike MRENCLAVE is stable across
+# releases.  A node whose signer differs from the chain's is running somebody else's build entirely.
+#
+# On a debug build there is no signing key and public.pem answers nothing, but the enclave still has
+# a signer identity -- the test_signer_id.txt placeholder, which genesis records alongside the unique
+# id and getEnclaveIdentity checks.  Same fallback order and the same hazard as measurement_of: ask
+# the binary only after ego has failed, since an ego-signed enclave invoked directly reports the
+# placeholder too.
 signer_id_of() {
     local out=""
     if command -v ego > /dev/null 2>&1; then
         out=$(ego signerid "$1" 2>/dev/null)
         if [ $? -eq 0 ] && is_measurement "$out"; then
             printf "%s" "$out"
+            return 0
+        fi
+    fi
+    if [ -n "$2" ] && [ -x "$2" ]; then
+        out=$("$2" -signer-id 2>/dev/null | tail -1)
+        if is_enclave_id "$out" && ! is_measurement "$out"; then
+            printf "%s (debug)" "$out"
             return 0
         fi
     fi
@@ -167,7 +204,7 @@ if [ -x "$qadenabin/signer_enclave" ]; then
     info "signer_enclave   $("$qadenabin/signer_enclave" --version 2>&1 | head -1)  $(measurement_of "$qadenabin/signer_enclave")"
 fi
 if [ -f "$QADENAHOME/config/public.pem" ]; then
-    info "signer id        $(signer_id_of "$QADENAHOME/config/public.pem")"
+    info "signer id        $(signer_id_of "$QADENAHOME/config/public.pem" "$qadenabin/qadenad_enclave")"
 fi
 
 echo ""
