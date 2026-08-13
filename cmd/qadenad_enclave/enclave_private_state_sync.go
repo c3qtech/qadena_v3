@@ -80,6 +80,19 @@ const (
 type privateStateTable struct {
 	prefix string
 	kind   privateStateTableKind
+
+	// alsoWrittenByStoreSync marks a table the CHAIN-MIRROR PUSH fills as a side effect, so its
+	// being non-empty at import time proves nothing about provenance.
+	//
+	// enclaveSynchronizeStores runs immediately before the import -- it has to, since it seeds the
+	// EnclaveIdentity needed to attest a peer and the IntervalPublicKeyID needed to find one -- and
+	// SetProtectKey/SetRecoverKey write their derived indexes on the way through.  So by the time
+	// the import looks, those two tables are legitimately populated by rows the push just derived
+	// from chain state.
+	//
+	// Treating that as "state of unknown provenance" is what made a correct state-synced node halt
+	// on its first block.  Only tables that NOTHING but block execution writes are evidence.
+	alsoWrittenByStoreSync bool
 }
 
 // privateStateTables is ORDER-SENSITIVE: the cursor's table index refers to positions in this
@@ -99,11 +112,16 @@ type privateStateTable struct {
 //	                               non-empty.
 //	EnclavePreparedHeight          node-local; left at 0 so the first EndBlock adopts H+1.
 var privateStateTables = []privateStateTable{
-	{EnclaveScanTransferHistoryKeyPrefix, kindScanHistory},
-	{EnclaveCredentialHashKeyPrefix, kindSealedString},
-	{EnclaveCredentialHashesByCredentialIDKeyPrefix, kindIdentityHistory},
-	{EnclaveProtectSubWalletIDByOriginalWalletIDKeyPrefix, kindSealedString},
-	{EnclaveRecoverOriginalWalletIDByNewWalletIDKeyPrefix, kindSealedString},
+	{prefix: EnclaveScanTransferHistoryKeyPrefix, kind: kindScanHistory},
+	{prefix: EnclaveCredentialHashKeyPrefix, kind: kindSealedString},
+	{prefix: EnclaveCredentialHashesByCredentialIDKeyPrefix, kind: kindIdentityHistory},
+
+	// Both of these are ALSO written by the mirror push that runs just before the import:
+	// SetProtectKey and SetRecoverKey derive them while seeding ProtectKey/RecoverKey from chain
+	// state.  They are still transferred -- that rebuild needs a historical SS interval key per row
+	// and fails silently without one -- but they cannot be used as evidence of provenance.
+	{prefix: EnclaveProtectSubWalletIDByOriginalWalletIDKeyPrefix, kind: kindSealedString, alsoWrittenByStoreSync: true},
+	{prefix: EnclaveRecoverOriginalWalletIDByNewWalletIDKeyPrefix, kind: kindSealedString, alsoWrittenByStoreSync: true},
 }
 
 // qmetaPrivateSyncHeightKey records that a COMPLETED import landed, and at what height.  Raw
@@ -476,10 +494,19 @@ func (s *qadenaServer) setPrivateStateSyncHeight(height int64) {
 	}
 }
 
-// privateStateTablesAreEmpty reports whether every transferred table is empty, which is the only
-// state an import may run against.
+// privateStateTablesAreEmpty reports whether the EXECUTION-ONLY private tables are empty.
+//
+// The check exists to refuse an import over state of unknown provenance -- overwriting that would
+// hide a real divergence.  Only tables that nothing but block execution writes can answer that
+// question: the two marked alsoWrittenByStoreSync are filled by the mirror push moments earlier,
+// from chain state, so finding rows in them means the seeding worked rather than that something is
+// wrong.  Including them made a correctly state-synced node refuse to import and halt on its first
+// block.
 func (s *qadenaServer) privateStateTablesAreEmpty() (empty bool, nonEmpty string) {
 	for _, tbl := range privateStateTables {
+		if tbl.alsoWrittenByStoreSync {
+			continue
+		}
 		store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(tbl.prefix))
 		itr := store.Iterator(nil, nil)
 		valid := itr.Valid()

@@ -337,6 +337,18 @@ func TestPrivateStateTablesAreEmptyDetectsEachTable(t *testing.T) {
 		}
 
 		empty, name := s.privateStateTablesAreEmpty()
+
+		if tbl.alsoWrittenByStoreSync {
+			// MUST STILL REPORT EMPTY.  The chain-mirror push fills these from chain state moments
+			// before the import runs, so rows here are evidence that seeding worked -- not that the
+			// store is of unknown provenance.  Counting them made a correctly state-synced node
+			// refuse its own import and halt on block H+1, observed on real hardware at height
+			// 52000.
+			require.True(t, empty,
+				"%s is written by the mirror push; treating it as unknown provenance halts a correct state-synced node", tbl.prefix)
+			continue
+		}
+
 		require.False(t, empty, "%s holds a row but the store reported empty", tbl.prefix)
 		require.Equal(t, tbl.prefix, name)
 	}
