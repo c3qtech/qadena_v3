@@ -99,10 +99,23 @@ for i in {1..150}; do
 done
 [ $resumed -eq 1 ] || fail "chain did not resume producing after the enclave came back"
 
-prepared=$(qadenad_alias enclave height 2>/dev/null | grep preparedHeight | awk '{print $2}')
-confirmed=$(qadenad_alias enclave height 2>/dev/null | grep confirmedHeight | awk '{print $2}')
+# ONE invocation, both watermarks parsed from it.  Two separate `enclave height` calls sample the
+# enclave at two different instants, and on a chain that is producing again the block in between
+# moves the watermarks -- so this used to report a "disagreement" the enclave never held.
+#
+# The tell was that it reported confirmed AHEAD of prepared (e.g. prepared=13420 confirmed=13421),
+# which the product cannot produce: preparing height H happens in the enclave's EndBlock and
+# confirming H happens after the chain's Commit, so confirmed can lag prepared but never lead it.
+# A watermark pair that is impossible by construction is a measurement artefact, not a finding.
+#
+# Reported from a parallel ARM run; the two-call structure is the whole cause.
+watermarks=$(qadenad_alias enclave height 2>/dev/null)
+prepared=$(print -r -- "$watermarks" | grep preparedHeight | awk '{print $2}')
+confirmed=$(print -r -- "$watermarks" | grep confirmedHeight | awk '{print $2}')
 [ -n "$prepared" ] || fail "cannot read enclave watermarks after recovery"
-[ "$prepared" = "$confirmed" ] || fail "watermarks disagree after recovery: prepared=$prepared confirmed=$confirmed"
+[ "$prepared" = "$confirmed" ] || fail "watermarks disagree after recovery: prepared=$prepared confirmed=$confirmed
+Both were read from a SINGLE enclave height call, so this is a real disagreement rather than two
+samples taken a block apart."
 
 logfile="$QADENAHOME/logs/qadena.log"
 if [ -f "$logfile" ] && grep -a "DIVERGED AT AN AGREED HEIGHT" "$logfile" > /dev/null; then
