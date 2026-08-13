@@ -181,7 +181,13 @@ if [ "$have" -lt "$required" ]; then
         --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment) \
         || fail "could not fund al from treasury"
     tx_hash=$(echo "$result" | jq -r .txhash)
-    qadenad_alias query wait-tx "$tx_hash" --timeout 30s > /dev/null || fail "funding tx did not land"
+    # confirm_tx, NOT a bare `query wait-tx`.  wait-tx SUBSCRIBES to a websocket event for the hash,
+    # so when the transaction is included BEFORE the subscription is established the event never
+    # arrives and it reports a timeout for a transaction that SUCCEEDED.  At ~1.5s blocks that race is
+    # routinely lost: observed in regression run 11, where this call failed while the tx sat committed
+    # at height 35977 with code 0.  confirm_tx polls `query tx` regardless of how the wait turned out,
+    # which is the whole reason it exists.
+    confirm_tx "$tx_hash" 30 || fail "funding tx did not land"
     have=$(bank_qdn "$al_addr")
     echo "al transparent balance now: ${have}qdn"
     [ "$have" -ge "$large_amount" ] || fail "al still short after funding: ${have}qdn"

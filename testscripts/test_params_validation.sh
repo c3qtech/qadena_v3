@@ -134,7 +134,13 @@ submit_expecting_pass() {
     rm -f "$errfile"
 
     tx_hash=$(echo "$result" | jq -r .txhash)
-    qadenad_alias query wait-tx "$tx_hash" --timeout 30s > /dev/null || fail "$title tx did not land"
+    # confirm_tx, NOT a bare `query wait-tx`.  wait-tx SUBSCRIBES to a websocket event for the hash,
+    # so when the transaction is included BEFORE the subscription is established the event never
+    # arrives and it reports a timeout for a transaction that SUCCEEDED.  At ~1.5s blocks that race is
+    # routinely lost: observed in regression run 11, where this call failed while the tx sat committed
+    # at height 35977 with code 0.  confirm_tx polls `query tx` regardless of how the wait turned out,
+    # which is the whole reason it exists.
+    confirm_tx "$tx_hash" 30 || fail "$title tx did not land"
 
     proposal_id=$(qadenad_alias query tx "$tx_hash" --output json \
         | jq -r '.events[] | select(.type=="submit_proposal") | .attributes[] | select(.key=="proposal_id") | .value')

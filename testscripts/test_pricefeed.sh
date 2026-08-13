@@ -127,8 +127,13 @@ result=$(qadenad_alias tx pricefeed post-price "$target_market" "$posted_price" 
     || fail "post-price tx failed: $(echo "$result" | jq -r .raw_log)"
 
 tx_hash=$(echo "$result" | jq -r .txhash)
-qadenad_alias query wait-tx "$tx_hash" --timeout 30s > /dev/null \
-    || fail "post-price tx $tx_hash did not land"
+# confirm_tx, NOT a bare `query wait-tx`.  wait-tx SUBSCRIBES to a websocket event for the hash,
+# so when the transaction is included BEFORE the subscription is established the event never
+# arrives and it reports a timeout for a transaction that SUCCEEDED.  At ~1.5s blocks that race is
+# routinely lost: observed in regression run 11, where this call failed while the tx sat committed
+# at height 35977 with code 0.  confirm_tx polls `query tx` regardless of how the wait turned out,
+# which is the whole reason it exists.
+confirm_tx "$tx_hash" 30 || fail "post-price tx $tx_hash did not land"
 echo "posted $(human "$posted_price") to $target_market"
 
 echo "========================="
