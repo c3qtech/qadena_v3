@@ -39,6 +39,63 @@ bad()  { printf "  \033[31m%-4s\033[0m %s\n" "DOWN" "$1"; problems=$((problems +
 warn() { printf "  \033[33m%-4s\033[0m %s\n" "WARN" "$1" }
 info() { printf "       %s\n" "$1" }
 
+# is_measurement -- a measurement is 32 bytes as 64 lowercase hex.  Used to reject ego's error
+# output, which is NOT distinguishable by exit status alone (see below).
+is_measurement() { [[ "$1" =~ ^[0-9a-f]{64}$ ]] }
+
+# measurement_of <binary> -- the MRENCLAVE of an ego-signed binary, or a reason it is unavailable.
+#
+# Two ways to get it, in order of preference:
+#
+#   1. `ego uniqueid <binary>`.  EGO REPORTS FAILURE ON STDOUT and exits non-zero -- `ego uniqueid`
+#      on an unsigned or missing file prints "ERROR: ..." where the answer would go.  A naive
+#      capture therefore yields the error text AS the measurement, which is how a broken build once
+#      got announced as a valid one.  Both the exit status and the SHAPE are checked.
+#
+#   2. The sibling filename a package install leaves behind: install.sh keeps
+#      qadenad_enclave.<measurement> next to the live binary.  This needs no tooling at all, which
+#      matters on a node installed from a release package -- those have no ego and no source tree.
+#
+# Neither is available on a debug (non-SGX) build, which has no measurement to report.  Say so
+# rather than printing an empty column: a blank there reads as "unknown", and the whole point of
+# showing it is to answer "is this node running the binary the chain expects?"
+measurement_of() {
+    local path="$1" out="" sib=""
+
+    if command -v ego > /dev/null 2>&1; then
+        out=$(ego uniqueid "$path" 2>/dev/null)
+        if [ $? -eq 0 ] && is_measurement "$out"; then
+            printf "%s" "$out"
+            return 0
+        fi
+    fi
+
+    for sib in "$path".*(N); do
+        if is_measurement "${sib##*.}"; then
+            printf "%s" "${sib##*.}"
+            return 0
+        fi
+    done
+
+    printf "(no measurement -- debug build, or ego unavailable)"
+    return 1
+}
+
+# signer_id_of <public.pem> -- MRSIGNER, which unlike MRENCLAVE is stable across releases.  A node
+# whose signer differs from the chain's is running somebody else's build entirely.
+signer_id_of() {
+    local out=""
+    if command -v ego > /dev/null 2>&1; then
+        out=$(ego signerid "$1" 2>/dev/null)
+        if [ $? -eq 0 ] && is_measurement "$out"; then
+            printf "%s" "$out"
+            return 0
+        fi
+    fi
+    printf "(unavailable -- ego not installed)"
+    return 1
+}
+
 # pid_of <pattern> -- first PID matching, empty if none.  Excludes this script so a pattern like
 # "qadenad" cannot match the checker itself, which is exactly how the grep approach goes wrong.
 pid_of() {
@@ -104,10 +161,13 @@ else
     warn "qadenad          binary not found at $qadenabin/qadenad"
 fi
 if [ -x "$qadenabin/qadenad_enclave" ]; then
-    info "qadenad_enclave  $("$qadenabin/qadenad_enclave" --version 2>&1 | head -1)"
+    info "qadenad_enclave  $("$qadenabin/qadenad_enclave" --version 2>&1 | head -1)  $(measurement_of "$qadenabin/qadenad_enclave")"
 fi
 if [ -x "$qadenabin/signer_enclave" ]; then
-    info "signer_enclave   $("$qadenabin/signer_enclave" --version 2>&1 | head -1)"
+    info "signer_enclave   $("$qadenabin/signer_enclave" --version 2>&1 | head -1)  $(measurement_of "$qadenabin/signer_enclave")"
+fi
+if [ -f "$QADENAHOME/config/public.pem" ]; then
+    info "signer id        $(signer_id_of "$QADENAHOME/config/public.pem")"
 fi
 
 echo ""
