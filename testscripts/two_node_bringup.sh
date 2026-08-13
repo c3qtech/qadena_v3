@@ -109,6 +109,22 @@ height() {
 
 run_phase() { [[ -n "$ONLY" ]] && { [[ "$1" == "$ONLY" ]] && return 0 || return 1 }; [[ "$1" -ge "$FROM" ]] }
 
+# repo_on <host> -- absolute path to the checkout, resolved AS THE LOGIN USER.
+#
+# Never write `sudo zsh -lc "cd ~/test/qadena_v3"`: under sudo, ~ is /root, and the cd fails with
+# "no such file or directory: /root/test/qadena_v3".  Resolve the path unprivileged, then hand the
+# absolute path to the privileged command.
+repo_on() {
+    local host="$1" p
+    for p in test/qadena_v3 qadena_v3 test/qv3; do
+        if ssh -o ConnectTimeout=10 "$host" "test -d \$HOME/$p" 2>/dev/null; then
+            ssh -o ConnectTimeout=10 "$host" "echo \$HOME/$p" 2>/dev/null | tr -d '\r'
+            return 0
+        fi
+    done
+    return 1
+}
+
 # ---------------------------------------------------------------------------- 1. preflight
 if run_phase 1; then
 phase "1. preflight"
@@ -299,7 +315,8 @@ sleep 20
 # setup_prerequisites splits the treasury delegation across ALL bonded validators, so it has to run
 # AFTER the joiner bonds or the split does not include it.
 info "re-running setup_prerequisites so the treasury delegation splits across both validators"
-ssh "$PRIMARY" 'sudo zsh -lc "cd ~/test/qadena_v3 && ./testscripts/setup_prerequisites.sh"' > /dev/null 2>&1 \
+prep_repo=$(repo_on "$PRIMARY") || fail "cannot locate the checkout on $PRIMARY"
+ssh "$PRIMARY" "sudo zsh -lc $(printf '%q' "cd $prep_repo && ./testscripts/setup_prerequisites.sh")" > /dev/null 2>&1 \
     || info "  (setup_prerequisites returned non-zero -- check manually)"
 
 info "voting power:"
@@ -323,8 +340,22 @@ phase "7. peer agreement"
 
 # The first run of this that can compare anything: on a single node it prints NOTHING COMPARED and
 # says to treat that as 'not tested'.
-ssh "$PRIMARY" 'sudo zsh -lc "cd ~/test/qadena_v3 && ./testscripts/test_peer_agreement.sh"' 2>&1 | tail -20 | sed 's/^/  /'
+repo=$(repo_on "$PRIMARY") || fail "cannot locate the checkout on $PRIMARY"
+
+# Capture the status of the SSH, not of the last element of a pipeline.  `cmd | tail | sed; rc=$?`
+# reports sed's status -- which is always 0 -- so the suite announces success no matter what
+# happened.  A harness that passes while testing nothing is worse than no harness.
+out=$(ssh "$PRIMARY" "sudo zsh -lc $(printf '%q' "cd $repo && ./testscripts/test_peer_agreement.sh")" 2>&1)
 rc=$?
+print -r -- "$out" | tail -20 | sed 's/^/  /'
+
+# Belt and braces: the suite exits 0 when it has NO PEERS and says to treat that as 'not tested'.
+# Passing on that would be the same false green in a different costume.
+if print -r -- "$out" | grep -q "NOTHING COMPARED"; then
+    rc=1
+    print ""
+    print "  NOT A PASS: the suite found no peers and compared nothing."
+fi
 
 print ""
 print "======================================================================"
