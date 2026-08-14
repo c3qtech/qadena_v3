@@ -4109,9 +4109,25 @@ func (s *qadenaServer) GetAuthorizedSignatory(ctx context.Context, creator strin
 	return &ret, true
 }
 
-/*
-// we'll store the request
-func (s *qadenaServer) SetAuthorizedSignatory(ctx context.Context, in *types.ValidateAuthorizedSignatoryRequest) {
+// SetAuthorizedSignatory writes a row the chain has ALREADY validated.  SEEDING ONLY.
+//
+// enclaveSynchronizeStores replays chain state into a fresh enclave, and every other store does it
+// through a setter.  AuthorizedSignatory was the exception -- it seeded through
+// ValidateAuthorizedSignatory, which applies the live-path freshness rule: the vshare bind must name
+// the CURRENT or PREVIOUS ss interval key (resolveSSIntervalPubKIDForBind).  Rows being replayed are
+// old by construction, so on a state-synced joiner every one was refused with
+//
+//	bindData does not contain the current or previous ssIntervalPubKID
+//	error returned by SetAuthorizedSignatory ... code 1141: Unauthorized
+//
+// and the node ran with none of them.  252 blocks later a signer check disagreed with the network
+// and it forked: ValidateAuthorizedSigner returned 1137 "Unauthorized signer" for a transaction the
+// primary accepted, which is a different app hash.
+//
+// THE FRESHNESS RULE IS NOT RELAXED.  It still guards the live path, where a user submits a
+// signatory and the check does real work; only the replay of already-validated chain state bypasses
+// it, which is what every other store already does.
+func (s *qadenaServer) SetAuthorizedSignatory(ctx context.Context, in *types.ValidateAuthorizedSignatoryRequest) (*types.SetAuthorizedSignatoryReply, error) {
 	c.LoggerDebug(logger, "SetAuthorizedSignatory "+c.PrettyPrint(in))
 
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(dsvstypes.AuthorizedSignatoryKeyPrefix))
@@ -4120,7 +4136,11 @@ func (s *qadenaServer) SetAuthorizedSignatory(ctx context.Context, in *types.Val
 
 	store.Set(EnclaveKeyKey(in.Creator), b)
 	c.LoggerDebug(logger, "Stored authorized signatory")
+
+	return &types.SetAuthorizedSignatoryReply{Status: true}, nil
 }
+
+/*
 
 func (s *qadenaServer) GetAuthorizedSignatory(ctx context.Context, creator string) (*types.VShareSignatory, bool) {
 	c.LoggerDebug(logger, "GetAuthorizedSignatory "+creator)

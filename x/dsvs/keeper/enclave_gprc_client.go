@@ -92,9 +92,22 @@ func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
 						Signatory:        first,
 						CurrentSignatory: rest,
 					}
-					_, err := enclaveGRPCClient.ValidateAuthorizedSignatory(sdkctx, req)
+					// SET, NOT VALIDATE.  This replays a row the chain has already validated, which is
+					// what every other store's seeding does (SetWallet, SetCredential, SetProtectKey).
+					// Going through ValidateAuthorizedSignatory applied the LIVE-path freshness rule --
+					// the vshare bind must name the current or previous ss interval key -- to rows that
+					// are old by construction, so on a state-synced joiner all of them were refused:
+					//
+					//	bindData does not contain the current or previous ssIntervalPubKID
+					//	... code 1141: Unauthorized
+					//
+					// The node then ran with no authorized signatories at all and forked 252 blocks
+					// later, when ValidateAuthorizedSigner rejected a transaction the network accepted.
+					// The freshness rule still guards the live path in
+					// msg_server_register_authorized_signatory.go; only this replay bypasses it.
+					_, err := enclaveGRPCClient.SetAuthorizedSignatory(sdkctx, req)
 					if err != nil {
-						c.ContextError(sdkctx, "DSVS: EnclaveSynchronizeStores error returned by ValidateAuthorizedSignatory on enclave "+err.Error())
+						c.ContextError(sdkctx, "DSVS: EnclaveSynchronizeStores error returned by SetAuthorizedSignatory on enclave "+err.Error())
 						return err
 					}
 					checkSync = true

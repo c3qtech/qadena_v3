@@ -110,6 +110,18 @@ service QadenaEnclave {
   // used to validate the "authorized signatory" (this allows a user to specify which eph wallet ID is allowed to sign documents)
   rpc ValidateAuthorizedSignatory (ValidateAuthorizedSignatoryRequest) returns (ValidateAuthorizedSignatoryReply) {}
 
+  // SEEDING ONLY -- writes a row the chain has ALREADY validated, with no re-validation.
+  //
+  // enclaveSynchronizeStores replays chain state into a fresh enclave, and every other store does
+  // that through a setter (SetWallet, SetCredential, SetProtectKey...).  AuthorizedSignatory was
+  // the exception: it seeded through ValidateAuthorizedSignatory, which applies the live-path
+  // freshness rule -- a vshare bind must name the CURRENT or PREVIOUS ss interval key.  Seeded rows
+  // are old by construction, so every one was refused, and a state-synced node ran with none of
+  // them until a signer check disagreed with the network and forked it.
+  //
+  // The rule is right for the live path and is left alone there.  This is the write path.
+  rpc SetAuthorizedSignatory (ValidateAuthorizedSignatoryRequest) returns (SetAuthorizedSignatoryReply) {}
+
   // used to validate whether this signer can sign a document (is the signer's credentials enough to sign the document?)
   rpc ValidateAuthorizedSigner (ValidateAuthorizedSignerRequest) returns (ValidateAuthorizedSignerReply) {}
   
@@ -383,6 +395,10 @@ message ValidateAuthorizedSignatoryRequest {
 }
 
 message ValidateAuthorizedSignatoryReply {
+  bool status = 1;
+}
+
+message SetAuthorizedSignatoryReply {
   bool status = 1;
 }
 
