@@ -301,17 +301,29 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
         CHAIN-MIRRORED (GetStoreHash, 9)      Wallet, Credential, JarRegulator, PublicKey,
                                               IntervalPublicKeyID, ProtectKey, RecoverKey,
                                               EnclaveIdentity, AuthorizedSignatory
-        NEITHER                               CredentialPCXY, PioneerJars
+        NEITHER                               PioneerJars (CredentialPCXY: see correction)
 
     Measured on the 2026-08-14 joiner at a settled height: all five transferred tables
     byte-identical; eight of nine mirrored stores identical; `AuthorizedSignatory` 0 against
     11 (item 30, and it forked the node); `CredentialPCXY` 72 against 360; `PioneerJars` 0
     against 1.
 
-    The third category has NO MECHANISM to reach a state-synced node. It is not failing --
-    nothing is even attempted. Those rows are built by executing blocks, which is precisely
-    what state-sync skips. `EnclaveCredentialPCXYKeyPrefix` has four read/write sites in
-    the enclave and appears nowhere in `privateStateTables` or `GetStoreHash`'s key list.
+    CORRECTION, recorded rather than quietly edited away: this item first claimed BOTH had
+    no mechanism. That is true of PioneerJar and NOT true of CredentialPCXY.
+    `SetCredential` calls `setCredentialByPCXY` when `WalletID == ""`, and the mirror push
+    goes through `SetCredential` -- so the index IS derived during seeding. The 72-vs-360
+    count gap is most likely the lazy-pruning asymmetry the HOWTO already documents for the
+    AML window ("a from-genesis node's may still hold dead entries... compare the live
+    entries, not the raw table"): the chain holds 100 credentials, not 360. Treat
+    CredentialPCXY as UNSETTLED, not as a known gap, until someone compares live entries.
+
+    PioneerJar is the real one. It is chain state -- `PioneerJarKeyPrefix`,
+    `GetAllPioneerJar`, and `EnclaveClientSetPioneerJar` all exist, and the record is
+    present in the joiner's own chain store -- but there is no `case
+    types.PioneerJarKeyPrefix` in `enclaveSynchronizeStores` and the prefix is absent from
+    `GetStoreHash`'s key list. Every piece needed is already written; the store was simply
+    never added to the mirror set. The fix has the same three-line shape as every other
+    case in that switch, and needs no peer, because the data is already local.
 
     NEITHER IS LEGITIMATELY NODE-LOCAL, which was checked rather than assumed. PioneerJar
     is shared chain state: `query qadena list-pioneer-jar` returns the SAME record
