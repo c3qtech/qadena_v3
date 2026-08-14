@@ -25,6 +25,7 @@
 #   enclave-rollback  send a tx, roll chain+enclave back past it, prove the state reverted
 #   enclave-crash     stall the enclave: the node must HALT, not fork, then recover
 #   credentials   update_credentials.sh                                    (--with-credentials)
+#   key-recovery  protect a seed, lose the key, re-prove identity, partners sign  (--with-recovery)
 #   replenish     al's ENCRYPTED balance is topped back up before anything spends it
 #   peer-agreement   every peer computed the SAME app hash -- i.e. no fork
 #   reclaim       the TRANSPARENT balance the suites accumulated goes back to the treasury
@@ -56,6 +57,13 @@
 #
 #   --from-genesis   DESTRUCTIVE.  init.sh deletes $QADENAHOME outright -- chain data AND the
 #                    keyring.  Everything is rebuilt from config/config.yml.
+#   --with-recovery  test_key_recovery.sh, which until now was in NO harness at all -- it existed
+#                    and nothing ran it, and its absence was only ever noted in passing (see
+#                    replenish_funds, which relies on it).  It is single-shot for the same reason
+#                    as the credentials layer, plus one of its own: recovery re-claims an identity
+#                    that already exists, because re-presenting a known identity IS the proof.
+#                    Implied by --from-genesis.  KEY RECOVERY IS THE ONLY WRITER OF THE
+#                    "RECOVERKEY" walletID sentinel, so without this nothing exercises that path.
 #   --with-credentials  update_credentials.sh is single-shot: its claim codes are single-use and
 #                    cases 1/2/5 consume rate-limit windows, so it cannot repeat against the same
 #                    chain without editing the codes at the top of it.  Implied by --from-genesis,
@@ -83,9 +91,10 @@
 #
 # Usage:
 #   regression.sh                     the repeatable suite against a running chain
-#   regression.sh --from-genesis      wipe, rebuild, and run everything (implies the two below)
+#   regression.sh --from-genesis      wipe, rebuild, and run everything (implies the three below)
 #   regression.sh --with-setup        run setup.sh first (slow; needed on a fresh chain)
 #   regression.sh --with-credentials  also run the single-shot update_credentials.sh, last
+#   regression.sh --with-recovery     also run the single-shot key-recovery flow, last
 #   regression.sh --with-enclave-upgrade  also upgrade the enclave to a new measurement, last
 #   regression.sh --with-sgx          also verify the SGX build is signed and reproducible (SGX hw only)
 #   regression.sh --stop-on-fail      stop at the first failure
@@ -110,6 +119,7 @@ function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 from_genesis=false
 with_setup=false
 with_credentials=false
+with_recovery=false
 with_enclave_upgrade=false
 with_sgx=false
 stop_on_fail=false
@@ -121,6 +131,7 @@ while [[ $# -gt 0 ]]; do
         --from-genesis)     from_genesis=true; shift ;;
         --with-setup)       with_setup=true; shift ;;
         --with-credentials) with_credentials=true; shift ;;
+        --with-recovery)    with_recovery=true; shift ;;
         --with-enclave-upgrade) with_enclave_upgrade=true; shift ;;
         --with-sgx)         with_sgx=true; shift ;;
         --stop-on-fail)     stop_on_fail=true; shift ;;
@@ -134,10 +145,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# a chain built from genesis has never seen any of it, so both of these become available
+# a chain built from genesis has never seen any of it, so all of these become available
 if [ "$from_genesis" = "true" ]; then
     with_setup=true
     with_credentials=true
+    with_recovery=true
 fi
 
 logdir="$qadenabuild/logs/regression"
@@ -1085,6 +1097,24 @@ if [ "$with_credentials" = "true" ]; then
     # LAST, because it mutates identities the other suites read: it removes al's email credential,
     # renames jill, and puts al/jill/dory inside their update cool-down windows.
     run_test "credentials" "$qadenatestscripts/update_credentials.sh"
+fi
+
+if [ "$with_recovery" = "true" ]; then
+    # AFTER credentials, and after reclaim, for two reasons that are not the same.
+    #
+    # It consumes al-eph1, which replenish_funds also uses as the conduit for al's encrypted
+    # top-up.  That reuse was justified on the grounds that "sign_key_recovery.sh is not in this
+    # suite" (see replenish_funds), so putting recovery in the suite retires that justification.
+    # Running it last means replenish has long since drained the wallet, and the NEXT run's
+    # replenish -- which happens before any functional suite -- finds it free again.
+    #
+    # And it is single-shot for the same reason update_credentials.sh is: fixed wallet names
+    # (recover-al, recover-ann, recover-victor, recover-jill), fixed claim codes, and a claim of an
+    # identity that ALREADY EXISTS, which is not incidental but the whole point -- recovery proves
+    # who you are by re-presenting a known identity, so it cannot be made repeatable simply by
+    # giving it a per-run id the way test_credential_uniqueness.sh does.  Making it repeat needs a
+    # per-run fixture: create a user, protect their key with partners, then recover it.
+    run_test "key-recovery" "$qadenatestscripts/test_key_recovery.sh"
 fi
 
 if [ "$with_enclave_upgrade" = "true" ]; then
