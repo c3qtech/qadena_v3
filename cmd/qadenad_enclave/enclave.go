@@ -7360,7 +7360,25 @@ func (s *qadenaServer) GetStoreHash(ctx context.Context, gsh *types.MsgGetStoreH
 
 	storeHashes := []*types.StoreHash{}
 
-	keys := []string{types.WalletKeyPrefix, types.CredentialKeyPrefix, types.JarRegulatorKeyPrefix, types.PublicKeyKeyPrefix, types.IntervalPublicKeyIDKeyPrefix, types.ProtectKeyKeyPrefix, types.RecoverKeyKeyPrefix, types.EnclaveIdentityKeyPrefix, dsvstypes.AuthorizedSignatoryKeyPrefix}
+	// THIS ORDER IS LOAD-BEARING, because enclaveSynchronizeStores pushes the out-of-sync stores in
+	// exactly the order they come back here.
+	//
+	// SetProtectKey and SetRecoverKey decrypt a vshare before writing, which needs an ACTIVE
+	// EnclaveIdentity for this enclave's own uniqueID.  With EnclaveIdentity last, a node seeding
+	// every store at once -- a state-synced or wiped enclave, the only case where they are all
+	// out-of-sync together -- pushed ProtectKey and RecoverKey while the identity table was still
+	// empty.  Every row was refused with
+	//
+	//     But couldn't find an active enclave identity for uniqueID: <id>
+	//     error returned by SetProtectKey ... code 1110: Encryption generic error
+	//
+	// and the enclave came up permanently short of those rows plus the private indexes their
+	// handlers build as a side effect.  That was silent until the push started checking errors; it
+	// is now a halt, which is how it was found.
+	//
+	// EnclaveIdentity and IntervalPublicKeyID therefore come FIRST: identity to authenticate with,
+	// interval keys to find a peer, before anything that needs either.
+	keys := []string{types.EnclaveIdentityKeyPrefix, types.IntervalPublicKeyIDKeyPrefix, types.WalletKeyPrefix, types.CredentialKeyPrefix, types.JarRegulatorKeyPrefix, types.PublicKeyKeyPrefix, types.ProtectKeyKeyPrefix, types.RecoverKeyKeyPrefix, dsvstypes.AuthorizedSignatoryKeyPrefix}
 
 	for _, k := range keys {
 		var sh types.StoreHash
