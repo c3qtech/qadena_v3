@@ -214,3 +214,78 @@ passing, not answers, and should be confirmed before anything is built on them.
     Related: item 28 (per-call failure-mode audit) and the unprofiled 60s peer timeout in
     `x/qadena/keeper/enclave_call_context.go`, which has the same "round number, never measured"
     problem.
+
+## Raised by the first two-node state-sync run (2026-08-14, ARM/non-SGX)
+
+Context: the private-state transfer executed end to end for the first time -- a joiner
+state-synced at height 2800, imported 79 rows in the first `BeginBlock`, reached
+`earliestHeight == H+1`, and agrees with the primary on every app hash. Getting there
+took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the peer's
+`31b86eeb`). What follows is what that run left open.
+
+30. **DSVS `AuthorizedSignatory` never seeds on a state-synced joiner, and nothing halts.**
+    Measured: the joiner holds 0 rows against the primary's 11, having failed 252 times --
+    once per block, indefinitely -- with
+
+        ERR DSVS: EnclaveSynchronizeStores error returned by ValidateAuthorizedSignatory
+            ... codespace qadena code 1141: Unauthorized
+        ERR [enclave - E]: bindData does not contain the current or previous ssIntervalPubKID
+
+    NOTHING IS MISSING. The joiner's CHAIN store holds all 11 rows (`query dsvs
+    list-authorized-signatory` reports Count: 11 on both nodes); the interval public key
+    ids are chain state and compare identical between the two enclaves; and
+    `resolveSSIntervalPubKIDForBind`'s own comment states that "getSSPrivK is keyed by
+    pubKID and interval private keys are never discarded, so the old key is still usable
+    for decryption". The key is available. The row is available.
+
+    The refusal is POSITIONAL. `resolveSSIntervalPubKIDForBind` accepts a bind naming the
+    CURRENT interval, or the PREVIOUS one as a rotation grace window, and rejects anything
+    older -- whether or not the key can be had. That is correct for the LIVE path, where a
+    bind naming a long-dead interval is suspicious. It is wrong for SEEDING, where rows are
+    old by construction: these were written during setup around height 300-500, and with
+    `keyUpdateFrequency = 555` against a chain at ~3000 they are four or five rotations
+    behind. Every row written before the last two rotations is refused on a node that is
+    legitimately replaying chain history.
+
+    THE MECHANISM FOR FIXING IT IS ALREADY THERE. `decryptSignatory(in, trusted bool)`
+    takes the unrestricted path when `trusted` -- `FindB64AddressAndBech32AddressByNodeIDAndType`,
+    no window. `ValidateAuthorizedSignatory` calls `decryptAuthorizedSignatory(in.Signatory,
+    false)`. Seeding replays rows that are already on chain and consensus-validated, which
+    is what `trusted` is for. Worth checking whether every other seeding-path decrypt makes
+    the same choice.
+
+    SEPARATELY: the DSVS path LOGS AND CONTINUES where the qadena path halts (`aa9cdbe8`).
+    The node runs permanently short of rows while every hash anyone checks agrees, which is
+    the silent divergence this branch exists to prevent, one module over.
+
+31. **`CredentialPCXYMap` is 72 on the joiner against 360 on the primary.** Same run, same
+    settled height (3000, both nodes at 3046). Plausibly the same expired-interval
+    mechanism as item 30, but that is a guess -- nothing has been traced. Worth settling
+    before assuming the transfer covers every table that matters.
+
+32. **The seeding halt's diagnosis is misleading.** Its text attributes rejected rows to a
+    historical SS interval key needing reconstruction "from its owners over the network"
+    and tells the operator to check peer reachability and restart. For `ProtectKey` that
+    was wrong on both counts: the cause was seeding ORDER (`b60c6316`), the peer was
+    reachable -- `SyncEnclave SUCCEEDED` against it minutes earlier -- and restarting
+    re-ran the identical fixed order and failed identically. The same text happens to
+    describe item 30 correctly. Rewrite it to name what was actually observed, or to
+    distinguish the two causes; a halt that names the wrong remedy costs more than one
+    that names none.
+
+33. **Neither paging path has been exercised over gRPC with more than one page.** The
+    joins ran `sync-enclave` over real gRPC (which item 29 wanted), but at ~8 interval key
+    ids they fit one page even with `syncEnclavePageTargetBytes` forced to 256 -- and the
+    page count only logs at `LoggerDebug`, while `add_full_node.sh`'s start-from-scratch
+    branch rewrites `config.toml` and reverts `log_level` before the enclave starts. The
+    private-state transfer reported `79 rows over 1 pages` for the same reason. To get
+    positive evidence: raise the log line to info, or make the page counts observable
+    somewhere that survives a join.
+
+34. **`add_full_node.sh` silently degrades to block-sync below `TRUSTHEIGHT > 1500`.** A
+    join given both genesis-pioneer IPs at height 1481 printed "Trust height is too low,
+    we won't use state sync", configured nothing, and completed successfully. The node
+    joined, peered, synced and passed peer agreement -- by block-sync. Nothing in the
+    join's outcome distinguishes that from a state-sync join; it is only visible by
+    reading `config.toml` afterwards. Either fail the join when state-sync was explicitly
+    requested and cannot be provided, or say so loudly at the end.
