@@ -104,26 +104,36 @@ func qmetaHVKey(height int64) []byte {
 	return []byte(fmt.Sprintf("%s%020d", qmetaHVPrefix, height))
 }
 
-// withHeightPinned runs fn with s.CacheCtx pointed at the store as it stood at the given height,
-// then restores it.  A height of 0 or less means "current view" and fn simply runs.
+// withHeightPinned calls fn with a VIEW of the store as it stood at the given height.  A height of
+// 0 or less means "current view" and fn is called with the receiver itself.
 //
-// This works because every accessor in the enclave reads through s.CacheCtx, so repointing that
-// one field makes an entire read path historical with no other change and no duplicated accessors.
+// IT MUST NOT MUTATE THE RECEIVER, AND THAT IS THE WHOLE DESIGN.  This function used to work by
+// swapping s.CacheCtx to the historical store and s.CacheCtxWrite to a no-op, restoring both with a
+// defer.  Those are fields of the ONE qadenaServer registered with the gRPC server, and grpc-go
+// dispatches every call on its own goroutine with no serialisation anywhere in this binary -- so
+// for the duration of a historical read, EVERY concurrent handler saw them too.
 //
-// Two properties the callers depend on:
+// That halted a producing validator.  An EndBlock overlapping the pin read and wrote through the
+// historical view and then called commitCache(), which was the installed no-op, so its writes --
+// including setPreparedHeight -- were computed and thrown away.  prepared stayed one block behind,
+// the chain committed, and ConfirmHeight refused:
 //
-//   - The restore is deferred, so it happens on panic as well as on return.  Leaving the server
-//     pinned to an old version would silently corrupt every subsequent block -- reads would answer
-//     from the past while writes went to the present.
-//   - CacheCtxWrite is replaced with a no-op for the duration.  The historical view is read-only,
-//     and a write through it must never reach the real store.  Callers must not rely on writes
-//     inside fn persisting; nothing here does.
+//	CONSENSUS FAILURE!!! enclave ConfirmHeight failed after the chain committed height 38028:
+//	the enclave's prepared height is 38027
+//
+// It is a race, so it needs the read to overlap the prepare -- which is why the same command had
+// been run several times before without incident.  Reachable from `enclave export-private-state
+// --height H` at any moment, and from QueryEnclavePrivateState, which serves a peer's private-state
+// fetch and pins a height PER PAGE while the node is producing blocks.
+//
+// The view therefore owns its own CacheCtx and its own no-op writer, and the receiver is never
+// touched.  Nothing needs restoring, so nothing can fail to be restored.
 //
 // A height that was never committed, or has been pruned, is refused BY NAME with the current
 // horizon -- an operator mid-incident needs "the oldest I can reach is N", not an IAVL stack trace.
-func (s *qadenaServer) withHeightPinned(height int64, fn func() error) error {
+func (s *qadenaServer) withHeightPinned(height int64, fn func(view *qadenaServer) error) error {
 	if height <= 0 {
-		return fn()
+		return fn(s)
 	}
 
 	v, found := s.getHeightVersion(height)
@@ -139,13 +149,43 @@ func (s *qadenaServer) withHeightPinned(height int64, fn func() error) error {
 		return fmt.Errorf("cannot read enclave state at height %d (version %d): %w", height, v, err)
 	}
 
-	saved, savedWrite := s.CacheCtx, s.CacheCtxWrite
-	s.CacheCtx = s.ServerCtx.WithMultiStore(historical)
-	s.CacheCtxWrite = func() {}
-	defer func() { s.CacheCtx, s.CacheCtxWrite = saved, savedWrite }()
+	// A SEPARATE SERVER VALUE, not a swap of the receiver's fields.  This is the whole point of the
+	// function's shape and it is not stylistic -- see the comment above.
+	//
+	// Built field by field rather than by copying *s, because qadenaServer holds a sync.RWMutex and
+	// copying it would both trip go vet's copylocks and alias a lock across two values.  The view
+	// gets its own zero mutex; it never writes, so nothing contends on it.
+	//
+	// The sealing material has to come across or the view cannot unseal a single row: MustUnseal and
+	// MustUnsealStable read privateEnclaveParams.  Copied under RLock so the snapshot of them is
+	// internally consistent.
+	// ITS OWN GAS METER TOO, not just its own multistore.  sdk.Context.WithMultiStore returns a new
+	// Context that still carries the SAME GasMeter pointer, and every store read consumes gas -- so
+	// a view built without this shares a mutable counter with the block being executed.  The race
+	// detector catches it immediately (infiniteGasMeter.ConsumeGas, read and write from both
+	// goroutines); without -race it is silent and corrupts a number nothing here even reads.
+	//
+	// Infinite because this is an internal historical read with no metering semantics to preserve.
+	s.mutex.RLock()
+	view := &qadenaServer{
+		ServerCtx: s.ServerCtx,
+		CacheCtx: s.ServerCtx.
+			WithMultiStore(historical).
+			WithGasMeter(storetypes.NewInfiniteGasMeter()),
+		CacheCtxWrite:        func() {},
+		Cdc:                  s.Cdc,
+		StoreKey:             s.StoreKey,
+		MetaDB:               s.MetaDB,
+		SecretsDB:            s.SecretsDB,
+		privateEnclaveParams: s.privateEnclaveParams,
+		sharedEnclaveParams:  s.sharedEnclaveParams,
+		HomePath:             s.HomePath,
+		RealEnclave:          s.RealEnclave,
+	}
+	s.mutex.RUnlock()
 
 	c.LoggerInfo(logger, fmt.Sprintf("reading enclave state at height %d (version %d)", height, v))
-	return fn()
+	return fn(view)
 }
 
 // ---- preparedHeight: versioned, inside the tree ----

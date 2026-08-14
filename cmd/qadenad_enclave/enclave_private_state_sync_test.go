@@ -446,10 +446,10 @@ func TestTransferServesExactlyTheRequestedHeight(t *testing.T) {
 			dst := newTestEnclaveServer(t)
 
 			// serve pinned to the target height, exactly as QueryEnclavePrivateState does
-			require.NoError(t, src.withHeightPinned(target, func() error {
+			require.NoError(t, src.withHeightPinned(target, func(view *qadenaServer) error {
 				var cursor privateStateCursor
 				for {
-					page, err := src.buildPrivateStatePage(target, 0, cursor, privateStatePageTargetBytes)
+					page, err := view.buildPrivateStatePage(target, 0, cursor, privateStatePageTargetBytes)
 					if err != nil {
 						return err
 					}
@@ -486,8 +486,8 @@ func TestTransferServesExactlyTheRequestedHeight(t *testing.T) {
 
 			// and the digests agree at that height, which is the check a live node would run
 			var srcDigest map[string]string
-			require.NoError(t, src.withHeightPinned(target, func() error {
-				srcDigest = src.privateStateDigest(0)
+			require.NoError(t, src.withHeightPinned(target, func(view *qadenaServer) error {
+				srcDigest = view.privateStateDigest(0)
 				return nil
 			}))
 			require.Equal(t, srcDigest, dst.privateStateDigest(0))

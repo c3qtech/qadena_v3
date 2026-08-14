@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -177,15 +178,18 @@ func TestDigestIsHeightPinned(t *testing.T) {
 		"height 11 added a row but the current digest did not change")
 
 	var pinned map[string]string
-	require.NoError(t, s.withHeightPinned(10, func() error {
-		pinned = s.privateStateDigest(0)
+	require.NoError(t, s.withHeightPinned(10, func(view *qadenaServer) error {
+		pinned = view.privateStateDigest(0)
 		return nil
 	}))
 	require.Equal(t, atTen, pinned, "a digest pinned to height 10 did not match what height 10 actually held")
 
-	// the pin must be released -- a server left pointing at the past would answer every subsequent
-	// read from a stale version while writing to the present
-	require.Equal(t, atEleven, s.privateStateDigest(0), "the height pin was not restored")
+	// THE RECEIVER MUST BE UNTOUCHED.  The pin used to work by swapping s.CacheCtx and s.CacheCtxWrite
+	// on the shared server, which every concurrent gRPC handler also saw -- an EndBlock overlapping a
+	// historical read wrote through the past and committed via the installed no-op, losing
+	// setPreparedHeight and halting a producing validator.  The view now owns its own cache, so this
+	// asserts the receiver still reads the present.
+	require.Equal(t, atEleven, s.privateStateDigest(0), "the receiver's view changed; the pin is mutating shared state again")
 }
 
 func TestDigestAtPrunedHeightIsRefusedByName(t *testing.T) {
@@ -195,7 +199,7 @@ func TestDigestAtPrunedHeightIsRefusedByName(t *testing.T) {
 		endBlock(t, s, h)
 	}
 
-	err := s.withHeightPinned(1, func() error { return nil })
+	err := s.withHeightPinned(1, func(view *qadenaServer) error { return nil })
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "pruned", "a below-horizon pin must say why, not fail obscurely")
 }
@@ -228,4 +232,65 @@ func TestPruneExpiredKeepsTheBoundaryEntry(t *testing.T) {
 	kept := c.PruneExpired(transfers, 100)
 	require.Len(t, kept, 2)
 	require.Equal(t, int64(100), kept[0].UnixTime, "the entry exactly at the cutoff must survive")
+}
+
+// TestHeightPinDoesNotDisturbConcurrentBlockExecution is the regression test for a halt on a
+// producing validator, and it fails against the previous implementation.
+//
+// withHeightPinned used to swap s.CacheCtx to the historical store and s.CacheCtxWrite to a no-op on
+// the SHARED server, restoring both with a defer.  grpc-go dispatches every call on its own
+// goroutine and nothing in this binary serialises them, so an EndBlock overlapping a historical read
+// executed against the past and then "committed" through the installed no-op.  Its writes --
+// setPreparedHeight among them -- were computed and discarded, prepared fell a block behind, and
+// ConfirmHeight refused after the chain had already committed:
+//
+//	CONSENSUS FAILURE!!! enclave ConfirmHeight failed after the chain committed height 38028:
+//	the enclave's prepared height is 38027
+//
+// Reachable from `enclave export-private-state --height H` and, worse, from
+// QueryEnclavePrivateState, which pins a height per page while serving a peer's private-state fetch.
+//
+// Run this with -race as well: with the old code the two goroutines also wrote the same fields.
+func TestHeightPinDoesNotDisturbConcurrentBlockExecution(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	seedPrivateTables(s, 1000)
+	for h := int64(1); h <= 5; h++ {
+		endBlock(t, s, h)
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// hammer historical reads for the whole of block execution
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = s.withHeightPinned(3, func(view *qadenaServer) error {
+					view.privateStateDigest(0)
+					return nil
+				})
+			}
+		}
+	}()
+
+	const finalHeight = int64(40)
+	for h := int64(6); h <= finalHeight; h++ {
+		endBlock(t, s, h)
+	}
+	close(stop)
+	wg.Wait()
+
+	// The property that halted a node: every block must still have PREPARED.  A pin that mutates the
+	// shared server leaves this short, and the chain then commits a height the enclave never
+	// prepared.
+	require.Equal(t, finalHeight, s.getPreparedHeight(),
+		"blocks executed during a historical read did not all prepare -- the pin is mutating shared state")
+
+	// and the receiver must still be reading the present, not the pinned height
+	require.NotEmpty(t, s.privateStateDigest(0))
 }

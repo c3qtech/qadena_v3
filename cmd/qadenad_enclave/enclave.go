@@ -1198,9 +1198,9 @@ func (s *qadenaServer) ExportPrivateState(ctx context.Context, in *types.MsgExpo
 	// enclave hold at the height where the two nodes diverged?"  Diff two nodes' dumps at the same
 	// height and the divergence is located rather than inferred.
 	var reply *types.ExportPrivateStateReply
-	err := s.withHeightPinned(in.Height, func() error {
+	err := s.withHeightPinned(in.Height, func(view *qadenaServer) error {
 		var e error
-		reply, e = s.exportPrivateStateFromCurrentView()
+		reply, e = view.exportPrivateStateFromCurrentView()
 		return e
 	})
 	if err != nil {

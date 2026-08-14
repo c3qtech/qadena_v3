@@ -278,9 +278,9 @@ func (s *qadenaServer) QueryEnclavePrivateState(goCtx context.Context, in *types
 	}
 
 	var page *types.EnclavePrivateStatePage
-	err = s.withHeightPinned(in.Height, func() error {
+	err = s.withHeightPinned(in.Height, func(view *qadenaServer) error {
 		var e error
-		page, e = s.buildPrivateStatePage(in.Height, cutoff, cursor, budget)
+		page, e = view.buildPrivateStatePage(in.Height, cutoff, cursor, budget)
 		return e
 	})
 	if err != nil {
