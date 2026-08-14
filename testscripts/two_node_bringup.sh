@@ -288,9 +288,19 @@ sleep 3
 print n
 sleep 600
 FEED
+# RESOLVE THE HOME DIRECTORY UNPRIVILEGED, then bake the absolute path in.  Writing
+# /home/$(whoami) inside the script evaluates it ON THE JOINER, UNDER SUDO, where whoami is root --
+# yielding /home/root/qadena/scripts/add_full_node.sh, which does not exist.  The failure is one
+# line in a log on the other machine and looks like a bad install rather than a quoting bug.  This
+# is the same trap repo_on() documents; it just was not applied here.
+JOINER_HOME=$(ssh -o ConnectTimeout=10 "$JOINER" 'echo $HOME' | tr -d '\r')
+[[ -n "$JOINER_HOME" ]] || fail "cannot resolve the joiner's home directory"
+ssh "$JOINER" "test -x $JOINER_HOME/qadena/scripts/add_full_node.sh" \
+    || fail "$JOINER_HOME/qadena/scripts/add_full_node.sh is missing -- install the release package first"
+
 cat > /tmp/tnb_join.sh <<FEED
 #!/bin/zsh
-exec script -qec "/home/\$(whoami)/qadena/scripts/add_full_node.sh \
+exec script -qec "$JOINER_HOME/qadena/scripts/add_full_node.sh \
   --pioneer $PIONEER_NAME \
   --advertise-ip-address $JOINER \
   --genesis-pioneer-first-ip-address $PRIMARY$SECOND_IP_ARG" /dev/null
