@@ -1683,6 +1683,26 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 			} else {
 				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
 			}
+		case types.PioneerJarKeyPrefix:
+			// PioneerJar is chain state the enclave mirrors -- SetPioneerJar forwards every write
+			// through EnclaveClientSetPioneerJar -- but the store was never added to the mirror set,
+			// so a node that did not EXECUTE the block that created the jar never received it.  A
+			// state-synced joiner held 0 against the primary's 1, with the row sitting in its own
+			// chain store the whole time.  Everything needed already existed; only this case and the
+			// GetStoreHash key were missing.
+			if sh.Hash != h {
+				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
+				pioneerJars := k.GetAllPioneerJar(sdkctx)
+				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores synchronizing PioneerJars", pioneerJars)
+				for _, pioneerJar := range pioneerJars {
+					if err := k.EnclaveClientSetPioneerJar(sdkctx, pioneerJar); err != nil {
+						pushFailures[sh.Key]++
+					}
+					checkSync = true
+				}
+			} else {
+				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
+			}
 		case types.JarRegulatorKeyPrefix:
 			if sh.Hash != h {
 				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))

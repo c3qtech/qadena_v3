@@ -7398,7 +7398,7 @@ func (s *qadenaServer) GetStoreHash(ctx context.Context, gsh *types.MsgGetStoreH
 	//
 	// EnclaveIdentity and IntervalPublicKeyID therefore come FIRST: identity to authenticate with,
 	// interval keys to find a peer, before anything that needs either.
-	keys := []string{types.EnclaveIdentityKeyPrefix, types.IntervalPublicKeyIDKeyPrefix, types.WalletKeyPrefix, types.CredentialKeyPrefix, types.JarRegulatorKeyPrefix, types.PublicKeyKeyPrefix, types.ProtectKeyKeyPrefix, types.RecoverKeyKeyPrefix, dsvstypes.AuthorizedSignatoryKeyPrefix}
+	keys := []string{types.EnclaveIdentityKeyPrefix, types.IntervalPublicKeyIDKeyPrefix, types.WalletKeyPrefix, types.CredentialKeyPrefix, types.JarRegulatorKeyPrefix, types.PioneerJarKeyPrefix, types.PublicKeyKeyPrefix, types.ProtectKeyKeyPrefix, types.RecoverKeyKeyPrefix, dsvstypes.AuthorizedSignatoryKeyPrefix}
 
 	for _, k := range keys {
 		var sh types.StoreHash
