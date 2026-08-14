@@ -442,120 +442,95 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     less useful than running it -- though GetStoreHash's per-block full scan is the
     standing favourite.
 
-39. **Claiming or updating a credential leaves its PCXY index row behind, so a
-    long-running node and a state-synced joiner hold DIFFERENT indexes.** Measured
-    2026-08-14 at a pinned height 13000, with the new `export-private-state
-    --digest-only` / `--section`:
 
-        CredentialPCXYMap    M1 1608 rows    M2 636 rows
-        only on M1  972      only on M2  0      shared 636
-        shared rows disagreeing in value    0
+39. **State-sync's rebuild indexes only the IDP credentials that are still UNCLAIMED, so
+    a joiner's CredentialPCXY index is permanently short by every credential claimed
+    before it joined.** Found 2026-08-14 with the new `export-private-state
+    --digest-only` / `--section`, which is the only reason it was visible at all.
 
-    M2's index is a STRICT SUBSET.  Nothing disagrees; M1 simply has 972 rows M2 does
-    not, covering 261 credential IDs, in a perfectly regular shape -- 237 identities x 4
-    rows (personal-info and its three sub-fields) plus 12 email and 12 phone.
+    THE INVARIANT, which M1 satisfies exactly and M2 does not:
 
-    M1 IS THE CORRECT ONE.  An earlier draft of this entry said the opposite -- that the
-    write gate
+        |CredentialPCXY|  ==  |credentials with a findCredentialPedersenCommit|
+
+        M1   1608 == 1608     complete
+        M2    636 != 1608     short by 972
+
+    An IDP-issued credential is exactly one that HAS a findCredentialPedersenCommit; the
+    user credential minted during a claim is created with that field nil
+    (enclave.go:3683, and update does the same), so it can never be indexed -- the guard
+    at enclave.go:5129 returns early on a nil commitment.  At height 13000 that splits
+    2832 credential rows into 1608 IDP-issued and 1224 user-owned, and M1's index is
+    1608 rows.  One per IDP credential, nothing stale, nothing missing.
+
+    THE MECHANISM.  SetCredential is doing double duty as the live-issue path AND the
+    rebuild path, and the two need different tests:
 
         enclave.go:4259    if in.WalletID == "" { s.setCredentialByPCXY(in) }
 
-    encodes an invariant "the index holds only ownerless credentials", making M1's extra
-    rows a leak to be removed at claim time.  THAT WAS WRONG, and the data refutes it.
-    Break the two indexes down by walletID:
+    On the live path that gate is right and always true -- a credential is ownerless at
+    the moment an IDP issues it.  On the REBUILD path it is wrong, because
+    enclaveSynchronizeStores replays CURRENT state: a credential claimed before the join
+    arrives reading walletID "CLAIMED", the gate is false, and it is silently skipped.
+    The mirror pushes every row and indexes a subset.
 
-        M1-only rows (972)     walletID "CLAIMED"   972     -- all sentinel, no real wallets
-        M2's own index (636)   walletID ""          384
-                               walletID "CLAIMED"   252     <-- impossible under that invariant
+    CONFIRMED BY PREDICTION.  If that is the mechanism, the deficit must equal the number
+    of IDP credentials already CLAIMED at the seeding height.  M1 keeps history to height
+    1, so it can be read directly at M2's seeding height 9800:
 
-    M2 ITSELF holds 252 rows for CLAIMED credentials.  A rebuild that only ever indexed
-    ownerless credentials could not contain one.  Those 252 were indexed while ownerless
-    and KEPT THROUGH THE CLAIM, live, after M2 joined -- so the live behaviour is
-    index-at-issue and retain, on both nodes, and the gate is a TYPE DISCRIMINATOR (index
-    IDP-issued credentials, not user-owned ones) rather than a lifecycle invariant.
+        idp_credentials 1272   =   ownerless 300  +  CLAIMED 972
+        M2's measured deficit at 13000:                        972
 
-    The reader settles it independently.  Both consumers branch on the retained row:
+    Predicted 972, measured 972.
 
-        ipCredential, found := s.getCredentialByPCXY(...)
-        if !found            { return ErrCredentialNotExists }
-        if WalletID != ""    { return ErrCredentialClaimed  }
+    AND IT IS PERMANENT.  Nothing re-indexes an already-claimed credential, so the hole
+    never closes by continued operation.  M2 indexed 300 at seeding, has added 336 live
+    since, and is still exactly 972 short.  The node carries it for life.
 
-    That second branch is reachable ONLY if claimed credentials stay in the index.  Under
-    the "ownerless only" reading it is dead code, and it plainly is not.
+    WHAT BREAKS.  Both consumers of the index diverge between the two nodes, and both are
+    consensus-visible because CometBFT's deterministicExecTxResult (types/results.go)
+    commits Code, Data, GasWanted and GasUsed to LastResultsHash:
 
-    SO THE DEFECT IS THE REBUILD, NOT THE RETENTION.  A row's existence depends on the
-    credential's HISTORY -- was it ownerless when first seen? -- and not on its present
-    value.  enclaveSynchronizeStores replays CURRENT chain state, where a consumed
-    credential already reads "CLAIMED", so the gate skips it and the row is never
-    recreated.  M2 is short by exactly the claims that happened BEFORE it joined; every
-    claim after its join it indexes correctly, which is the 252.
+      read side   claim (enclave.go:3536) and update (enclave_update_credential.go:445)
+                  do  if !found -> ErrCredentialNotExists ; if WalletID != "" ->
+                  ErrCredentialClaimed.  Same transaction, two different codes.
 
-    That makes this comment in privateStateTables false:
+      write side  credentialByPCXYExists (enclave.go:4252) returns BEFORE storing, so a
+                  credential whose commitment matches a row M1 has and M2 lacks is
+                  REJECTED ON M1 AND STORED ON M2 -- divergent enclave state, not just a
+                  divergent code.  This is the worse of the two.
 
-        EnclaveCredentialPCXY   rebuilt locally -- SetCredential writes it from chain
-                                state with no key material and no network, so shipping it
-                                is pure waste.
+    Reachable because the commitment is deterministic: findCredentialPC =
+    NewPedersenCommit(hash(lastName+phoneNumber), hash(providerPrivK)), and
+    NewPedersenCommit only randomizes the blinding when it is nil (ecpedersen.go:317).
+    Same person, same issuer, same commitment, forever.
 
-    The rebuild is LOSSY, so the table belongs in the private-state transfer next to
-    ProtectSubWalletIDByOriginalWalletID and RecoverOriginalWalletIDByNewWalletID, which
-    are shipped for the analogous reason -- their local rebuild "fails silently" without
-    inputs the joiner does not have.  Here the missing input is history.
+    NOT the identity-uniqueness guard.  That is the credential-HASH table, written at
+    claim time, and it is byte-identical on both nodes (CredentialHashMap, 264 rows).
+    Uniqueness enforcement is intact on the joiner; what is short is the lookup index.
 
-    DO NOT "FIX" THIS BY REMOVING THE ROW AT CLAIM TIME.  It would delete rows the reader
-    depends on and silently convert every ErrCredentialClaimed into ErrCredentialNotExists
-    -- a semantic change to a consensus-visible code, dressed as a cleanup.
+    TWO EARLIER READINGS OF THIS WERE WRONG and are recorded because both were plausible
+    and both would have caused damage:
 
-    removeCredentialByPCXY has exactly one production caller, RemoveCredential
-    (enclave.go:4298), and that is correct: a DELETED credential should leave the index, a
-    CONSUMED one should not.
+      "M2 is right, M1 leaks"      -- claimed the gate encodes "index holds only
+                                     ownerless credentials" and the claim path should
+                                     remove the row.  Refuted by M2's own 252 CLAIMED
+                                     rows, which that invariant makes impossible, and by
+                                     1608 == 1608.  Acting on it would have deleted rows
+                                     the reader depends on.
+      "the retained row is the duplicate-issue guard" -- over-reached in the other
+                                     direction.  The guard is the hash table; this is a
+                                     lookup index.
 
-    The gap is a CONSTANT 972 rather than something that drifts precisely because both
-    nodes handle new claims identically -- retaining the row -- and the difference is
-    entirely the history M2 could not reconstruct at seeding.
+    THE FIX is to make the rebuild test what the invariant states --
+    findCredentialPedersenCommit != nil -- rather than the current walletID, which is
+    irrelevant history by rebuild time.  Transferring the table in privateStateTables
+    would also work and is a bigger hammer; the comment there calling it "pure waste" to
+    ship is wrong either way, since the local rebuild is demonstrably lossy.
 
-    WHY IT MATTERS BEYOND TIDINESS.  getCredentialByPCXY backs the identity-uniqueness
-    check -- the one that rejects a duplicate claim with code 1115.  Two nodes with
-    different indexes can reach different verdicts on the same transaction, which is the
-    same shape as the AuthorizedSignatory fork (item 35): enclave state that is a
-    consensus input diverging silently between a live node and a state-synced one.
-
-    IT IS A LATENT FORK, NOT A LEAK.  That question is now settled by reading the two
-    transaction paths that consume the index.  Both branch the same way:
-
-        enclave.go:3536              claim-credential
-        enclave_update_credential.go:445   update-credential
-
-            ipCredential, found := s.getCredentialByPCXY(...)
-            if !found            { return ErrCredentialNotExists }   // the joiner
-            if WalletID != ""    { return ErrCredentialClaimed  }   // the live node
-
-    Both REJECT, so no bad state is written -- but they reject with DIFFERENT CODES, and
-    the code is consensus material.  CometBFT's deterministicExecTxResult
-    (types/results.go) keeps Code, Data, GasWanted and GasUsed, and merkle-hashes them
-    into the header's LastResultsHash.  Two nodes returning different codes for the same
-    transaction therefore build different headers.  That is precisely how the
-    AuthorizedSignatory fork presented -- a different verdict on one transaction, then a
-    consensus failure -- and the differing gas of the two branches would do it even if
-    the codes matched.
-
-    THE TRIGGER HAS NOT BEEN FIRED.  What is proven is the mechanism, by code reading,
-    not a live divergence: it needs a claim or update whose findCredentialPC resolves to
-    a row that is stale on the live node and absent on the joiner -- i.e. re-claiming or
-    re-updating an already-consumed identity-provider credential.  No suite does that
-    today, which is why 670 regression runs never surfaced it.  Worth writing, because
-    the negative result would be evidence and the positive one is a fork.
-
-    The third consumer, QueryFindCredential (enclave.go:2797), is a query rather than a
-    transaction, so it does not reach consensus -- it just answers two clients
-    differently depending on which node they ask.
-
-    THE FIX: add EnclaveCredentialPCXYKeyPrefix to privateStateTables so the index is
-    transferred rather than rebuilt, and correct the comment there that calls shipping it
-    "pure waste".  The rows are ordinary sealed key/value pairs with no key material in
-    them, so they page like the others.
-
-    A state-synced joiner is the only thing that would ever have revealed this, since a
-    node that has processed the whole chain live cannot disagree with itself -- and note
-    how nearly it escaped anyway: the joiner's OWN 252 retained rows are what proves the
-    retention is intended, and a smaller sample, or a joiner that had claimed nothing
-    since joining, would have looked exactly like a leak.
+    NOT YET DONE: fire the trigger.  Everything above is measurement plus code reading;
+    no live divergence has been provoked.  Doing so deliberately halts the chain, since a
+    consensus failure is the success condition.  Note also that
+    test_credential_uniqueness.sh cannot catch this -- every identity it issues carries a
+    per-run id, so no two issues ever share a commitment and credentialByPCXYExists never
+    fires.  Its header line `create   no check at all` is inaccurate: there IS a check at
+    create, just not the hash-uniqueness one it is describing.
