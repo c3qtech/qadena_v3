@@ -455,27 +455,63 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     not, covering 261 credential IDs, in a perfectly regular shape -- 237 identities x 4
     rows (personal-info and its three sub-fields) plus 12 email and 12 phone.
 
-    WHICH ONE IS RIGHT IS DECIDED BY THE CODE, and it is M2.  The only production writer
-    is gated on the credential being ownerless:
+    M1 IS THE CORRECT ONE.  An earlier draft of this entry said the opposite -- that the
+    write gate
 
         enclave.go:4259    if in.WalletID == "" { s.setCredentialByPCXY(in) }
 
-    and all 972 of M1's extra rows belong to credentials whose walletID is now SET --
-    ownerless_walletID_empty: 0, owned_walletID_set: 972.  They were written correctly at
-    issue time, when the credential had no owner, and never removed when it acquired one.
+    encodes an invariant "the index holds only ownerless credentials", making M1's extra
+    rows a leak to be removed at claim time.  THAT WAS WRONG, and the data refutes it.
+    Break the two indexes down by walletID:
 
-    THE REMOVAL EXISTS AND IS CALLED FROM ONE PLACE.  removeCredentialByPCXY has exactly
-    one production caller, RemoveCredential (enclave.go:4298).  Two other paths assign a
-    walletID to an existing credential and do not:
+        M1-only rows (972)     walletID "CLAIMED"   972     -- all sentinel, no real wallets
+        M2's own index (636)   walletID ""          384
+                               walletID "CLAIMED"   252     <-- impossible under that invariant
 
-        enclave.go:3743                      WalletID = ClaimedCredentialWalletID
-        enclave_update_credential.go:279,289,345  WalletID = UpdatedCredentialWalletID
+    M2 ITSELF holds 252 rows for CLAIMED credentials.  A rebuild that only ever indexed
+    ownerless credentials could not contain one.  Those 252 were indexed while ownerless
+    and KEPT THROUGH THE CLAIM, live, after M2 joined -- so the live behaviour is
+    index-at-issue and retain, on both nodes, and the gate is a TYPE DISCRIMINATOR (index
+    IDP-issued credentials, not user-owned ones) rather than a lifecycle invariant.
 
-    So the index grows monotonically with claims and updates on any node that processes
-    them live, while a joiner that rebuilds from current chain state gets only the rows
-    the invariant actually calls for.  This is why the gap is a CONSTANT 972 rather than
-    something that drifts: both nodes handle new writes identically, and the difference
-    is entirely what M1 accumulated before M2 joined.
+    The reader settles it independently.  Both consumers branch on the retained row:
+
+        ipCredential, found := s.getCredentialByPCXY(...)
+        if !found            { return ErrCredentialNotExists }
+        if WalletID != ""    { return ErrCredentialClaimed  }
+
+    That second branch is reachable ONLY if claimed credentials stay in the index.  Under
+    the "ownerless only" reading it is dead code, and it plainly is not.
+
+    SO THE DEFECT IS THE REBUILD, NOT THE RETENTION.  A row's existence depends on the
+    credential's HISTORY -- was it ownerless when first seen? -- and not on its present
+    value.  enclaveSynchronizeStores replays CURRENT chain state, where a consumed
+    credential already reads "CLAIMED", so the gate skips it and the row is never
+    recreated.  M2 is short by exactly the claims that happened BEFORE it joined; every
+    claim after its join it indexes correctly, which is the 252.
+
+    That makes this comment in privateStateTables false:
+
+        EnclaveCredentialPCXY   rebuilt locally -- SetCredential writes it from chain
+                                state with no key material and no network, so shipping it
+                                is pure waste.
+
+    The rebuild is LOSSY, so the table belongs in the private-state transfer next to
+    ProtectSubWalletIDByOriginalWalletID and RecoverOriginalWalletIDByNewWalletID, which
+    are shipped for the analogous reason -- their local rebuild "fails silently" without
+    inputs the joiner does not have.  Here the missing input is history.
+
+    DO NOT "FIX" THIS BY REMOVING THE ROW AT CLAIM TIME.  It would delete rows the reader
+    depends on and silently convert every ErrCredentialClaimed into ErrCredentialNotExists
+    -- a semantic change to a consensus-visible code, dressed as a cleanup.
+
+    removeCredentialByPCXY has exactly one production caller, RemoveCredential
+    (enclave.go:4298), and that is correct: a DELETED credential should leave the index, a
+    CONSUMED one should not.
+
+    The gap is a CONSTANT 972 rather than something that drifts precisely because both
+    nodes handle new claims identically -- retaining the row -- and the difference is
+    entirely the history M2 could not reconstruct at seeding.
 
     WHY IT MATTERS BEYOND TIDINESS.  getCredentialByPCXY backs the identity-uniqueness
     check -- the one that rejects a duplicate claim with code 1115.  Two nodes with
@@ -513,6 +549,13 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     transaction, so it does not reach consensus -- it just answers two clients
     differently depending on which node they ask.
 
-    The fix is the same either way: remove the row where the walletID is assigned.  And a
-    state-synced joiner is the only thing that would ever have revealed it, since a node
-    that has processed the whole chain live cannot disagree with itself.
+    THE FIX: add EnclaveCredentialPCXYKeyPrefix to privateStateTables so the index is
+    transferred rather than rebuilt, and correct the comment there that calls shipping it
+    "pure waste".  The rows are ordinary sealed key/value pairs with no key material in
+    them, so they page like the others.
+
+    A state-synced joiner is the only thing that would ever have revealed this, since a
+    node that has processed the whole chain live cannot disagree with itself -- and note
+    how nearly it escaped anyway: the joiner's OWN 252 retained rows are what proves the
+    retention is intended, and a smaller sample, or a joiner that had claimed nothing
+    since joining, would have looked exactly like a leak.
