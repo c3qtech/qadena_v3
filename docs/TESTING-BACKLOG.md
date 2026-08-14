@@ -313,6 +313,14 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     what state-sync skips. `EnclaveCredentialPCXYKeyPrefix` has four read/write sites in
     the enclave and appears nowhere in `privateStateTables` or `GetStoreHash`'s key list.
 
+    NEITHER IS LEGITIMATELY NODE-LOCAL, which was checked rather than assumed. PioneerJar
+    is shared chain state: `query qadena list-pioneer-jar` returns the SAME record
+    (pioneerID pioneer1) on both nodes, and `SetPioneerJar` forwards it to the enclave via
+    `EnclaveClientSetPioneerJar` -- so the joiner's chain holds the row, the enclave has a
+    setter for it, and no path connects the two on a node that did not execute the
+    originating message. That is the AuthorizedSignatory shape exactly, minus the attempt:
+    that one tries and is refused, this one is never tried.
+
     THE WORK: enumerate every `Enclave*KeyPrefix`, classify each as transferred,
     chain-mirrored, legitimately node-local, or MISSING, and justify each classification in
     the table's own comment. A table whose absence changes a validation verdict is a fork,
