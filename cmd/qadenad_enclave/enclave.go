@@ -2228,16 +2228,57 @@ func (s *qadenaServer) QueryEnclaveSyncEnclave(goCtx context.Context, in *types.
 	//	RegulatorPrivK      string
 	//	RegulatorPubK       string
 
-	// intentionally send the SSIntervalOwners
-	tmpEnclaveParams.SSIntervalOwners = s.getAllOwners()
-
 	// do not send the SSIntervalShares
 	// do not send our local private key cache
 
 	// remove first intentionally send the public key cache
 	//  tmpEnclaveParams.SSIntervalPubKCache = s.exportTable(EnclaveSSIntervalPubKKeyPrefix)
 
-	enc := c.ProtoMarshalAndBEncrypt(in.EnclavePubK, &tmpEnclaveParams)
+	// LEGACY, UNPAGED.  A caller that sends maxBytes == 0 predates paging, so answer the way we
+	// always did.  Keeping this path is what lets a NEW joiner talk to an OLD seed and vice versa
+	// during an upgrade window -- and sync-enclave is exactly where the two ends differ in version,
+	// since it is how a fresh node meets an established one.
+	if in.MaxBytes == 0 {
+		// intentionally send the SSIntervalOwners
+		tmpEnclaveParams.SSIntervalOwners = s.getAllOwners()
+
+		enc := c.ProtoMarshalAndBEncrypt(in.EnclavePubK, &tmpEnclaveParams)
+
+		report, err := s.getRemoteReport(strings.Join([]string{
+			string(enc),
+		}, "|"))
+		if err != nil {
+			return nil, err
+		}
+
+		return &types.QueryEnclaveSyncEnclaveResponse{RemoteReport: report,
+			EncEnclaveParamsEnclavePubK: enc,
+		}, nil
+	}
+
+	// PAGED.  SSIntervalOwners is the only field that grows with chain age -- one entry per
+	// keyUpdateFrequency (555) blocks -- so it is the only one that pages.  The fixed-size key
+	// material rides along on the first page.
+	budget := int(in.MaxBytes)
+	if budget > syncEnclavePageMaxBytes {
+		budget = syncEnclavePageMaxBytes
+	}
+
+	owners, nextCursor, done := s.getOwnersPage(string(in.Cursor), budget)
+
+	page := types.EncryptableSyncEnclavePage{
+		SSIntervalOwners: owners,
+		NextCursor:       []byte(nextCursor),
+		Done:             done,
+	}
+	if len(in.Cursor) == 0 {
+		// First page only.  SSIntervalOwners is left nil inside params -- the owners travel in the
+		// page's own field so that every page carries them identically.
+		tmpEnclaveParams.SSIntervalOwners = nil
+		page.Params = &tmpEnclaveParams
+	}
+
+	enc := c.ProtoMarshalAndBEncrypt(in.EnclavePubK, &page)
 
 	report, err := s.getRemoteReport(strings.Join([]string{
 		string(enc),
@@ -2247,8 +2288,63 @@ func (s *qadenaServer) QueryEnclaveSyncEnclave(goCtx context.Context, in *types.
 	}
 
 	return &types.QueryEnclaveSyncEnclaveResponse{RemoteReport: report,
-		EncEnclaveParamsEnclavePubK: enc,
+		EncSyncEnclavePagePubK: enc,
 	}, nil
+}
+
+const (
+	// Mirrors the private-state transfer: aim for 1 MiB, refuse to build more than 3 MiB, so a
+	// single reply cannot approach gRPC's 4 MiB default message limit.
+	syncEnclavePageTargetBytes = 1 << 20
+	syncEnclavePageMaxBytes    = 3 << 20
+
+	// A runaway-loop backstop, not a real limit.  At the 1 MiB target this is far more owners than
+	// any plausible chain: 10M blocks yields ~18,000 entries, which is a handful of pages.
+	syncEnclaveMaxPages = 1024
+)
+
+// getOwnersPage returns the slice of SSIntervalOwners that follows cursor, up to roughly budget
+// bytes.  An empty cursor starts at the beginning; done reports that this page reached the end.
+//
+// The keys are SORTED, which is what makes the cursor a stable position: store.Keys() gives no
+// ordering guarantee, and paging an unordered scan would silently skip or duplicate entries between
+// calls.  A skipped interval is not a visible error -- it becomes a getSSPrivK that returns "" long
+// afterwards.
+func (s *qadenaServer) getOwnersPage(cursor string, budget int) (page map[string]*types.EncryptablePioneerIDs, nextCursor string, done bool) {
+	store := s.secrets(EnclaveSSIntervalOwnersKeyPrefix)
+
+	// Keys() is a snapshot, so getOwners below re-acquires the secrets lock safely
+	keys := make([]string, 0)
+	for _, key := range store.Keys() {
+		keys = append(keys, string(key[:len(key)-1]))
+	}
+	sort.Strings(keys)
+
+	page = make(map[string]*types.EncryptablePioneerIDs)
+	used := 0
+	for _, key := range keys {
+		if cursor != "" && key <= cursor {
+			continue
+		}
+		owners, found := s.getOwners(key)
+		if !found {
+			c.LoggerDebug(logger, "couldn't find in owners db")
+			continue
+		}
+		page[key] = &owners
+		nextCursor = key
+
+		// Estimate rather than re-marshal the whole page each iteration: the budget only has to
+		// keep us clear of the gRPC limit, and being a few hundred bytes out does not matter.
+		used += len(key) + 8
+		for _, id := range owners.PioneerIDs {
+			used += len(id) + 2
+		}
+		if used >= budget {
+			return page, nextCursor, false
+		}
+	}
+	return page, nextCursor, true
 }
 
 func (s *qadenaServer) QueryEnclaveValidateEnclaveIdentity(goCtx context.Context, in *types.QueryEnclaveValidateEnclaveIdentityRequest) (*types.QueryEnclaveValidateEnclaveIdentityResponse, error) {
@@ -2776,6 +2872,9 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 	params := &types.QueryEnclaveSyncEnclaveRequest{
 		RemoteReport: report,
 		EnclavePubK:  s.getPrivateEnclaveParamsEnclavePubK(),
+		// Non-zero tells the seed we understand paging.  An older seed ignores it and replies in
+		// the legacy shape, which the loop below detects and handles.
+		MaxBytes: syncEnclavePageTargetBytes,
 	}
 
 	if s.RealEnclave {
@@ -2828,10 +2927,65 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 	// identities with its own key material still gets through and surfaces later, when the first
 	// VShare fails to decrypt.
 	var fromRemoteEnclaveParams types.EncryptableSharedEnclaveParams
-	_, err = c.BDecryptAndProtoUnmarshal(s.getPrivateEnclaveParamsEnclavePrivK(), res.GetEncEnclaveParamsEnclavePubK(), &fromRemoteEnclaveParams)
-	if err != nil {
-		c.LoggerError(logger, "couldn't decrypt")
-		return nil, err
+	allOwners := &types.EncryptableEnclaveSSOwnerMap{Pioneers: make(map[string]*types.EncryptablePioneerIDs)}
+
+	if len(res.GetEncSyncEnclavePagePubK()) == 0 {
+		// An older seed that does not page.  Everything arrives at once, as it always did.
+		_, err = c.BDecryptAndProtoUnmarshal(s.getPrivateEnclaveParamsEnclavePrivK(), res.GetEncEnclaveParamsEnclavePubK(), &fromRemoteEnclaveParams)
+		if err != nil {
+			c.LoggerError(logger, "couldn't decrypt")
+			return nil, err
+		}
+		allOwners = fromRemoteEnclaveParams.SSIntervalOwners
+	} else {
+		// Paged.  Accumulate every page before installing anything: a half-applied owners map is
+		// worse than none, because the missing intervals do not fail here -- they surface much
+		// later as a getSSPrivK that returns "" and silently changes a state transition.
+		gotParams := false
+		for pages := 1; ; pages++ {
+			var page types.EncryptableSyncEnclavePage
+			_, err = c.BDecryptAndProtoUnmarshal(s.getPrivateEnclaveParamsEnclavePrivK(), res.GetEncSyncEnclavePagePubK(), &page)
+			if err != nil {
+				c.LoggerError(logger, "couldn't decrypt sync-enclave page")
+				return nil, err
+			}
+
+			if page.Params != nil {
+				fromRemoteEnclaveParams = *page.Params
+				gotParams = true
+			}
+			for k, v := range page.SSIntervalOwners {
+				allOwners.Pioneers[k] = v
+			}
+			c.LoggerDebug(logger, "sync-enclave page "+strconv.Itoa(pages)+" owners so far "+strconv.Itoa(len(allOwners.Pioneers)))
+
+			if page.Done {
+				break
+			}
+			// A seed that neither finishes nor advances would loop us forever. Treat it as a failed
+			// join rather than spinning: refusing here is loud and the operator can retry.
+			if len(page.NextCursor) == 0 {
+				c.LoggerError(logger, "sync-enclave page is not done but carries no cursor")
+				return nil, types.ErrGenericEnclave
+			}
+			if pages >= syncEnclaveMaxPages {
+				c.LoggerError(logger, "sync-enclave exceeded "+strconv.Itoa(syncEnclaveMaxPages)+" pages, refusing")
+				return nil, types.ErrGenericEnclave
+			}
+
+			params.Cursor = page.NextCursor
+			res, err = queryClient.EnclaveSyncEnclave(context.Background(), params)
+			if err != nil {
+				c.LoggerError(logger, "err "+err.Error())
+				return nil, err
+			}
+		}
+		if !gotParams {
+			// The key material rides on the first page; without it we would install an owners map
+			// and no jar/regulator keys at all.
+			c.LoggerError(logger, "sync-enclave completed without ever receiving the params page")
+			return nil, types.ErrGenericEnclave
+		}
 	}
 
 	if s.RealEnclave {
@@ -2846,8 +3000,8 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 
 	s.setSharedEnclaveParamsRegulatorInfo(fromRemoteEnclaveParams.RegulatorID, fromRemoteEnclaveParams.RegulatorPubK, fromRemoteEnclaveParams.RegulatorPrivK, fromRemoteEnclaveParams.RegulatorArmorPrivK)
 
-	// store the owners
-	s.setAllOwners(fromRemoteEnclaveParams.SSIntervalOwners)
+	// store the owners -- accumulated across every page, installed once
+	s.setAllOwners(allOwners)
 
 	// intentionally don't store the shares, they're private to a specific enclave
 	// do not store the SSIntervalPrivKCache

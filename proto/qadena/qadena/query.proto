@@ -415,11 +415,20 @@ message QueryEnclaveValidateEnclaveIdentityResponse {
 message QueryEnclaveSyncEnclaveRequest {
   bytes remoteReport = 1;
   string enclavePubK  = 2;
+  // Paging.  maxBytes == 0 means "this caller predates paging" and selects the legacy unpaged
+  // reply, which is what keeps a NEW joiner working against an OLD seed during an upgrade window --
+  // and sync-enclave is precisely a path where the two ends are expected to differ in version.
+  bytes  cursor   = 3;
+  uint32 maxBytes = 4;
 }
 
 message QueryEnclaveSyncEnclaveResponse {
   bytes remoteReport                = 1;
+  // Legacy, unpaged: EncryptableSharedEnclaveParams with SSIntervalOwners inline.  Still sent when
+  // the request carries maxBytes == 0.
   bytes  encEnclaveParamsEnclavePubK = 2;
+  // Paged: EncryptableSyncEnclavePage.  The remoteReport above certifies exactly these bytes.
+  bytes  encSyncEnclavePagePubK      = 3;
 }
 
 message QueryEnclavePrivateStateRequest {

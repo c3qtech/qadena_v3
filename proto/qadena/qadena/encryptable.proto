@@ -308,3 +308,33 @@ message EncryptableSharedEnclaveParams {
 	EncryptableEnclavePubKCacheMap SSIntervalPubKCache = 10;
 }
 
+// One page of the sync-enclave handshake.
+//
+// WHY THIS EXISTS.  SSIntervalOwners grows without bound: a new SS interval key is minted every
+// keyUpdateFrequency (555) blocks, so the map holds roughly chainHeight/555 entries -- ~166 at 92k,
+// ~1,800 at 1M, ~18,000 at 10M.  It used to be sent as ONE message, which walks into both a latency
+// ceiling and gRPC's 4 MiB message limit as the chain ages.  The failure would land on the joining
+// operator as "add_full_node.sh fails at sync-enclave" against a seed that is perfectly healthy,
+// with nothing in either log saying "too much data".
+//
+// nextCursor and done live INSIDE this message on purpose.  This message is encrypted to the
+// joiner and the seed's remote report covers exactly those ciphertext bytes, so a network attacker
+// cannot truncate the handshake by flipping `done` in the clear.  That matters more than it looks:
+// a short owners map is not a visible failure.  It makes getSSPrivK return "" for the missing
+// intervals much later, and an empty key is a valid-looking input that silently changes a state
+// transition -- a fork with no error anywhere near it.
+message EncryptableSyncEnclavePage {
+	// Populated on the FIRST page only.  The key material is fixed-size and does not page; only the
+	// owners map does.  Its SSIntervalOwners field is left empty -- the owners travel in the field
+	// below so that every page carries them the same way.
+	EncryptableSharedEnclaveParams params = 1;
+
+	// This page's slice of SSIntervalOwners, keyed by SS interval pubKID.
+	map<string, EncryptablePioneerIDs> SSIntervalOwners = 2;
+
+	// Opaque to the caller; it is the last pubKID on this page.  Plaintext is fine -- a pubKID is
+	// already public on chain as an IntervalPublicKeyID.
+	bytes nextCursor = 3;
+	bool  done = 4;
+}
+
