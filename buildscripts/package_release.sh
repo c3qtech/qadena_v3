@@ -126,6 +126,29 @@ echo "commit: $commit" >> "$manifest"
 
 included=""
 
+# Which mechanism identifies the packaged chain enclave -- set by add_binary, read by the public.pem
+# check further down, which only means anything for a signed one.
+enclave_identity_mode=""
+
+# debug_id_of <binary> unique|signer -- a debug enclave's embedded identity, asked of the binary.
+#
+# THE TWO ENCLAVES SPELL THESE FLAGS DIFFERENTLY: qadenad_enclave takes -unique-id / -signer-id,
+# signer_enclave takes -query-unique-id / -query-signer-id.  Both spellings are tried rather than
+# keeping a per-binary table here, because the wrong one is free and unmistakable -- Go's flag
+# package prints "flag provided but not defined" to stderr and exits 2 without starting anything, so
+# a miss produces no stdout at all rather than a plausible-looking wrong answer.
+debug_id_of() {
+    local b="$1" which="$2" f out=""
+    for f in "-$which-id" "-query-$which-id"; do
+        out=$("$b" "$f" 2>/dev/null | tail -1)
+        if [[ -n "$out" && "$out" != *[[:space:]]* ]]; then
+            printf "%s" "$out"
+            return 0
+        fi
+    done
+    return 1
+}
+
 add_binary() {   # name src [signed]
     local name="$1" src="$2" signed="$3"
     [[ -x "$src" ]] || fail "$name not built at $src -- build it first"
@@ -149,13 +172,48 @@ add_binary() {   # name src [signed]
     else
         ver=$("$src" -version 2>&1 | head -1)
     fi
+    # THE ENCLAVE'S IDENTITY, BY WHICHEVER MECHANISM THIS BUILD USES.  An ego-signed enclave is
+    # identified by its MEASUREMENT; a debug enclave by the go:embed-ed placeholder pair it prints for
+    # itself with -unique-id / -signer-id.  BOTH ARE REAL IDENTITIES -- build_enclave.sh writes
+    # whichever the build produced into genesis.json's enclaveIdentityList, and getEnclaveIdentity
+    # looks it up by that exact string, so a node whose id differs is refused either way.  Packaging
+    # it means install_release.sh can verify on arrival that the binary is the one this manifest
+    # describes, which is the property that matters and is checkable without SGX.
+    #
+    # Requiring ego unconditionally made this script unusable for the debug path it exists to serve:
+    # ego ships as an amd64-only .deb (ubuntu/setup_qadena_build.sh), so on ARM it cannot be installed
+    # at all -- and there every enclave is a debug build, which has nothing for ego to read even if it
+    # could be.
     if [[ "$signed" == "signed" ]]; then
-        command -v ego > /dev/null 2>&1 || fail "ego is not installed; cannot verify $name is signed"
-        meas=$(ego uniqueid "$src" 2>/dev/null | tail -1)
-        [[ "$meas" =~ ^[0-9a-f]{64}$ ]] \
-            || fail "$name is not ego-signed (no measurement) -- was it built with --build-sgx?"
-        local signer
-        signer=$(ego signerid "$src" 2>/dev/null | tail -1)
+        local signer mode
+        if is_sgx_binary "$src"; then
+            mode=sgx
+            meas=$(ego uniqueid "$src" 2>/dev/null | tail -1)
+            [[ "$meas" =~ ^[0-9a-f]{64}$ ]] \
+                || fail "$name is not ego-signed (no measurement) -- was it built with --build-sgx?"
+            signer=$(ego signerid "$src" 2>/dev/null | tail -1)
+        else
+            # A MACHINE THAT COULD HAVE SIGNED THIS AND DID NOT is the accidental-debug-package case
+            # the old hard failure existed to catch, and it still fails.  What no longer fails is the
+            # machine that could never have signed it -- not a mistake, but the debug path working.
+            if [[ $REAL_ENCLAVE -eq 1 ]] && command -v ego > /dev/null 2>&1; then
+                fail "$name is not ego-signed, but this machine has SGX and ego -- packaging a debug
+       enclave from here is almost certainly a mistake.  Rebuild:  buildscripts/build.sh --build-sgx"
+            fi
+            mode=debug
+            # `|| x=""` rather than a bare assignment: under set -e a non-zero function status
+            # inside a command substitution kills the script before the check below can name a cause.
+            meas=$(debug_id_of "$src" unique) || meas=""
+            signer=$(debug_id_of "$src" signer) || signer=""
+            [[ -n "$meas" && -n "$signer" ]] \
+                || fail "$name reports no identity -- it is neither ego-signed nor a debug enclave
+       answering -unique-id / -signer-id.  Was it built?"
+            echo "  $name is a DEBUG enclave: $meas / $signer"
+        fi
+        if [[ "$name" == "qadenad_enclave" ]]; then
+            enclave_identity_mode="$mode"
+        fi
+        echo "$name.identity_mode: $mode" >> "$manifest"
         echo "$name.signer: $signer" >> "$manifest"
     fi
     cp "$src" "$stage/bin/$name"
@@ -216,7 +274,12 @@ if want config; then
     # THE PEM MUST BELONG TO THE PACKAGED ENCLAVE.  A stale public.pem produces a valid-looking node
     # that hands the chain the wrong --enclave-signer-id and is refused -- a failure that surfaces
     # only at startup on the target machine, long after this archive was built.
-    if want enclave; then
+    #
+    # ONLY FOR A SIGNED ENCLAVE.  public.pem is the signing key's public half, so on a debug build
+    # there is no key, nothing signed it, and `ego signerid` has no answer -- the comparison would be
+    # between two empty strings dressed up as a check.  The debug enclave's signer identity is the
+    # placeholder recorded above, and it comes from the binary, not from this file.
+    if want enclave && [[ "$enclave_identity_mode" == "sgx" ]]; then
         pem_signer=$(ego signerid "$pem" 2>/dev/null | tail -1)
         encl_signer=$(grep '^qadenad_enclave.signer:' "$manifest" | awk '{print $2}')
         [[ "$pem_signer" == "$encl_signer" ]] \

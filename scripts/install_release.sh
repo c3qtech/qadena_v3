@@ -8,8 +8,9 @@
 #   sudo ./qadena-full-1.1.8-abc1234/install.sh
 #
 # There is no git checkout, no build tree and no toolchain on that machine, and this script needs
-# none: it is shipped inside the package as install.sh and sources nothing.  ego IS required, since
-# a node cannot start without it whatever is installed.
+# none: it is shipped inside the package as install.sh and sources nothing.  ego is required for an
+# SGX package, because a node cannot start an ego-signed enclave without it -- and NOT required for a
+# debug package, which is the only way the non-SGX path can work at all (ego is an amd64-only .deb).
 #
 # From a checkout, pointing at an archive works too:
 #
@@ -106,9 +107,16 @@ qadenascripts="$QADENAHOME/scripts"
 export LD_LIBRARY_PATH="$qadenabin:$LD_LIBRARY_PATH"
 echo "node home: $QADENAHOME"
 
-# WHAT THE TARGET MACHINE MUST ALREADY HAVE.  ego is not optional and never becomes optional: run.sh
-# derives --enclave-signer-id and --enclave-unique-id from it on every start, so a box without it
-# cannot run a node no matter what is installed.  Better to say so now than at the first start.
+# WHAT THE TARGET MACHINE MUST ALREADY HAVE.  ego is required for an SGX package and ONLY for one:
+# run.sh derives --enclave-signer-id and --enclave-unique-id from it on every start, but only when
+# the enclave is ego-signed.  A debug enclave is a plain Go binary that reports those ids itself
+# (-unique-id / -signer-id), and a machine installing a debug package needs no ego at all -- which is
+# what makes the debug path usable, since ego ships as an amd64-only .deb and cannot be installed on
+# ARM under any circumstances.
+#
+# SO THE REQUIREMENT CANNOT BE DECIDED HERE.  It depends on what is IN the package, and the package
+# has not been unpacked yet.  It is enforced in section 1, once the manifest has said which kind of
+# enclave arrived -- still before anything is written, which is what "say so now" was protecting.
 prereq_hint() {
     # The package ships ubuntu/setup_qadena_build.sh precisely so a bare machine can fix this
     # itself.  Point at the copy that travelled with this package, not at a checkout that may not
@@ -123,14 +131,6 @@ prereq_hint() {
     echo "       run ubuntu/setup_qadena_build.sh from the qadena source tree"
 }
 
-if ! command -v ego > /dev/null 2>&1; then
-    fail "ego is not installed, and a node cannot start without it -- run.sh derives
-       --enclave-signer-id and --enclave-unique-id from it on every start.
-
-       This package ships the setup script that installs it, along with the SGX quote
-       provider, the PCCS configuration and the sgx/sgx_prv group membership:
-$(prereq_hint)"
-fi
 missing=""
 for t in jq curl dasel; do
     command -v "$t" > /dev/null 2>&1 || missing="$missing $t"
@@ -193,13 +193,60 @@ while read -r _sum entry; do
 done < "$stage/sha256sums.txt"
 echo "  every path is installable"
 
+# WHICH IDENTITY MECHANISM THIS PACKAGE USES -- the PACKAGE's property, not this machine's.  An SGX
+# package carries an ego-signed enclave identified by its measurement; a debug package carries a
+# plain Go binary identified by the go:embed-ed placeholder it prints for itself.  Both must match
+# what the chain's genesis recorded or every enclave-to-enclave call fails closed, so both are
+# verified here -- the check is the same shape, only the reader differs.
+#
+# Packages built before this key existed are SGX by construction: the debug path could not be
+# packaged at all, because packaging refused to run without ego.
+identity_mode=$(mval qadenad_enclave.identity_mode)
+[[ -n "$identity_mode" ]] || identity_mode=sgx
+echo "  enclave identity: $identity_mode"
+
+if [[ "$identity_mode" == "sgx" ]]; then
+    command -v ego > /dev/null 2>&1 || fail "this package carries an ego-signed (SGX) enclave, and ego
+       is not installed here.  run.sh derives --enclave-signer-id and --enclave-unique-id from it on
+       every start, so this machine could not run the node even once installed.
+
+       This package ships the setup script that installs it, along with the SGX quote
+       provider, the PCCS configuration and the sgx/sgx_prv group membership:
+$(prereq_hint)"
+fi
+
+# read_unique / read_signer <binary> -- an enclave binary's identity, by the package's mechanism.
+#
+# THE TWO ENCLAVES SPELL THE DEBUG FLAGS DIFFERENTLY: qadenad_enclave takes -unique-id / -signer-id,
+# signer_enclave takes -query-unique-id / -query-signer-id.  Both are tried; the wrong one makes Go's
+# flag package print "flag provided but not defined" to stderr and exit 2 without starting anything,
+# so a miss yields no stdout rather than a plausible-looking wrong answer.
+debug_id_of() {
+    local b="$1" which="$2" f out=""
+    for f in "-$which-id" "-query-$which-id"; do
+        out=$("$b" "$f" 2>/dev/null | tail -1)
+        if [[ -n "$out" && "$out" != *[[:space:]]* ]]; then
+            printf "%s" "$out"
+            return 0
+        fi
+    done
+    return 1
+}
+read_unique() {
+    if [[ "$identity_mode" == "sgx" ]]; then ego uniqueid "$1" 2>/dev/null | tail -1
+    else debug_id_of "$1" unique || true; fi
+}
+read_signer() {
+    if [[ "$identity_mode" == "sgx" ]]; then ego signerid "$1" 2>/dev/null | tail -1
+    else debug_id_of "$1" signer || true; fi
+}
+
 new_encl="$stage/bin/qadenad_enclave"
 new_unique=""; new_signer=""; new_version=""
 if [[ -f "$new_encl" ]]; then
     chmod +x "$new_encl"
-    command -v ego > /dev/null 2>&1 || fail "ego is not installed; cannot verify the enclave"
-    new_unique=$(ego uniqueid "$new_encl" 2>/dev/null | tail -1)
-    new_signer=$(ego signerid "$new_encl" 2>/dev/null | tail -1)
+    new_unique=$(read_unique "$new_encl")
+    new_signer=$(read_signer "$new_encl")
     new_version=$("$new_encl" -version 2>&1 | head -1)
     # The checksum proves the bytes arrived intact; the MEASUREMENT is what the chain actually
     # accepts, so verify the binary measures what the manifest promised.
@@ -209,7 +256,7 @@ if [[ -f "$new_encl" ]]; then
 fi
 if [[ -f "$stage/bin/signer_enclave" ]]; then
     chmod +x "$stage/bin/signer_enclave"
-    s=$(ego uniqueid "$stage/bin/signer_enclave" 2>/dev/null | tail -1)
+    s=$(read_unique "$stage/bin/signer_enclave")
     [[ "$s" == "$(mval signer_enclave.unique_id)" ]] \
         || fail "signer_enclave measures $s but the manifest says $(mval signer_enclave.unique_id)"
     echo "  signer_enclave measures $s"
@@ -241,8 +288,8 @@ if [[ "$mode" == "install" ]]; then
 else
     cur_version=""; cur_unique=""; cur_signer=""
     if [[ -x "$cur_encl" ]]; then
-        cur_unique=$(ego uniqueid "$cur_encl" 2>/dev/null | tail -1)
-        cur_signer=$(ego signerid "$cur_encl" 2>/dev/null | tail -1)
+        cur_unique=$(read_unique "$cur_encl")
+        cur_signer=$(read_signer "$cur_encl")
         cur_version=$("$cur_encl" -version 2>&1 | head -1)
     fi
     echo "  a node is already installed -- UPGRADE"
@@ -432,7 +479,7 @@ for f in "$stage"/bin/*(N); do
             echo "  staged   qadenad_enclave.$new_unique"
             ;;
         signer_enclave)
-            m=$(ego uniqueid "$f" 2>/dev/null | tail -1)
+            m=$(read_unique "$f")
             install_versioned "$f" "$qadenabin/signer_enclave.$m" "signer_enclave"
             install_file "$f" "$qadenabin/signer_enclave"
             echo "  installed signer_enclave ($m)"
@@ -519,24 +566,31 @@ fi
 
 if [[ -f "$stage/config/public.pem" ]]; then
     dest="$QADENAHOME/config/public.pem"
-    pem_signer=$(ego signerid "$stage/config/public.pem" 2>/dev/null | tail -1)
-    if [[ -f "$dest" ]]; then
-        old_signer=$(ego signerid "$dest" 2>/dev/null | tail -1)
-        # public.pem records which enclave signer this node was set up for.  A package carrying a
-        # different one is the MRSIGNER change in file form, so refuse it here too.
-        #
-        # Today this is belt-and-braces rather than load-bearing: keeper.InitEnclave checks
-        # SupportsUnixDomainSockets first, that is hardcoded true, and the socket path only LOGS the
-        # signer id -- the attested dial that would verify it is unreachable.  The MRSIGNER check in
-        # section 2 is the one that actually protects sealed state.  This check costs nothing and
-        # starts mattering the moment the socket path is not the only one.
-        if [[ -n "$old_signer" && "$old_signer" != "$pem_signer" ]]; then
-            fail "public.pem here signs as $old_signer, the package's as $pem_signer.
+    # ONLY AN EGO-SIGNED PACKAGE HAS A SIGNER TO COMPARE.  A debug package carries public.pem because
+    # install.sh ships it and it costs 621 bytes, but no key signed that enclave, so `ego signerid`
+    # has nothing to say and the comparison below would be between two empty strings -- a check that
+    # can never fail, which is worse than one that is skipped and admits it.
+    pem_signer=""
+    if [[ "$identity_mode" == "sgx" ]]; then
+        pem_signer=$(ego signerid "$stage/config/public.pem" 2>/dev/null | tail -1)
+        if [[ -f "$dest" ]]; then
+            old_signer=$(ego signerid "$dest" 2>/dev/null | tail -1)
+            # public.pem records which enclave signer this node was set up for.  A package carrying a
+            # different one is the MRSIGNER change in file form, so refuse it here too.
+            #
+            # Today this is belt-and-braces rather than load-bearing: keeper.InitEnclave checks
+            # SupportsUnixDomainSockets first, that is hardcoded true, and the socket path only LOGS
+            # the signer id -- the attested dial that would verify it is unreachable.  The MRSIGNER
+            # check in section 2 is the one that actually protects sealed state.  This check costs
+            # nothing and starts mattering the moment the socket path is not the only one.
+            if [[ -n "$old_signer" && "$old_signer" != "$pem_signer" ]]; then
+                fail "public.pem here signs as $old_signer, the package's as $pem_signer.
        This node was set up for $old_signer.  Refusing to replace it."
+            fi
         fi
     fi
     install_file "$stage/config/public.pem" "$dest"
-    echo "  installed config/public.pem (signer $pem_signer)"
+    echo "  installed config/public.pem${pem_signer:+ (signer $pem_signer)}"
 fi
 
 if [[ -f "$stage/config/node_params.json" ]]; then
