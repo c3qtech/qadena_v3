@@ -5151,6 +5151,63 @@ func (s *qadenaServer) removeCredentialByPCXY(credential *types.Credential) {
 	c.LoggerDebug(logger, "Removed credentialByPCXY", hex.EncodeToString(credentialPCXY), credential.CredentialType)
 }
 
+// credentialIDByPCXY returns the credentialID the index holds for a commitment, without following
+// it to the credential itself.
+//
+// Split out of getCredentialByPCXY because the seeding path needs to distinguish "this exact row
+// is already indexed" from "a DIFFERENT credential claims this commitment", and the former must
+// not be treated as a collision.  getCredentialByPCXY cannot answer that: it resolves the ID and
+// returns found=false when the credential behind it is missing, which conflates an absent index
+// entry with a dangling one.
+func (s *qadenaServer) credentialIDByPCXY(pcXY []byte, credentialType string) (string, bool) {
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveCredentialPCXYKeyPrefix))
+	b := store.Get(EnclaveKeyBKeyCredentialType(pcXY, credentialType))
+	if b == nil {
+		return "", false
+	}
+	var credentialIDString types.EnclaveStoreString
+	s.Cdc.MustUnmarshal(b, &credentialIDString)
+	return credentialIDString.GetS(), true
+}
+
+// SeedCredential replays a credential from chain state into a fresh enclave.  See the RPC comment
+// in enclave.proto for why this is not SetCredential.
+func (s *qadenaServer) SeedCredential(ctx context.Context, in *types.Credential) (*types.SetCredentialReply, error) {
+	if s.RealEnclave {
+		c.LoggerDebug(logger, "SeedCredential")
+	} else {
+		c.LoggerDebug(logger, "SeedCredential "+c.PrettyPrint(in))
+	}
+
+	hasCommit := in.FindCredentialPedersenCommit != nil &&
+		in.FindCredentialPedersenCommit.C != nil &&
+		in.FindCredentialPedersenCommit.C.Compressed != nil
+
+	// A commitment already held by a DIFFERENT credential is a real collision and must not be
+	// silently overwritten -- the index would then point at one of two identities arbitrarily.
+	// The same credentialID is this row arriving twice, which a bulk re-push does by construction.
+	if hasCommit {
+		if existingID, found := s.credentialIDByPCXY(in.FindCredentialPedersenCommit.C.Compressed, in.CredentialType); found && existingID != in.CredentialID {
+			c.LoggerError(logger, "SeedCredential: commitment already held by credential "+existingID+", refusing to seed "+in.CredentialID)
+			return &types.SetCredentialReply{Status: false}, types.ErrCredentialExists
+		}
+	}
+
+	s.setCredentialNoNotify(in.CredentialID, in.CredentialType, *in)
+
+	// INDEXED ON THE INTRINSIC PROPERTY, not on the current walletID.  Every credential an identity
+	// provider issued carries a findCredentialPedersenCommit and belongs in the index for life; the
+	// ones minted for a user by ClaimCredential are created with that field nil (enclave.go, the
+	// claim path) and are excluded here by the same test that excludes them live.  A consumed row
+	// stays indexed on purpose -- the sentinel walletID is what makes it unusable, and
+	// findOwnerlessIPCredential rejects on it.
+	if hasCommit {
+		s.setCredentialByPCXY(in)
+	}
+
+	return &types.SetCredentialReply{Status: true}, nil
+}
+
 func (s *qadenaServer) getCredentialByPCXY(pcXY []byte, credentialType string) (credential types.Credential, found bool) {
 	//	key := pcXY + "." + credentialType
 

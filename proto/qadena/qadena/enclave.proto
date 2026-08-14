@@ -95,6 +95,24 @@ service QadenaEnclave {
   rpc SetProtectKey (ProtectKey) returns (SetProtectKeyReply) {}
   rpc SetRecoverKey (RecoverKey) returns (SetRecoverKeyReply) {}
   rpc SetCredential (Credential) returns (SetCredentialReply) {}
+
+  // SeedCredential is SetCredential for the MIRROR REPLAY, and exists because the two callers ask
+  // different questions of the same row.
+  //
+  // A live issue asks "is this a fresh, unclaimed credential?", and SetCredential answers it with
+  // `walletID == ""` -- correct, and always true at the moment an identity provider issues one.
+  // enclaveSynchronizeStores asks "should this row be in the PCXY index?", and the answer is
+  // whether it has a findCredentialPedersenCommit, because by replay time the walletID is
+  // historical.  Using the live gate for the replay is what made a state-synced joiner skip every
+  // credential claimed before it joined -- 972 of them on the test chain -- leaving its index
+  // permanently short.  See docs/TESTING-BACKLOG.md item 39.
+  //
+  // It is also REPLAY-TOLERANT, which SetCredential must not be: a commitment already mapping to
+  // the SAME credentialID is a row this enclave already has, not a duplicate identity, so seeding
+  // it again succeeds.  Only a DIFFERENT credentialID behind one commitment is a real collision.
+  // SetCredential refuses both, which is right for a user-submitted duplicate and wrong for a
+  // bulk re-push -- and refuses BEFORE storing, so the row is dropped as well (item 43).
+  rpc SeedCredential (Credential) returns (SetCredentialReply) {}
   rpc RemoveCredential (EnclaveRemoveCredentialRequest) returns (RemoveCredentialReply) {}
   rpc RecoverKeyByCredential (Credential) returns (RecoverKeyReply) {}
   rpc ClaimCredential(MsgClaimCredential) returns (MsgClaimCredentialResponse) {}

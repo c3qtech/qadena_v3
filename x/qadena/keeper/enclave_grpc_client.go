@@ -497,6 +497,30 @@ func (k Keeper) EnclaveClientSetRecoverKey(sdkctx sdk.Context, pk types.RecoverK
 	return nil
 }
 
+// EnclaveClientSeedCredential forwards a credential for the MIRROR REPLAY rather than a live issue.
+//
+// Used only by enclaveSynchronizeStores.  The live create path keeps EnclaveClientSetCredential:
+// its walletID gate and its strict duplicate check are correct for a user-submitted credential and
+// wrong for a bulk re-push of rows the chain has already accepted.  See enclave.proto's
+// SeedCredential comment and docs/TESTING-BACKLOG.md items 39 and 43.
+func (k Keeper) EnclaveClientSeedCredential(sdkctx sdk.Context, credential types.Credential) error {
+	if sdkctx.IsCheckTx() {
+		c.ContextDebug(sdkctx, "SeedCredential not called in checktx")
+		return nil
+	}
+
+	ctx, cancel := enclaveExecContext()
+	defer cancel()
+
+	r, err := EnclaveGRPCClient.SeedCredential(ctx, &credential)
+	if err != nil {
+		c.ContextError(sdkctx, "error returned by SeedCredential on enclave "+err.Error())
+		return err
+	}
+	c.ContextDebug(sdkctx, "SeedCredential returns "+strconv.FormatBool(r.GetStatus()))
+	return nil
+}
+
 func (k Keeper) EnclaveClientSetCredential(sdkctx sdk.Context, credential types.Credential) error {
 	if sdkctx.IsCheckTx() {
 		c.ContextDebug(sdkctx, "SetCredential not called in checktx")
@@ -1661,7 +1685,11 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
 				credentials := k.GetAllCredential(sdkctx)
 				for _, credential := range credentials {
-					if err := k.EnclaveClientSetCredential(sdkctx, credential); err != nil {
+					// SEED, not Set.  A replay is not a live issue: the PCXY index must be rebuilt
+					// from whether a credential HAS a commitment, not from whether it is still
+					// unclaimed, or every credential consumed before this node joined is skipped
+					// and its index is permanently short.  See item 39.
+					if err := k.EnclaveClientSeedCredential(sdkctx, credential); err != nil {
 						pushFailures[sh.Key]++
 					}
 					checkSync = true
