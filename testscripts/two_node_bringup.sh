@@ -155,11 +155,30 @@ info "primary at height $PH"
 
 # Measurements MUST match, or the joiner is refused by attestation with an error that names the
 # measurement rather than the cause (trap 6).
-prim_uid=$(ssh "$PRIMARY" 'sudo ego uniqueid ~/qadena/bin/qadenad_enclave 2>/dev/null' | tr -d '\r')
-join_uid=$(ssh "$JOINER"  'sudo ego uniqueid ~/qadena/bin/qadenad_enclave 2>/dev/null' | tr -d '\r')
-gen_uid=$(ssh "$PRIMARY" 'grep -o "\"uniqueID\": *\"[0-9a-f]\{64\}\"" ~/qadena/config/genesis.json 2>/dev/null | head -1 | grep -o "[0-9a-f]\{64\}"' | tr -d '\r')
+#
+# READ TWO WAYS, because a debug enclave has a real identity too.  On SGX the measurement comes from
+# `ego uniqueid`.  On a machine without SGX -- every ARM box, where ego ships as an amd64-only .deb
+# and cannot be installed at all -- the enclave is a debug build whose uniqueID is a go:embed'ed
+# string like "unique047", printed by the binary itself.  getEnclaveIdentity looks that string up in
+# genesis exactly as it would a measurement, and a joiner whose ids differ is refused exactly the
+# same way, so the check is the same shape either way and only the reader differs.  Asking ego for
+# it on ARM yields nothing, which used to read as "no readable enclave measurement" -- a true
+# statement about the wrong thing.
+uid_of() {
+    local h="$1" out
+    out=$(ssh "$h" 'sudo ego uniqueid ~/qadena/bin/qadenad_enclave 2>/dev/null' | tr -d '\r')
+    [[ "$out" =~ ^[0-9a-f]{64}$ ]] && { printf "%s" "$out"; return 0 }
+    # debug path: the binary prints its embedded id.  -unique-id is qadenad_enclave's spelling.
+    out=$(ssh "$h" 'sudo ~/qadena/bin/qadenad_enclave -unique-id 2>/dev/null | tail -1' | tr -d '\r')
+    [[ -n "$out" && "$out" != *[[:space:]]* ]] && { printf "%s" "$out"; return 0 }
+    return 1
+}
+prim_uid=$(uid_of "$PRIMARY")
+join_uid=$(uid_of "$JOINER")
+# Genesis records whatever the enclave reports, so the pattern must not assume a 64-hex measurement.
+gen_uid=$(ssh "$PRIMARY" "grep -o '\"uniqueID\": *\"[^\"]*\"' ~/qadena/config/genesis.json 2>/dev/null | head -1 | sed 's/.*: *\"//; s/\"//'" | tr -d '\r')
 
-[[ "$prim_uid" =~ ^[0-9a-f]{64}$ ]] || fail "primary has no readable enclave measurement"
+[[ -n "$prim_uid" ]] || fail "primary has no readable enclave identity (neither ego uniqueid nor -unique-id answered)"
 info "primary  enclave $prim_uid"
 info "joiner   enclave $join_uid"
 info "genesis  records $gen_uid"
