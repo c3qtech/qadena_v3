@@ -588,3 +588,39 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
 
     The third is worth doing even if the first two happen, because it is the only one
     that keeps working on a chain whose history nobody replayed.
+
+41. **setup.sh --prefix silently produces unclaimable credentials unless the prefix is
+    NUMERIC, because the CLI throws away a parse error.**  Found 2026-08-15 while making
+    update_credentials.sh repeatable.
+
+    --prefix suffixes the blinding factor along with the names (bf "5678" -> "5678ZZTEST"),
+    and the CLI parses it as a base-10 integer with the error DISCARDED:
+
+        x/qadena/client/cli/tx_create_credential.go:111
+            findCredentialA,  _ := big.NewInt(0).SetString(argFindCredentialA, 10)
+            findCredentialBF, _ := big.NewInt(0).SetString(argFindCredentialBF, 10)
+            findCredentialPC = c.NewPedersenCommit(findCredentialA, findCredentialBF)
+
+    SetString on a non-numeric string returns nil, and NewPedersenCommit treats a nil
+    blinding factor as "generate a random one" (ecpedersen.go:317).  So the credential is
+    created against a RANDOM commitment; the later claim-credential recomputes another
+    random one, does not find the row, and fails with ErrCredentialNotExists -- an error
+    that names neither the blinding factor nor the prefix.
+
+    A numeric prefix works, which is why test_credential_uniqueness.sh is fine: it uses
+    run_id=$(date +%s), suffix="${run_id: -6}", and builds claim codes as "${suffix}13".
+    That constraint is load-bearing and written down nowhere.
+
+    THREE FIXES, and they are not alternatives:
+
+    - Check the SetString errors and fail with "blinding factor must be numeric, got X".
+      Discarding them is what turns a typo into a random commitment.
+    - Reconsider nil-means-random in NewPedersenCommit for the CLI path.  It is
+      reasonable for a caller that wants a fresh commitment and dangerous for one that
+      just failed to parse; the two are indistinguishable at the call site.
+    - Say so in setup.sh --help, which currently documents --prefix as "Add a prefix to
+      the test users" with no hint that the value must be a number.
+
+    NOT a hypothetical: --prefix is the mechanism for giving a suite per-run identities,
+    which is exactly what item 40 asks for.  Anyone reaching for it with a word-shaped
+    prefix gets a setup that fails at the claim step for reasons that point elsewhere.
