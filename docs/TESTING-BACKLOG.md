@@ -624,3 +624,33 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     NOT a hypothetical: --prefix is the mechanism for giving a suite per-run identities,
     which is exactly what item 40 asks for.  Anyone reaching for it with a word-shaped
     prefix gets a setup that fails at the claim step for reasons that point elsewhere.
+
+42. **test_key_recovery.sh asserts nothing, so wiring it into regression would add a
+    suite that cannot fail.**  Nearly done on 2026-08-15, then reverted.
+
+        script                    set -e   expect_*   fail()   exit 1
+        test_key_recovery.sh         0         0         0        0
+        request_key_recovery.sh      0         0         0        2
+        sign_key_recovery.sh         0         0         0        0
+        show_key_recovery.sh         0         0         0        0
+
+    show_key_recovery.sh is four `query show-recover-key` calls that PRINT their output.
+    Nothing compares it to anything.  So the suite would report PASS with every recovery
+    request rejected, no partner signature registered, and every query returning an
+    error -- the same shape as "the bring-up harness reported success while testing
+    nothing" (commit 31616f51), which this repo has already been bitten by once.
+
+    IT IS ALSO REDUNDANT.  update_credentials.sh cases 6/6a/6b cover the same flow and
+    actually check it: the seed is withheld at 2-of-3 signatories and released at 3, the
+    released phrase equals jill's real mnemonic, a second recovery returns the same
+    phrase, and -- the part nothing else covers -- recovery still works when the user
+    presents their PRE-MARRIAGE surname, which is the hash-aliasing guarantee.
+
+    What test_key_recovery.sh has that the credentials suite does not is breadth: four
+    users at three different signatory thresholds (al 2, ann 1, jill 3).  That is worth
+    having, but only once it checks outcomes.  As written it exercises code without
+    observing it, which is worse than not running it, because the green light is
+    evidence to whoever reads the summary.
+
+    SO: add assertions to it FIRST, then wire it in.  Until then the recovery coverage
+    that means anything is the one inside update_credentials.sh.
