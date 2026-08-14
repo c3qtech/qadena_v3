@@ -89,6 +89,13 @@
 #   regression.sh --with-enclave-upgrade  also upgrade the enclave to a new measurement, last
 #   regression.sh --with-sgx          also verify the SGX build is signed and reproducible (SGX hw only)
 #   regression.sh --stop-on-fail      stop at the first failure
+#   regression.sh --skip a,b,c        do not run these suites
+#
+# --skip exists for runs that must not lose the chain.  enclave-rollback, enclave-crash and
+# enclave-upgrade STOP AND RESTART the node by design, which is correct when the suite is the only
+# thing using it and disastrous when it is not: a joining node sees the primary's RPC vanish for
+# minutes, and snapshot accumulation restarts.  For a continuous run alongside a second node, use
+#   --skip enclave-rollback,enclave-crash,enclave-upgrade
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
@@ -106,6 +113,7 @@ with_credentials=false
 with_enclave_upgrade=false
 with_sgx=false
 stop_on_fail=false
+skip_list=""
 advertise_ip=""
 
 while [[ $# -gt 0 ]]; do
@@ -116,6 +124,7 @@ while [[ $# -gt 0 ]]; do
         --with-enclave-upgrade) with_enclave_upgrade=true; shift ;;
         --with-sgx)         with_sgx=true; shift ;;
         --stop-on-fail)     stop_on_fail=true; shift ;;
+        --skip)             skip_list="$2"; shift 2 ;;
         --advertise-ip-address) advertise_ip="$2"; shift 2 ;;
         --help)
             sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//'
@@ -142,6 +151,21 @@ failed=0
 # run_test <label> <command> [args...]
 run_test() {
     local label="$1"; shift
+
+    # SKIPPED IS RECORDED, NOT SILENT.  A suite that vanishes from the summary is indistinguishable
+    # from one that passed, and this runner's whole value is that its output means something.
+    if [[ -n "$skip_list" ]] && print -r -- ",$skip_list," | grep -q ",$label,"; then
+        echo ""
+        echo "======================================================================"
+        echo ">>> $label"
+        echo "======================================================================"
+        echo "SKIP  (--skip)"
+        names+=("$label")
+        results+=("SKIP")
+        seconds+=(0)
+        return 0
+    fi
+
     local logfile="$logdir/${label}.log"
     local start end rc
 
@@ -224,7 +248,17 @@ summarize() {
     if [ ${#names[@]} -eq 0 ]; then
         echo "  NO SUITES RAN -- the run stopped before any test started (see above)"
     elif [ $failed -eq 0 ]; then
-        echo "  ALL ${#names[@]} SUITES PASSED"
+        # A SKIPPED SUITE IS NOT A PASSING ONE, and "ALL n SUITES PASSED" over a list containing
+        # skips is the same false green this summary already guards against for an empty run.
+        local skipped=0 r
+        for r in "${results[@]}"; do
+            [[ "$r" == "SKIP" ]] && skipped=$((skipped + 1))
+        done
+        if [ $skipped -gt 0 ]; then
+            echo "  $(( ${#names[@]} - skipped )) SUITES PASSED, $skipped SKIPPED -- NOT A FULL RUN"
+        else
+            echo "  ALL ${#names[@]} SUITES PASSED"
+        fi
     else
         echo "  $failed of ${#names[@]} SUITES FAILED"
     fi
