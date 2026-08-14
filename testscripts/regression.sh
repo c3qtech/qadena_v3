@@ -24,13 +24,14 @@
 #   enf           enf-smart-contracts: the ENF notarial book (ENP registry + entries)
 #   enclave-rollback  send a tx, roll chain+enclave back past it, prove the state reverted
 #   enclave-crash     stall the enclave: the node must HALT, not fork, then recover
-#   credentials   update_credentials.sh                                    (--with-credentials)
+#   credentials   update_credentials.sh -- corrections, rejections, contacts, anti-squat
+#                 (its single-shot KEY RECOVERY cases additionally need --with-credentials)
 #   replenish     al's ENCRYPTED balance is topped back up before anything spends it
 #   peer-agreement   every peer computed the SAME app hash -- i.e. no fork
 #   reclaim       the TRANSPARENT balance the suites accumulated goes back to the treasury
 #   enclave-upgrade  a new enclave measurement takes over the sealed state (--with-enclave-upgrade)
 #
-# Everything except the genesis/chain/credentials layers is IDEMPOTENT -- safe to repeat against the
+# Everything except the genesis/chain layers is IDEMPOTENT -- safe to repeat against the
 # same chain.  They achieve that in different ways depending on what the module allows: delta
 # assertions rather than absolute balances (transfers), per-run unique ids AND content (dsvs -- a
 # document is keyed by content hash, so unique ids alone are not enough), fresh deploys (evm, wasm),
@@ -56,10 +57,14 @@
 #
 #   --from-genesis   DESTRUCTIVE.  init.sh deletes $QADENAHOME outright -- chain data AND the
 #                    keyring.  Everything is rebuilt from config/config.yml.
-#   --with-credentials  update_credentials.sh is single-shot: its claim codes are single-use and
-#                    cases 1/2/5 consume rate-limit windows, so it cannot repeat against the same
-#                    chain without editing the codes at the top of it.  Implied by --from-genesis,
-#                    which produces a chain that has never run it.
+#   --with-credentials  NO LONGER GATES THE CREDENTIALS SUITE, which now runs by default: it
+#                    provisions its own four identities per run with setup.sh --prefix, so the
+#                    single-use claim codes and the 10000-block update cool-down that made it
+#                    single-shot no longer apply.  The flag now adds only the KEY RECOVERY cases
+#                    inside it, which remain genuinely once-per-chain -- a wallet may be recovered
+#                    exactly ONCE (getRecoverKeyByOriginalWalletID refuses a second) and the
+#                    partner approvals need three signatories resolved three different ways, i.e.
+#                    the whole seeded user set.  Implied by --from-genesis.
 #   --with-enclave-upgrade  registers a new enclave identity on chain PERMANENTLY, then stops the
 #                    node, swaps the enclave binary and restarts.  Runs last, after credentials,
 #                    because nothing after it would be measuring the same process -- and because it
@@ -85,7 +90,7 @@
 #   regression.sh                     the repeatable suite against a running chain
 #   regression.sh --from-genesis      wipe, rebuild, and run everything (implies the two below)
 #   regression.sh --with-setup        run setup.sh first (slow; needed on a fresh chain)
-#   regression.sh --with-credentials  also run the single-shot update_credentials.sh, last
+#   regression.sh --with-credentials  also run the single-shot key-recovery cases in credentials
 #   regression.sh --with-enclave-upgrade  also upgrade the enclave to a new measurement, last
 #   regression.sh --with-sgx          also verify the SGX build is signed and reproducible (SGX hw only)
 #   regression.sh --stop-on-fail      stop at the first failure
@@ -1046,6 +1051,24 @@ run_test "suspicious"  "$qadenatestscripts/test_suspicious.sh"
 run_test "bank-scan"   "$qadenatestscripts/test_bank_restriction.sh"
 run_test "params"      "$qadenatestscripts/test_params_validation.sh"
 run_test "uniqueness"  "$qadenatestscripts/test_credential_uniqueness.sh"
+
+# CREDENTIALS RUNS BY DEFAULT NOW.  It used to be opt-in because it corrected the SHARED seeded
+# identities -- which burned single-use claim codes and put al/jill/dory inside a 10000-block
+# update cool-down, so it could not repeat and had to run LAST to avoid disturbing suites that read
+# those users.  It now provisions its own four identities per run via setup.sh --prefix, so neither
+# constraint applies and it can sit here with the other credential suites.  Skippable like any
+# other: --skip credentials.
+#
+# --with-credentials no longer gates it; it now only adds the single-shot KEY RECOVERY cases (6,
+# 6a, 6b) inside it, which genuinely cannot repeat -- a wallet may be recovered exactly ONCE,
+# permanently, and their partner approvals need three signatories resolved three different ways,
+# which is the whole seeded user set rather than the four this suite provisions.  Implied by
+# --from-genesis, so a fresh chain still gets that coverage, including the hash-aliasing case that
+# is the only test anywhere of recovery via a PRE-MARRIAGE surname.
+if [ "$with_credentials" = "true" ]; then
+    export UPDATE_CREDENTIALS_WITH_RECOVERY=1
+fi
+run_test "credentials" "$qadenatestscripts/update_credentials.sh"
 # Immediately after uniqueness because that is the suite the rotation race kept breaking: a VShare
 # bound just before the SS interval key rotated was rejected as invalid (qadena code 1142).  This
 # forces rotations rather than waiting 555 blocks for one.  Skips loudly on real SGX, where the
@@ -1081,11 +1104,6 @@ run_test "peer-agreement" "$qadenatestscripts/test_peer_agreement.sh"
 # that needed the treasury back.
 run_test "reclaim" reclaim_funds
 
-if [ "$with_credentials" = "true" ]; then
-    # LAST, because it mutates identities the other suites read: it removes al's email credential,
-    # renames jill, and puts al/jill/dory inside their update cool-down windows.
-    run_test "credentials" "$qadenatestscripts/update_credentials.sh"
-fi
 
 if [ "$with_enclave_upgrade" = "true" ]; then
     # LAST OF ALL, and after credentials.  It stops the node, swaps the enclave binary and restarts,
