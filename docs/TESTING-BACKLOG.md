@@ -441,3 +441,51 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     wallets, and the first structure that falls over.  Guessing which one it will be is
     less useful than running it -- though GetStoreHash's per-block full scan is the
     standing favourite.
+
+39. **Claiming or updating a credential leaves its PCXY index row behind, so a
+    long-running node and a state-synced joiner hold DIFFERENT indexes.** Measured
+    2026-08-14 at a pinned height 13000, with the new `export-private-state
+    --digest-only` / `--section`:
+
+        CredentialPCXYMap    M1 1608 rows    M2 636 rows
+        only on M1  972      only on M2  0      shared 636
+        shared rows disagreeing in value    0
+
+    M2's index is a STRICT SUBSET.  Nothing disagrees; M1 simply has 972 rows M2 does
+    not, covering 261 credential IDs, in a perfectly regular shape -- 237 identities x 4
+    rows (personal-info and its three sub-fields) plus 12 email and 12 phone.
+
+    WHICH ONE IS RIGHT IS DECIDED BY THE CODE, and it is M2.  The only production writer
+    is gated on the credential being ownerless:
+
+        enclave.go:4259    if in.WalletID == "" { s.setCredentialByPCXY(in) }
+
+    and all 972 of M1's extra rows belong to credentials whose walletID is now SET --
+    ownerless_walletID_empty: 0, owned_walletID_set: 972.  They were written correctly at
+    issue time, when the credential had no owner, and never removed when it acquired one.
+
+    THE REMOVAL EXISTS AND IS CALLED FROM ONE PLACE.  removeCredentialByPCXY has exactly
+    one production caller, RemoveCredential (enclave.go:4298).  Two other paths assign a
+    walletID to an existing credential and do not:
+
+        enclave.go:3743                      WalletID = ClaimedCredentialWalletID
+        enclave_update_credential.go:279,289,345  WalletID = UpdatedCredentialWalletID
+
+    So the index grows monotonically with claims and updates on any node that processes
+    them live, while a joiner that rebuilds from current chain state gets only the rows
+    the invariant actually calls for.  This is why the gap is a CONSTANT 972 rather than
+    something that drifts: both nodes handle new writes identically, and the difference
+    is entirely what M1 accumulated before M2 joined.
+
+    WHY IT MATTERS BEYOND TIDINESS.  getCredentialByPCXY backs the identity-uniqueness
+    check -- the one that rejects a duplicate claim with code 1115.  Two nodes with
+    different indexes can reach different verdicts on the same transaction, which is the
+    same shape as the AuthorizedSignatory fork (item 35): enclave state that is a
+    consensus input diverging silently between a live node and a state-synced one.
+
+    NOT YET DEMONSTRATED: that a real transaction actually diverges.  getCredentialByPCXY
+    re-fetches the credential and returns found=true for a stale row, so whether the
+    disagreement reaches consensus depends on whether the caller then checks walletID.
+    That is the next thing to establish, and it decides whether this is a latent fork or
+    only a leak.  Either way the fix is the same -- remove the row where the walletID is
+    assigned -- and a joiner is the only way anyone would have noticed.
