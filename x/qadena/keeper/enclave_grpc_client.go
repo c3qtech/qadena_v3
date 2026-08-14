@@ -170,7 +170,7 @@ func (k Keeper) ScanBankSend(sdkctx sdk.Context, fromAddr, toAddr sdk.AccAddress
 		return err
 	}
 
-	grpcctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	grpcctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.ScanBankSend(grpcctx, &types.MsgScanBankSend{
@@ -263,7 +263,7 @@ func (k Keeper) InitEnclave() bool {
 				// test with a simple "hello"
 				greeterClient := types.NewGreeterClient(conn)
 
-				ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+				ctx, cancel := enclaveQueryContext()
 				defer cancel()
 
 				r, err := greeterClient.SayHello(ctx, &types.HelloRequest{Name: "Pong"})
@@ -355,7 +355,7 @@ func (k Keeper) EnclaveValidateAuthenticateServiceProvider(sdkctx sdk.Context, p
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.ValidateAuthenticateServiceProvider(ctx, &types.ValidateAuthenticateServiceProviderRequest{PubKID: pubKID, ServiceProviderType: serviceProviderType})
@@ -377,7 +377,7 @@ func (k Keeper) EnclaveValidateAuthorizedSigner(sdkctx sdk.Context, creator stri
 		return true, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.ValidateAuthorizedSigner(ctx, &types.ValidateAuthorizedSignerRequest{Creator: creator, RequestingSignatory: requestingSignatory, RequiredSignatory: requiredSignatory, CompletedSignatory: completedSignatories})
@@ -395,7 +395,7 @@ func (k Keeper) EnclaveValidateAuthorizedSignatory(sdkctx sdk.Context, creator s
 		return true, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.ValidateAuthorizedSignatory(ctx, &types.ValidateAuthorizedSignatoryRequest{Creator: creator, Signatory: signatory, CurrentSignatory: currentSignatory})
@@ -413,7 +413,7 @@ func (k Keeper) EnclaveClientSetWallet(sdkctx sdk.Context, wallet types.Wallet) 
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SetWallet(ctx, &wallet)
@@ -431,7 +431,7 @@ func (k Keeper) EnclaveClientSetEnclaveIdentity(sdkctx sdk.Context, ei types.Enc
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SetEnclaveIdentity(ctx, &ei)
@@ -449,7 +449,7 @@ func (k Keeper) EnclaveClientUpdateEnclaveIdentity(sdkctx sdk.Context, ei types.
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.UpdateEnclaveIdentity(ctx, &ei)
@@ -467,7 +467,7 @@ func (k Keeper) EnclaveClientSetProtectKey(sdkctx sdk.Context, pk types.ProtectK
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SetProtectKey(ctx, &pk)
@@ -485,7 +485,7 @@ func (k Keeper) EnclaveClientSetRecoverKey(sdkctx sdk.Context, pk types.RecoverK
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SetRecoverKey(ctx, &pk)
@@ -503,7 +503,7 @@ func (k Keeper) EnclaveClientSetCredential(sdkctx sdk.Context, credential types.
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SetCredential(ctx, &credential)
@@ -524,7 +524,7 @@ func (k Keeper) EnclaveClientRemoveCredential(sdkctx sdk.Context, credential typ
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.RemoveCredential(ctx, &types.EnclaveRemoveCredentialRequest{
@@ -545,7 +545,7 @@ func (k Keeper) EnclaveClientClaimCredential(sdkctx sdk.Context, claimCredential
 		return &types.MsgClaimCredentialResponse{}, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.ClaimCredential(ctx, claimCredential)
@@ -566,7 +566,7 @@ func (k Keeper) EnclaveClientUpdateCredential(sdkctx sdk.Context, updateCredenti
 		return &types.MsgUpdateCredentialResponse{}, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.UpdateCredential(ctx, &types.EnclaveUpdateCredentialRequest{
@@ -588,7 +588,7 @@ func (k Keeper) EnclaveClientClaimUpdatedCredential(sdkctx sdk.Context, msg *typ
 		return &types.MsgClaimUpdatedCredentialResponse{}, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.ClaimUpdatedCredential(ctx, msg)
@@ -601,7 +601,7 @@ func (k Keeper) EnclaveClientClaimUpdatedCredential(sdkctx sdk.Context, msg *typ
 }
 
 func (k Keeper) EnclaveClientQueryGetSubWalletIDByOriginalWalletID(credential types.Credential) string {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveQueryContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.QueryGetSubWalletIDByOriginalWalletID(ctx, &credential)
@@ -619,7 +619,7 @@ func (k Keeper) EnclaveClientRecoverKeyByCredential(sdkctx sdk.Context, credenti
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.RecoverKeyByCredential(ctx, &credential)
@@ -637,7 +637,7 @@ func (k Keeper) EnclaveClientSignRecoverKey(sdkctx sdk.Context, signRecoverKey t
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SignRecoverKey(ctx, &signRecoverKey)
@@ -655,7 +655,7 @@ func (k Keeper) EnclaveClientSetPublicKey(sdkctx sdk.Context, publicKey types.Pu
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SetPublicKey(ctx, &publicKey)
@@ -673,7 +673,7 @@ func (k Keeper) EnclaveClientSetIntervalPublicKeyId(sdkctx sdk.Context, interval
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SetIntervalPublicKeyID(ctx, &intervalPublicKeyId)
@@ -691,7 +691,7 @@ func (k Keeper) EnclaveClientSetPioneerJar(sdkctx sdk.Context, pioneerJar types.
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SetPioneerJar(ctx, &pioneerJar)
@@ -709,7 +709,7 @@ func (k Keeper) EnclaveClientSetJarRegulator(sdkctx sdk.Context, jarRegulator ty
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SetJarRegulator(ctx, &jarRegulator)
@@ -727,7 +727,7 @@ func (k Keeper) EnclaveClientBroadcastSecretSharePrivateKey(sdkctx sdk.Context, 
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SetSecretSharePrivateKey(ctx, &key)
@@ -987,6 +987,7 @@ func (k Keeper) enclavePrivateStatePeers(sdkCtx sdk.Context) []string {
 }
 
 func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
+	reportSlowEnclaveCalls(sdkCtx)
 
 	if !synchronizedWithEnclave {
 		// Height reconciliation FIRST, store synchronization second: the store push is only
@@ -1025,7 +1026,7 @@ func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
 	//  fmt.Println("HEADER", c.PrettyPrint(header))
 
 	if header.Height%11 == 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+		ctx, cancel := enclaveExecContext()
 		defer cancel()
 		proposerAddress := strings.ToUpper(hex.EncodeToString(blockInfo.GetProposerAddress()))
 		//    fmt.Println("ProposerAddress", proposerAddress)
@@ -1035,7 +1036,7 @@ func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
 }
 
 func (k Keeper) EnclaveInvokeEndBlock(sdkctx sdk.Context) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 	// This RPC is what makes the enclave's block durable -- its handler commits the enclave's
 	// store.  The error used to be discarded here while the four Sync* calls above halt the node
@@ -1055,7 +1056,7 @@ func (k Keeper) EnclaveInvokeEndBlock(sdkctx sdk.Context) {
 // IAVL version, rollback horizon and on-disk schema.  This is the basis for startup
 // reconciliation between chain and enclave.
 func (k Keeper) EnclaveGetHeight(sdkctx sdk.Context) (*types.GetEnclaveHeightReply, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 	r, err := EnclaveGRPCClient.GetEnclaveHeight(ctx, &types.MsgGetEnclaveHeight{})
 	if err != nil {
@@ -1081,7 +1082,7 @@ const EnclavePrivateStateSyncTimeout = 60 * time.Minute
 // second phase of the two-phase commit, called from the app.Commit override in app/app.go AFTER
 // BaseApp.Commit returns.  Runs outside any block, so it takes no sdk.Context.
 func (k Keeper) EnclaveConfirmHeight(height int64) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 	_, err := EnclaveGRPCClient.ConfirmHeight(ctx, &types.MsgConfirmHeight{Height: height})
 	return err
@@ -1102,7 +1103,7 @@ func (k Keeper) EnclaveRollbackToHeight(sdkctx sdk.Context, height int64, dryRun
 }
 
 func (k Keeper) EnclaveSyncWallets(sdkctx sdk.Context) (error, []*types.Wallet) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SyncWallets(ctx, &types.MsgSyncWallets{Clear: true})
@@ -1120,7 +1121,7 @@ func (k Keeper) EnclaveSyncWallets(sdkctx sdk.Context) (error, []*types.Wallet) 
 // separately from writes: an enclave-originated deletion has no other way to reach the chain,
 // because SetCredentialNoEnclave can only write.
 func (k Keeper) EnclaveSyncCredentials(sdkctx sdk.Context) (error, []*types.Credential, []*types.CredentialRef) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SyncCredentials(ctx, &types.MsgSyncCredentials{Clear: true})
@@ -1138,7 +1139,7 @@ func (k Keeper) EnclaveSyncCredentials(sdkctx sdk.Context) (error, []*types.Cred
 }
 
 func (k Keeper) EnclaveSyncRecoverKeys(sdkctx sdk.Context) (error, []*types.RecoverKey) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SyncRecoverKeys(ctx, &types.MsgSyncRecoverKeys{Clear: true})
@@ -1153,7 +1154,7 @@ func (k Keeper) EnclaveSyncRecoverKeys(sdkctx sdk.Context) (error, []*types.Reco
 }
 
 func (k Keeper) EnclaveSyncSuspiciousTransactions(sdkctx sdk.Context) (error, []*types.SuspiciousTransaction) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.SyncSuspiciousTransactions(ctx, &types.MsgSyncSuspiciousTransactions{Clear: true})
@@ -1173,7 +1174,7 @@ func (k Keeper) EnclaveValidateDestinationWallet(sdkctx sdk.Context, msg *types.
 		return types.WalletTypeCheckTx, nil
 	}
 
-	grpcctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	grpcctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.ValidateDestinationWallet(grpcctx, msg)
@@ -1190,7 +1191,7 @@ func (k Keeper) EnclaveValidateCredential(sdkctx sdk.Context, msg *types.MsgBind
 		return true, nil
 	}
 
-	grpcctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	grpcctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.ValidateCredential(grpcctx, msg)
@@ -1211,7 +1212,7 @@ func (k Keeper) EnclaveValidateCredential(sdkctx sdk.Context, msg *types.MsgBind
 // CheckTx would not surface during the CLI's --gas auto simulation -- the provider would get a
 // successful-looking broadcast and discover the failure only in the block result.
 func (k Keeper) EnclaveValidatePersonalInfo(sdkctx sdk.Context, msg *types.MsgCreateCredential) error {
-	grpcctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	grpcctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.ValidatePersonalInfo(grpcctx, msg)
@@ -1235,7 +1236,7 @@ func (k Keeper) EnclaveValidateTransferPrime(sdkctx sdk.Context, msg *types.MsgT
 		return true, nil
 	}
 
-	grpcctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	grpcctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.ValidateTransferPrime(grpcctx, msg)
@@ -1256,7 +1257,7 @@ func (k Keeper) EnclaveScanTransaction(sdkctx sdk.Context, msg *types.MsgTransfe
 		return true, nil
 	}
 
-	grpcctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	grpcctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	// The policy travels with the scan rather than being fixed at enclave startup, so a governance
@@ -1294,7 +1295,7 @@ func (k Keeper) EnclaveValidateTransferDoublePrime(sdkctx sdk.Context, msg *type
 		return true, nil
 	}
 
-	grpcctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	grpcctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.ValidateTransferDoublePrime(grpcctx, msg)
@@ -1306,7 +1307,7 @@ func (k Keeper) EnclaveValidateTransferDoublePrime(sdkctx sdk.Context, msg *type
 }
 
 func (k Keeper) EnclaveQuerySyncEnclave(sdkctx sdk.Context, msg *types.QueryEnclaveSyncEnclaveRequest) (error, *types.QueryEnclaveSyncEnclaveResponse) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveQueryContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.QueryEnclaveSyncEnclave(ctx, msg)
@@ -1319,7 +1320,7 @@ func (k Keeper) EnclaveQuerySyncEnclave(sdkctx sdk.Context, msg *types.QueryEncl
 }
 
 func (k Keeper) EnclaveQueryPrivateState(sdkctx sdk.Context, msg *types.QueryEnclavePrivateStateRequest) (error, *types.QueryEnclavePrivateStateResponse) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclavePeerContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.QueryEnclavePrivateState(ctx, msg)
@@ -1332,7 +1333,7 @@ func (k Keeper) EnclaveQueryPrivateState(sdkctx sdk.Context, msg *types.QueryEnc
 }
 
 func (k Keeper) EnclaveQueryPrivateStateAvailability(sdkctx sdk.Context, msg *types.QueryEnclavePrivateStateAvailabilityRequest) (error, *types.QueryEnclavePrivateStateAvailabilityResponse) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclavePeerContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.QueryEnclavePrivateStateAvailability(ctx, msg)
@@ -1362,7 +1363,7 @@ func (k Keeper) EnclaveSyncPrivateState(sdkctx sdk.Context, msg *types.MsgSyncPr
 }
 
 func (k Keeper) EnclaveQueryValidateEnclaveIdentity(sdkctx sdk.Context, msg *types.QueryEnclaveValidateEnclaveIdentityRequest) (error, *types.QueryEnclaveValidateEnclaveIdentityResponse) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveQueryContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.QueryEnclaveValidateEnclaveIdentity(ctx, msg)
@@ -1375,7 +1376,7 @@ func (k Keeper) EnclaveQueryValidateEnclaveIdentity(sdkctx sdk.Context, msg *typ
 }
 
 func (k Keeper) EnclaveQueryFindCredential(sdkctx sdk.Context, msg *types.QueryFindCredentialRequest) (error, *types.QueryFindCredentialResponse) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveQueryContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.QueryFindCredential(ctx, msg)
@@ -1388,7 +1389,7 @@ func (k Keeper) EnclaveQueryFindCredential(sdkctx sdk.Context, msg *types.QueryF
 }
 
 func (k Keeper) EnclaveQuerySecretShare(sdkctx sdk.Context, msg *types.QueryEnclaveSecretShareRequest) (error, *types.QueryEnclaveSecretShareResponse) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclavePeerContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.QueryEnclaveSecretShare(ctx, msg)
@@ -1401,7 +1402,7 @@ func (k Keeper) EnclaveQuerySecretShare(sdkctx sdk.Context, msg *types.QueryEncl
 }
 
 func (k Keeper) EnclaveQueryRecoverKeyShare(sdkctx sdk.Context, msg *types.QueryEnclaveRecoverKeyShareRequest) (error, *types.QueryEnclaveRecoverKeyShareResponse) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveQueryContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.QueryEnclaveRecoverKeyShare(ctx, msg)
@@ -1414,7 +1415,7 @@ func (k Keeper) EnclaveQueryRecoverKeyShare(sdkctx sdk.Context, msg *types.Query
 }
 
 func (k Keeper) EnclaveQueryGetRecoverKey(sdkctx sdk.Context, msg *types.QueryGetRecoverKeyRequest) (error, *types.QueryGetRecoverKeyResponse) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveQueryContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.QueryGetRecoverKey(ctx, msg)
@@ -1498,7 +1499,7 @@ func (k Keeper) BeginTransaction(logger log.Logger, feeInAQDN uint64) {
 // func (k Keeper) EndTransaction(ctx sdk.Context, logger log.Logger, refundGas int64, success bool) error {
 func (k Keeper) EndTransaction(ctx sdk.Context, logger log.Logger, success bool) error {
 	// let the enclave know that the transaction is complete
-	grpcctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	grpcctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	tc := &types.MsgTransactionComplete{
@@ -1565,7 +1566,7 @@ func (k Keeper) EndTransaction(ctx sdk.Context, logger log.Logger, success bool)
 }
 
 func (k Keeper) displayStoresSync(sdkctx sdk.Context) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	gsh := &types.MsgGetStoreHash{}
@@ -1611,7 +1612,7 @@ func (k Keeper) displayStoresSync(sdkctx sdk.Context) error {
 func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 	c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores -- Chain initialized and ready for business, synchronizing enclave...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	gsh := &types.MsgGetStoreHash{}

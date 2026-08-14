@@ -1,9 +1,6 @@
 package keeper
 
 import (
-	"context"
-	"time"
-
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/c3qtech/qadena_v3/x/dsvs/types"
@@ -12,7 +9,7 @@ import (
 )
 
 func (k Keeper) displayStoresSync(sdkctx sdk.Context) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	gsh := &qadenatypes.MsgGetStoreHash{}
@@ -46,7 +43,7 @@ func (k Keeper) displayStoresSync(sdkctx sdk.Context) error {
 func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
 	c.ContextDebug(sdkctx, "DSVS: EnclaveSynchronizeStores -- Chain initialized and ready for business, synchronizing enclave...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
 	gsh := &qadenatypes.MsgGetStoreHash{}
