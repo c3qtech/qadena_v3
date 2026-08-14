@@ -628,6 +628,13 @@ func New(
 	}
 
 	if loadLatest {
+		// BEFORE anything reads state.  A store that restored without its fast index reads as empty
+		// while hashing correctly, so every later step -- including the pinned-code load below --
+		// would run against silently missing data and succeed.  See assertStoresAreReadable.
+		if err := app.assertStoresAreReadable(); err != nil {
+			panic(err)
+		}
+
 		ctx := app.BaseApp.NewUncachedContext(true, tmproto.Header{})
 
 		// Initialize pinned codes in wasmvm as they are not persisted there

@@ -78,6 +78,11 @@ func initRootCmd(
 	// why a chain-only rollback is unrecoverable on this chain.
 	replaceRollbackCmd(rootCmd, sdkAppCreator, app.DefaultNodeHome)
 
+	// Repairs a database whose fast-node index a snapshot restore left empty -- the state in which
+	// a store's tree is intact and correctly hashed while every read of it returns nil.  Startup
+	// refuses to run in that state (app.assertStoresAreReadable) and points here.
+	rootCmd.AddCommand(newRepairFastIndexCmd(app.DefaultNodeHome))
+
 	// add Cosmos EVM key commands
 	rootCmd.AddCommand(
 		evmcosmoscmd.KeyCommands(app.DefaultNodeHome, true),
