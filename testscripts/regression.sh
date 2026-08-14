@@ -189,6 +189,17 @@ run_test() {
         results+=("FAIL")
         failed=$((failed + 1))
         echo "FAIL  ($((end - start))s)  -> $logfile"
+
+        # PRESERVE THE EVIDENCE.  $logfile is a FIXED NAME and the next run overwrites it, so in a
+        # continuous loop a suite that fails once and passes next time leaves summary.log saying it
+        # failed and nothing at all saying why -- the one log you want is the one just destroyed.
+        # Failures are rare enough to keep whole, and an intermittent failure is exactly the kind
+        # you cannot reproduce on demand.
+        local keep="$logdir/failed/${label}-$(date -u +%Y%m%dT%H%M%SZ).log"
+        mkdir -p "$logdir/failed"
+        if cp "$logfile" "$keep" 2>/dev/null; then
+            echo "      preserved -> $keep"
+        fi
         echo "--- last 15 lines ---"
         tail -15 "$logfile" | sed 's/^/    /'
         echo "---------------------"
