@@ -30,6 +30,17 @@ var (
 
 const (
 	ArmorPassPhrase = "8675309" // this is only used in-process, in the enclave, does not affect security
+
+	// ExportPrivateStateReply carries the whole export in one `string state` field, so its size
+	// grows with the chain and there is no page to fall back on.  gRPC's DEFAULT RECEIVE CAP IS
+	// 4 MiB and the server's send cap is effectively unbounded, so the enclave builds a reply the
+	// client then refuses: at ~10k blocks this began failing with
+	//     ResourceExhausted: received message larger than max (8328613 vs 4194304)
+	// and every larger chain fails harder.  These commands are one-shot, operator-invoked and run
+	// over a local unix socket, so a high cap is the right answer HERE -- it bounds nothing an
+	// attacker controls and preallocates nothing.  It is NOT the answer on the consensus paths in
+	// x/qadena/keeper, where a reply outgrowing a limit means the message needs paging.
+	maxDiagnosticReplyBytes = 512 << 20
 )
 
 func NewEnclaveCmd() *cobra.Command {
@@ -418,7 +429,8 @@ func getEnclaveConnection(cmd *cobra.Command) (types.QadenaEnclaveClient, error)
 		if debug {
 			c.LoggerDebug(logger, "Will connect to QadenaDEnclave (unix domain socket)", addr)
 		}
-		conn, err = grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithTimeout(time.Duration(5)*time.Second))
+		conn, err = grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithTimeout(time.Duration(5)*time.Second),
+			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxDiagnosticReplyBytes)))
 	} else {
 		c.LoggerError(logger, "Not supported", err)
 		return nil, fmt.Errorf("not supported")
