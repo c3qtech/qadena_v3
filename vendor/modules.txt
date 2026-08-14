@@ -1262,9 +1262,7 @@ github.com/cosmos/evm/crypto/hd
 github.com/cosmos/evm/crypto/keyring
 github.com/cosmos/evm/crypto/secp256r1
 github.com/cosmos/evm/eips
-github.com/cosmos/evm/encoding
 github.com/cosmos/evm/encoding/address
-github.com/cosmos/evm/encoding/codec
 github.com/cosmos/evm/ethereum/eip712
 github.com/cosmos/evm/ibc
 github.com/cosmos/evm/indexer
@@ -1379,7 +1377,7 @@ github.com/cosmos/gogoproto/types/any
 github.com/cosmos/gogoproto/types/any/internal
 github.com/cosmos/gogoproto/vanity
 github.com/cosmos/gogoproto/vanity/command
-# github.com/cosmos/iavl v1.2.4
+# github.com/cosmos/iavl v1.2.8
 ## explicit; go 1.20
 github.com/cosmos/iavl
 github.com/cosmos/iavl/cache

@@ -70,6 +70,7 @@ require (
 	github.com/CosmWasm/wasmd v0.55.1
 	github.com/cometbft/cometbft-db v0.14.1
 	github.com/cosmos/evm v0.5.1
+	github.com/cosmos/iavl v1.2.8
 	github.com/cosmos/ibc-go/v10 v10.3.1-0.20250909102629-ed3b125c7b6f
 	github.com/spf13/cast v1.10.0
 	sigs.k8s.io/yaml v1.6.0
@@ -167,7 +168,6 @@ require (
 	github.com/containerd/stargz-snapshotter/estargz v0.15.1 // indirect
 	github.com/cosmos/btcutil v1.0.5 // indirect
 	github.com/cosmos/gogogateway v1.2.0 // indirect
-	github.com/cosmos/iavl v1.2.4 // indirect
 	github.com/cosmos/ics23/go v0.11.0 // indirect
 	github.com/cosmos/ledger-cosmos-go v0.16.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.6 // indirect
