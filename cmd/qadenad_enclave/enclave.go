@@ -1200,7 +1200,7 @@ func (s *qadenaServer) ExportPrivateState(ctx context.Context, in *types.MsgExpo
 	var reply *types.ExportPrivateStateReply
 	err := s.withHeightPinned(in.Height, func(view *qadenaServer) error {
 		var e error
-		reply, e = view.exportPrivateStateFromCurrentView()
+		reply, e = view.exportPrivateStateFromCurrentView(in)
 		return e
 	})
 	if err != nil {
@@ -1209,117 +1209,200 @@ func (s *qadenaServer) ExportPrivateState(ctx context.Context, in *types.MsgExpo
 	return reply, nil
 }
 
-// exportPrivateStateFromCurrentView dumps whatever s.CacheCtx currently points at.  Split from
-// ExportPrivateState so the height pin wraps it rather than being interleaved with it.
-func (s *qadenaServer) exportPrivateStateFromCurrentView() (*types.ExportPrivateStateReply, error) {
-	var state struct {
-		PrivateEnclaveParams                    PrivateEnclaveParams
-		SharedEnclaveParams                     types.EncryptableSharedEnclaveParams
-		Wallets                                 []types.Wallet
-		Credentials                             []types.Credential
-		CredentialHashMap                       map[string]string
-		CredentialHashAliasMap                  map[string]types.EncryptableCredentialIdentityHistory
-		RecoverOriginalWalletIDByNewWalletIDMap map[string]string
-		RecoverKeyByOriginalWalletIDs           []types.RecoverKey
-		JarRegulators                           []types.JarRegulator
-		PioneerJars                             []types.PioneerJar
-		PublicKeys                              []types.PublicKey
-		IntervalPublicKeyIds                    []types.IntervalPublicKeyID
-		//		PioneerIPAddressMap                     PioneerIPAddressMap
-		ProtectKeys                             []types.ProtectKey
-		ProtectSubWalletIDByOriginalWalletIDMap map[string]string
-		CredentialPCXYMap                       map[string]string
-		EnclaveSSShareMap                       EnclaveSSShareMap
-		EnclaveSSOwnersMap                      types.EncryptableEnclaveSSOwnerMap
-		EnclavePrivKCacheMap                    EnclavePrivKCacheMap
-		EnclavePubKCacheMap                     EnclavePubKCacheMap
-		AuthorizedSignatories                   []dsvstypes.AuthorizedSignatory
-		EnclaveIdentityMap                      []types.EnclaveIdentity
+// defaultExportMaxBytes keeps a full export inside gRPC's 4 MiB default receive cap with room for
+// framing.  A caller that has raised its own cap (cmd/qadenad does, for these commands) can raise
+// this too via max_bytes; the point of the default is that the failure is a NAMED SECTION AND A
+// SIZE rather than a transport error from a reply that was already built.
+const defaultExportMaxBytes = 3 << 20
+
+// canonicalizeSection makes a section's JSON comparable between two enclaves.
+//
+// Map sections are already canonical: encoding/json sorts map keys, and the exporters unseal both
+// key and value, so what is left is plaintext in a fixed order.  ARRAY SECTIONS ARE NOT: they come
+// from getAll* store iteration, and where a prefix is stable-sealed that order is per-node, so two
+// correct enclaves would produce different bytes for identical content.  Sorting the elements by
+// their own encoding removes that without needing to know which prefixes are sealed -- and is a
+// no-op for the sections that were already ordered.
+func canonicalizeSection(raw []byte) ([]byte, int64) {
+	var elems []json.RawMessage
+	if err := json.Unmarshal(raw, &elems); err != nil {
+		// Not an array: a map, scalar or struct.  Count map entries where we can, else one row.
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &m); err == nil {
+			return raw, int64(len(m))
+		}
+		return raw, 1
+	}
+	strs := make([]string, len(elems))
+	for i, e := range elems {
+		strs[i] = string(e)
+	}
+	sort.Strings(strs)
+	var buf bytes.Buffer
+	buf.WriteByte('[')
+	for i, sv := range strs {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.WriteString(sv)
+	}
+	buf.WriteByte(']')
+	return buf.Bytes(), int64(len(strs))
+}
+
+// exportSection names one section of the dump and the way to FETCH IT ON DEMAND.
+//
+// A thunk rather than a struct field: the caller usually wants one section, or the content of
+// none of them.  See exportPrivateStateFromCurrentView for why that matters.
+type exportSection struct {
+	name  string
+	fetch func() any
+}
+
+// exportSections lists every section, IN A FIXED ORDER that is part of the output.  It is the
+// order the dump has always had, so diffs against older dumps still line up, and --digest-only
+// output is directly diffable between two nodes without sorting.
+//
+// Append new sections at the end.
+func (s *qadenaServer) exportSections() []exportSection {
+	return []exportSection{
+		{"PrivateEnclaveParams", func() any { return s.privateEnclaveParams }},
+		{"SharedEnclaveParams", func() any { return s.sharedEnclaveParams }},
+		{"Wallets", func() any { return s.getAllWallets() }},
+		{"Credentials", func() any { return s.getAllCredentials() }},
+		{"CredentialHashMap", func() any { return s.exportSealedTable(EnclaveCredentialHashKeyPrefix) }},
+		{"CredentialHashAliasMap", func() any { return s.exportSealedCredentialIdentityHistoryTable() }},
+		{"RecoverOriginalWalletIDByNewWalletIDMap", func() any {
+			return s.exportSealedTable(EnclaveRecoverOriginalWalletIDByNewWalletIDKeyPrefix)
+		}},
+		{"RecoverKeyByOriginalWalletIDs", func() any { return s.getAllRecoverKeyByOriginalWalletIDs() }},
+		{"JarRegulators", func() any { return s.getAllJarRegulators() }},
+		{"PioneerJars", func() any { return s.getAllPioneerJars() }},
+		{"PublicKeys", func() any { return s.getAllPublicKeys() }},
+		{"IntervalPublicKeyIds", func() any { return s.getAllIntervalPublicKeyIds() }},
+		{"ProtectKeys", func() any { return s.getAllProtectKeys() }},
+		{"ProtectSubWalletIDByOriginalWalletIDMap", func() any {
+			return s.exportSealedTable(EnclaveProtectSubWalletIDByOriginalWalletIDKeyPrefix)
+		}},
+		{"CredentialPCXYMap", func() any { return s.exportTable(EnclaveCredentialPCXYKeyPrefix) }},
+
+		// These four live in the secrets DB, not the versioned store -- see enclave_secrets.go.
+		// They are therefore NOT affected by the height pin: a historical export reports the
+		// secrets as they are now.
+		{"EnclaveSSShareMap", func() any { return s.exportSealedSecretsTable(EnclaveSSIntervalSharesKeyPrefix) }},
+		{"EnclaveSSOwnersMap", func() any { return *s.getAllOwners() }}, // EnclaveSSIntervalOwnersKeyPrefix
+		{"EnclavePrivKCacheMap", func() any { return s.exportSealedSecretsTable(EnclaveSSIntervalPrivKKeyPrefix) }},
+		{"EnclavePubKCacheMap", func() any { return s.exportSecretsTable(EnclaveSSIntervalPubKKeyPrefix) }},
+
+		{"AuthorizedSignatories", func() any { return s.getAllDSVSAuthorizedSignatories() }},
+		{"EnclaveIdentityMap", func() any { return s.getAllEnclaveIdentities() }},
 
 		// Added because their absence is exactly what made the 2026-08-09 fork undiagnosable.
 		// ScanTransferHistory is a CONSENSUS INPUT -- the AML window decides whether a transfer is
 		// refused and whether a suspicious transaction is filed -- so two nodes disagreeing about a
 		// block cannot be explained without it.  The outbox and the height watermarks say what the
 		// enclave was about to hand the chain and which height it believed it was at.
-		ScanTransferHistoryMap map[string][]*types.EncryptableScanTransfer
-		Outbox                 outboxDump
-		PreparedHeight         int64
-		ConfirmedHeight        int64
-		EarliestIndexedHeight  int64
+		{"ScanTransferHistoryMap", func() any { return s.exportScanTransferHistoryTable() }},
+		{"Outbox", func() any { return exportOutbox(s) }},
+
+		// The watermarks are read from the CURRENT view even under a height pin: preparedHeight
+		// lives inside the tree and so rolls back with it (giving the pinned height), while
+		// confirmedHeight and the index horizon are raw MetaDB keys outside the tree and always
+		// report now.  That asymmetry is intentional -- confirmedHeight is the record of what the
+		// network has, which a historical read must not be able to un-say -- but it means these
+		// three are not all "as of H".
+		{"PreparedHeight", func() any { return s.getPreparedHeight() }},
+		{"ConfirmedHeight", func() any { return s.getConfirmedHeight() }},
+		{"EarliestIndexedHeight", func() any { return s.earliestIndexedHeight() }},
+	}
+}
+
+// exportPrivateStateFromCurrentView dumps whatever s.CacheCtx currently points at.  Split from
+// ExportPrivateState so the height pin wraps it rather than being interleaved with it.
+func (s *qadenaServer) exportPrivateStateFromCurrentView(in *types.MsgExportPrivateState) (*types.ExportPrivateStateReply, error) {
+	// ONE SECTION AT A TIME, fetched only if it is wanted.  Marshalling a single struct holding
+	// every table gave no way to digest one section, no way to fetch one, and no way to discover
+	// the result was too large except by handing it to the transport and having it refused --
+	// which is how this command started failing at ~10k blocks with ResourceExhausted
+	// (8328613 vs 4194304) once the reply outgrew gRPC's default receive cap.
+	//
+	// Laziness is the point, not a refinement.  --section wants exactly one table and
+	// --digest-only reads every table but KEEPS none, so populating all of them up front would do
+	// the whole store's work and hold the whole store in memory in both cases.  Peak memory is now
+	// one section, which is the same discipline the private-state IMPORT already follows for the
+	// same reason: enclave EPC is tens to a couple of hundred MB.
+	maxBytes := int64(in.GetMaxBytes())
+	if maxBytes == 0 {
+		maxBytes = defaultExportMaxBytes
+	}
+	want := in.GetSection()
+
+	sections := s.exportSections()
+
+	var digests []*types.PrivateStateSectionDigest
+	var total int64
+	body := bytes.NewBufferString("{")
+	wrote := 0
+	matched := false
+
+	for _, sec := range sections {
+		name := sec.name
+		if want != "" && name != want {
+			continue
+		}
+		matched = true
+
+		raw, err := json.Marshal(sec.fetch())
+		if err != nil {
+			return nil, fmt.Errorf("export section %s: %w", name, err)
+		}
+		canon, rows := canonicalizeSection(raw)
+
+		if in.GetDigestOnly() {
+			sum := sha256.Sum256(canon)
+			digests = append(digests, &types.PrivateStateSectionDigest{
+				Name:   name,
+				Rows:   rows,
+				Sha256: hex.EncodeToString(sum[:]),
+				Bytes:  int64(len(canon)),
+			})
+			continue
+		}
+
+		total += int64(len(canon))
+		if total > maxBytes {
+			// ABANDON HERE, not after assembling everything.  The caller gets a section name and a
+			// size, which is actionable -- digest_only always fits, and section= pulls just this
+			// one -- and the enclave never holds the whole oversized document, which matters where
+			// the memory budget is EPC.
+			return nil, fmt.Errorf(
+				"private-state export exceeds %d bytes: section %s adds %d bytes over %d rows, "+
+					"bringing the total to %d.  Re-run with --digest-only to compare sections "+
+					"without their content, then --section=<name> to fetch only the one that "+
+					"differs, or raise --max-bytes if the transport can carry it",
+				maxBytes, name, len(canon), rows, total)
+		}
+
+		if wrote > 0 {
+			body.WriteByte(',')
+		}
+		nameJSON, _ := json.Marshal(name)
+		body.Write(nameJSON)
+		body.WriteByte(':')
+		body.Write(canon)
+		wrote++
 	}
 
-	state.PrivateEnclaveParams = s.privateEnclaveParams
-	state.SharedEnclaveParams = s.sharedEnclaveParams
-
-	// these four live in the secrets DB, not the versioned store -- see enclave_secrets.go
-	state.EnclaveSSShareMap = s.exportSealedSecretsTable(EnclaveSSIntervalSharesKeyPrefix)
-	state.EnclaveSSOwnersMap = *s.getAllOwners() // EnclaveSSIntervalOwnersKeyPrefix
-	state.EnclavePubKCacheMap = s.exportSecretsTable(EnclaveSSIntervalPubKKeyPrefix)
-	state.EnclavePrivKCacheMap = s.exportSealedSecretsTable(EnclaveSSIntervalPrivKKeyPrefix)
-
-	// export wallets
-	state.Wallets = s.getAllWallets()
-
-	// export credentials
-	state.Credentials = s.getAllCredentials()
-
-	state.CredentialHashMap = s.exportSealedTable(EnclaveCredentialHashKeyPrefix)
-
-	state.CredentialHashAliasMap = s.exportSealedCredentialIdentityHistoryTable()
-
-	state.CredentialPCXYMap = s.exportTable(EnclaveCredentialPCXYKeyPrefix)
-
-	state.RecoverOriginalWalletIDByNewWalletIDMap = s.exportSealedTable(EnclaveRecoverOriginalWalletIDByNewWalletIDKeyPrefix)
-	state.RecoverKeyByOriginalWalletIDs = s.getAllRecoverKeyByOriginalWalletIDs()
-
-	state.PublicKeys = s.getAllPublicKeys()
-
-	//	state.IntervalPublicKeyIdMap = make(map[string]string)
-	//	for k, v := range intervalPublicKeyIdMap {
-	//		state.IntervalPublicKeyIdMap["["+k.nodeID+","+k.nodeType+"]"] = v
-	//	}
-
-	state.IntervalPublicKeyIds = s.getAllIntervalPublicKeyIds()
-
-	// export jar regulator map
-	state.JarRegulators = s.getAllJarRegulators()
-
-	// export pioneer jar map
-	state.PioneerJars = s.getAllPioneerJars()
-
-	//	state.PioneerIPAddressMap = s.getAllPioneerIPAddress()
-
-	state.ProtectKeys = s.getAllProtectKeys()
-
-	state.ProtectSubWalletIDByOriginalWalletIDMap = s.exportSealedTable(EnclaveProtectSubWalletIDByOriginalWalletIDKeyPrefix)
-
-	state.AuthorizedSignatories = s.getAllDSVSAuthorizedSignatories()
-
-	state.EnclaveIdentityMap = s.getAllEnclaveIdentities()
-
-	state.ScanTransferHistoryMap = s.exportScanTransferHistoryTable()
-	state.Outbox = exportOutbox(s)
-
-	// The watermarks are read from the CURRENT view even under a height pin: preparedHeight lives
-	// inside the tree and so rolls back with it (giving the pinned height), while confirmedHeight
-	// and the index horizon are raw MetaDB keys outside the tree and always report now.  That
-	// asymmetry is intentional -- confirmedHeight is the record of what the network has, which a
-	// historical read must not be able to un-say -- but it means these three are not all "as of H".
-	state.PreparedHeight = s.getPreparedHeight()
-	state.ConfirmedHeight = s.getConfirmedHeight()
-	state.EarliestIndexedHeight = s.earliestIndexedHeight()
-
-	//	state.CredentialIDByPCXYMap = credentialIDByPCXYMap
-
-	//  c.LoggerDebug(logger, "state" + c.PrettyPrint(state))
-
-	// export as jsonstring
-	jsonState, err := json.Marshal(state)
-	if err != nil {
-		return nil, err
+	if want != "" && !matched {
+		return nil, fmt.Errorf("no private-state section named %q; run with --digest-only to list them", want)
 	}
 
-	return &types.ExportPrivateStateReply{State: string(jsonState)}, nil
+	if in.GetDigestOnly() {
+		return &types.ExportPrivateStateReply{Digests: digests}, nil
+	}
+
+	body.WriteByte('}')
+	return &types.ExportPrivateStateReply{State: body.String()}, nil
 }
 
 func (s *qadenaServer) exportTable(pfx string) (tableMap map[string]string) {

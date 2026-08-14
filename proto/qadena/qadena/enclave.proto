@@ -328,6 +328,42 @@ message MsgExportPrivateState {
   // it and the export reads that version.  This is the tool the 2026-08-09 fork had no answer
   // to -- "what did this enclave actually hold at the height where the two nodes diverged?"
   int64 height = 1;
+
+  // Return one digest per section instead of the content.  THE ONLY MODE THAT CANNOT OUTGROW THE
+  // TRANSPORT: the reply is a fixed handful of rows whatever the chain has done.  Comparing two
+  // enclaves is comparing these, and the content dump is only needed for a section whose digest
+  // already disagreed.
+  bool digest_only = 2;
+
+  // Restrict the dump to this section (a field name of the export struct, e.g. "CredentialPCXYMap").
+  // Empty means all of them.  This is what makes a differing section fetchable on a chain whose
+  // full export no longer fits.
+  string section = 3;
+
+  // Refuse rather than return more than this many bytes of content.  0 uses the built-in default.
+  // Sections are measured as they are marshalled and the whole export is abandoned as soon as the
+  // running total crosses the limit, so an over-large export costs one section of memory rather
+  // than all of it -- which matters inside an enclave, where the budget is EPC.
+  uint64 max_bytes = 4;
+}
+
+// PrivateStateSectionDigest identifies one section's content without carrying it.
+//
+// CANONICALIZED BEFORE HASHING, because neither of the obvious byte streams is comparable across
+// nodes: rows live under STABLE-SEALED KEYS and stable sealing is per-node, and the slice sections
+// are built by store iteration, so their order follows those per-node keys.  The exporters already
+// unseal both key and value, and JSON sorts map keys; the remaining fix is to sort array elements.
+// What is hashed is therefore the logical content, which two correct enclaves agree on and two
+// diverged ones do not.
+message PrivateStateSectionDigest {
+  string name = 1;
+  // Rows for a map or slice section; 1 for a scalar or a single struct.
+  int64 rows = 2;
+  // Hex sha256 over the canonicalized JSON of the section.
+  string sha256 = 3;
+  // Bytes of that canonicalized JSON -- names the section to pull when a digest disagrees, and the
+  // section to blame when a full export no longer fits.
+  int64 bytes = 4;
 }
 
 message MsgUpdateSSIntervalKey {
@@ -345,6 +381,9 @@ message ExportPrivateKeyReply {
 
 message ExportPrivateStateReply {
   string state = 1;
+
+  // Populated when digest_only was set; state is empty then.
+  repeated PrivateStateSectionDigest digests = 2;
 }
 
 message ValidateAuthenticateServiceProviderRequest {

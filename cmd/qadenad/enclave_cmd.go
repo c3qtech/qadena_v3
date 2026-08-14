@@ -354,11 +354,28 @@ func newRemovePrivateKeyCmd() *cobra.Command {
 	}
 }
 
+// newExportPrivateStateCmd dumps the enclave's private state, or -- with --digest-only -- just
+// enough to tell whether two enclaves hold the SAME private state without moving any of it.
+//
+// The digest exists because the dump does not scale and cannot be made to.  Its reply is one JSON
+// document that grows with the chain, and at ~10k blocks on the two-node testnet it passed gRPC's
+// 4 MiB default receive cap and the command simply stopped working -- exactly when there was most
+// to compare.  --digest-only returns a fixed handful of rows no matter how large the chain gets,
+// so the comparison is O(sections) and the content dump is needed only for a section that already
+// disagreed, which --section then fetches on its own.
+//
+// WHY THE DIGESTS ARE COMPARABLE AT ALL: rows live under stable-sealed keys and stable sealing is
+// per-node, so neither the raw bytes nor the store's iteration order match between two correct
+// enclaves.  The enclave hashes the UNSEALED content with array sections sorted, which is the
+// logical state both nodes should agree on.
 func newExportPrivateStateCmd() *cobra.Command {
 	var height int64
+	var digestOnly bool
+	var section string
+	var maxBytes uint64
 	cmd := &cobra.Command{
-		Use:   "export-private-state [pubKID]",
-		Short: "Export private state for a given pubKID",
+		Use:   "export-private-state",
+		Short: "Export enclave private state, or --digest-only to compare two enclaves cheaply",
 		Args:  cobra.ExactArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			enclaveClient, err := getEnclaveConnection(cmd)
@@ -366,9 +383,14 @@ func newExportPrivateStateCmd() *cobra.Command {
 				return err
 			}
 
-			grpcctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			grpcctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 			defer cancel()
-			r2, err := enclaveClient.ExportPrivateState(grpcctx, &types.MsgExportPrivateState{Height: height})
+			r2, err := enclaveClient.ExportPrivateState(grpcctx, &types.MsgExportPrivateState{
+				Height:     height,
+				DigestOnly: digestOnly,
+				Section:    section,
+				MaxBytes:   maxBytes,
+			})
 			if err != nil {
 				c.LoggerError(logger, "could not export private state", err)
 				return err
@@ -377,17 +399,28 @@ func newExportPrivateStateCmd() *cobra.Command {
 				c.LoggerDebug(logger, "ExportPrivateState returns", r2)
 			}
 
+			if digestOnly {
+				// Tab-separated and one section per line, so comparing two nodes is a diff.
+				for _, d := range r2.GetDigests() {
+					fmt.Printf("%s\t%d\t%s\t%d\n", d.GetName(), d.GetRows(), d.GetSha256(), d.GetBytes())
+				}
+				return nil
+			}
+
 			var prettyJSON bytes.Buffer
 			if err := json.Indent(&prettyJSON, []byte(r2.State), "", "    "); err != nil {
 				c.LoggerError(logger, "could not format JSON", err)
 				return err
 			}
-			fmt.Println(string(prettyJSON.Bytes()))
+			fmt.Println(prettyJSON.String())
 
 			return nil
 		},
 	}
 	cmd.Flags().Int64Var(&height, "height", 0, "dump the enclave's state as of this chain height (0 = current)")
+	cmd.Flags().BoolVar(&digestOnly, "digest-only", false, "print name/rows/sha256/bytes per section instead of the content -- the reply cannot outgrow the transport")
+	cmd.Flags().StringVar(&section, "section", "", "dump only this section (see --digest-only for the names)")
+	cmd.Flags().Uint64Var(&maxBytes, "max-bytes", 0, "refuse a content dump larger than this, naming the section that blew the budget (0 = built-in default)")
 	return cmd
 }
 

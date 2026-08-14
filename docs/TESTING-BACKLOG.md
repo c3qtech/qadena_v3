@@ -401,3 +401,43 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
 
     Also check the cp exit status while you are in there.  A build that cannot install
     what it built has not succeeded.
+
+38. **Nothing here has been tried at a million wallets and credentials, and several
+    things are O(state) per block.** The two-node testnet runs ~100 wallets and ~100
+    credentials. Every number below is fine at that size and none of them have a
+    ceiling in the code.
+
+    What is already known to grow without bound:
+
+        export-private-state    ONE JSON document for the whole enclave.  Passed gRPC's
+                                4 MiB default receive cap at ~10k blocks and 100 wallets
+                                (8,328,613 bytes).  --digest-only and --section exist
+                                now; the full dump does not scale and is not meant to.
+        GetStoreHash            "scans the whole tree on most blocks" (enclave.go:227),
+                                iterating nine prefixes with no cache -- per block.
+        enclaveSynchronizeStores  seeds a fresh enclave by pushing EVERY row of every
+                                mirrored store, one-shot at first BeginBlock.  At a
+                                million wallets this is the join, and it holds a block.
+        private-state transfer  paged, but the page size is tuned against 269 rows.
+        assertStoresAreReadable one iterator seek per store -- O(1), fine.
+
+    The questions worth answering before anyone claims a size:
+
+    - What is the largest chain a joiner can state-sync in a bounded time?  Seeding and
+      the private-state import both run inside ONE BeginBlock, and a block that takes
+      minutes is a liveness failure even though nothing is wrong.
+    - Does GetStoreHash's per-block full scan become the block time?  It is the obvious
+      first thing to cache or make incremental, and it is on the consensus path.
+    - Where does enclave memory actually run out?  The EPC budget is tens to a couple of
+      hundred MB (enclave_private_state_sync.go), the import was deliberately paged to
+      bound live memory to one page -- and then the EXPORT builds everything at once.
+      The digest path fixes that for diagnostics; the getAll* helpers still materialize
+      whole tables into slices and maps.
+    - Do the AML scan-history windows grow per wallet without bound, and is the pruning
+      the transfer relies on actually pruning?
+
+    THIS IS A SIZING EXERCISE, NOT A BUG REPORT.  The right output is a table of
+    measured block time, join time and peak enclave RSS against 1e3 / 1e4 / 1e5 / 1e6
+    wallets, and the first structure that falls over.  Guessing which one it will be is
+    less useful than running it -- though GetStoreHash's per-block full scan is the
+    standing favourite.
