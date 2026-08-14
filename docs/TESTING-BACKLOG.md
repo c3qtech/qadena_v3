@@ -654,3 +654,43 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
 
     SO: add assertions to it FIRST, then wire it in.  Until then the recovery coverage
     that means anything is the one inside update_credentials.sh.
+
+43. **SetCredential refuses to re-store a credential it has already indexed, so a partial
+    re-sync loses every row it has already seen.**  Found 2026-08-15 while costing the
+    fixes for item 39, and it is independent of which of those is chosen.
+
+        enclave.go:4252
+            if s.credentialByPCXYExists(in) {
+                return &types.SetCredentialReply{Status: false}, types.ErrCredentialExists
+            }
+            s.setCredentialNoNotify(in.CredentialID, in.CredentialType, *in)   // NOT REACHED
+
+    The existence check runs BEFORE the store, so a re-push is not a no-op -- it is a
+    failure that also skips the write.  For a live IDP issuing a genuine duplicate that is
+    correct.  For enclaveSynchronizeStores it is not: that pushes EVERY credential
+    whenever the Credential store hash differs, which is precisely the case where the
+    enclave already holds some of them.
+
+    So a node re-synced with a partially-populated enclave fails on each row already in
+    the index, increments pushFailures, and leaves those credentials unstored -- while the
+    rows it has NOT seen go in fine.  The result is a half-seeded enclave whose failures
+    are counted but whose store is silently short.
+
+    THE BLAST RADIUS GROWS WITH ANY ITEM 39 FIX.  Today the rebuild only indexes the
+    still-ownerless credentials, so only those can collide: 504 of 3589 rows on this chain.
+    Every candidate fix for item 39 indexes all IDP-issued credentials instead -- 2054 --
+    so the number of rows a re-push would refuse goes up roughly FOURFOLD.  Fixing item 39
+    without this makes this one worse.
+
+    THE FIX is to make the re-push idempotent rather than to weaken the duplicate check:
+    if the existing PCXY row already maps to the SAME credentialID, this is a replay of a
+    row the enclave already has, and the correct response is to store it and return
+    success.  Only a DIFFERENT credentialID behind the same commitment is a real duplicate
+    and deserves ErrCredentialExists.  That distinction is available at the call site --
+    getCredentialByPCXY returns the credentialID -- and it is the difference between "this
+    identity is already issued" and "I have seen this exact row before".
+
+    Not yet observed in the wild: the two-node chain has never re-synced an enclave that
+    already held credentials, because the joiner was always wiped first.  That is also why
+    it has not bitten -- and why it would, the first time anyone re-syncs rather than
+    rebuilds.
