@@ -28,6 +28,23 @@ while [[ $# -gt 0 ]]; do
             ;;
         --prefix)
             prefix="$2"
+            # MUST BE NUMERIC, and this check is the difference between a clear failure here and a
+            # baffling one much later.  The prefix is appended to bf as well as to the names, and
+            # the CLI parses the blinding factor with big.Int.SetString(..., 10) while DISCARDING
+            # the error (x/qadena/client/cli/tx_create_credential.go).  A non-numeric bf therefore
+            # becomes nil, NewPedersenCommit treats nil as "generate a random blinding factor"
+            # (x/qadena/common/ecpedersen.go), and the credential is created against a commitment
+            # that the matching claim-credential -- which recomputes it, and gets a DIFFERENT
+            # random value -- cannot find.  The user sees ErrCredentialNotExists from the claim,
+            # which names neither the prefix nor the blinding factor, several steps after the
+            # thing that actually went wrong.
+            if [[ ! "$prefix" =~ ^[0-9]+$ ]]; then
+                echo "setup.sh: --prefix must be numeric, got \"$prefix\"" >&2
+                echo "  It is appended to each user's blinding factor, which the CLI parses as a" >&2
+                echo "  base-10 integer.  A non-numeric prefix silently yields a random commitment" >&2
+                echo "  and the credential cannot be claimed afterwards." >&2
+                exit 1
+            fi
             shift 2
             ;;
         --no-execute)

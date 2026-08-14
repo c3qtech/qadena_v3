@@ -321,8 +321,19 @@ func CmdClaimCredential() *cobra.Command {
 			var pSCI types.EncryptableSingleContactInfo
 
 			var findCredentialPC *c.PedersenCommit
-			findCredentialA, _ := big.NewInt(0).SetString(argFindCredentialA, 10)
-			findCredentialBF, _ := big.NewInt(0).SetString(argFindCredentialBF, 10)
+			// CHECKED, unlike before.  SetString returns nil on a non-numeric argument, and
+			// NewPedersenCommit treats a nil blinding factor as "generate a random one"
+			// (x/qadena/common/ecpedersen.go), so a typo silently produced a commitment nothing
+			// could recompute -- surfacing later as ErrCredentialNotExists, which names neither
+			// the argument nor the parse.  See docs/TESTING-BACKLOG.md item 41.
+			findCredentialA, okA := big.NewInt(0).SetString(argFindCredentialA, 10)
+			if !okA {
+				return fmt.Errorf("find-credential amount must be a base-10 integer, got %q", argFindCredentialA)
+			}
+			findCredentialBF, okBF := big.NewInt(0).SetString(argFindCredentialBF, 10)
+			if !okBF {
+				return fmt.Errorf("find-credential blinding factor must be a base-10 integer, got %q", argFindCredentialBF)
+			}
 			findCredentialPC = c.NewPedersenCommit(findCredentialA, findCredentialBF)
 
 			fmt.Println("findCredentialPC", c.PrettyPrint(findCredentialPC))

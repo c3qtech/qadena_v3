@@ -50,8 +50,19 @@ func CmdFindCredential() *cobra.Command {
 			pinABF := strings.Split(argFindCredentialABF, ".")
 
 			var pinPC *c.PedersenCommit
-			pinA, _ := big.NewInt(0).SetString(pinABF[0], 10)
-			pinBF, _ := big.NewInt(0).SetString(pinABF[1], 10)
+			// CHECKED, unlike before.  SetString returns nil on a non-numeric argument, and
+			// NewPedersenCommit treats a nil blinding factor as "generate a random one"
+			// (x/qadena/common/ecpedersen.go), so a typo silently produced a commitment nothing
+			// could recompute -- surfacing later as ErrCredentialNotExists, which names neither
+			// the argument nor the parse.  See docs/TESTING-BACKLOG.md item 41.
+			pinA, okA := big.NewInt(0).SetString(pinABF[0], 10)
+			if !okA {
+				return fmt.Errorf("pin amount must be a base-10 integer, got %q", pinABF[0])
+			}
+			pinBF, okBF := big.NewInt(0).SetString(pinABF[1], 10)
+			if !okBF {
+				return fmt.Errorf("pin blinding factor must be a base-10 integer, got %q", pinABF[1])
+			}
 			pinPC = c.NewPedersenCommit(pinA, pinBF)
 
 			fmt.Println("pinPC", c.PrettyPrint(pinPC))
