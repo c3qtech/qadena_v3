@@ -362,3 +362,42 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     pass proves the peers agreed at that height and nothing more. And the halt that
     protects the qadena-side push (`aa9cdbe8`) has no counterpart on the DSVS side, which
     is exactly why this one got as far as consensus.
+
+37. **Building on a machine with a running node CRASHES the node, and the build reports
+    success.** Observed 2026-08-14 21:18: the chain segfaulted (`run.sh: Process qadenad
+    ... exited with RC 139`) twice, ~9,639 blocks in, with no Go stack trace and no core
+    dump.
+
+    The chain, in order:
+
+        build.sh:130 calls install.sh --chain -- BUILDING IMPLIES INSTALLING
+        install.sh copies with plain `cp` into $qadenabin
+        the running EXECUTABLES are protected by ETXTBSY, so those copies fail:
+            cp: cannot create regular file '.../qadenad': Text file busy
+            cp: cannot create regular file '.../qadenad_enclave': Text file busy
+            cp: cannot create regular file '.../signer_enclave': Text file busy
+        libwasmvm*.so has NO such protection and was overwritten IN PLACE at 21:18
+        the node had it mmap'd; the kernel pages it in lazily; the bytes changed
+        underneath a live process -> SIGSEGV
+        run.sh respawned into the same corrupted mapping -> a second RC 139
+
+    Timestamps at the moment of the crash, captured before they were overwritten:
+    libwasmvm*.so and the versioned copies at 21:18-21:19, while qadenad,
+    qadenad_enclave and signer_enclave stayed at 18:23 -- the ETXTBSY split is the whole
+    story in one listing.
+
+    NO GO STACK TRACE is diagnostic rather than unhelpful: the fault is in mapped C code,
+    not Go, which is what sends you looking at cgo and libwasmvm instead of the chain.
+
+    AND THE BUILD EXITED 0.  The three cp failures are printed and never checked, so
+    build.sh announced success at the moment it crashed the running chain, and the only
+    evidence was three lines in a log nobody reads on a green build.
+
+    THE FIX: copy to a temporary name and `mv` over the target.  mv is an atomic rename,
+    so a process still mapping the old inode keeps a coherent library and only new
+    processes see the new one.  Failing that, install.sh should refuse when
+    is_qadena_running, or build.sh should not install at all -- but the rename is the one
+    that makes the operation safe rather than merely forbidden.
+
+    Also check the cp exit status while you are in there.  A build that cannot install
+    what it built has not succeeded.
