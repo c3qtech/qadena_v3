@@ -534,3 +534,55 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     per-run id, so no two issues ever share a commitment and credentialByPCXYExists never
     fires.  Its header line `create   no check at all` is inaccurate: there IS a check at
     create, just not the hash-uniqueness one it is describing.
+
+40. **The suites that cannot repeat are the ones that create unreconstructable history,
+    so the continuous loop structurally cannot find rebuild bugs.** Noticed while
+    chasing item 39, which 672 consecutive regression runs did not surface.
+
+    Three flows stamp a sentinel into Credential.walletID, and each one consumes an
+    IDP-issued row permanently:
+
+        CLAIMED      enclave.go:3743                       claim
+        UPDATED      enclave_update_credential.go:279,289,345   update
+        RECOVERKEY   enclave.go:4487                       key recovery
+
+    Coverage in the continuous loop:
+
+        CLAIMED      every cycle
+        UPDATED      only under --with-credentials, which the loop never passes
+        RECOVERKEY   NO SUITE AT ALL -- test_key_recovery.sh exists and is referenced by
+                     no harness
+
+    update_credentials.sh is excluded for a STATED and good reason (regression.sh:59):
+    single-use claim codes and consumed rate-limit windows mean it cannot run twice
+    against one chain.  test_key_recovery.sh is excluded for NO stated reason anywhere;
+    its absence is merely observed in passing at regression.sh:571, where it is relied on
+    to justify reusing al-eph1.  It has the same single-shot property (fixed recover-al /
+    recover-ann wallet names, fixed claim codes) so it would qualify for the same
+    justification -- but nobody wrote one, so it reads as an omission rather than a
+    decision, and nothing flags it.
+
+    THE STRUCTURAL POINT.  Non-repeatable is not an incidental property here: a suite
+    cannot repeat precisely BECAUSE it consumes something irreversibly, and consuming
+    something irreversibly is what creates state that a from-current-state rebuild cannot
+    reconstruct.  So the tests most able to expose a rebuild-vs-history divergence are
+    exactly the ones a continuous loop must skip.  Item 39 is one instance; there is no
+    reason to think it is the only one.
+
+    WHAT WOULD ACTUALLY HELP, in rough order of value:
+
+    - Run the excluded suites ONCE against a chain that a joiner then state-syncs from,
+      and diff the enclaves with `export-private-state --digest-only`.  That is the shape
+      of test that finds this class, and it does not need to be repeatable to be run --
+      it needs to be run on a chain that is then joined.
+    - Make the single-shot suites parameterised by a per-run id, the way
+      test_credential_uniqueness.sh already is, so they become repeatable.  That is a
+      real piece of work for update_credentials.sh (its claim codes are baked in at the
+      top) but it converts an opt-in into a default.
+    - Failing both, assert the invariant directly and cheaply on every joiner:
+      |CredentialPCXY| == |credentials with a findCredentialPedersenCommit|.  It is one
+      comparison, it holds on a correct node regardless of history, and it would have
+      caught item 39 the first time any node state-synced.
+
+    The third is worth doing even if the first two happen, because it is the only one
+    that keeps working on a chain whose history nobody replayed.
