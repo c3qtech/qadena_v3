@@ -483,9 +483,36 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     same shape as the AuthorizedSignatory fork (item 35): enclave state that is a
     consensus input diverging silently between a live node and a state-synced one.
 
-    NOT YET DEMONSTRATED: that a real transaction actually diverges.  getCredentialByPCXY
-    re-fetches the credential and returns found=true for a stale row, so whether the
-    disagreement reaches consensus depends on whether the caller then checks walletID.
-    That is the next thing to establish, and it decides whether this is a latent fork or
-    only a leak.  Either way the fix is the same -- remove the row where the walletID is
-    assigned -- and a joiner is the only way anyone would have noticed.
+    IT IS A LATENT FORK, NOT A LEAK.  That question is now settled by reading the two
+    transaction paths that consume the index.  Both branch the same way:
+
+        enclave.go:3536              claim-credential
+        enclave_update_credential.go:445   update-credential
+
+            ipCredential, found := s.getCredentialByPCXY(...)
+            if !found            { return ErrCredentialNotExists }   // the joiner
+            if WalletID != ""    { return ErrCredentialClaimed  }   // the live node
+
+    Both REJECT, so no bad state is written -- but they reject with DIFFERENT CODES, and
+    the code is consensus material.  CometBFT's deterministicExecTxResult
+    (types/results.go) keeps Code, Data, GasWanted and GasUsed, and merkle-hashes them
+    into the header's LastResultsHash.  Two nodes returning different codes for the same
+    transaction therefore build different headers.  That is precisely how the
+    AuthorizedSignatory fork presented -- a different verdict on one transaction, then a
+    consensus failure -- and the differing gas of the two branches would do it even if
+    the codes matched.
+
+    THE TRIGGER HAS NOT BEEN FIRED.  What is proven is the mechanism, by code reading,
+    not a live divergence: it needs a claim or update whose findCredentialPC resolves to
+    a row that is stale on the live node and absent on the joiner -- i.e. re-claiming or
+    re-updating an already-consumed identity-provider credential.  No suite does that
+    today, which is why 670 regression runs never surfaced it.  Worth writing, because
+    the negative result would be evidence and the positive one is a fork.
+
+    The third consumer, QueryFindCredential (enclave.go:2797), is a query rather than a
+    transaction, so it does not reach consensus -- it just answers two clients
+    differently depending on which node they ask.
+
+    The fix is the same either way: remove the row where the walletID is assigned.  And a
+    state-synced joiner is the only thing that would ever have revealed it, since a node
+    that has processed the whole chain live cannot disagree with itself.
