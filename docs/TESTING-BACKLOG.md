@@ -289,3 +289,56 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     join's outcome distinguishes that from a state-sync join; it is only visible by
     reading `config.toml` afterwards. Either fail the join when state-sync was explicitly
     requested and cannot be provided, or say so loudly at the end.
+
+35. **The transfer's table list was never audited against the full enclave-private surface,
+    and the one omission we tested forked a node.** Three categories exist and only two are
+    covered:
+
+        TRANSFERRED (privateStateTables, 5)   ScanTransferHistory, CredentialHash,
+                                              CredentialHashesByCredentialID,
+                                              ProtectSubWalletIDByOriginalWalletID,
+                                              RecoverOriginalWalletIDByNewWalletID
+        CHAIN-MIRRORED (GetStoreHash, 9)      Wallet, Credential, JarRegulator, PublicKey,
+                                              IntervalPublicKeyID, ProtectKey, RecoverKey,
+                                              EnclaveIdentity, AuthorizedSignatory
+        NEITHER                               CredentialPCXY, PioneerJars
+
+    Measured on the 2026-08-14 joiner at a settled height: all five transferred tables
+    byte-identical; eight of nine mirrored stores identical; `AuthorizedSignatory` 0 against
+    11 (item 30, and it forked the node); `CredentialPCXY` 72 against 360; `PioneerJars` 0
+    against 1.
+
+    The third category has NO MECHANISM to reach a state-synced node. It is not failing --
+    nothing is even attempted. Those rows are built by executing blocks, which is precisely
+    what state-sync skips. `EnclaveCredentialPCXYKeyPrefix` has four read/write sites in
+    the enclave and appears nowhere in `privateStateTables` or `GetStoreHash`'s key list.
+
+    THE WORK: enumerate every `Enclave*KeyPrefix`, classify each as transferred,
+    chain-mirrored, legitimately node-local, or MISSING, and justify each classification in
+    the table's own comment. A table whose absence changes a validation verdict is a fork,
+    and `AuthorizedSignatory` demonstrated that is not hypothetical -- a table nobody had
+    audited took a node out of consensus 250 blocks after it joined, with nothing on the
+    node reporting a problem. Also settle the node-local set by evidence rather than
+    assumption: SSIntervalShares, SSIntervalPrivK, PrivateEnclaveParams, PrivKCache and
+    PreparedHeight are currently believed per-node because their differences look
+    plausible, which is the same standard that let AuthorizedSignatory through.
+
+36. **A state-synced joiner forked, and only an external test noticed.** Full chain, every
+    step evidenced: DSVS seeding refused 11 AuthorizedSignatory rows (item 30) -> the
+    enclave held none -> a transaction requiring signer authorization arrived ->
+    `ValidateAuthorizedSigner` returned code 1137 "Unauthorized signer" ONCE, seven log
+    lines before the failure -> the same transaction carries `code: 0` in the primary's
+    `block_results` -> divergent app hash -> `CONSENSUS FAILURE!!! Expected 7CBD399E...,
+    got EA3A099...` at height 3053, 252 blocks after joining at 2800.
+
+    The node then sat at 3052 reporting `catching_up=false` and answering RPC normally.
+    Nothing on it complained. It was `test_peer_agreement.sh`, running inside the
+    regression loop from the OTHER node, that caught it -- and the failing suite's log
+    survived only because failed logs are now preserved (`1d9fd033`); the next run would
+    have overwritten it.
+
+    Two things to take from this. A joiner cannot detect this class of divergence about
+    itself, so peer agreement has to run from outside and has to keep running -- a single
+    pass proves the peers agreed at that height and nothing more. And the halt that
+    protects the qadena-side push (`aa9cdbe8`) has no counterpart on the DSVS side, which
+    is exactly why this one got as far as consensus.
