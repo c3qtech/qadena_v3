@@ -550,8 +550,10 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
 
         CLAIMED      every cycle
         UPDATED      only under --with-credentials, which the loop never passes
-        RECOVERKEY   NO SUITE AT ALL -- test_key_recovery.sh exists and is referenced by
-                     no harness
+        RECOVERKEY   only under --with-credentials as well -- update_credentials.sh
+                     carries its own recovery flow (recover-jill / recover-jill2, claimed
+                     with --recover-key).  The standalone test_key_recovery.sh is wired
+                     into no harness at all, but the sentinel itself is not uncovered.
 
     update_credentials.sh is excluded for a STATED and good reason (regression.sh:59):
     single-use claim codes and consumed rate-limit windows mean it cannot run twice
