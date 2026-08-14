@@ -58,6 +58,8 @@ FROM=1
 ONLY=""
 VALIDATOR_STAKE="110000"
 FUND_QDN="200000"
+PIONEER_NAME="pioneer2"
+STATE_SYNC=0
 
 fail() { print -u2 "FAIL(two_node_bringup): $*"; exit 1 }
 info() { print "  $*" }
@@ -70,8 +72,20 @@ while [[ $# -gt 0 ]]; do
         --from)    FROM="$2";    shift 2 ;;
         --only)    ONLY="$2";    shift 2 ;;
         --stake)   VALIDATOR_STAKE="$2"; shift 2 ;;
+        --pioneer) PIONEER_NAME="$2"; shift 2 ;;
+        --state-sync) STATE_SYNC=1; shift ;;
         --help)
             print "Usage: two_node_bringup.sh --primary <ip> --joiner <ip> [--from N] [--only N] [--stake qdn]"
+            print "                          [--pioneer <name>] [--state-sync]"
+            print ""
+            print "  --pioneer     the joiner's pioneer name (default pioneer2).  MUST BE UNUSED ON"
+            print "                THE CHAIN: add_full_node.sh refuses a name already registered, so"
+            print "                a re-join after a wipe needs a fresh one -- the key is gone"
+            print "                locally but the chain still remembers it."
+            print "  --state-sync  join by STATE-SYNC instead of block-sync.  add_full_node.sh turns"
+            print "                it on only when a SECOND genesis-pioneer IP is supplied and the"
+            print "                two agree on the trust height and hash, so this passes the primary"
+            print "                as both.  Needs the chain past height 1500."
             print ""
             print "  1 preflight      both reachable, measurements match genesis, primary healthy"
             print "  2 quiesce        stop continuous regression on the primary (it restarts the chain)"
@@ -194,11 +208,11 @@ phase "3. fund the joiner's pioneer key"
 # The joiner mints its key during the join, so on a FIRST run there is nothing to fund yet.  This
 # phase is therefore a no-op the first time and does the work on the re-run -- which is why phase 4
 # tolerates an unfunded start and phase 3 can be re-run after it.
-addr=$(ssh "$JOINER" 'sudo ~/qadena/bin/qadenad --home ~/qadena keys show pioneer2 -a --keyring-backend test 2>/dev/null' | tr -d '\r')
+addr=$(ssh "$JOINER" "sudo ~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
 if [[ ! "$addr" =~ ^qadena1 ]]; then
-    info "joiner has no pioneer2 key yet -- run phase 4 first, then re-run --only 3"
+    info "joiner has no $PIONEER_NAME key yet -- run phase 4 first, then re-run --only 3"
 else
-    info "joiner pioneer2 = $addr"
+    info "joiner $PIONEER_NAME = $addr"
     bal=$(ssh "$PRIMARY" "sudo ~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
     if [[ "${bal:-0}" -gt 0 ]] 2>/dev/null; then
         info "already funded ($bal aqdn) -- nothing to do"
@@ -218,10 +232,22 @@ fi
 
 # ---------------------------------------------------------------------------- 4. join
 if run_phase 4; then
-phase "4. join (block-sync)"
+if (( STATE_SYNC )); then
+    phase "4. join (STATE-SYNC)"
+    # add_full_node.sh enables statesync only when BOTH genesis-pioneer IPs are given: it reads the
+    # trust height and hash from the first, re-reads that exact height from the second, and refuses
+    # unless they match.  With two machines the primary is both -- the cross-check then proves only
+    # that the primary is self-consistent, which is the most a two-node topology can offer.
+    SECOND_IP_ARG=" --genesis-pioneer-second-ip-address $PRIMARY"
+else
+    phase "4. join (block-sync)"
+    SECOND_IP_ARG=""
+fi
 
-# ONE seed address: state-sync is only configured when a SECOND genesis-pioneer IP is given, and the
-# first join should exercise the ordinary path so a failure here is unambiguous.
+# WHICH SYNC IS CHOSEN BY THE NUMBER OF SEED ADDRESSES, not by a flag on add_full_node.sh: it turns
+# statesync on only when a SECOND genesis-pioneer IP is supplied AND both report the same trust
+# height and hash.  Block-sync is therefore the default here on purpose -- a first join should
+# exercise the ordinary path so a failure is unambiguous -- and --state-sync opts into the other.
 #
 # Driven under script(1) for a real PTY (trap 2).  The feeder answers 'c' first when the node is
 # already part-initialised -- the resume branch, which keeps the key that has already been funded;
@@ -246,9 +272,9 @@ FEED
 cat > /tmp/tnb_join.sh <<FEED
 #!/bin/zsh
 exec script -qec "/home/\$(whoami)/qadena/scripts/add_full_node.sh \
-  --pioneer pioneer2 \
+  --pioneer $PIONEER_NAME \
   --advertise-ip-address $JOINER \
-  --genesis-pioneer-first-ip-address $PRIMARY" /dev/null
+  --genesis-pioneer-first-ip-address $PRIMARY$SECOND_IP_ARG" /dev/null
 FEED
 scp -q /tmp/tnb_feed.sh /tmp/tnb_join.sh "$JOINER":/tmp/ || fail "cannot copy join drivers"
 ssh "$JOINER" 'chmod +x /tmp/tnb_feed.sh /tmp/tnb_join.sh'
