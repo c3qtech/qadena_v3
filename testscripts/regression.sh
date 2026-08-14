@@ -227,9 +227,16 @@ restore_tree_ownership() {
 
 summarize() {
     restore_tree_ownership
+
+    # TEE'D TO A FILE THAT ACCUMULATES.  The per-suite logs are OVERWRITTEN by the next run -- same
+    # filenames every time -- so a continuous loop leaves no history whatever: the only record of
+    # run N is whatever scrolled past on a terminal nobody was watching.  summary.log keeps one
+    # timestamped block per run, which is what you read to answer "has anything started failing?"
+    mkdir -p "$logdir"
+    {
     echo ""
     echo "======================================================================"
-    echo "REGRESSION SUMMARY"
+    echo "REGRESSION SUMMARY  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "======================================================================"
     local i=1
     while [ $i -le ${#names[@]} ]; do
@@ -264,6 +271,7 @@ summarize() {
     fi
     echo "======================================================================"
     echo "logs: $logdir"
+    } | tee -a "$logdir/summary.log"
 }
 
 # ---------------------------------------------------------------------------------------------
