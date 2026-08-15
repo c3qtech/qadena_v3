@@ -109,7 +109,7 @@ thing already covered elsewhere.
 
 ## 2. Bring up the two nodes
 
-There is a harness that encodes the traps: `testscripts/two_node_bringup.sh`. Read its header
+There is a harness that encodes the traps: `testscripts/nth_node_bringup.sh`. Read its header
 comment before doing anything by hand; every trap in it cost real time to find. Run
 `--help` for the phase list. It was written against SGX nodes: its phase 1 reads measurements with
 `ego uniqueid`, which does not exist on a debug build, so that check needs swapping for the
@@ -349,4 +349,4 @@ both were disproven by the next command.
   page size interacts with the 4 MiB gRPC limit on every hop.
 - `x/qadena/keeper/enclave_grpc_client.go` — `classifyEnclaveHeight` and the case table above
   `reconcileEnclaveHeight`. Case F is the state-sync case.
-- `testscripts/two_node_bringup.sh` — the harness, and its header comment listing the traps.
+- `testscripts/nth_node_bringup.sh` — the harness, and its header comment listing the traps.

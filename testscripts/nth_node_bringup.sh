@@ -1,11 +1,15 @@
 #!/bin/zsh
-# Bring a SECOND node onto an existing chain and prove the two agree.
+# Bring ANOTHER node onto an existing chain and prove the peers agree.
+#
+# Nothing here is specific to the second node.  It takes an existing --primary and a new --joiner,
+# so the same run adds a third or a fourth; only the pioneer name has to be fresh (--pioneer),
+# because add_full_node.sh refuses one the chain already knows.
 #
 # Run from a workstation with ssh access to both nodes.  It drives them over ssh rather than living
 # on either, because the interesting failures are cross-node and a script that runs on one of them
 # cannot see the other half.
 #
-#   ./two_node_bringup.sh --primary 192.168.86.120 --joiner 192.168.86.140
+#   ./nth_node_bringup.sh --primary 192.168.86.120 --joiner 192.168.86.140
 #
 # Phases are separately runnable (--from / --only) because the slow ones are very slow and the
 # whole point of writing this down is not repeating the parts that already passed.
@@ -60,8 +64,9 @@ VALIDATOR_STAKE="110000"
 FUND_QDN="200000"
 PIONEER_NAME="pioneer2"
 STATE_SYNC=0
+SEED2=""
 
-fail() { print -u2 "FAIL(two_node_bringup): $*"; exit 1 }
+fail() { print -u2 "FAIL(nth_node_bringup): $*"; exit 1 }
 info() { print "  $*" }
 phase() { print ""; print "======================================================================"; print ">>> $*"; print "======================================================================" }
 
@@ -74,9 +79,10 @@ while [[ $# -gt 0 ]]; do
         --stake)   VALIDATOR_STAKE="$2"; shift 2 ;;
         --pioneer) PIONEER_NAME="$2"; shift 2 ;;
         --state-sync) STATE_SYNC=1; shift ;;
+        --seed2)   SEED2="$2"; shift 2 ;;
         --help)
-            print "Usage: two_node_bringup.sh --primary <ip> --joiner <ip> [--from N] [--only N] [--stake qdn]"
-            print "                          [--pioneer <name>] [--state-sync]"
+            print "Usage: nth_node_bringup.sh --primary <ip> --joiner <ip> [--from N] [--only N] [--stake qdn]"
+            print "                          [--pioneer <name>] [--state-sync] [--seed2 <ip>]"
             print ""
             print "  --pioneer     the joiner's pioneer name (default pioneer2).  MUST BE UNUSED ON"
             print "                THE CHAIN: add_full_node.sh refuses a name already registered, so"
@@ -86,6 +92,12 @@ while [[ $# -gt 0 ]]; do
             print "                it on only when a SECOND genesis-pioneer IP is supplied and the"
             print "                two agree on the trust height and hash, so this passes the primary"
             print "                as both.  Needs the chain past height 1500."
+            print "  --seed2       the SECOND genesis-pioneer IP for the state-sync trust check."
+            print "                Defaults to the primary, which is all a two-node chain can"
+            print "                offer -- and which makes the cross-check prove only that the"
+            print "                primary agrees with itself.  Adding a THIRD node is what makes"
+            print "                it meaningful: pass an existing peer here and the trust height"
+            print "                and hash are then corroborated by an independent source."
             print ""
             print "  1 preflight      both reachable, measurements match genesis, primary healthy"
             print "  2 quiesce        stop continuous regression on the primary (it restarts the chain)"
@@ -138,6 +150,16 @@ repo_on() {
     done
     return 1
 }
+
+# JOINER_HOME -- the joiner's home directory, resolved AS THE LOGIN USER, once.
+#
+# `~` is safe when the OUTER remote shell expands it before sudo runs (ssh host "sudo ~/qadena/...")
+# and unsafe the moment it appears inside a shell that sudo itself starts
+# (sudo zsh -lc "cd ~/qadena/..."), because that one expands it as root and gets /root.  Both forms
+# appear in this script and only the second is wrong, which is exactly why the failure looks like a
+# broken install rather than a quoting bug.
+JOINER_HOME=$(ssh -o ConnectTimeout=10 "$JOINER" 'echo $HOME' 2>/dev/null | tr -d '\r')
+[[ -n "$JOINER_HOME" ]] || fail "cannot resolve the joiner's home directory on $JOINER"
 
 # ---------------------------------------------------------------------------- 1. preflight
 if run_phase 1; then
@@ -255,9 +277,16 @@ if (( STATE_SYNC )); then
     phase "4. join (STATE-SYNC)"
     # add_full_node.sh enables statesync only when BOTH genesis-pioneer IPs are given: it reads the
     # trust height and hash from the first, re-reads that exact height from the second, and refuses
-    # unless they match.  With two machines the primary is both -- the cross-check then proves only
-    # that the primary is self-consistent, which is the most a two-node topology can offer.
-    SECOND_IP_ARG=" --genesis-pioneer-second-ip-address $PRIMARY"
+    # unless they match.
+    #
+    # DEFAULTING SEED2 TO THE PRIMARY IS A DEGENERATE CROSS-CHECK -- it proves the primary agrees
+    # with itself, which is the most a two-node chain can offer and is worth naming rather than
+    # glossing.  From the third node onward, pass --seed2 <an existing peer>: the height and hash
+    # are then corroborated by a source that could actually disagree, which is the check the
+    # mechanism was designed for.
+    seed2="${SEED2:-$PRIMARY}"
+    [[ -n "$SEED2" ]] || info "no --seed2 given: using the primary for both trust sources (self-corroborating)"
+    SECOND_IP_ARG=" --genesis-pioneer-second-ip-address $seed2"
 else
     phase "4. join (block-sync)"
     SECOND_IP_ARG=""
@@ -293,8 +322,6 @@ FEED
 # yielding /home/root/qadena/scripts/add_full_node.sh, which does not exist.  The failure is one
 # line in a log on the other machine and looks like a bad install rather than a quoting bug.  This
 # is the same trap repo_on() documents; it just was not applied here.
-JOINER_HOME=$(ssh -o ConnectTimeout=10 "$JOINER" 'echo $HOME' | tr -d '\r')
-[[ -n "$JOINER_HOME" ]] || fail "cannot resolve the joiner's home directory"
 ssh "$JOINER" "test -x $JOINER_HOME/qadena/scripts/add_full_node.sh" \
     || fail "$JOINER_HOME/qadena/scripts/add_full_node.sh is missing -- install the release package first"
 
@@ -341,7 +368,7 @@ if run_phase 5; then
 phase "5. start the joiner and catch up"
 
 # Standalone, NOT from inside add_full_node.sh (trap 3).
-ssh "$JOINER" 'sudo zsh -lc "cd ~/qadena/scripts && ./start_qadena.sh"' > /dev/null 2>&1
+ssh "$JOINER" "sudo zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./start_qadena.sh'" > /dev/null 2>&1
 sleep 30
 jh=$(height "$JOINER")
 [[ -n "$jh" ]] || fail "joiner did not start; check ~/qadena/logs on $JOINER"
@@ -364,12 +391,12 @@ fi
 if run_phase 6; then
 phase "6. convert to validator and split the stake"
 
-ssh "$JOINER" "sudo zsh -lc 'cd ~/qadena/scripts && ./convert_to_validator.sh --validator-stake $VALIDATOR_STAKE'" 2>&1 | tail -5 | sed 's/^/  /'
+ssh "$JOINER" "sudo zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./convert_to_validator.sh --validator-stake $VALIDATOR_STAKE'" 2>&1 | tail -5 | sed 's/^/  /'
 sleep 20
 
 # setup_prerequisites splits the treasury delegation across ALL bonded validators, so it has to run
 # AFTER the joiner bonds or the split does not include it.
-info "re-running setup_prerequisites so the treasury delegation splits across both validators"
+info "re-running setup_prerequisites so the treasury delegation splits across the validators"
 prep_repo=$(repo_on "$PRIMARY") || fail "cannot locate the checkout on $PRIMARY"
 ssh "$PRIMARY" "sudo zsh -lc $(printf '%q' "cd $prep_repo && ./testscripts/setup_prerequisites.sh")" > /dev/null 2>&1 \
     || info "  (setup_prerequisites returned non-zero -- check manually)"
@@ -377,12 +404,12 @@ ssh "$PRIMARY" "sudo zsh -lc $(printf '%q' "cd $prep_repo && ./testscripts/setup
 info "voting power:"
 ssh "$PRIMARY" 'curl -s localhost:26657/validators | jq -r ".result.validators[] | \"  \(.address) \(.voting_power)\""' 2>/dev/null | sed 's/^/  /'
 
-# Neither node alone may reach 2/3, or "the peers disagree" can never be observed: one node would
+# NO validator may reach 2/3, or "the peers disagree" can never be observed: one node would
 # simply carry the chain regardless of the other.
 tot=$(ssh "$PRIMARY" 'curl -s localhost:26657/validators | jq -r "[.result.validators[].voting_power|tonumber]|add"' | tr -d '\r')
 mx=$(ssh "$PRIMARY" 'curl -s localhost:26657/validators | jq -r "[.result.validators[].voting_power|tonumber]|max"' | tr -d '\r')
 if [[ -n "$tot" && -n "$mx" ]] && (( mx * 3 >= tot * 2 )); then
-    info "WARNING: one validator holds $mx/$tot (>= 2/3).  A disagreement between the two nodes"
+    info "WARNING: one validator holds $mx/$tot (>= 2/3).  A disagreement between the nodes"
     info "         cannot be observed at this split -- re-run setup_prerequisites or delegate more."
 else
     info "no validator holds >= 2/3 ($mx of $tot) -- disagreement is observable"
