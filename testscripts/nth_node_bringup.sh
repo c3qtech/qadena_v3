@@ -439,21 +439,101 @@ phase "5. start the joiner and catch up"
 #
 # nohup does not save us: it redirects only when stdout is a TERMINAL, and over ssh without -t it is
 # a pipe, so restart_qadena.sh's `nohup ... &` still inherits this channel.
-ssh -n "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./start_qadena.sh' > /dev/null 2>&1 < /dev/null"
-sleep 30
-jh=$(height "$JOINER")
-[[ -n "$jh" ]] || fail "joiner did not start; check ~/qadena/logs on $JOINER"
-info "joiner started at height $jh"
+ssh -n "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./start_qadena.sh' > /dev/null 2>&1 < /dev/null" \
+    || fail "start_qadena.sh returned non-zero on $JOINER"
+info "start_qadena.sh returned (it backgrounds run.sh and exits; the node comes up behind it)"
 
-info "block-syncing (rebuilds every enclave-private table by executing each block; this is slow and correct)"
+# jlog <n> -- the last n lines of the joiner's node log, ANSI stripped, indented.  Every failure
+# below prints this, because 'check the logs on the other machine' is an instruction to do the
+# debugging again rather than a report of what went wrong.
+jlog() {
+    ssh "$JOINER" "L=\$(ls -t $JOINER_HOME/qadena/logs/qadena-*.log 2>/dev/null | head -1); \
+                   [[ -n \"\$L\" ]] && tail -${1:-25} \"\$L\"" 2>/dev/null \
+        | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^/      /'
+}
+
+# STAGE 1: the processes.  Distinguished from 'RPC not answering' because they fail for different
+# reasons -- a missing binary or a dead enclave here, a slow restore there.
+for i in {1..30}; do
+    np=$(ssh "$JOINER" 'pgrep -c qadenad 2>/dev/null || echo 0' | tr -d '\r')
+    [[ "${np:-0}" -ge 1 ]] && break
+    sleep 2
+done
+if [[ "${np:-0}" -lt 1 ]]; then
+    info "no qadenad process appeared.  Last log lines:"
+    jlog 30
+    fail "the node did not start on $JOINER"
+fi
+# Report the count, not an assumption about which.  The enclave comes up first and the node a
+# moment later, so "1" here is normal and "1 (qadenad + enclave)" was simply wrong.
+info "qadenad processes up: $np"
+
+# STAGE 2: the RPC.  A state-sync joiner can sit here for a while: it discovers snapshots, fetches
+# chunks and restores them BEFORE serving status, so an empty reply is normal early and alarming
+# late.  The old code slept 30s once and declared failure, which on a slow restore reported a
+# healthy node as dead.
+if (( STATE_SYNC )); then
+    info "waiting for RPC (state-sync: the node discovers a snapshot and restores it before serving)"
+else
+    info "waiting for RPC"
+fi
+jh=""
+for i in {1..60}; do
+    jh=$(height "$JOINER")
+    [[ -n "$jh" ]] && break
+    if (( i % 5 == 0 )); then
+        snap=$(ssh "$JOINER" "L=\$(ls -t $JOINER_HOME/qadena/logs/qadena-*.log 2>/dev/null | head -1); \
+                              [[ -n \"\$L\" ]] && grep -a 'snapshot\|Snapshot' \"\$L\" | tail -1" 2>/dev/null \
+               | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-120)
+        info "  ... no RPC yet (${i}0s)${snap:+ -- $snap}"
+    fi
+    sleep 10
+done
+if [[ -z "$jh" ]]; then
+    info "RPC never answered.  Last log lines:"
+    jlog 30
+    fail "joiner did not start serving RPC on $JOINER"
+fi
+info "joiner serving RPC at height $jh"
+
+# STAGE 3: catch-up.  Report the MODE honestly -- the old text said 'block-syncing ... by executing
+# each block', which is what state-sync exists to avoid, so a state-synced run narrated the wrong
+# mechanism at exactly the moment someone would be reading it to understand a stall.
+if (( STATE_SYNC )); then
+    info "catching up from the restored snapshot (enclave-private tables are SEEDED and IMPORTED, not replayed)"
+else
+    info "block-syncing (rebuilds every enclave-private table by executing each block; slow and correct)"
+fi
 for i in {1..480}; do
     cu=$(ssh "$JOINER" 'curl -s --max-time 5 localhost:26657/status 2>/dev/null | jq -r ".result.sync_info.catching_up"' | tr -d '\r')
     [[ "$cu" == "false" ]] && break
-    [[ $((i % 20)) -eq 0 ]] && info "  ... joiner $(height "$JOINER") / primary $(height "$PRIMARY")"
+    if (( i % 8 == 0 )); then
+        jn=$(height "$JOINER"); pn=$(height "$PRIMARY")
+        info "  ... joiner ${jn:-?} / primary ${pn:-?}${jn:+ (behind by $(( ${pn:-0} - ${jn:-0} )))}"
+    fi
     sleep 15
 done
-[[ "$cu" == "false" ]] || fail "joiner did not catch up within two hours"
+if [[ "$cu" != "false" ]]; then
+    info "still catching up after two hours.  Last log lines:"
+    jlog 30
+    fail "joiner did not catch up within two hours"
+fi
 info "caught up at $(height "$JOINER")"
+
+# EARLIEST HEIGHT IS THE PROOF OF WHICH PATH RAN.  A state-synced node starts its store at the
+# snapshot; a block-synced one has everything from 1.  Asserting it means --state-sync cannot
+# silently degrade to block-sync -- which it has done before, when the trust height was too low.
+eh=$(ssh "$JOINER" 'curl -s --max-time 5 localhost:26657/status 2>/dev/null | jq -r ".result.sync_info.earliest_block_height"' | tr -d '\r')
+info "earliest block on the joiner: ${eh:-?}"
+if (( STATE_SYNC )); then
+    if [[ "${eh:-1}" == "1" ]]; then
+        info "WARNING: earliest is 1, so this node BLOCK-SYNCED despite --state-sync."
+        info "         add_full_node.sh silently falls back when the trust height is <= 1500 or the"
+        info "         two seeds disagree.  The run is valid, but it did not test state-sync."
+    else
+        info "confirmed STATE-SYNCED: the store begins at the snapshot, not at genesis"
+    fi
+fi
 
 ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena enclave height" 2>/dev/null | sed 's/^/  /'
 fi
