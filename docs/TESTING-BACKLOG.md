@@ -694,3 +694,30 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     already held credentials, because the joiner was always wiped first.  That is also why
     it has not bitten -- and why it would, the first time anyone re-syncs rather than
     rebuilds.
+
+30. **Does an SGX node actually need root? Evidence says no, and nobody has tested it.**
+    `needs_root_if_real_enclave` (`scripts/setup_env.sh`) exits demanding sudo whenever the enclave
+    is a real one, and every runtime script gates on it -- so every SGX node anyone has run has been
+    started as root, and the assumption has never been re-examined.
+
+    It looks wrong. `ubuntu/setup_qadena_build.sh` adds the login user to the `sgx` and `sgx_prv`
+    groups, which own `/dev/sgx_enclave` and `/dev/sgx_provision` (`crw-rw---- root sgx` and
+    `crw-rw---- root sgx_prv`). Measured on .120: the login user is in both groups (108, 1001) and
+    `os.open()` succeeds on both devices. If `ego run` needs nothing else privileged, the node
+    should come up unprivileged.
+
+    The test: stop the node, `chown -R` $QADENAHOME to the login user, start WITHOUT sudo, and
+    confirm the enclave attests, the chain produces blocks, and `qadenad enclave store-hash` works
+    as the login user. If it does, `needs_root_if_real_enclave` should become a check that the user
+    can open the devices rather than a check that the user is root.
+
+    Why it is worth doing rather than leaving alone: running as root is the root cause of a
+    surprising amount of friction. It produced root-owned logs that `init.sh` then could not delete
+    without sudo, a root-owned `$QADENAHOME`, a root-owned `/tmp/start120.log` whose failed redirect
+    silently ate a run and served STALE output as if current, and the EPERM that made
+    enclave-rollback and enclave-crash look like a broken enclave (item fixed in 7688e6b5, but the
+    fix would be unnecessary). It also means every test that touches the enclave needs an elevation
+    path it should not need.
+
+    Note the fix in 7688e6b5 is deliberately ownership-based rather than SGX-based, so it keeps
+    working either way and does not have to be reverted if this test succeeds.
