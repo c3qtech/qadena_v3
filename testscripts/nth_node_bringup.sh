@@ -146,7 +146,7 @@ run_phase() { [[ -n "$ONLY" ]] && { [[ "$1" == "$ONLY" ]] && return 0 || return 
 # absolute path to the privileged command.
 repo_on() {
     local host="$1" p
-    for p in test/qadena_v3 qadena_v3 test/qv3; do
+    for p in test/qadena_v3 qadena_v3 test/qv3 qv3; do
         if ssh -o ConnectTimeout=10 "$host" "test -d \$HOME/$p" 2>/dev/null; then
             ssh -o ConnectTimeout=10 "$host" "echo \$HOME/$p" 2>/dev/null | tr -d '\r'
             return 0
