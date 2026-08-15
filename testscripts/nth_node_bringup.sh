@@ -430,7 +430,16 @@ if run_phase 5; then
 phase "5. start the joiner and catch up"
 
 # Standalone, NOT from inside add_full_node.sh (trap 3).
-ssh "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./start_qadena.sh'" > /dev/null 2>&1
+# REDIRECT ON THE REMOTE SIDE, INSIDE THE QUOTES.  This used to end with `> /dev/null 2>&1` outside
+# them, which only silences the ssh client here and leaves the node holding the ssh channel's
+# stdout and stderr on the other end.  ssh does not exit while ANY process still has that channel
+# open -- not merely the direct child -- so the node came up, synced normally, and this line blocked
+# forever.  The symptom is the worst kind: the joiner is visibly healthy while the harness looks
+# hung, so the natural conclusion is that the START failed, which is the one thing that did not.
+#
+# nohup does not save us: it redirects only when stdout is a TERMINAL, and over ssh without -t it is
+# a pipe, so restart_qadena.sh's `nohup ... &` still inherits this channel.
+ssh -n "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./start_qadena.sh' > /dev/null 2>&1 < /dev/null"
 sleep 30
 jh=$(height "$JOINER")
 [[ -n "$jh" ]] || fail "joiner did not start; check ~/qadena/logs on $JOINER"
