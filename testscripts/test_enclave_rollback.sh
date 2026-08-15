@@ -129,7 +129,7 @@ bal_before=$(pioneer_balance)
 # only thing that proves the ENCLAVE rolled back rather than merely moving its watermark.
 # GetStoreHash returns hashes of the nine mirror stores, never their contents, so it works on a
 # real SGX enclave too -- unlike export-private-state.
-hash_before=$(qadenad_alias enclave store-hash 2>/dev/null | sort)
+hash_before=$(as_enclave_owner "$qadenad_binary" --home "$QADENAHOME" enclave store-hash 2>/dev/null | sort)
 [ -n "$hash_before" ] || fail "cannot read the enclave's store hashes"
 
 # A CREATE-WALLET, not a bank send: it writes a Wallet into the ENCLAVE, which is the state
@@ -177,7 +177,7 @@ fi
 # a bank send moves wallet state, so the enclave's mirrors must have moved with it.  If they did
 # not, the comparison after the rollback would be vacuous -- it would "match" because nothing
 # ever changed, and the suite would pass without testing anything.
-hash_after=$(qadenad_alias enclave store-hash 2>/dev/null | sort)
+hash_after=$(as_enclave_owner "$qadenad_binary" --home "$QADENAHOME" enclave store-hash 2>/dev/null | sort)
 [ "$hash_after" != "$hash_before" ] || fail "the enclave's store hashes did not change across the transaction -- the post-rollback comparison would prove nothing"
 
 # ---- 2. roll chain and enclave back to the height before the tx ----
@@ -229,7 +229,7 @@ if [ "$peer_count" -eq 0 ]; then
     # and the ENCLAVE's state reverted with it -- the assertion this whole branch exists for.
     # Watermarks and balances could both look right while the enclave still held the
     # transaction's state; only the store hashes rule that out.
-    hash_now=$(qadenad_alias enclave store-hash 2>/dev/null | sort)
+    hash_now=$(as_enclave_owner "$qadenad_binary" --home "$QADENAHOME" enclave store-hash 2>/dev/null | sort)
     [ "$hash_now" = "$hash_before" ] || fail "the ENCLAVE did not roll back: its store hashes differ from before the transaction
 before: $hash_before
 now:    $hash_now"

@@ -130,6 +130,55 @@ needs_root_if_real_enclave() {
   fi
 }
 
+# as_enclave_owner <command...> -- run one command as whoever owns the enclave.
+#
+# The counterpart to needs_root_if_real_enclave, for callers that must NOT themselves become root.
+# The test suites run as the login user and need to keep doing so: they write logs and use the
+# keyring under $QADENAHOME, and running the whole suite as root would leave root-owned files
+# behind for the next unprivileged run to trip over.
+#
+# But on SGX the enclave PROCESS and its unix socket belong to root, because `ego run` needs
+# /dev/sgx_enclave.  So a suite that signals the enclave or talks to it gets EPERM:
+#
+#     kill 3152561 failed: operation not permitted
+#     dial unix /tmp/qadena_50051.sock: connect: permission denied
+#
+# and reports "cannot SIGSTOP the enclave" or "cannot read the enclave's store hashes" -- both of
+# which read as a BROKEN ENCLAVE rather than a permission boundary.  That cost a real diagnosis:
+# enclave-rollback and enclave-crash both failed within two seconds on a healthy SGX node, which
+# looks exactly like the regression those suites exist to catch.
+#
+# On a debug node the enclave runs unprivileged and this is a no-op, which is why the predicate is
+# use_real_enclave rather than "am I on SGX hardware" -- a debug enclave on SGX hardware needs no
+# sudo, and asking for it would prompt for a password in a suite that must not block.
+# THE PREDICATE IS OWNERSHIP, not "is this a real enclave", and the difference matters in both
+# directions.  A real SGX enclave does NOT inherently need root: setup_qadena_build.sh adds the
+# login user to the sgx and sgx_prv groups, and a node started unprivileged then owns its own
+# socket, where elevating would be pointless.  Equally, a node someone started with sudo needs it
+# whether or not SGX is involved.  Asking who actually owns the process answers both without
+# assuming a deployment style.
+#
+# sudo -n, not plain sudo: a suite that stops on an invisible password prompt looks like a hang, and
+# these run unattended from run_regression_continually.sh.  Failing immediately with "a password is
+# required" is a diagnosable message; blocking forever is not.
+#
+# The bracket classes in the patterns are not decoration -- see the pkill warning in
+# nth_node_bringup.sh.  A plain `pgrep -f qadenad_enclave` matches the shell running this very
+# function when the suite was invoked over ssh.
+as_enclave_owner() {
+  local pid owner
+  pid=$(pgrep -f "ego-host.*qadenad_enclav[e]" 2>/dev/null | head -1)
+  [[ -n "$pid" ]] || pid=$(pgrep -f "qadenad_enclav[e] --home" 2>/dev/null | head -1)
+  if [[ -n "$pid" ]]; then
+      owner=$(ps -o user= -p "$pid" 2>/dev/null | tr -d ' ')
+      if [[ -n "$owner" && "$owner" != "$(id -un)" ]]; then
+          sudo -n "$@"
+          return $?
+      fi
+  fi
+  "$@"
+}
+
 # confirm_tx <hash> [seconds] -- did this transaction land, and did it succeed?
 #
 # `query wait-tx` alone is NOT a reliable answer.  It SUBSCRIBES to a websocket event, so a

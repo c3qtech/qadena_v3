@@ -44,7 +44,7 @@ fi
 [ -n "$enclave_pid" ] || fail "cannot find the enclave process"
 
 echo "stalling enclave pid $enclave_pid at chain height $h0"
-kill -STOP "$enclave_pid" || fail "cannot SIGSTOP the enclave"
+as_enclave_owner kill -STOP "$enclave_pid" || fail "cannot SIGSTOP the enclave"
 
 # ---- 1. the node must stop COMMITTING -- which is not the same as the process exiting ----
 #
@@ -85,7 +85,7 @@ if [ -f "$logfile" ]; then
 fi
 echo "chain halted at $h_final ($advanced block(s) after the stall began), with haltOnEnclaveFailure in the log"
 
-kill -CONT "$enclave_pid" 2>/dev/null || true
+as_enclave_owner kill -CONT "$enclave_pid" 2>/dev/null || true
 
 # ---- 2. recovery: restart everything, reconciliation sorts the watermarks out ----
 "$qadenascripts/stop_qadena.sh" --all > /dev/null 2>&1 || true
