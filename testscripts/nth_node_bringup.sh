@@ -47,7 +47,11 @@
 #      verifyRemoteReport -- and the error names the measurement, not the cause.  Install the
 #      joiner from a package BUILT ON THE PRIMARY.  This script refuses to proceed otherwise.
 #
-#   7. ROOT IS REQUIRED for anything touching the enclave: /tmp/qadena_50051.sock is root-owned.
+#   7. ROOT IS REQUIRED ONLY ON SGX.  The enclave needs privilege to open /dev/sgx_enclave; a DEBUG
+#      enclave has no device and runs as the login user.  The root-owned /tmp/qadena_50051.sock that
+#      used to justify sudo everywhere is a CONSEQUENCE of having started the enclave as root, not a
+#      cause -- and it is expensive, because every file the node then creates is root-owned, so the
+#      tree cannot be removed or reinstalled without sudo either.  sudo_for() decides per host.
 #
 #   8. THE NODE SCRIPTS ARE ZSH, and qadenad_alias is a zsh ALIAS.  Running them under `bash -lc`
 #      yields "qadenad_alias: command not found".  (`bash -lc` is the fix for a different problem --
@@ -161,15 +165,47 @@ repo_on() {
 JOINER_HOME=$(ssh -o ConnectTimeout=10 "$JOINER" 'echo $HOME' 2>/dev/null | tr -d '\r')
 [[ -n "$JOINER_HOME" ]] || fail "cannot resolve the joiner's home directory on $JOINER"
 
+# sudo_for <host> -- "sudo " when that host genuinely needs root, empty otherwise.
+#
+# ROOT IS AN SGX REQUIREMENT, NOT A QADENA ONE.  The enclave needs privilege to open
+# /dev/sgx_enclave; a DEBUG enclave has no device to open, and runs perfectly as the login user --
+# verified on this pair, where the node, the enclave and /tmp/qadena_50051.sock are all owned by
+# alvillarica and the chain syncs normally.
+#
+# Using sudo anyway is not merely unnecessary, it is ACTIVELY HARMFUL: every file the node creates
+# is then owned by root, so the install can only be removed by root, `rm -rf ~/qadena` as the login
+# user fails on every entry, and the next install refuses because it cannot overwrite what is
+# already there.  That sequence cost a full wipe-and-reinstall cycle today.
+#
+# The socket being root-owned -- the reason this script gave for requiring sudo everywhere -- is a
+# CONSEQUENCE of having started the enclave as root, not a cause.
+sudo_for() {
+    local host="$1"
+    if ssh -o ConnectTimeout=10 "$host" 'test -e /dev/sgx_enclave || test -e /dev/isgx' 2>/dev/null; then
+        print "sudo "
+    else
+        print ""
+    fi
+}
+SUDO_P=$(sudo_for "$PRIMARY")
+SUDO_J=$(sudo_for "$JOINER")
+[[ -n "$SUDO_P" ]] || info "primary has no SGX device: running unprivileged"
+[[ -n "$SUDO_J" ]] || info "joiner has no SGX device: running unprivileged"
+
 # ---------------------------------------------------------------------------- 1. preflight
 if run_phase 1; then
 phase "1. preflight"
 
 for h in "$PRIMARY" "$JOINER"; do
     ssh -o ConnectTimeout=10 -o BatchMode=yes "$h" true 2>/dev/null || fail "cannot ssh to $h"
-    ssh "$h" 'sudo -n true' 2>/dev/null || fail "$h needs passwordless sudo (trap 7: the enclave socket is root-owned)"
 done
-info "both nodes reachable with passwordless sudo"
+for h in "$PRIMARY" "$JOINER"; do
+    # Only an SGX host needs it; a debug node runs as the login user.
+    if ssh "$h" 'test -e /dev/sgx_enclave || test -e /dev/isgx' 2>/dev/null; then
+        ssh "$h" 'sudo -n true' 2>/dev/null || fail "$h has SGX and therefore needs passwordless sudo (the enclave opens /dev/sgx_enclave)"
+    fi
+done
+info "both nodes reachable"
 
 PH=$(height "$PRIMARY")
 [[ -n "$PH" ]] || fail "primary $PRIMARY is not answering on 26657 -- start it before joining"
@@ -188,10 +224,11 @@ info "primary at height $PH"
 # statement about the wrong thing.
 uid_of() {
     local h="$1" out
-    out=$(ssh "$h" 'sudo ego uniqueid ~/qadena/bin/qadenad_enclave 2>/dev/null' | tr -d '\r')
+    local sp; sp=$(sudo_for "$h")
+    out=$(ssh "$h" "${sp}ego uniqueid ~/qadena/bin/qadenad_enclave 2>/dev/null" | tr -d '\r')
     [[ "$out" =~ ^[0-9a-f]{64}$ ]] && { printf "%s" "$out"; return 0 }
     # debug path: the binary prints its embedded id.  -unique-id is qadenad_enclave's spelling.
-    out=$(ssh "$h" 'sudo ~/qadena/bin/qadenad_enclave -unique-id 2>/dev/null | tail -1' | tr -d '\r')
+    out=$(ssh "$h" "${sp}~/qadena/bin/qadenad_enclave -unique-id 2>/dev/null | tail -1" | tr -d '\r')
     [[ -n "$out" && "$out" != *[[:space:]]* ]] && { printf "%s" "$out"; return 0 }
     return 1
 }
@@ -221,7 +258,7 @@ phase "2. quiesce the primary"
 loop_pids=$(ssh "$PRIMARY" 'pgrep -f "[r]un_regression_continually" 2>/dev/null' | tr '\n' ' ')
 if [[ -n "${loop_pids// /}" ]]; then
     info "stopping continuous regression (pids: $loop_pids)"
-    for p in ${=loop_pids}; do ssh "$PRIMARY" "sudo kill $p" 2>/dev/null; done
+    for p in ${=loop_pids}; do ssh "$PRIMARY" "${SUDO_P}kill $p" 2>/dev/null; done
     sleep 3
 else
     info "continuous regression not running"
@@ -249,22 +286,22 @@ phase "3. fund the joiner's pioneer key"
 # The joiner mints its key during the join, so on a FIRST run there is nothing to fund yet.  This
 # phase is therefore a no-op the first time and does the work on the re-run -- which is why phase 4
 # tolerates an unfunded start and phase 3 can be re-run after it.
-addr=$(ssh "$JOINER" "sudo ~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+addr=$(ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
 if [[ ! "$addr" =~ ^qadena1 ]]; then
     info "joiner has no $PIONEER_NAME key yet -- run phase 4 first, then re-run --only 3"
 else
     info "joiner $PIONEER_NAME = $addr"
-    bal=$(ssh "$PRIMARY" "sudo ~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
+    bal=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
     if [[ "${bal:-0}" -gt 0 ]] 2>/dev/null; then
         info "already funded ($bal aqdn) -- nothing to do"
     else
         chainid=$(ssh "$PRIMARY" 'curl -s localhost:26657/status | jq -r ".result.node_info.network"' | tr -d '\r')
         amt="${FUND_QDN}000000000000000000"
         info "sending ${FUND_QDN}qdn from treasury on chain $chainid"
-        ssh "$PRIMARY" "sudo ~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $addr ${amt}aqdn --keyring-backend test --chain-id $chainid --gas auto --gas-adjustment 1.5 --gas-prices 0.025aqdn --yes --output json" > /dev/null 2>&1 \
+        ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $addr ${amt}aqdn --keyring-backend test --chain-id $chainid --gas auto --gas-adjustment 1.5 --gas-prices 0.025aqdn --yes --output json" > /dev/null 2>&1 \
             || fail "funding transfer failed"
         sleep 12
-        bal=$(ssh "$PRIMARY" "sudo ~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
+        bal=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
         [[ "${bal:-0}" -gt 0 ]] 2>/dev/null || fail "funding did not land"
         info "funded: $bal aqdn"
     fi
@@ -336,7 +373,7 @@ scp -q /tmp/tnb_feed.sh /tmp/tnb_join.sh "$JOINER":/tmp/ || fail "cannot copy jo
 ssh "$JOINER" 'chmod +x /tmp/tnb_feed.sh /tmp/tnb_join.sh'
 
 info "driving add_full_node.sh (PTY); this mints the key, fetches genesis and runs sync-enclave"
-ssh "$JOINER" 'rm -f /tmp/tnb_join.log; sudo nohup setsid zsh -c "/tmp/tnb_feed.sh | /tmp/tnb_join.sh" > /tmp/tnb_join.log 2>&1 & echo started' > /dev/null
+ssh "$JOINER" "rm -f /tmp/tnb_join.log; ${SUDO_J}nohup setsid zsh -c '/tmp/tnb_feed.sh | /tmp/tnb_join.sh' > /tmp/tnb_join.log 2>&1 & echo started" > /dev/null
 
 for i in {1..60}; do
     if ssh "$JOINER" 'grep -aq "SyncEnclave SUCCEEDED" /tmp/tnb_join.log' 2>/dev/null; then
@@ -353,13 +390,13 @@ ssh "$JOINER" 'grep -aq "SyncEnclave SUCCEEDED" /tmp/tnb_join.log' 2>/dev/null \
 
 # Params must be on disk BEFORE the node executes a block -- that is the whole reason a block-sync
 # joiner works at all.
-ssh "$JOINER" 'sudo ls ~/qadena/enclave_config/enclave_params_*.json' > /dev/null 2>&1 \
+ssh "$JOINER" "${SUDO_J}ls ~/qadena/enclave_config/enclave_params_*.json" > /dev/null 2>&1 \
     || fail "sync-enclave reported success but wrote no enclave_params file"
 info "enclave params persisted"
 
 # Leave nothing holding a PTY open.  By PID (trap 1).
 for p in $(ssh "$JOINER" 'pgrep -f "[t]nb_feed|[t]nb_join|[a]dd_full_node" 2>/dev/null'); do
-    ssh "$JOINER" "sudo kill -9 $p" 2>/dev/null
+    ssh "$JOINER" "${SUDO_J}kill -9 $p" 2>/dev/null
 done
 fi
 
@@ -368,7 +405,7 @@ if run_phase 5; then
 phase "5. start the joiner and catch up"
 
 # Standalone, NOT from inside add_full_node.sh (trap 3).
-ssh "$JOINER" "sudo zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./start_qadena.sh'" > /dev/null 2>&1
+ssh "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./start_qadena.sh'" > /dev/null 2>&1
 sleep 30
 jh=$(height "$JOINER")
 [[ -n "$jh" ]] || fail "joiner did not start; check ~/qadena/logs on $JOINER"
@@ -384,21 +421,21 @@ done
 [[ "$cu" == "false" ]] || fail "joiner did not catch up within two hours"
 info "caught up at $(height "$JOINER")"
 
-ssh "$JOINER" 'sudo ~/qadena/bin/qadenad --home ~/qadena enclave height' 2>/dev/null | sed 's/^/  /'
+ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena enclave height" 2>/dev/null | sed 's/^/  /'
 fi
 
 # ---------------------------------------------------------------------------- 6. validator
 if run_phase 6; then
 phase "6. convert to validator and split the stake"
 
-ssh "$JOINER" "sudo zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./convert_to_validator.sh --validator-stake $VALIDATOR_STAKE'" 2>&1 | tail -5 | sed 's/^/  /'
+ssh "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./convert_to_validator.sh --validator-stake $VALIDATOR_STAKE'" 2>&1 | tail -5 | sed 's/^/  /'
 sleep 20
 
 # setup_prerequisites splits the treasury delegation across ALL bonded validators, so it has to run
 # AFTER the joiner bonds or the split does not include it.
 info "re-running setup_prerequisites so the treasury delegation splits across the validators"
 prep_repo=$(repo_on "$PRIMARY") || fail "cannot locate the checkout on $PRIMARY"
-ssh "$PRIMARY" "sudo zsh -lc $(printf '%q' "cd $prep_repo && ./testscripts/setup_prerequisites.sh")" > /dev/null 2>&1 \
+ssh "$PRIMARY" "${SUDO_P}zsh -lc $(printf '%q' "cd $prep_repo && ./testscripts/setup_prerequisites.sh")" > /dev/null 2>&1 \
     || info "  (setup_prerequisites returned non-zero -- check manually)"
 
 info "voting power:"
@@ -427,7 +464,7 @@ repo=$(repo_on "$PRIMARY") || fail "cannot locate the checkout on $PRIMARY"
 # Capture the status of the SSH, not of the last element of a pipeline.  `cmd | tail | sed; rc=$?`
 # reports sed's status -- which is always 0 -- so the suite announces success no matter what
 # happened.  A harness that passes while testing nothing is worse than no harness.
-out=$(ssh "$PRIMARY" "sudo zsh -lc $(printf '%q' "cd $repo && ./testscripts/test_peer_agreement.sh")" 2>&1)
+out=$(ssh "$PRIMARY" "${SUDO_P}zsh -lc $(printf '%q' "cd $repo && ./testscripts/test_peer_agreement.sh")" 2>&1)
 rc=$?
 print -r -- "$out" | tail -20 | sed 's/^/  /'
 
