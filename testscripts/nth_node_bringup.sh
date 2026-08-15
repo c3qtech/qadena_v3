@@ -340,19 +340,44 @@ fi
 # node ourselves in phase 5 (trap 3).
 cat > /tmp/tnb_feed.sh <<'FEED'
 #!/bin/zsh
-# 'c' resumes a part-initialised node and keeps the funded key; 'y' covers the fresh path.
-# Both are sent because which prompt appears depends on prior state, and the wrong one merely
-# re-prompts.  The final 'n' declines the in-script node start on purpose.
-print c
-sleep 3
-print y
-sleep 3
-print y
-sleep 3
-print y
-sleep 3
-print n
-sleep 600
+# PROMPT-DRIVEN, not timed.  This used to print c/y/y/y/n on three-second intervals and hope each
+# landed on the right question.  It does not: the funding prompt polls for the balance for up to six
+# minutes, so every answer had been written and echoed long before the LAST prompt appeared, and the
+# final 'n' -- the one trap 3 exists to deliver -- was consumed by something else.  The node then
+# started itself, several process layers under a PTY that exits moments later, which is precisely
+# the failure trap 3 documents.
+#
+# So: watch the transcript, answer each prompt ONCE, when it actually appears.
+LOG=/tmp/tnb_join.log
+proceed=0 fork=0 final=0 funds=0 start=0
+
+for i in {1..2400}; do
+    [[ -f $LOG ]] || { sleep 1; continue }
+    if (( ! proceed )) && grep -aq "Proceed? (y/n)" $LOG; then
+        print y; proceed=1; sleep 2; continue
+    fi
+    # 'c' resumes a part-initialised node and KEEPS its already-funded key; 's' would erase and mint
+    # a new one, stranding the funds.  Only one of the two spellings appears, depending on how far a
+    # previous attempt got.
+    if (( ! fork )) && grep -aqE "\[c\]ontinue" $LOG; then
+        print c; fork=1; sleep 2; continue
+    fi
+    if (( ! fork )) && grep -aqE "\[s\]tart from scratch" $LOG; then
+        print s; fork=1; sleep 2; continue
+    fi
+    if (( ! final )) && grep -aq "Are you really sure" $LOG; then
+        print y; final=1; sleep 2; continue
+    fi
+    if (( ! funds )) && grep -aq "Are you done sending funds" $LOG; then
+        print y; funds=1; sleep 2; continue
+    fi
+    # THE ONE THAT MATTERS: decline the in-script start, so phase 5 starts it standalone.
+    if (( ! start )) && grep -aq "start the new qadena" $LOG; then
+        print n; start=1; sleep 5; break
+    fi
+    sleep 1
+done
+sleep 30
 FEED
 # RESOLVE THE HOME DIRECTORY UNPRIVILEGED, then bake the absolute path in.  Writing
 # /home/$(whoami) inside the script evaluates it ON THE JOINER, UNDER SUDO, where whoami is root --
