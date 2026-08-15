@@ -4,22 +4,29 @@
 #
 # WHY THE FLOOR EXISTS, and why it is a backstop rather than a scheduled death.
 #
-# A run costs the treasury more than it destroys.  Measured across consecutive runs on the two-node
-# testnet with every suite passing:
+# A RUN CONSUMES GAS, essentially and by design.  Everything else it moves comes back.
 #
-#     treasury spent per run              7,007,732 qdn
-#     recovered by regression.sh's reclaim 3,200,116 qdn
+# reclaim_funds() in regression.sh sweeps both halves, in one pass and in the right order: it
+# UNSHIELDS FIRST -- draining any stranded queue entries, then moving each account's encrypted
+# surplus out through an ephemeral wallet (ann-eph2, victor-eph1) -- and only then sweeps the
+# transparent balances into the treasury.  Doing it in that order is what stops the unshielded funds
+# sitting a run behind the sweep that is supposed to collect them.
 #
-# The rest is not destroyed either.  It has crossed from a transparent balance into ann's ENCRYPTED
-# one, via the [from-transparent-amount] slot of transfer-funds in test_suspicious.sh, and
-# reclaim_funds() does not yet bring it back -- see the note there.  It CAN be brought back:
-# receive-funds takes a [to-transparent-amount], which converts a collected transfer into transparent
-# balance, and case 10 of test_transfers.sh asserts exactly that round trip.
+# What a run therefore costs the treasury is gas, plus the deliberately small reserves left behind:
+# a 1000 qdn float per account so the next run has something to pay gas with, and whatever sits
+# under a suite's own assertion thresholds.  It is not a per-run drain of millions.
 #
-# An earlier version of this comment said the opposite -- that nothing unshields an encrypted balance,
-# that ~4.5 million qdn a run left the pool for good, and that a 2 billion qdn treasury was therefore
-# good for about 500 runs before only --from-genesis could recover it.  That was wrong.  Nothing here
-# has to end after four days; the drain is a gap in the reclaim, not a property of the chain.
+# THE FIGURES THAT USED TO BE HERE -- 7,007,732 qdn spent per run against 3,200,116 reclaimed -- WERE
+# MEASURED BEFORE THE UNSHIELD EXISTED, when reclaim_funds() moved transparent balance only and the
+# remainder stayed in ann's encrypted balance.  They no longer describe this loop, and quoting them
+# makes the suite look far more expensive than it is.  Anyone who wants a current number should
+# measure one rather than trust a figure from a different implementation; that is why none is quoted
+# here now.
+#
+# (An older version of the comment was wrong in the other direction as well, claiming an encrypted
+# balance could never be unshielded and that a 2 billion qdn treasury was good for ~500 runs before
+# only --from-genesis could recover it.  Both readings were an artefact of a reclaim gap that has
+# since been closed, not a property of the chain.)
 #
 # The floor stays regardless, because a treasury that DOES run down takes every suite with it at
 # once, and a wall of failures on insufficient funds reads as a catastrophic regression rather than
@@ -46,8 +53,11 @@ function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 max_runs=0
 pause=0
-# Roughly seven runs of headroom, so the loop stops while the chain can still comfortably pay for
-# the runs it has already started rather than part way through one.
+# A floor with a lot of headroom, deliberately.  It used to be justified as "roughly seven runs",
+# which was 50000000 divided by a per-run cost that no longer applies now that reclaim_funds()
+# unshields -- see the header.  Against gas alone this is very many runs, and that is fine: the
+# floor is a backstop against an unnoticed reclaim regression, not a budget.  Its job is to stop the
+# loop while the chain can still comfortably pay, so keep it generous rather than tuned.
 floor_qdn=50000000
 
 while [[ $# -gt 0 ]]; do

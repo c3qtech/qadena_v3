@@ -703,23 +703,23 @@ replenish_funds() {
 
 # RETURN WHAT THE SUITES BORROWED, so the treasury survives being run against repeatedly.
 #
-# A run costs the treasury far more than it destroys.  Measured over three consecutive runs on the
-# two-node testnet: 9,407,832qdn drawn on a run that funded everything, 7,007,732qdn on one that did
-# not need the evm top-up.  Almost all of it is still on the chain afterwards -- it has just moved
-# into the accounts the suites transact with, and nothing was giving it back.  At that rate a
-# 2,000,000,000qdn genesis treasury funds about 207 runs, which is a day and a half of running the
-# suite back to back, and then every suite starts failing on insufficient funds at once.
+# A run DRAWS far more from the treasury than it consumes, and this function is what closes the gap.
+# What a run actually consumes is gas; the millions it draws move into the accounts the suites
+# transact with and come back here.  Measured over three consecutive runs on the two-node testnet:
+# 9,407,832qdn drawn on a run that funded everything, 7,007,732qdn on one that did not need the evm
+# top-up.  Almost all of that is still on the chain when the run ends -- the question was only
+# whether anything went and got it.
 #
 # Two of the three big draws are already guarded ("top up al if short"), so they stop firing the
-# moment al is solvent again.  Reclaiming is therefore enough on its own: put the transparent
-# balance back and the guards go quiet.
+# moment al is solvent again.  Reclaiming is therefore enough on its own: put the balance back and
+# the guards go quiet.
 #
-# WHAT THIS DOES NOT YET RECOVER -- and it is a gap in this function, not a property of the chain.
-#
-# transfer-funds takes [from-encrypted-amount] [from-transparent-amount], and the large transfers in
-# test_suspicious.sh spend the TRANSPARENT side to credit the recipient's ENCRYPTED balance.  This
-# sweep only moves transparent balance, so what crossed over stays with ann and the transparent pool
-# still shrinks by roughly 2.4 million qdn a run.
+# WHY IT UNSHIELDS BEFORE IT SWEEPS.  transfer-funds takes [from-encrypted-amount]
+# [from-transparent-amount], and the large transfers in test_suspicious.sh spend the TRANSPARENT side
+# to credit the recipient's ENCRYPTED balance.  A sweep that moved transparent balance ONLY would
+# leave everything that crossed over sitting with ann, and the transparent pool would still shrink by
+# roughly 2.4 million qdn a run -- which is exactly what this function did until it learned to
+# unshield, and why the numbers above were once read as a per-run drain.
 #
 # So it UNSHIELDS FIRST, then sweeps.  receive-funds takes [to-transparent-amount], so collecting a
 # transfer with an amount rather than the 0qdn every other caller passes brings the funds back out as
@@ -729,7 +729,7 @@ replenish_funds() {
 # service without checking what receive-funds' second argument does, and it is why this function
 # spent so long walking past most of the money.
 #
-# WHAT IT WAS WALKING PAST, measured on the rebuilt chain after two runs: ann held 4,750,750qdn and
+# WHAT IT USED TO WALK PAST, measured on the rebuilt chain after two runs: ann held 4,750,750qdn and
 # victor 3,860,500qdn encrypted, 8.6 million between them, against a transparent sweep that recovered
 # 3.2 million.  victor is the sharper case -- the sweep looked at its 500qdn transparent balance,
 # found it under the float, and logged "nothing to reclaim" while it sat on 3.8 million.
