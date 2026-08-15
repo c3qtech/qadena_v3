@@ -55,6 +55,8 @@ fi
 
 ADVERTISE_IP_ADDRESS=""
 PIONEER=""
+STOP_FOR_FUNDING=""
+TEST_NET=""
 GENESIS_PIONEER_FIRST_IP_ADDRESS=""
 GENESIS_PIONEER_SECOND_IP_ADDRESS=""
 
@@ -96,10 +98,30 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ;;
+    --stop-for-funding)
+      STOP_FOR_FUNDING="true"
+      shift
+      ;;
+    --test-net)
+      TEST_NET="true"
+      shift
+      ;;
     --help)
       echo "Usage: add_full_node.sh --pioneer <pioneer> --advertise-ip-address <advertise-ip-address> --genesis-pioneer-first-ip-address <genesis-pioneer-first-ip-address> [optional: --genesis-pioneer-second-ip-address <genesis-pioneer-second-ip-address>]"
 	  echo "Example 1 (adding the second node):  add_full_node.sh --pioneer pioneer2 --advertise-ip-address 192.168.86.133 --genesis-pioneer-first-ip-address 192.168.86.109"
 	  echo "Example 2 (adding the 3rd node):  add_full_node.sh --pioneer pioneer3 --advertise-ip-address 192.168.86.140 --genesis-pioneer-first-ip-address 192.168.86.109 --genesis-pioneer-second-ip-address 192.168.86.133"
+	  echo ""
+	  echo "  --stop-for-funding   Mint the pioneer key, print its address, and EXIT instead of"
+	  echo "                       waiting for the balance.  Re-run without the flag once the funds"
+	  echo "                       have arrived and answer [c] to continue, which keeps the key."
+	  echo "                       Use this when funding is not something you can do within minutes"
+	  echo "                       -- which on the testnet it is not, since the instructions above"
+	  echo "                       are to EMAIL for coins while the wait below lasts six minutes."
+	  echo "  --test-net           Print the ACTUAL command that funds this node, to run on a"
+	  echo "                       validator, instead of the email-us instructions.  On a test"
+	  echo "                       network whoever is standing this node up also holds the"
+	  echo "                       treasury key, so the useful output is a command, not an"
+	  echo "                       address and an address to write to."
       exit 0
       ;;      
     *)
@@ -507,6 +529,21 @@ echo "This node is *almost* a Qadena 'full-node'"
 #echo "  For validator node:"
 #echo "    ~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $PIONEERADDRESS ${VALIDATOR}qdn --yes --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment"
 #echo ""
+# ON A TEST NETWORK THE INSTRUCTION SHOULD BE A COMMAND.  The email-and-wait text below describes
+# a public testnet where someone else holds the treasury; on a private one -- which is every
+# development and CI network -- the person running this script can fund it themselves in one line.
+# These lines existed here commented out, which helped nobody: the reader still had to reconstruct
+# the flags.
+if [[ "$TEST_NET" == "true" ]] ; then
+	echo "Run ONE of these on a validator (it holds the treasury key):"
+	echo ""
+	echo "  full node:"
+	echo "    ~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $PIONEERADDRESS ${FULL}qdn --yes --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment"
+	echo ""
+	echo "  validator node:"
+	echo "    ~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $PIONEERADDRESS ${VALIDATOR}qdn --yes --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment"
+	echo ""
+else
 echo "(TESTNET) Please send an email to qadenatestnet@c3qtech.com with the subject 'Qadena Testnet Full Node'"
 echo "(TESTNET) and include the Pioneer name, the Pioneer address ($PIONEERADDRESS), the Pioneer public IP address of the node."
 echo "(TESTNET) If you're going to run a full-node, request for ${FULL}qdn to be sent to $PIONEERADDRESS."
@@ -514,6 +551,26 @@ echo "(TESTNET) If you're going to run a validator node, request for ${VALIDATOR
 echo ""
 echo "(PRODUCTION) Full Node:  Please purchase and send at least ${FULL}qdn to $PIONEERADDRESS"
 echo "(PRODUCTION) Validator Node:  Please purchase and send at least ${VALIDATOR}qdn to $PIONEERADDRESS"
+fi
+# STOP HERE RATHER THAN WAIT, if asked.  The key exists and is on record from this point on, so
+# there is nothing to lose by exiting: re-running and answering [c] resumes from exactly here and
+# KEEPS this key.  Without this, the only way past this point is to have the coins land inside the
+# 120x3s window below -- which cannot serve the process described immediately above, where the
+# testnet instruction is to email someone and wait.  It also makes the step scriptable: a caller can
+# mint the key, fund it, and come back, instead of racing a poll from a second shell.
+if [[ "$STOP_FOR_FUNDING" == "true" ]] ; then
+	echo ""
+	echo "add_full_node.sh: stopping for funding, as requested."
+	echo "  pioneer:  $PIONEER"
+	echo "  address:  $PIONEERADDRESS"
+	echo "  needs:    ${FULL}qdn (full node) or ${VALIDATOR}qdn (validator)"
+	echo ""
+	echo "The key is minted and kept.  When the funds have arrived, run the SAME command without"
+	echo "--stop-for-funding and answer [c] to continue -- answering [s] would erase this key and"
+	echo "mint a new one, stranding whatever was sent to the address above."
+	exit 0
+fi
+
 REPLY=""
 while [[ $REPLY != "y" && $REPLY != "n" ]]; do
 	read REPLY\?"Are you done sending funds to $PIONEERADDRESS ? (y/n) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
