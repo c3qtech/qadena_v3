@@ -1,0 +1,406 @@
+#!/bin/zsh
+# Prepare a node's MACHINE: stop it, update its checkout, build, install, init genesis, package.
+#
+# The companion to nth_node_bringup.sh, which adds a node to a chain that already exists.  Nothing
+# creates the FIRST node, and nothing refreshes a machine onto a newer commit -- both were done by
+# hand every time, and the hand-run is where the traps below live.
+#
+# Run from a workstation with ssh access to the target.  Like nth_node_bringup.sh it drives the
+# machine over ssh rather than living on it, so a run is reproducible from one place and the
+# commands are visible in one transcript.
+#
+#   ./1st_node_bringup.sh --primary 192.168.86.120 --build-sgx
+#
+# Phases are separately runnable (--from/--until/--only): the build is ~24 minutes and there is no
+# reason to repeat it to redo a start.
+#
+# ---------------------------------------------------------------------------------------------
+# WHY THIS SCRIPT EXISTS
+#
+# Every trap below cost real time on 2026-08-15, doing exactly this by hand:
+#
+#   1. A STALE ROOT-OWNED LOG FILE SILENTLY EATS THE RUN.  `nohup sudo ... > /tmp/start120.log`
+#      failed with "Permission denied" because a root-owned file of that name was left by an
+#      earlier run.  The redirect failing means THE COMMAND NEVER RAN -- but `tail` of that same
+#      path then printed the OLD run's contents, which read like a plausible current result.  Two
+#      wrong conclusions came out of that before it was noticed.  Logs here go under the login
+#      user's home with a run-specific name, and are removed first.
+#
+#   2. A HOST CAN HAVE MORE THAN ONE CHECKOUT.  .120 had ~/qv3 AND ~/test/qadena_v3 at different
+#      commits.  The installed $QADENAHOME/scripts resolve their build directory from their OWN
+#      location (setup_env.sh), so which one you invoke decides which tree you get.  This script
+#      takes --repo explicitly and PRINTS the commit it actually built, because "I built the fix"
+#      and "the node is running the fix" are different claims.
+#
+#   3. NEVER pgrep/pkill -f A PATTERN CONTAINING "qadenad" OVER SSH.  The remote shell running your
+#      command matches it.  stop_qadena.sh reported "qadenad is STILL running after SIGKILL" when
+#      the only match was the ssh command asking the question.  Match with a bracket class.
+#
+#   4. init.sh REFUSES TO RUN AS ROOT, but an SGX node MUST BE STARTED WITH sudo -- the enclave
+#      opens /dev/sgx_enclave.  Two different privilege levels in adjacent phases.
+#
+#   5. UNDER sudo, ~ IS /root.  Resolve the checkout and home as the login user, then hand absolute
+#      paths to the privileged command.
+#
+#   6. --build-sgx RUNS `git clean -fd` FIRST.  Uncommitted work in the target's checkout is
+#      DESTROYED.  Phase 3 refuses a dirty tree rather than discovering this afterwards.
+#
+#   8. `zsh -lc` DOES NOT GET THE USER'S LOGIN PATH WHEN THE LOGIN SHELL IS bash.  On .120 go is
+#      at /usr/local/go/bin/go, present under `bash -lc` and ABSENT under `zsh -lc` -- so a
+#      toolchain check written the obvious way reports "go is not installed" on a machine that
+#      builds fine by hand.  Toolchain probes here check known locations too, and build commands
+#      prepend the path rather than trusting whichever rc file happens to run.
+#
+#   7. THE MEASUREMENT MUST MATCH GENESIS.  A joiner whose enclave differs by one byte is refused
+#      by verifyRemoteReport, and the error names the measurement rather than the cause.  Phase 5
+#      compares the built binary against what genesis recorded, while the two are still in reach.
+
+set -u
+
+PRIMARY=""
+JOINER=""
+REPO=""
+REPO_DEFAULT="qv3"
+REF=""
+BUILD_SGX=0
+ADVERTISE=""
+PKG_OUT="/tmp/pkg"
+FORCE=0
+FROM=1
+UNTIL=8
+ONLY=""
+
+fail() { print -u2 "FAIL(1st_node_bringup): $*"; exit 1 }
+info() { print "  $*" }
+phase() { print ""; print "======================================================================"; print ">>> $*"; print "======================================================================" }
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --primary)   PRIMARY="$2"; shift 2 ;;
+        --joiner)    JOINER="$2"; shift 2 ;;
+        --repo)      REPO="$2"; shift 2 ;;
+        --ref)       REF="$2"; shift 2 ;;
+        --build-sgx) BUILD_SGX=1; shift ;;
+        --advertise-ip-address) ADVERTISE="$2"; shift 2 ;;
+        --package-out) PKG_OUT="$2"; shift 2 ;;
+        --force)     FORCE=1; shift ;;
+        --from)      FROM="$2"; shift 2 ;;
+        --until)     UNTIL="$2"; shift 2 ;;
+        --only)      ONLY="$2"; shift 2 ;;
+        --help)
+            print "Usage: 1st_node_bringup.sh --primary <ip> [--joiner <ip>] [--repo <path>] [--ref <git-ref>]"
+            print "                          [--build-sgx] [--advertise-ip-address <ip>]"
+            print "                          [--package-out <dir>] [--force]"
+            print "                          [--from N] [--until N] [--only N]"
+            print ""
+            print "  --repo        checkout on the TARGET, relative to its home unless absolute."
+            print "                Default \$HOME/$REPO_DEFAULT.  A host may have more than one"
+            print "                checkout at different commits, so this is explicit on purpose."
+            print "  --ref         git ref to build.  Default: leave the checkout where it is, and"
+            print "                just report the commit.  Passing a ref does fetch + reset --hard"
+            print "                + clean -fd, which DESTROYS uncommitted work on the target."
+            print "  --build-sgx   reproducible docker build, ~24 min, real SGX measurements."
+            print "                Without it you get a DEBUG enclave with go:embed'ed placeholder"
+            print "                ids -- fine for logic, useless for attestation."
+            print "  --advertise-ip-address   defaults to --primary."
+            print "  --force       proceed even if the target's checkout is dirty (its changes will"
+            print "                be destroyed by the build's git clean -fd)."
+            print "  --joiner      a node to install the freshly built package onto (phase 8).  This"
+            print "                is the seam with nth_node_bringup.sh, which assumes the joiner"
+            print "                ALREADY has matching binaries -- its phase 1 checks the joiner's"
+            print "                measurement against genesis and stops if it differs.  Installing"
+            print "                from the primary's own package makes them match by construction."
+            print ""
+            print "  1 preflight   reachable; checkout present; toolchain present; SGX if asked for"
+            print "  2 stop        stop node + enclaves, and PROVE nothing survived"
+            print "  3 update      fetch/reset the checkout to --ref; report the commit built"
+            print "  4 build+init  init.sh -- builds, WIPES \$QADENAHOME, re-inits genesis, installs"
+            print "  5 verify      built measurement == the one genesis recorded"
+            print "  6 start       start the node (sudo only where SGX) and wait for blocks"
+            print "  7 package     package_release.sh, and print the joiner's install command"
+            print "  8 distribute  install that package on --joiner, so nth_node_bringup.sh can start"
+            exit 0 ;;
+        *) fail "unknown option $1" ;;
+    esac
+done
+
+[[ -n "$PRIMARY" ]] || fail "--primary is required"
+[[ "$FROM"  == <-> ]] || fail "--from takes a phase number, got \"$FROM\""
+[[ "$UNTIL" == <-> ]] || fail "--until takes a phase number, got \"$UNTIL\""
+[[ "$FROM" -le "$UNTIL" ]] || fail "--from $FROM is after --until $UNTIL, so nothing would run"
+[[ -n "$ADVERTISE" ]] || ADVERTISE="$PRIMARY"
+
+# rsh -- run as root through a LOGIN zsh, so PATH and setup_env.sh's definitions are present.
+rsh() {
+    local host="$1"; shift
+    ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "sudo zsh -lc $(printf '%q' "$*")"
+}
+# rsh_user -- same, unprivileged, for anything that must not create root-owned files (trap 1).
+rsh_user() {
+    local host="$1"; shift
+    ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "zsh -lc $(printf '%q' "$*")"
+}
+
+# BUILD_PATH -- prepended to any command that compiles or packages (trap 8).  Belt and braces: the
+# login shell's PATH may or may not have go, and which rc file runs depends on the target's shell.
+BUILD_PATH='export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH;'
+
+run_phase() {
+    [[ -n "$ONLY" ]] && { [[ "$1" == "$ONLY" ]] && return 0 || return 1 }
+    [[ "$1" -ge "$FROM" ]]  || return 1
+    [[ "$1" -le "$UNTIL" ]] || return 1
+    return 0
+}
+
+# sudo_for -- SGX needs root to open the device; a debug node must NOT run as root.  Detect per
+# host rather than assuming, so a mixed pair works unchanged.
+sudo_for() {
+    if ssh -o ConnectTimeout=10 "$1" 'test -e /dev/sgx_enclave || test -e /dev/isgx' 2>/dev/null; then
+        print "sudo "
+    else
+        print ""
+    fi
+}
+
+HOME_DIR=$(rsh_user "$PRIMARY" 'print $HOME' | tr -d '\r') || fail "cannot ssh to $PRIMARY"
+[[ -n "$HOME_DIR" ]] || fail "could not resolve the login user's home on $PRIMARY"
+case "$REPO" in
+    "")  REPO="$HOME_DIR/$REPO_DEFAULT" ;;
+    /*)  ;;
+    *)   REPO="$HOME_DIR/$REPO" ;;
+esac
+NODE_HOME="$HOME_DIR/qadena"
+SUDO=$(sudo_for "$PRIMARY")
+RUNLOG="$HOME_DIR/primary_bringup.$$.log"   # trap 1: fresh name, user-owned, never /tmp
+
+info "target        $PRIMARY"
+info "checkout      $REPO"
+info "node home     $NODE_HOME"
+info "privilege     ${SUDO:-none (no SGX device)}"
+[[ -n "$SUDO" ]] || info "NOTE: no SGX device -- this will be a DEBUG enclave regardless of --build-sgx"
+
+# ---------------------------------------------------------------------------------------------
+run_phase 1 && phase "1. preflight"
+if run_phase 1; then
+    rsh_user "$PRIMARY" "test -d $REPO/.git" \
+        || fail "$REPO is not a git checkout on $PRIMARY (pass --repo)"
+
+    # Name every checkout we can see. A second one at a different commit is not an error, but it
+    # IS the thing that makes "which code is this node running?" ambiguous (trap 2).
+    local_others=$(rsh_user "$PRIMARY" 'for d in $HOME/qv3 $HOME/qadena_v3 $HOME/test/qv3 $HOME/test/qadena_v3; do [[ -d $d/.git ]] && print "$d $(git -C $d rev-parse --short HEAD 2>/dev/null)"; done' | tr -d '\r')
+    print "$local_others" | while read -r line; do [[ -n "$line" ]] && info "checkout: $line"; done
+    if [[ $(print "$local_others" | grep -c .) -gt 1 ]]; then
+        info "MORE THAN ONE CHECKOUT -- building $REPO; the others are ignored but may confuse"
+        info "anyone reading \$QADENAHOME/scripts, which resolve their build dir from their own path"
+    fi
+
+    for t in go git; do
+        rsh_user "$PRIMARY" "$BUILD_PATH command -v $t >/dev/null" \
+            || fail "$t not found on $PRIMARY, even with /usr/local/go/bin and \$HOME/go/bin on PATH"
+    done
+    if (( BUILD_SGX )); then
+        rsh_user "$PRIMARY" 'command -v ego >/dev/null' || fail "--build-sgx needs ego on $PRIMARY (run ubuntu/setup_qadena_build.sh)"
+        rsh_user "$PRIMARY" 'command -v docker >/dev/null' || fail "--build-sgx is a docker build; docker is missing on $PRIMARY"
+        rsh_user "$PRIMARY" 'test -e /dev/sgx_enclave' \
+            || fail "--build-sgx but /dev/sgx_enclave is absent: the result would be a debug enclave wearing an SGX label"
+    fi
+    avail=$(rsh_user "$PRIMARY" "df --output=avail -BG $HOME_DIR | tail -1 | tr -dc '0-9'" | tr -d '\r')
+    [[ -n "$avail" && "$avail" -ge 20 ]] || info "WARNING: only ${avail:-?}G free on $PRIMARY; a build plus a chain wants more"
+    info "preflight ok"
+fi
+
+# ---------------------------------------------------------------------------------------------
+run_phase 2 && phase "2. stop the node and prove it stopped"
+if run_phase 2; then
+    if rsh_user "$PRIMARY" "test -x $NODE_HOME/scripts/stop_qadena.sh"; then
+        rsh "$PRIMARY" "$NODE_HOME/scripts/stop_qadena.sh --all" 2>&1 | tail -5 | while read -r l; do info "$l"; done
+    else
+        info "no $NODE_HOME/scripts/stop_qadena.sh (never installed?) -- nothing to stop"
+    fi
+
+    # trap 3: the bracket class is what stops this matching our own ssh command line.
+    sleep 3
+    left=$(ssh -o ConnectTimeout=10 "$PRIMARY" 'ps -eo pid,cmd | grep -E "qaden[a]d|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep | wc -l' | tr -d '\r')
+    [[ "$left" == "0" ]] || {
+        ssh -o ConnectTimeout=10 "$PRIMARY" 'ps -eo pid,cmd | grep -E "qaden[a]d|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep' | while read -r l; do info "$l"; done
+        fail "$left process(es) survived the stop; kill them BY PID and re-run --only 2"
+    }
+    info "stopped: nothing matching the node or its enclaves is left"
+fi
+
+# ---------------------------------------------------------------------------------------------
+run_phase 3 && phase "3. update the checkout"
+if run_phase 3; then
+    dirty=$(rsh_user "$PRIMARY" "git -C $REPO status --porcelain | head -20" | tr -d '\r')
+    if [[ -n "$dirty" ]]; then
+        print "$dirty" | while read -r l; do info "dirty: $l"; done
+        # trap 6: the build's own git clean -fd would delete this without asking.
+        (( FORCE )) || fail "$REPO has uncommitted work, which the build's 'git clean -fd' will DESTROY. Commit it, or pass --force."
+        info "--force: proceeding, and the above WILL be destroyed"
+    fi
+
+    if [[ -n "$REF" ]]; then
+        rsh_user "$PRIMARY" "git -C $REPO fetch --quiet --all --prune" || fail "git fetch failed on $PRIMARY"
+        rsh_user "$PRIMARY" "git -C $REPO reset --quiet --hard $REF" || fail "git reset --hard $REF failed on $PRIMARY"
+        rsh_user "$PRIMARY" "git -C $REPO clean -qfd" || fail "git clean failed on $PRIMARY"
+    else
+        info "no --ref: leaving the checkout where it is"
+    fi
+
+    BUILT_COMMIT=$(rsh_user "$PRIMARY" "git -C $REPO rev-parse --short HEAD" | tr -d '\r')
+    BUILT_SUBJ=$(rsh_user "$PRIMARY" "git -C $REPO log -1 --format=%s" | tr -d '\r')
+    info "building commit $BUILT_COMMIT  ($BUILT_SUBJ)"
+fi
+
+# ---------------------------------------------------------------------------------------------
+run_phase 4 && phase "4. build, wipe the home, re-init genesis, install"
+if run_phase 4; then
+    (( BUILD_SGX )) && info "reproducible docker build: expect ~24 minutes"
+    info "NOTE: init.sh REMOVES $NODE_HOME entirely, including any chain history on this machine"
+
+    sgx_flag=""
+    (( BUILD_SGX )) && sgx_flag=" --build-sgx"
+
+    # trap 4: init.sh refuses to run as root.  trap 1: a fresh, user-owned log.
+    # The redirect matters for a second reason -- without it the ssh channel stays open for as long
+    # as the build runs, which looks like a hang.
+    rsh_user "$PRIMARY" "rm -f $RUNLOG"
+    ssh -o ConnectTimeout=10 "$PRIMARY" \
+        "cd $REPO && nohup zsh -lc '$BUILD_PATH ./buildscripts/init.sh --advertise-ip-address $ADVERTISE$sgx_flag' > $RUNLOG 2>&1 &" \
+        || fail "could not launch init.sh on $PRIMARY"
+
+    info "waiting for init.sh to finish (log: $PRIMARY:$RUNLOG)"
+    while ssh -o ConnectTimeout=10 "$PRIMARY" 'pgrep -f "buildscripts/init\.s[h]" >/dev/null' 2>/dev/null; do
+        sleep 30
+    done
+
+    if ! rsh_user "$PRIMARY" "grep -q 'FINAL BUILD SUCCESS' $RUNLOG"; then
+        rsh_user "$PRIMARY" "tail -25 $RUNLOG" | while read -r l; do info "$l"; done
+        fail "init.sh did not report success; see $PRIMARY:$RUNLOG"
+    fi
+    info "build + init reported success"
+fi
+
+# ---------------------------------------------------------------------------------------------
+run_phase 5 && phase "5. the built measurement must be the one genesis recorded"
+if run_phase 5; then
+    # Compare while both are in reach.  Later this failure appears on the JOINER, as
+    # verifyRemoteReport naming a measurement, with nothing to say it came from a rebuild here.
+    gen=$(rsh_user "$PRIMARY" "jq -r '.app_state.qadena.enclaveIdentityList[0].uniqueID' $NODE_HOME/config/genesis.json" | tr -d '\r')
+    if (( BUILD_SGX )); then
+        bin=$(rsh_user "$PRIMARY" "$BUILD_PATH cd $REPO && ego uniqueid cmd/qadenad_enclave/qadenad_enclave 2>/dev/null | head -1" | tr -d '\r')
+    else
+        bin=$(rsh_user "$PRIMARY" "strings $REPO/cmd/qadenad_enclave/qadenad_enclave 2>/dev/null | grep -m1 '^unique[0-9]*$'" | tr -d '\r')
+    fi
+    info "genesis records : ${gen:-<none>}"
+    info "binary measures : ${bin:-<unreadable>}"
+    [[ -n "$gen" && -n "$bin" ]] || fail "could not read one of them; refusing to call this verified"
+    [[ "$gen" == "$bin" ]] || fail "measurement mismatch -- a joiner built from this tree will be refused by verifyRemoteReport"
+    info "measurement matches genesis"
+fi
+
+# ---------------------------------------------------------------------------------------------
+run_phase 6 && phase "6. start and confirm blocks"
+if run_phase 6; then
+    rsh_user "$PRIMARY" "rm -f $RUNLOG.start"
+    # trap 4 again, mirrored: SGX must start WITH sudo, debug must not.
+    ssh -o ConnectTimeout=10 "$PRIMARY" \
+        "nohup ${SUDO}$NODE_HOME/scripts/start_qadena.sh > $RUNLOG.start 2>&1 &" \
+        || fail "could not launch start_qadena.sh on $PRIMARY"
+
+    info "waiting for the RPC to answer and the height to advance"
+    h0=""; ok=0
+    for i in {1..40}; do
+        sleep 15
+        h=$(ssh -o ConnectTimeout=10 "$PRIMARY" 'curl -s --max-time 5 localhost:26657/status 2>/dev/null | jq -r ".result.sync_info.latest_block_height // empty"' 2>/dev/null | tr -d '\r')
+        [[ -z "$h" ]] && continue
+        [[ -z "$h0" ]] && { h0="$h"; info "first height seen: $h0"; continue }
+        if [[ "$h" -gt "$h0" ]]; then info "height advanced $h0 -> $h"; ok=1; break; fi
+    done
+    (( ok )) || {
+        rsh_user "$PRIMARY" "tail -20 $RUNLOG.start" | while read -r l; do info "$l"; done
+        fail "the node did not produce blocks; see $PRIMARY:$RUNLOG.start and $NODE_HOME/logs"
+    }
+fi
+
+# ---------------------------------------------------------------------------------------------
+run_phase 7 && phase "7. package for the joiners"
+if run_phase 7; then
+    # Build once, distribute: a joiner installed from THIS package has a measurement identical to
+    # the primary's by construction.  Building the two independently is where drift bites.
+    rsh_user "$PRIMARY" "rm -rf $PKG_OUT && mkdir -p $PKG_OUT"
+    out=$(rsh_user "$PRIMARY" "$BUILD_PATH cd $REPO && ./buildscripts/package_release.sh --out $PKG_OUT 2>&1 | tail -25") \
+        || { print "$out" | while read -r l; do info "$l"; done; fail "package_release.sh failed"; }
+    print "$out" | while read -r l; do info "$l"; done
+
+    tgz=$(rsh_user "$PRIMARY" "ls -1 $PKG_OUT/*.tar.gz 2>/dev/null | head -1" | tr -d '\r')
+    [[ -n "$tgz" ]] || fail "package_release.sh produced no tarball in $PKG_OUT"
+    info ""
+    info "package: $PRIMARY:$tgz"
+    info "to install on a joiner:"
+    info "    scp $PRIMARY:$tgz /tmp/ && scp /tmp/$(basename $tgz) <joiner>:/tmp/"
+    info "    ssh <joiner> 'cd /tmp && tar xzf $(basename $tgz) && sudo ./${$(basename $tgz)%.tar.gz}/install.sh'"
+    info "then:"
+    info "    ./testscripts/nth_node_bringup.sh --primary $PRIMARY --joiner <joiner> \\"
+    info "        --pioneer <a-name-the-chain-has-never-seen> --state-sync --from 1 --until 5"
+fi
+
+# ---------------------------------------------------------------------------------------------
+run_phase 8 && phase "8. install the package on the joiner"
+if run_phase 8 && [[ -n "$JOINER" ]]; then
+    # THE SEAM WITH nth_node_bringup.sh.  Its phase 1 refuses to proceed unless the joiner's
+    # measurement matches genesis, and it has no way to fix a mismatch -- that is this phase's job.
+    # Installing the PRIMARY's own package is what makes them match by construction; building the
+    # joiner independently from "the same" source is where drift bites.
+    tgz=$(rsh_user "$PRIMARY" "ls -1 $PKG_OUT/*.tar.gz 2>/dev/null | head -1" | tr -d '\r')
+    [[ -n "$tgz" ]] || fail "no package in $PRIMARY:$PKG_OUT -- run phase 7 first"
+    base=$(basename "$tgz")
+    dir="${base%.tar.gz}"
+
+    JHOME=$(rsh_user "$JOINER" 'print $HOME' | tr -d '\r') || fail "cannot ssh to joiner $JOINER"
+    SUDO_J=$(sudo_for "$JOINER")
+
+    # Stop the joiner first: install.sh replaces binaries a running enclave has open.
+    if rsh_user "$JOINER" "test -x $JHOME/qadena/scripts/stop_qadena.sh"; then
+        rsh "$JOINER" "$JHOME/qadena/scripts/stop_qadena.sh --all" >/dev/null 2>&1 || true
+        sleep 3
+        left=$(ssh -o ConnectTimeout=10 "$JOINER" 'ps -eo pid,cmd | grep -E "qaden[a]d|eg[o] run|ego-hos[t]" | grep -v grep | wc -l' | tr -d '\r')
+        [[ "$left" == "0" ]] || fail "joiner still has $left process(es) running; kill by PID and re-run --only 8"
+    fi
+
+    # Relay through the workstation rather than primary->joiner directly: we already have ssh to
+    # both, and the two nodes need not be able to reach each other's accounts.
+    info "copying $base to $JOINER"
+    ssh -o ConnectTimeout=10 "$PRIMARY" "cat $tgz" | ssh -o ConnectTimeout=10 "$JOINER" "cat > /tmp/$base" \
+        || fail "could not copy the package to $JOINER"
+
+    info "installing on $JOINER"
+    out=$(ssh -o ConnectTimeout=10 "$JOINER" "cd /tmp && rm -rf $dir && tar xzf $base && ${SUDO_J}./$dir/install.sh 2>&1 | tail -20") \
+        || { print "$out" | while read -r l; do info "$l"; done; fail "install.sh failed on $JOINER"; }
+    print "$out" | while read -r l; do info "$l"; done
+
+    # Verify against the PRIMARY's genesis: the joiner has no genesis of its own until it joins.
+    gen=$(rsh_user "$PRIMARY" "jq -r '.app_state.qadena.enclaveIdentityList[0].uniqueID' $NODE_HOME/config/genesis.json" | tr -d '\r')
+    if (( BUILD_SGX )); then
+        jbin=$(rsh_user "$JOINER" "$BUILD_PATH ego uniqueid $JHOME/qadena/bin/qadenad_enclave 2>/dev/null | head -1" | tr -d '\r')
+    else
+        jbin=$(rsh_user "$JOINER" "strings $JHOME/qadena/bin/qadenad_enclave 2>/dev/null | grep -m1 '^unique[0-9]*\$'" | tr -d '\r')
+    fi
+    info "primary genesis records : ${gen:-<none>}"
+    info "joiner binary measures  : ${jbin:-<unreadable>}"
+    [[ -n "$gen" && -n "$jbin" ]] || fail "could not read one of them; refusing to call this verified"
+    [[ "$gen" == "$jbin" ]] || fail "joiner measurement != genesis -- nth_node_bringup.sh phase 1 would refuse it"
+    info "joiner measurement matches the chain's genesis"
+
+    info ""
+    info "READY FOR nth_node_bringup.sh.  Next:"
+    info "    ./testscripts/nth_node_bringup.sh --primary $PRIMARY --joiner $JOINER \\"
+    info "        --pioneer <a-name-the-chain-has-never-seen> --state-sync --from 1 --until 5"
+    info "  (state-sync needs the chain past height 1500, and a snapshot to have been taken --"
+    info "   lower snapshot-interval in $NODE_HOME/config/app.toml if you are not waiting for 2000)"
+elif run_phase 8; then
+    info "no --joiner given; nothing to distribute to"
+fi
+
+print ""
+print "1st_node_bringup: done (phases ${ONLY:-$FROM..$UNTIL})"
