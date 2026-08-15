@@ -63,6 +63,7 @@ set -u
 PRIMARY=""
 JOINER=""
 FROM=1
+UNTIL=7
 ONLY=""
 VALIDATOR_STAKE="110000"
 FUND_QDN="200000"
@@ -79,15 +80,19 @@ while [[ $# -gt 0 ]]; do
         --primary) PRIMARY="$2"; shift 2 ;;
         --joiner)  JOINER="$2";  shift 2 ;;
         --from)    FROM="$2";    shift 2 ;;
+        --until)   UNTIL="$2";   shift 2 ;;
         --only)    ONLY="$2";    shift 2 ;;
         --stake)   VALIDATOR_STAKE="$2"; shift 2 ;;
         --pioneer) PIONEER_NAME="$2"; shift 2 ;;
         --state-sync) STATE_SYNC=1; shift ;;
         --seed2)   SEED2="$2"; shift 2 ;;
         --help)
-            print "Usage: nth_node_bringup.sh --primary <ip> --joiner <ip> [--from N] [--only N] [--stake qdn]"
+            print "Usage: nth_node_bringup.sh --primary <ip> --joiner <ip> [--from N] [--until N] [--only N]"
+            print "                          [--stake qdn]"
             print "                          [--pioneer <name>] [--state-sync] [--seed2 <ip>]"
             print ""
+            print "  --from/--until  run a RANGE of phases, inclusive: --from 1 --until 5 brings a node"
+            print "                up and stops short of converting it to a validator.  --only runs one."
             print "  --pioneer     the joiner's pioneer name (default pioneer2).  MUST BE UNUSED ON"
             print "                THE CHAIN: add_full_node.sh refuses a name already registered, so"
             print "                a re-join after a wipe needs a fresh one -- the key is gone"
@@ -115,6 +120,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+[[ "$FROM"  == <-> ]] || fail "--from takes a phase number, got \"$FROM\""
+[[ "$UNTIL" == <-> ]] || fail "--until takes a phase number, got \"$UNTIL\""
+[[ "$FROM" -le "$UNTIL" ]] || fail "--from $FROM is after --until $UNTIL, so nothing would run"
 [[ -n "$PRIMARY" ]] || fail "--primary is required"
 [[ -n "$JOINER" ]]  || fail "--joiner is required"
 
@@ -137,7 +145,17 @@ height() {
     ssh -o ConnectTimeout=10 "$1" 'curl -s --max-time 5 localhost:26657/status 2>/dev/null | jq -r ".result.sync_info.latest_block_height // empty"' 2>/dev/null
 }
 
-run_phase() { [[ -n "$ONLY" ]] && { [[ "$1" == "$ONLY" ]] && return 0 || return 1 }; [[ "$1" -ge "$FROM" ]] }
+# run_phase <n> -- should phase n run?
+#
+# --only wins outright.  Otherwise the range is [FROM, UNTIL] INCLUSIVE, so --from 1 --until 5 is
+# "bring the node up and stop before the validator conversion" -- the common case when adding a
+# node that is meant to follow rather than validate, and previously five separate --only runs.
+run_phase() {
+    [[ -n "$ONLY" ]] && { [[ "$1" == "$ONLY" ]] && return 0 || return 1 }
+    [[ "$1" -ge "$FROM" ]]  || return 1
+    [[ "$1" -le "$UNTIL" ]] || return 1
+    return 0
+}
 
 # repo_on <host> -- absolute path to the checkout, resolved AS THE LOGIN USER.
 #
@@ -179,6 +197,15 @@ JOINER_HOME=$(ssh -o ConnectTimeout=10 "$JOINER" 'echo $HOME' 2>/dev/null | tr -
 #
 # The socket being root-owned -- the reason this script gave for requiring sudo everywhere -- is a
 # CONSEQUENCE of having started the enclave as root, not a cause.
+# SECOND_IP_ARG -- the extra seed that turns statesync on.  Computed here rather than inside phase
+# 4, because phase 3 now drives add_full_node.sh too and the two must agree: a key minted for a
+# block-sync join and then resumed as a state-sync one would rewrite config.toml mid-flight.
+if (( STATE_SYNC )); then
+    SECOND_IP_ARG=" --genesis-pioneer-second-ip-address ${SEED2:-$PRIMARY}"
+else
+    SECOND_IP_ARG=""
+fi
+
 sudo_for() {
     local host="$1"
     if ssh -o ConnectTimeout=10 "$host" 'test -e /dev/sgx_enclave || test -e /dev/isgx' 2>/dev/null; then
@@ -266,7 +293,11 @@ fi
 
 info "waiting for any in-flight regression run to finish (it restarts the chain; a joiner cannot survive that)"
 for i in {1..120}; do
-    n=$(ssh "$PRIMARY" 'pgrep -cf "[r]egression.sh" 2>/dev/null || echo 0' | tr -d '\r')
+    # `pgrep -c` PRINTS the count and EXITS NON-ZERO when it is zero, so `|| echo 0` appended a
+    # second line and the arithmetic below saw "0\n0" -- "bad math expression: operator expected".
+    # The effect was perverse: this loop worked while regression WAS running (one line, exit 0) and
+    # crashed when the primary was already idle, which is the normal state before a join.
+    n=$(ssh "$PRIMARY" 'pgrep -cf "[r]egression.sh" 2>/dev/null; true' | tr -d '\r' | head -1)
     [[ "${n:-0}" -eq 0 ]] && break
     sleep 30
 done
@@ -279,65 +310,10 @@ done
 info "primary quiescent and producing at $PH"
 fi
 
-# ---------------------------------------------------------------------------- 3. fund
-if run_phase 3; then
-phase "3. fund the joiner's pioneer key"
+# THE PROMPT FEEDER, defined once and used by BOTH phase 3 (which mints the key with
+# --stop-for-funding) and phase 4 (which resumes the join).  It lived inside phase 4 until
+# phase 3 grew a need for it, at which point phase 3 was scp-ing a file that did not exist yet.
 
-# The joiner mints its key during the join, so on a FIRST run there is nothing to fund yet.  This
-# phase is therefore a no-op the first time and does the work on the re-run -- which is why phase 4
-# tolerates an unfunded start and phase 3 can be re-run after it.
-addr=$(ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
-if [[ ! "$addr" =~ ^qadena1 ]]; then
-    info "joiner has no $PIONEER_NAME key yet -- run phase 4 first, then re-run --only 3"
-else
-    info "joiner $PIONEER_NAME = $addr"
-    bal=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
-    if [[ "${bal:-0}" -gt 0 ]] 2>/dev/null; then
-        info "already funded ($bal aqdn) -- nothing to do"
-    else
-        chainid=$(ssh "$PRIMARY" 'curl -s localhost:26657/status | jq -r ".result.node_info.network"' | tr -d '\r')
-        amt="${FUND_QDN}000000000000000000"
-        info "sending ${FUND_QDN}qdn from treasury on chain $chainid"
-        ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $addr ${amt}aqdn --keyring-backend test --chain-id $chainid --gas auto --gas-adjustment 1.5 --gas-prices 0.025aqdn --yes --output json" > /dev/null 2>&1 \
-            || fail "funding transfer failed"
-        sleep 12
-        bal=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
-        [[ "${bal:-0}" -gt 0 ]] 2>/dev/null || fail "funding did not land"
-        info "funded: $bal aqdn"
-    fi
-fi
-fi
-
-# ---------------------------------------------------------------------------- 4. join
-if run_phase 4; then
-if (( STATE_SYNC )); then
-    phase "4. join (STATE-SYNC)"
-    # add_full_node.sh enables statesync only when BOTH genesis-pioneer IPs are given: it reads the
-    # trust height and hash from the first, re-reads that exact height from the second, and refuses
-    # unless they match.
-    #
-    # DEFAULTING SEED2 TO THE PRIMARY IS A DEGENERATE CROSS-CHECK -- it proves the primary agrees
-    # with itself, which is the most a two-node chain can offer and is worth naming rather than
-    # glossing.  From the third node onward, pass --seed2 <an existing peer>: the height and hash
-    # are then corroborated by a source that could actually disagree, which is the check the
-    # mechanism was designed for.
-    seed2="${SEED2:-$PRIMARY}"
-    [[ -n "$SEED2" ]] || info "no --seed2 given: using the primary for both trust sources (self-corroborating)"
-    SECOND_IP_ARG=" --genesis-pioneer-second-ip-address $seed2"
-else
-    phase "4. join (block-sync)"
-    SECOND_IP_ARG=""
-fi
-
-# WHICH SYNC IS CHOSEN BY THE NUMBER OF SEED ADDRESSES, not by a flag on add_full_node.sh: it turns
-# statesync on only when a SECOND genesis-pioneer IP is supplied AND both report the same trust
-# height and hash.  Block-sync is therefore the default here on purpose -- a first join should
-# exercise the ordinary path so a failure is unambiguous -- and --state-sync opts into the other.
-#
-# Driven under script(1) for a real PTY (trap 2).  The feeder answers 'c' first when the node is
-# already part-initialised -- the resume branch, which keeps the key that has already been funded;
-# 's' would erase and mint a new one, stranding the funds.  The LAST answer is 'n': we start the
-# node ourselves in phase 5 (trap 3).
 cat > /tmp/tnb_feed.sh <<'FEED'
 #!/bin/zsh
 # PROMPT-DRIVEN, not timed.  This used to print c/y/y/y/n on three-second intervals and hope each
@@ -379,6 +355,99 @@ for i in {1..2400}; do
 done
 sleep 30
 FEED
+
+# ---------------------------------------------------------------------------- 3. fund
+if run_phase 3; then
+phase "3. mint the joiner's pioneer key and fund it"
+
+# THIS PHASE MINTS THE KEY IT FUNDS, and that is the point.  Funding used to be ordered before the
+# join, which cannot work on a first run: the key does not exist until add_full_node.sh creates it,
+# and add_full_node.sh then BLOCKS waiting for that key to hold a balance.  So phase 3 no-opped,
+# phase 4 polled 120x3s for money nobody was sending, and the documented way through was to run 4,
+# then 3, then 4 again -- a cycle a linear phase list cannot express, and the reason --until 5 could
+# not complete without someone funding from a second shell against a six-minute timer.
+#
+# add_full_node.sh --stop-for-funding breaks it: it mints the key, prints the address and exits,
+# leaving the key on disk for the [c] resume branch that already existed.  Minting is therefore part
+# of getting funded, and phase 4 goes back to being purely the join.
+addr=$(ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+if [[ ! "$addr" =~ ^qadena1 ]]; then
+    info "no $PIONEER_NAME key yet -- minting it with --stop-for-funding"
+    cat > /tmp/tnb_prep.sh <<PREP
+#!/bin/zsh
+exec script -qec "$JOINER_HOME/qadena/scripts/add_full_node.sh \
+  --pioneer $PIONEER_NAME \
+  --advertise-ip-address $JOINER \
+  --genesis-pioneer-first-ip-address $PRIMARY$SECOND_IP_ARG \
+  --stop-for-funding" /dev/null
+PREP
+    scp -q /tmp/tnb_feed.sh /tmp/tnb_prep.sh "$JOINER":/tmp/ 2>/dev/null \
+        || fail "cannot copy the prepare drivers to $JOINER"
+    ssh "$JOINER" 'chmod +x /tmp/tnb_feed.sh /tmp/tnb_prep.sh'
+    ssh "$JOINER" "rm -f /tmp/tnb_join.log; ${SUDO_J}nohup setsid zsh -c '/tmp/tnb_feed.sh | /tmp/tnb_prep.sh' > /tmp/tnb_join.log 2>&1 & echo started" > /dev/null
+    for i in {1..60}; do
+        ssh "$JOINER" 'grep -aq "stopping for funding, as requested" /tmp/tnb_join.log' 2>/dev/null && break
+        sleep 5
+    done
+    addr=$(ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+    if [[ ! "$addr" =~ ^qadena1 ]]; then
+        info "the key was not minted.  Last log lines:"
+        ssh "$JOINER" 'tail -20 /tmp/tnb_join.log' 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^/      /'
+        fail "could not mint $PIONEER_NAME on $JOINER"
+    fi
+    # The prepare run exits at the funding stop, so its feeder is still looping for prompts that
+    # will never come.  It would die of SIGPIPE on its next write anyway, but leaving a process to
+    # discover that on its own is how orphans outlive the run that made them.
+    ssh "$JOINER" "pgrep -f '[t]nb_feed.sh' | while read fp; do ${SUDO_J}kill \$fp 2>/dev/null; done; true" > /dev/null 2>&1
+    info "minted $PIONEER_NAME = $addr"
+fi
+if true; then
+    info "joiner $PIONEER_NAME = $addr"
+    bal=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
+    if [[ "${bal:-0}" -gt 0 ]] 2>/dev/null; then
+        info "already funded ($bal aqdn) -- nothing to do"
+    else
+        chainid=$(ssh "$PRIMARY" 'curl -s localhost:26657/status | jq -r ".result.node_info.network"' | tr -d '\r')
+        amt="${FUND_QDN}000000000000000000"
+        info "sending ${FUND_QDN}qdn from treasury on chain $chainid"
+        ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $addr ${amt}aqdn --keyring-backend test --chain-id $chainid --gas auto --gas-adjustment 1.5 --gas-prices 0.025aqdn --yes --output json" > /dev/null 2>&1 \
+            || fail "funding transfer failed"
+        sleep 12
+        bal=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
+        [[ "${bal:-0}" -gt 0 ]] 2>/dev/null || fail "funding did not land"
+        info "funded: $bal aqdn"
+    fi
+fi
+fi
+
+# ---------------------------------------------------------------------------- 4. join
+if run_phase 4; then
+if (( STATE_SYNC )); then
+    phase "4. join (STATE-SYNC)"
+    # add_full_node.sh enables statesync only when BOTH genesis-pioneer IPs are given: it reads the
+    # trust height and hash from the first, re-reads that exact height from the second, and refuses
+    # unless they match.
+    #
+    # DEFAULTING SEED2 TO THE PRIMARY IS A DEGENERATE CROSS-CHECK -- it proves the primary agrees
+    # with itself, which is the most a two-node chain can offer and is worth naming rather than
+    # glossing.  From the third node onward, pass --seed2 <an existing peer>: the height and hash
+    # are then corroborated by a source that could actually disagree, which is the check the
+    # mechanism was designed for.
+    [[ -n "$SEED2" ]] || info "no --seed2 given: using the primary for both trust sources (self-corroborating)"
+    :
+else
+    phase "4. join (block-sync)"
+fi
+
+# WHICH SYNC IS CHOSEN BY THE NUMBER OF SEED ADDRESSES, not by a flag on add_full_node.sh: it turns
+# statesync on only when a SECOND genesis-pioneer IP is supplied AND both report the same trust
+# height and hash.  Block-sync is therefore the default here on purpose -- a first join should
+# exercise the ordinary path so a failure is unambiguous -- and --state-sync opts into the other.
+#
+# Driven under script(1) for a real PTY (trap 2).  The feeder answers 'c' first when the node is
+# already part-initialised -- the resume branch, which keeps the key that has already been funded;
+# 's' would erase and mint a new one, stranding the funds.  The LAST answer is 'n': we start the
+# node ourselves in phase 5 (trap 3).
 # RESOLVE THE HOME DIRECTORY UNPRIVILEGED, then bake the absolute path in.  Writing
 # /home/$(whoami) inside the script evaluates it ON THE JOINER, UNDER SUDO, where whoami is root --
 # yielding /home/root/qadena/scripts/add_full_node.sh, which does not exist.  The failure is one
@@ -400,13 +469,24 @@ ssh "$JOINER" 'chmod +x /tmp/tnb_feed.sh /tmp/tnb_join.sh'
 info "driving add_full_node.sh (PTY); this mints the key, fetches genesis and runs sync-enclave"
 ssh "$JOINER" "rm -f /tmp/tnb_join.log; ${SUDO_J}nohup setsid zsh -c '/tmp/tnb_feed.sh | /tmp/tnb_join.sh' > /tmp/tnb_join.log 2>&1 & echo started" > /dev/null
 
+# SURFACE THE ADDRESS AND THE STAGE HERE, rather than leaving them in a log on the other machine.
+# add_full_node.sh prints the pioneer address once and then polls silently for the balance; anyone
+# watching has to ssh over and grep the transcript to learn what to fund -- and reading that file
+# before this phase recreates it returns the PREVIOUS run's contents, which is a convincing way to
+# be told the wrong thing.  (This phase does clear it, at the rm -f above; the trap is reading it
+# from outside.)
+announced=0
 for i in {1..60}; do
     if ssh "$JOINER" 'grep -aq "SyncEnclave SUCCEEDED" /tmp/tnb_join.log' 2>/dev/null; then
         info "SyncEnclave SUCCEEDED -- params are on the joiner"
         break
     fi
-    if ssh "$JOINER" 'grep -aq "has enough funds\|attempt to detect" /tmp/tnb_join.log' 2>/dev/null && [[ $i -eq 12 ]]; then
-        info "waiting at the funding poll -- run --only 3 in another shell if it is unfunded"
+    if (( ! announced )) && ssh "$JOINER" 'grep -aq "attempt to detect" /tmp/tnb_join.log' 2>/dev/null; then
+        pa=$(ssh "$JOINER" "grep -a 'PIONEER ADDRESS' /tmp/tnb_join.log | tail -1 | awk '{print \$NF}'" 2>/dev/null | tr -d '\r')
+        info "at the funding poll for ${PIONEER_NAME}${pa:+ = $pa}"
+        info "  it polls 120x3s and then gives up -- fund it now with:"
+        info "  ./testscripts/nth_node_bringup.sh --primary $PRIMARY --joiner $JOINER --pioneer $PIONEER_NAME --only 3"
+        announced=1
     fi
     sleep 10
 done
@@ -455,7 +535,7 @@ jlog() {
 # STAGE 1: the processes.  Distinguished from 'RPC not answering' because they fail for different
 # reasons -- a missing binary or a dead enclave here, a slow restore there.
 for i in {1..30}; do
-    np=$(ssh "$JOINER" 'pgrep -c qadenad 2>/dev/null || echo 0' | tr -d '\r')
+    np=$(ssh "$JOINER" 'pgrep -c qadenad 2>/dev/null; true' | tr -d '\r' | head -1)
     [[ "${np:-0}" -ge 1 ]] && break
     sleep 2
 done
