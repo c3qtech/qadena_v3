@@ -5,6 +5,12 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# This script runs the enclave twice (--upgrade-mode, then the new binary) and had no privilege
+# check at all, so on a machine whose devices are out of reach it failed inside ego rather than
+# saying which groups to join.  The upgrade is the worst place to discover that: it stops the
+# node and swaps the enclave binary first.
+needs_root_if_real_enclave "upgrade_enclave.sh" "$qadenabin/qadenad_enclave"
+
 FROM_ENCLAVE_UNIQUE_ID=""
 
 while [[ $# -gt 0 ]]; do

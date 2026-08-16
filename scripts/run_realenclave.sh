@@ -7,6 +7,11 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# `ego run` below OPENS /dev/sgx_enclave, so check reachability here too.  run.sh already gates
+# this, but this script is also launched directly and by restart_qadena.sh -- and an ungated
+# start fails inside ego with a device error rather than the message that names the fix.
+needs_root_if_real_enclave "run_realenclave.sh" "$qadenabin/qadenad_enclave"
+
 if [[ ! -d "$QADENAHOME/enclave_config" ]] ; then
     mkdir "$QADENAHOME/enclave_config"
 fi

@@ -7,6 +7,11 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# The SIGNER enclave opens the same devices as the chain enclave, so it needs the same check --
+# and it is gated on the SIGNER binary, because that is the one being run: a debug signer beside
+# a real chain enclave must not be forced to root.
+needs_root_if_real_enclave "run_realsignerenclave.sh" "$qadenabin/signer_enclave"
+
 while true; do
     ego run $qadenabin/signer_enclave --real-enclave --home=$QADENAHOME --addr=127.0.0.1:26659
     ret=$?
