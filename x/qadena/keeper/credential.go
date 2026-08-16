@@ -26,6 +26,9 @@ func (k Keeper) SetCredential(ctx context.Context, credential types.Credential) 
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.CredentialKeyPrefix))
 	b := k.cdc.MustMarshal(&credential)
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.CredentialKeyPrefix, types.CredentialKey(credential.CredentialID, credential.CredentialType), b)
 	store.Set(types.CredentialKey(
 		credential.CredentialID,
 		credential.CredentialType,
@@ -38,6 +41,9 @@ func (k Keeper) SetCredentialNoEnclave(ctx context.Context, credential types.Cre
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.CredentialKeyPrefix))
 	b := k.cdc.MustMarshal(&credential)
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.CredentialKeyPrefix, types.CredentialKey(credential.CredentialID, credential.CredentialType), b)
 	store.Set(types.CredentialKey(
 		credential.CredentialID,
 		credential.CredentialType,
@@ -50,6 +56,9 @@ func (k Keeper) SetCredentialNoEnclave(ctx context.Context, credential types.Cre
 func (k Keeper) RemoveCredentialNoEnclave(ctx context.Context, credentialID string, credentialType string) {
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.CredentialKeyPrefix))
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.CredentialKeyPrefix, types.CredentialKey(credentialID, credentialType), nil)
 	store.Delete(types.CredentialKey(
 		credentialID,
 		credentialType,
@@ -100,6 +109,9 @@ func (k Keeper) KeeperRemoveCredential(
 	}
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.CredentialKeyPrefix))
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.CredentialKeyPrefix, types.CredentialKey(credentialID, credentialType), nil)
 	store.Delete(types.CredentialKey(
 		credentialID,
 		credentialType,

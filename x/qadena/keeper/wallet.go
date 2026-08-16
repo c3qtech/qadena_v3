@@ -30,6 +30,9 @@ func (k Keeper) SetWallet(ctx context.Context, wallet types.Wallet) {
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.WalletKeyPrefix))
 	b := k.cdc.MustMarshal(&sw)
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.WalletKeyPrefix, types.WalletKey(wallet.WalletID), b)
 	store.Set(types.WalletKey(
 		wallet.WalletID,
 	), b)
@@ -43,6 +46,9 @@ func (k Keeper) SetWalletNoEnclave(ctx context.Context, wallet types.Wallet) {
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.WalletKeyPrefix))
 	b := k.cdc.MustMarshal(&sw)
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.WalletKeyPrefix, types.WalletKey(wallet.WalletID), b)
 	store.Set(types.WalletKey(
 		wallet.WalletID,
 	), b)
@@ -76,6 +82,9 @@ func (k Keeper) RemoveWallet(
 ) {
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.WalletKeyPrefix))
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.WalletKeyPrefix, types.WalletKey(walletID), nil)
 	store.Delete(types.WalletKey(
 		walletID,
 	))

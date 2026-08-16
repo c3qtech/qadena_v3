@@ -87,7 +87,7 @@ func NewKeeper(
 		pricefeedKeeper:      pfk,
 		contractInfo:         &types.ContractInfoHolder{}, // filled in by app wiring once wasmd exists
 		cachedCreator:        &c.StringHolder{},           //
-		cachedGasPriceInAQDN: &c.UInt64Holder{}, //
+		cachedGasPriceInAQDN: &c.UInt64Holder{},           //
 		headerService:        headerService,
 		cometService:         cometService,
 	}

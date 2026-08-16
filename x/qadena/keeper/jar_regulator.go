@@ -26,6 +26,9 @@ func (k Keeper) SetJarRegulator(ctx context.Context, jarRegulator types.JarRegul
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.JarRegulatorKeyPrefix))
 	b := k.cdc.MustMarshal(&jarRegulator)
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.JarRegulatorKeyPrefix, types.JarRegulatorKey(jarRegulator.JarID), b)
 	store.Set(types.JarRegulatorKey(
 		jarRegulator.JarID,
 	), b)
@@ -59,6 +62,9 @@ func (k Keeper) RemoveJarRegulator(
 ) {
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.JarRegulatorKeyPrefix))
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.JarRegulatorKeyPrefix, types.JarRegulatorKey(jarID), nil)
 	store.Delete(types.JarRegulatorKey(
 		jarID,
 	))

@@ -15,6 +15,9 @@ func (k Keeper) SetRecoverKey(ctx context.Context, recoverKey types.RecoverKey) 
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.RecoverKeyKeyPrefix))
 	b := k.cdc.MustMarshal(&recoverKey)
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.RecoverKeyKeyPrefix, types.RecoverKeyKey(recoverKey.WalletID), b)
 	store.Set(types.RecoverKeyKey(
 		recoverKey.WalletID,
 	), b)
@@ -48,6 +51,9 @@ func (k Keeper) RemoveRecoverKey(
 ) {
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.RecoverKeyKeyPrefix))
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.RecoverKeyKeyPrefix, types.RecoverKeyKey(walletID), nil)
 	store.Delete(types.RecoverKeyKey(
 		walletID,
 	))

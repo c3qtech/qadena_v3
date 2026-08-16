@@ -272,6 +272,10 @@ func (k Keeper) InitEnclave() bool {
 				} else {
 					c.LoggerDebug(k.logger, "Greeting "+r.GetMessage())
 					EnclaveGRPCClient = types.NewQadenaEnclaveClient(conn)
+					// The dial succeeded and the enclave answered a ping, so liveness is
+					// established -- from here the watchdog owns the question.  Started exactly
+					// once: InitEnclave has a single caller (app wiring) and returns on success.
+					startEnclaveWatchdog(k.logger, conn)
 					return true
 				}
 			}
@@ -1126,70 +1130,156 @@ func (k Keeper) EnclaveRollbackToHeight(sdkctx sdk.Context, height int64, dryRun
 	return r, nil
 }
 
-func (k Keeper) EnclaveSyncWallets(sdkctx sdk.Context) (error, []*types.Wallet) {
-	ctx, cancel := enclaveExecContext()
-	defer cancel()
+// Outbox drains are PAGED, so each of these loops until the enclave says the queue is empty.
+//
+// ALL PAGES MUST BE DRAINED WITHIN THIS BLOCK.  The enclave clears each page through its
+// transaction cache, so the clears become durable together when the block commits -- at the same
+// moment the chain writes the rows those pages carried.  Stopping partway and resuming in a later
+// block would apply rows whose queue entries then survive, and deliver them twice.
+//
+// See MsgSyncWallets for why the enclave bounds a page at all: it resolves every queued ID into a
+// full row and holds the page in the EPC, so an unbounded drain would make its peak memory a
+// function of how busy the block was.
 
-	r, err := EnclaveGRPCClient.SyncWallets(ctx, &types.MsgSyncWallets{Clear: true})
-	if err != nil {
-		c.ContextError(sdkctx, "error returned by SyncWallets on enclave "+err.Error())
-		return err, nil
+// outboxDrainMaxPages bounds the loop so a misbehaving enclave stalls the node instead of spinning
+// forever.  At a megabyte a page this is 256 MiB of queued rows in a SINGLE block -- unreachable by
+// any real workload, which is the point: crossing it means `more` is stuck true, not that the chain
+// is busy.  The enclave only ever reports `more` after consuming entries, so a healthy queue
+// strictly shrinks.
+const outboxDrainMaxPages = 256
+
+func (k Keeper) EnclaveSyncWallets(sdkctx sdk.Context) (error, []*types.Wallet) {
+	var wallets []*types.Wallet
+
+	for page := 0; ; page++ {
+		if page >= outboxDrainMaxPages {
+			err := fmt.Errorf("SyncWallets did not drain after %d pages (%d rows so far) -- "+
+				"the enclave keeps reporting more work", outboxDrainMaxPages, len(wallets))
+			c.ContextError(sdkctx, err.Error())
+			return err, nil
+		}
+
+		ctx, cancel := enclaveExecContext()
+		r, err := EnclaveGRPCClient.SyncWallets(ctx, &types.MsgSyncWallets{Clear: true})
+		cancel()
+		if err != nil {
+			c.ContextError(sdkctx, "error returned by SyncWallets on enclave "+err.Error())
+			return err, nil
+		}
+
+		wallets = append(wallets, r.GetWallets()...)
+		if !r.GetMore() {
+			break
+		}
 	}
-	if len(r.GetWallets()) > 0 {
-		c.ContextDebug(sdkctx, "SyncWallets returns ", c.PrettyPrint(r.GetWallets()))
+
+	if len(wallets) > 0 {
+		c.ContextDebug(sdkctx, "SyncWallets returns ", c.PrettyPrint(wallets))
 	}
-	return nil, r.GetWallets()
+	return nil, wallets
 }
 
 // EnclaveSyncCredentials drains the enclave's pending credential changes.  Removals come back
 // separately from writes: an enclave-originated deletion has no other way to reach the chain,
 // because SetCredentialNoEnclave can only write.
 func (k Keeper) EnclaveSyncCredentials(sdkctx sdk.Context) (error, []*types.Credential, []*types.CredentialRef) {
-	ctx, cancel := enclaveExecContext()
-	defer cancel()
+	var credentials []*types.Credential
+	var removed []*types.CredentialRef
 
-	r, err := EnclaveGRPCClient.SyncCredentials(ctx, &types.MsgSyncCredentials{Clear: true})
-	if err != nil {
-		c.ContextError(sdkctx, "error returned by SyncCredentials on enclave "+err.Error())
-		return err, nil, nil
+	// One `more` covers BOTH queues -- changed and removed share a reply and a budget -- so the
+	// loop keeps going while either has work left.
+	for page := 0; ; page++ {
+		if page >= outboxDrainMaxPages {
+			err := fmt.Errorf("SyncCredentials did not drain after %d pages (%d changed, %d removed so far) -- "+
+				"the enclave keeps reporting more work", outboxDrainMaxPages, len(credentials), len(removed))
+			c.ContextError(sdkctx, err.Error())
+			return err, nil, nil
+		}
+
+		ctx, cancel := enclaveExecContext()
+		r, err := EnclaveGRPCClient.SyncCredentials(ctx, &types.MsgSyncCredentials{Clear: true})
+		cancel()
+		if err != nil {
+			c.ContextError(sdkctx, "error returned by SyncCredentials on enclave "+err.Error())
+			return err, nil, nil
+		}
+
+		credentials = append(credentials, r.GetCredentials()...)
+		removed = append(removed, r.GetRemovedCredentials()...)
+		if !r.GetMore() {
+			break
+		}
 	}
-	if len(r.GetCredentials()) > 0 {
-		c.ContextDebug(sdkctx, "SyncCredentials returns", r.GetCredentials())
+
+	if len(credentials) > 0 {
+		c.ContextDebug(sdkctx, "SyncCredentials returns", credentials)
 	}
-	if len(r.GetRemovedCredentials()) > 0 {
-		c.ContextDebug(sdkctx, "SyncCredentials removed", r.GetRemovedCredentials())
+	if len(removed) > 0 {
+		c.ContextDebug(sdkctx, "SyncCredentials removed", removed)
 	}
-	return nil, r.GetCredentials(), r.GetRemovedCredentials()
+	return nil, credentials, removed
 }
 
 func (k Keeper) EnclaveSyncRecoverKeys(sdkctx sdk.Context) (error, []*types.RecoverKey) {
-	ctx, cancel := enclaveExecContext()
-	defer cancel()
+	var recoverKeys []*types.RecoverKey
 
-	r, err := EnclaveGRPCClient.SyncRecoverKeys(ctx, &types.MsgSyncRecoverKeys{Clear: true})
-	if err != nil {
-		c.ContextError(sdkctx, "error returned by SyncRecoverKeys on enclave "+err.Error())
-		return err, nil
+	for page := 0; ; page++ {
+		if page >= outboxDrainMaxPages {
+			err := fmt.Errorf("SyncRecoverKeys did not drain after %d pages (%d rows so far) -- "+
+				"the enclave keeps reporting more work", outboxDrainMaxPages, len(recoverKeys))
+			c.ContextError(sdkctx, err.Error())
+			return err, nil
+		}
+
+		ctx, cancel := enclaveExecContext()
+		r, err := EnclaveGRPCClient.SyncRecoverKeys(ctx, &types.MsgSyncRecoverKeys{Clear: true})
+		cancel()
+		if err != nil {
+			c.ContextError(sdkctx, "error returned by SyncRecoverKeys on enclave "+err.Error())
+			return err, nil
+		}
+
+		recoverKeys = append(recoverKeys, r.GetRecoverKeys()...)
+		if !r.GetMore() {
+			break
+		}
 	}
-	if len(r.GetRecoverKeys()) > 0 {
-		c.ContextDebug(sdkctx, "SyncRecoverKeys returns", r.GetRecoverKeys())
+
+	if len(recoverKeys) > 0 {
+		c.ContextDebug(sdkctx, "SyncRecoverKeys returns", recoverKeys)
 	}
-	return nil, r.GetRecoverKeys()
+	return nil, recoverKeys
 }
 
 func (k Keeper) EnclaveSyncSuspiciousTransactions(sdkctx sdk.Context) (error, []*types.SuspiciousTransaction) {
-	ctx, cancel := enclaveExecContext()
-	defer cancel()
+	var suspicious []*types.SuspiciousTransaction
 
-	r, err := EnclaveGRPCClient.SyncSuspiciousTransactions(ctx, &types.MsgSyncSuspiciousTransactions{Clear: true})
-	if err != nil {
-		c.ContextError(sdkctx, "error returned by SyncSuspiciousTransactions on enclave "+err.Error())
-		return err, nil
+	for page := 0; ; page++ {
+		if page >= outboxDrainMaxPages {
+			err := fmt.Errorf("SyncSuspiciousTransactions did not drain after %d pages (%d rows so far) -- "+
+				"the enclave keeps reporting more work", outboxDrainMaxPages, len(suspicious))
+			c.ContextError(sdkctx, err.Error())
+			return err, nil
+		}
+
+		ctx, cancel := enclaveExecContext()
+		r, err := EnclaveGRPCClient.SyncSuspiciousTransactions(ctx, &types.MsgSyncSuspiciousTransactions{Clear: true})
+		cancel()
+		if err != nil {
+			c.ContextError(sdkctx, "error returned by SyncSuspiciousTransactions on enclave "+err.Error())
+			return err, nil
+		}
+
+		suspicious = append(suspicious, r.GetSuspiciousTransactions()...)
+		if !r.GetMore() {
+			break
+		}
 	}
-	if len(r.GetSuspiciousTransactions()) > 0 {
-		c.ContextDebug(sdkctx, "SyncSuspiciousTransactions returns", r.GetSuspiciousTransactions())
+
+	if len(suspicious) > 0 {
+		c.ContextDebug(sdkctx, "SyncSuspiciousTransactions returns", suspicious)
 	}
-	return nil, r.GetSuspiciousTransactions()
+	return nil, suspicious
 }
 
 func (k Keeper) EnclaveValidateDestinationWallet(sdkctx sdk.Context, msg *types.MsgCreateWallet) (int, error) {
@@ -1663,143 +1753,26 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 	pushFailures := map[string]int{}
 
 	for _, sh := range storeHashes.GetHashes() {
-		h := c.StoreHashByKVStoreService(sdkctx, k.storeService, sh.Key)
-		switch sh.Key {
-		case types.WalletKeyPrefix:
-			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
-				wallets := k.GetAllWallet(sdkctx)
-				//    fmt.Println("wallets", list)
-				for _, wallet := range wallets {
-					if err := k.EnclaveClientSetWallet(sdkctx, wallet); err != nil {
-						pushFailures[sh.Key]++
-					}
-					checkSync = true
-				}
-			} else {
-				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
-			}
-
-		case types.CredentialKeyPrefix:
-			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
-				credentials := k.GetAllCredential(sdkctx)
-				for _, credential := range credentials {
-					// SEED, not Set.  A replay is not a live issue: the PCXY index must be rebuilt
-					// from whether a credential HAS a commitment, not from whether it is still
-					// unclaimed, or every credential consumed before this node joined is skipped
-					// and its index is permanently short.  See item 39.
-					if err := k.EnclaveClientSeedCredential(sdkctx, credential); err != nil {
-						pushFailures[sh.Key]++
-					}
-					checkSync = true
-				}
-			} else {
-				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
-			}
-		case types.PublicKeyKeyPrefix:
-			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
-				publicKeys := k.GetAllPublicKey(sdkctx)
-				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores synchronizing PublicKeys", publicKeys)
-				for _, publicKey := range publicKeys {
-					if err := k.EnclaveClientSetPublicKey(sdkctx, publicKey); err != nil {
-						pushFailures[sh.Key]++
-					}
-					checkSync = true
-				}
-			} else {
-				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
-			}
-		case types.PioneerJarKeyPrefix:
-			// PioneerJar is chain state the enclave mirrors -- SetPioneerJar forwards every write
-			// through EnclaveClientSetPioneerJar -- but the store was never added to the mirror set,
-			// so a node that did not EXECUTE the block that created the jar never received it.  A
-			// state-synced joiner held 0 against the primary's 1, with the row sitting in its own
-			// chain store the whole time.  Everything needed already existed; only this case and the
-			// GetStoreHash key were missing.
-			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
-				pioneerJars := k.GetAllPioneerJar(sdkctx)
-				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores synchronizing PioneerJars", pioneerJars)
-				for _, pioneerJar := range pioneerJars {
-					if err := k.EnclaveClientSetPioneerJar(sdkctx, pioneerJar); err != nil {
-						pushFailures[sh.Key]++
-					}
-					checkSync = true
-				}
-			} else {
-				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
-			}
-		case types.JarRegulatorKeyPrefix:
-			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
-				jarRegulators := k.GetAllJarRegulator(sdkctx)
-				for _, jarRegulator := range jarRegulators {
-					if err := k.EnclaveClientSetJarRegulator(sdkctx, jarRegulator); err != nil {
-						pushFailures[sh.Key]++
-					}
-					checkSync = true
-				}
-			} else {
-				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
-			}
-		case types.IntervalPublicKeyIDKeyPrefix:
-			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
-				intervalPublicKeyIDs := k.GetAllIntervalPublicKeyID(sdkctx)
-				for _, intervalPublicKeyID := range intervalPublicKeyIDs {
-					if err := k.EnclaveClientSetIntervalPublicKeyId(sdkctx, intervalPublicKeyID); err != nil {
-						pushFailures[sh.Key]++
-					}
-					checkSync = true
-				}
-			} else {
-				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
-			}
-		case types.ProtectKeyKeyPrefix:
-			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
-				protectKeys := k.GetAllProtectKey(sdkctx)
-				for _, protectKey := range protectKeys {
-					if err := k.EnclaveClientSetProtectKey(sdkctx, protectKey); err != nil {
-						pushFailures[sh.Key]++
-					}
-					checkSync = true
-				}
-			} else {
-				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
-			}
-		case types.RecoverKeyKeyPrefix:
-			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
-				recoverKeys := k.GetAllRecoverKey(sdkctx)
-				for _, recoverKey := range recoverKeys {
-					if err := k.EnclaveClientSetRecoverKey(sdkctx, recoverKey); err != nil {
-						pushFailures[sh.Key]++
-					}
-					checkSync = true
-				}
-			} else {
-				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
-			}
-		case types.EnclaveIdentityKeyPrefix:
-			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
-				enclaveIdentities := k.GetAllEnclaveIdentity(sdkctx)
-				for _, enclaveIdentity := range enclaveIdentities {
-					if err := k.EnclaveClientSetEnclaveIdentity(sdkctx, enclaveIdentity); err != nil {
-						pushFailures[sh.Key]++
-					}
-					checkSync = true
-				}
-			} else {
-				c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
-			}
-		default:
+		if !mirroredStores[sh.Key] {
 			c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores Ignoring key="+sh.Key+" in Qadena module")
+			continue
 		}
 
+		h := c.StoreHashByKVStoreService(sdkctx, k.storeService, sh.Key)
+		if sh.Hash == h {
+			c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
+			continue
+		}
+
+		c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
+
+		rows, failed := k.seedEnclaveStore(sdkctx, sh.Key)
+		if failed > 0 {
+			pushFailures[sh.Key] += failed
+		}
+		if rows > 0 {
+			checkSync = true
+		}
 	}
 
 	if len(pushFailures) > 0 {
@@ -1875,6 +1848,16 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 func haltOnEnclaveFailure(sdkctx sdk.Context, step string, err error) {
 	if err == nil {
 		return
+	}
+
+	// A cancelled call means the watchdog declared the enclave dead; report THAT.  Without this
+	// the operator sees "context canceled", which is true and useless.  Checked via the root's
+	// recorded cause rather than errors.Is(err, context.Canceled), because gRPC surfaces the
+	// cancellation as a status error (codes.Canceled) that does not unwrap to context.Canceled --
+	// and once the root is cancelled, EVERY exec-path call fails, so whenever a cause exists it
+	// is the reason this call failed.
+	if cause := context.Cause(EnclaveAliveContext()); cause != nil {
+		err = cause
 	}
 
 	c.ContextError(sdkctx, "enclave "+step+" failed during EndBlock: "+err.Error())

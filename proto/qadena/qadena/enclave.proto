@@ -113,6 +113,10 @@ service QadenaEnclave {
   // SetCredential refuses both, which is right for a user-submitted duplicate and wrong for a
   // bulk re-push -- and refuses BEFORE storing, so the row is dropped as well (item 43).
   rpc SeedCredential (Credential) returns (SetCredentialReply) {}
+
+  // Seeding a store, a page at a time.  Replaces one RPC per row -- ~10k of them per table on a
+  // state-synced joiner -- with one per page.  See MsgSeedStorePage.
+  rpc SeedStorePage (MsgSeedStorePage) returns (SeedStorePageReply) {}
   rpc RemoveCredential (EnclaveRemoveCredentialRequest) returns (RemoveCredentialReply) {}
   rpc RecoverKeyByCredential (Credential) returns (RecoverKeyReply) {}
   rpc ClaimCredential(MsgClaimCredential) returns (MsgClaimCredentialResponse) {}
@@ -251,6 +255,18 @@ message StoreHash {
 }
 
 message MsgGetStoreHash {
+  // Which store prefixes to hash.  EMPTY MEANS ALL TEN, so existing callers are unaffected.
+  //
+  // Hashing a prefix is a full scan of it, and the reply used to be all-or-nothing: the dsvs
+  // module handles exactly one prefix (AuthorizedSignatory, 167 rows) and was triggering a scan of
+  // all ten (~16,000 rows) to obtain it, discarding the other nine with "Ignoring key=...".
+  //
+  // The RESPONSE ORDER IS NOT THE REQUEST ORDER.  Hashes come back in the enclave's canonical
+  // order regardless of what was asked for, because enclaveSynchronizeStores pushes out-of-sync
+  // stores in exactly the order it receives them, and that order is load-bearing -- EnclaveIdentity
+  // and IntervalPublicKeyID must precede ProtectKey and RecoverKey, whose handlers cannot decrypt
+  // without them.  A caller cannot reorder the seeding by reordering its request.
+  repeated string keys = 1;
 }
 
 message GetStoreHashReply {
@@ -536,16 +552,65 @@ message ScanBankSendReply {
   bool status = 1;
 }
 
+// MsgSeedStorePage carries a run of rows from ONE mirrored store, for the chain->enclave seed.
+//
+// Rows travel MARSHALLED rather than as a typed repeated field, so that one message serves all ten
+// mirrored stores instead of ten near-identical ones.  The key names which store, using the same
+// identifiers GetStoreHash reports, and the enclave unmarshals into the type that store's handler
+// expects:
+//
+//     Wallet/value/               -> Wallet              Credential/value/       -> Credential
+//     PublicKey/value/            -> PublicKey           PioneerJar/value/       -> PioneerJar
+//     JarRegulator/value/         -> JarRegulator        ProtectKey/value/       -> ProtectKey
+//     IntervalPublicKeyID/value/  -> IntervalPublicKeyID RecoverKey/value/       -> RecoverKey
+//     EnclaveIdentity/value/      -> EnclaveIdentity
+//
+// EACH ROW STILL GOES THROUGH ITS OWN HANDLER inside the enclave.  This changes how rows arrive,
+// never what happens to them: SetProtectKey and SetRecoverKey decrypt a vshare and build derived
+// indexes, and SeedCredential maintains the PCXY index.  A bulk write straight to the store would
+// be faster still and would reintroduce exactly the class of bug that left CredentialPCXY 972 rows
+// short -- a derived index rebuilt by a path that skipped the logic that maintains it.
+message MsgSeedStorePage {
+  string key = 1;
+  repeated bytes rows = 2;
+}
+
+// Rejections are COUNTED, not fatal, and the caller decides.  A handler can legitimately fail for
+// reasons that have nothing to do with the page -- ProtectKey and RecoverKey reconstruct a
+// historical interval key from its owners over the network -- and the seed treats any rejection as
+// grounds to refuse to continue rather than proceeding half-seeded.
+message SeedStorePageReply {
+  uint32 accepted = 1;
+  uint32 failed = 2;
+}
+
+// Outbox drains are PAGED.  Each Msg carries a byte budget and each Reply reports whether the
+// queue still holds entries; the caller loops until it does not.
+//
+// The bound exists for two reasons, and the first is the enclave rather than the wire.  Draining
+// resolves every queued ID into a full row and holds them all at once, inside the EPC -- tens to a
+// couple hundred megabytes, shared with everything else the enclave is doing.  An unbounded drain
+// makes the enclave's peak memory a function of how busy the block was.  The second reason is the
+// 4 MiB grpc-go default, which nothing on this path overrides.
+//
+// PAGE ALL OF IT WITHIN ONE BLOCK.  The clear rides the transaction cache, so every page's clear
+// becomes durable together at commit, exactly when the chain's writes do.  Stopping partway through
+// and resuming in a later block would break that: the rows are applied and the queue keeps them.
 message MsgSyncWallets {
   bool clear = 1;
+  // 0 means the enclave's own page budget.  The caller does not need to know it.
+  uint32 maxBytes = 2;
 }
 
 message SyncWalletsReply {
   repeated Wallet wallets = 1;
+  // The queue was not emptied by this call.  Call again, in the same block.
+  bool more = 2;
 }
 
 message MsgSyncCredentials {
   bool clear = 1;
+  uint32 maxBytes = 2;
 }
 
 // CredentialRef names a credential without carrying it.  Not "CredentialKey": that name is
@@ -561,6 +626,7 @@ message SyncCredentialsReply {
   // populates this yet; it is the channel an enclave-originated removal will need once
   // MsgRemoveCredential grows a user-initiated path.
   repeated CredentialRef removedCredentials = 2;
+  bool more = 3;
 }
 
 // EnclaveRemoveCredentialRequest carries who asked for the removal.  An empty requesterWalletID
@@ -585,10 +651,12 @@ message EnclaveUpdateCredentialRequest {
 
 message MsgSyncRecoverKeys {
   bool clear = 1;
+  uint32 maxBytes = 2;
 }
 
 message SyncRecoverKeysReply {
   repeated RecoverKey recoverKeys = 1;
+  bool more = 2;
 }
 
 
@@ -598,10 +666,12 @@ message SetSecretSharePrivateKeyReply {
 
 message MsgSyncSuspiciousTransactions {
   bool clear = 1;
+  uint32 maxBytes = 2;
 }
 
 message SyncSuspiciousTransactionsReply {
   repeated SuspiciousTransaction suspiciousTransactions = 1;
+  bool more = 2;
 }
 
 message InitEnclaveReply {

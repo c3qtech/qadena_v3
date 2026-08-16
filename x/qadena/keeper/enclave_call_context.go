@@ -32,13 +32,47 @@ package keeper
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync/atomic"
 	"time"
 
+	"cosmossdk.io/log"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"google.golang.org/grpc"
 
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 )
+
+// enclaveAlive is cancelled ONCE, by the watchdog, when the enclave has stopped serving anything.
+// Every execution-path context derives from it, so a call blocked inside a wedged enclave unblocks
+// with a cancellation and reaches haltOnEnclaveFailure -- the loud, intended halt -- instead of
+// hanging forever with nothing in the log.
+//
+// This is the counterpart to removing the wall-clock deadline (the height-34,025 fix, above).
+// Removing the deadline was right, but it made a DEAD enclave indistinguishable from a busy one:
+// the node froze silently, with no panic, no height and no reason anywhere.  Liveness is a separate
+// question from latency, so it is asked separately -- by the watchdog, off the consensus path --
+// and the answer arrives here, as a cancellation whose cause names what actually happened.
+var (
+	enclaveAlive       context.Context
+	enclaveAliveCancel context.CancelCauseFunc
+)
+
+func init() { resetEnclaveAliveForTesting() }
+
+// resetEnclaveAliveForTesting re-arms the root.  Production arms it exactly once, via init;
+// tests that fire the watchdog need a fresh root afterwards or every later test inherits the
+// cancellation.
+func resetEnclaveAliveForTesting() {
+	enclaveAlive, enclaveAliveCancel = context.WithCancelCause(context.Background())
+}
+
+// EnclaveAliveContext exposes the root for the dsvs keeper, whose enclave_call_context.go is a
+// deliberate duplicate of this file's exec tier (it cannot live in x/qadena/common without
+// perturbing the enclave measurement).  dsvs's calls run from ITS BeginBlock, so without this a
+// stopped enclave could leave the node blocked there -- a door the cancellation would never reach.
+func EnclaveAliveContext() context.Context { return enclaveAlive }
 
 // enclaveSlowCallThreshold is the deadline that used to be enforced here. It is no longer enforced
 // on the execution path, but a call that exceeds it is still worth shouting about: it is a call that
@@ -53,8 +87,14 @@ const enclaveSlowCallThreshold = 2 * time.Second
 // That trades a fork for a stall: a genuinely wedged enclave now stops this node instead of silently
 // diverging from the network. A stalled node is loud, recoverable, and cannot corrupt state; a
 // forked one is none of those.
+// It derives from enclaveAlive rather than context.Background(), which is the one exception to
+// "no deadline": not a timer, but the watchdog's considered verdict that the enclave is GONE.  If
+// that verdict arrives while a message handler's call is in flight, the transaction fails on this
+// node only -- and that still cannot fork it, because EndBlock's own sync calls then fail the same
+// way and haltOnEnclaveFailure panics before the block commits.  Cancellation converts a silent
+// hang into a named halt, never into divergent committed state.
 func enclaveExecContext() (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(enclaveAlive)
 	start := time.Now()
 	return ctx, func() {
 		cancel()
@@ -185,4 +225,109 @@ const enclavePeerCallTimeout = 60 * time.Second
 // enclave would hang the query server.
 func enclaveQueryContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The watchdog: liveness asked as its own question, off the consensus path.
+// ---------------------------------------------------------------------------------------------
+
+// Vars rather than consts so the tests can compress time; nothing else may write them.
+var (
+	enclaveHealthInterval = 5 * time.Second // how often we ask
+	enclaveHealthTimeout  = 3 * time.Second // SayHello does no work; this is generous already
+)
+
+// TWO THRESHOLDS, because "tell me what is wrong" and "give up" are different decisions.
+//
+// The FIRST missed check is logged immediately: the operator sees why the chain stopped within
+// seconds, which is the whole point of this change.  Halting waits for a much longer grace, so a
+// transient stall -- a slow unseal, a GC pause, a machine that swapped -- resolves itself with the
+// node still running and no operator involvement.  A genuinely dead enclave still ends in the
+// named panic, just later.
+//
+// Overridable so the crash suite can shorten it; a two-minute wait in every continuous-regression
+// cycle is a real cost, and the suite is the only caller that wants the short value.  Reading an
+// env var is safe here because it feeds ONLY the watchdog, which is off the consensus path -- it
+// can decide when THIS node halts, never what any node computes.
+//
+// A var rather than a const so the tests can shorten it; nothing else may write it.
+var enclaveHealthGrace = envDuration("QADENA_ENCLAVE_HEALTH_GRACE", 2*time.Minute)
+
+func envDuration(name string, def time.Duration) time.Duration {
+	if v := os.Getenv(name); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return def
+}
+
+// startEnclaveWatchdog asks the enclave whether it is alive, on a timer, entirely OFF the
+// consensus path -- which is what makes its deadline safe.  A deadline that can only cancel a
+// health probe cannot change state; the 2s deadline that forked height 34,025 was on a path whose
+// error became a failed transaction.
+//
+// WHY A PING RATHER THAN A LONGER TIMEOUT ON THE CALL ITSELF.  The duration of an EndBlock
+// measures the WORK, and cannot distinguish "the enclave is busy" from "the enclave is gone".  Any
+// single number is wrong in both directions: short enough to detect a wedge promptly is short
+// enough that ordinary load trips it, and long enough to be safe under load leaves a dead node
+// silent for minutes.  SayHello takes no locks and gRPC serves it on its own goroutine, so a busy
+// enclave answers it and a stopped one does not -- evidence of death, not an inference from
+// elapsed time.
+//
+// Started once, from InitEnclave, right after the dial succeeds.  InitEnclave runs exactly once
+// per process (app/app.go panics if it fails), so there is exactly one watchdog.
+func startEnclaveWatchdog(logger log.Logger, conn *grpc.ClientConn) {
+	go watchEnclaveLiveness(logger, types.NewGreeterClient(conn))
+}
+
+// watchEnclaveLiveness is the loop, split from the conn plumbing so the tests can stand a fake
+// GreeterClient behind it.  It reads the interval each pass, so a test that compressed time and
+// then restored it leaves any still-running loop probing at the production cadence.
+func watchEnclaveLiveness(logger log.Logger, greeter types.GreeterClient) {
+	var silentSince time.Time
+	misses := 0
+
+	for {
+		time.Sleep(enclaveHealthInterval)
+		ctx, cancel := context.WithTimeout(context.Background(), enclaveHealthTimeout)
+		_, err := greeter.SayHello(ctx, &types.HelloRequest{Name: "watchdog"})
+		cancel()
+
+		if err == nil {
+			if misses > 0 {
+				// Say so explicitly.  A stall that resolved is the case the grace exists
+				// for, and it should be visible rather than inferred from the logging
+				// stopping.
+				c.LoggerError(logger, fmt.Sprintf(
+					"enclave answered again after %d missed health check(s) over %s -- not halting",
+					misses, time.Since(silentSince).Round(time.Second)))
+			}
+			misses, silentSince = 0, time.Time{}
+			continue
+		}
+
+		if misses == 0 {
+			silentSince = time.Now()
+		}
+		misses++
+		silent := time.Since(silentSince)
+
+		// Logged from the FIRST miss: the chain is already frozen by now, because the blocked
+		// EndBlock stopped commits immediately.  This is the line that says why.
+		c.LoggerError(logger, fmt.Sprintf(
+			"enclave missed health check %d (silent for %s, halting at %s): %v",
+			misses, silent.Round(time.Second), enclaveHealthGrace, err))
+
+		if silent < enclaveHealthGrace {
+			continue
+		}
+
+		// One-way door: unblock every in-flight execution call so the halt path runs.  The
+		// cause is what haltOnEnclaveFailure reports instead of a bare "context canceled".
+		enclaveAliveCancel(fmt.Errorf(
+			"enclave stopped responding: silent for %s across %d health checks (last: %w)",
+			silent.Round(time.Second), misses, err))
+		return
+	}
 }

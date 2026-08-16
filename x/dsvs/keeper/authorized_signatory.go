@@ -15,6 +15,10 @@ func (k Keeper) SetAuthorizedSignatory(ctx context.Context, authorizedSignatory 
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.AuthorizedSignatoryKeyPrefix))
 	b := k.cdc.MustMarshal(&authorizedSignatory)
+	// BEFORE the Set: an overwrite has to subtract the previous value, which this read still sees.
+	k.AccumulateWrite(ctx, types.AuthorizedSignatoryKeyPrefix, types.AuthorizedSignatoryKey(
+		authorizedSignatory.WalletID,
+	), b)
 	store.Set(types.AuthorizedSignatoryKey(
 		authorizedSignatory.WalletID,
 	), b)
@@ -48,6 +52,10 @@ func (k Keeper) RemoveAuthorizedSignatory(
 ) {
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.AuthorizedSignatoryKeyPrefix))
+	// nil newValue = a delete: the row's contribution is subtracted and nothing added.
+	k.AccumulateWrite(ctx, types.AuthorizedSignatoryKeyPrefix, types.AuthorizedSignatoryKey(
+		walletID,
+	), nil)
 	store.Delete(types.AuthorizedSignatoryKey(
 		walletID,
 	))

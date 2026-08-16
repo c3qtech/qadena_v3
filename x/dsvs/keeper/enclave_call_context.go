@@ -12,9 +12,23 @@ package keeper
 // This is duplicated rather than shared because the natural shared home, x/qadena/common, is
 // imported by cmd/qadenad_enclave -- and changing that package's contents risks perturbing the
 // enclave binary, whose measurement genesis records.
+//
+// DERIVED FROM THE QADENA KEEPER'S ALIVE-ROOT, not from context.Background().  The watchdog there
+// cancels that root when the enclave has stopped serving anything; without inheriting it, a stopped
+// enclave could leave the node blocked HERE, in dsvs's BeginBlock, where the cancellation would
+// never reach -- the silent-hang failure mode surviving through a different door.  The import is
+// acyclic: the qadena keeper does not import this package.
+//
+// dsvs's error handling is unchanged by this: its callers log and continue, they never halt.  The
+// named halt still comes from the qadena keeper's EndBlock, which fails the same way at the same
+// moment.
 
-import "context"
+import (
+	"context"
+
+	qadenakeeper "github.com/c3qtech/qadena_v3/x/qadena/keeper"
+)
 
 func enclaveExecContext() (context.Context, context.CancelFunc) {
-	return context.WithCancel(context.Background())
+	return context.WithCancel(qadenakeeper.EnclaveAliveContext())
 }

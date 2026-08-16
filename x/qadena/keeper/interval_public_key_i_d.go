@@ -94,6 +94,9 @@ func (k Keeper) SetIntervalPublicKeyID(ctx context.Context, intervalPublicKeyID 
 	}
 
 	b := k.cdc.MustMarshal(&intervalPublicKeyID)
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.IntervalPublicKeyIDKeyPrefix, types.IntervalPublicKeyIDKey(intervalPublicKeyID.NodeID, intervalPublicKeyID.NodeType), b)
 	store.Set(types.IntervalPublicKeyIDKey(
 		intervalPublicKeyID.NodeID,
 		intervalPublicKeyID.NodeType,
@@ -156,6 +159,9 @@ func (k Keeper) RemoveIntervalPublicKeyID(
 ) {
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.IntervalPublicKeyIDKeyPrefix))
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.IntervalPublicKeyIDKeyPrefix, types.IntervalPublicKeyIDKey(nodeID, nodeType), nil)
 	store.Delete(types.IntervalPublicKeyIDKey(
 		nodeID,
 		nodeType,

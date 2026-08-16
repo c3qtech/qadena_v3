@@ -26,6 +26,9 @@ func (k Keeper) SetPioneerJar(ctx context.Context, pioneerJar types.PioneerJar) 
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.PioneerJarKeyPrefix))
 	b := k.cdc.MustMarshal(&pioneerJar)
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.PioneerJarKeyPrefix, types.PioneerJarKey(pioneerJar.PioneerID), b)
 	store.Set(types.PioneerJarKey(
 		pioneerJar.PioneerID,
 	), b)
@@ -59,6 +62,9 @@ func (k Keeper) RemovePioneerJar(
 ) {
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.PioneerJarKeyPrefix))
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.PioneerJarKeyPrefix, types.PioneerJarKey(pioneerID), nil)
 	store.Delete(types.PioneerJarKey(
 		pioneerID,
 	))

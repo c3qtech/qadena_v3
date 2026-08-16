@@ -26,6 +26,9 @@ func (k Keeper) SetPublicKey(ctx context.Context, publicKey types.PublicKey) {
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.PublicKeyKeyPrefix))
 	b := k.cdc.MustMarshal(&publicKey)
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.PublicKeyKeyPrefix, types.PublicKeyKey(publicKey.PubKID, publicKey.PubKType), b)
 	store.Set(types.PublicKeyKey(
 		publicKey.PubKID,
 		publicKey.PubKType,
@@ -63,6 +66,9 @@ func (k Keeper) RemovePublicKey(
 ) {
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.PublicKeyKeyPrefix))
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.PublicKeyKeyPrefix, types.PublicKeyKey(pubKID, pubKType), nil)
 	store.Delete(types.PublicKeyKey(
 		pubKID,
 		pubKType,

@@ -126,6 +126,13 @@ type qadenaServer struct {
 	Cdc           *amino.ProtoCodec
 	StoreKey      storetypes.StoreKey
 
+	// Prefixes whose shadow accumulator disagreed with a scan, or was never established.  Written
+	// by the READ path (compareAccumulatorToScan, called from GetStoreHash, which must not write to
+	// the store) and drained by the next write to that prefix.  In memory on purpose: losing it on
+	// restart costs nothing, because the next comparison re-derives it.
+	accMu          sync.Mutex
+	accNeedsReseed map[string]bool
+
 	// The same goleveldb that backs the multistore, held directly for the raw (non-IAVL)
 	// height-bookkeeping keys under qmeta/ -- confirmedHeight and the height->version index must
 	// live OUTSIDE the tree so a tree rollback cannot rewrite them.  See enclave_height.go.
@@ -4157,6 +4164,9 @@ func (s *qadenaServer) SetDSVSAuthorizedSignatory(ctx context.Context, in *dsvst
 
 	b := s.Cdc.MustMarshal(in)
 
+	// Maintain the shadow accumulator BEFORE the write: an overwrite has to subtract the
+	// row's previous value, which is gone once this store.Set lands.
+	s.accumulateWrite(dsvstypes.AuthorizedSignatoryKeyPrefix, EnclaveKeyKey(in.WalletID), b)
 	store.Set(EnclaveKeyKey(in.WalletID), b)
 	c.LoggerDebug(logger, "Stored authorized signatory")
 }
@@ -4217,6 +4227,9 @@ func (s *qadenaServer) SetAuthorizedSignatory(ctx context.Context, in *types.Val
 
 	b := s.Cdc.MustMarshal(in)
 
+	// Maintain the shadow accumulator BEFORE the write: an overwrite has to subtract the
+	// row's previous value, which is gone once this store.Set lands.
+	s.accumulateWrite(dsvstypes.AuthorizedSignatoryKeyPrefix, EnclaveKeyKey(in.Creator), b)
 	store.Set(EnclaveKeyKey(in.Creator), b)
 	c.LoggerDebug(logger, "Stored authorized signatory")
 
@@ -4696,6 +4709,9 @@ func (s *qadenaServer) setPublicKeyNoNotify(in types.PublicKey) {
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.PublicKeyKeyPrefix))
 
 	b := s.Cdc.MustMarshal(&in)
+	// Maintain the shadow accumulator BEFORE the write: an overwrite has to subtract the
+	// row's previous value, which is gone once this store.Set lands.
+	s.accumulateWrite(types.PublicKeyKeyPrefix, types.PublicKeyKey(in.PubKID, in.PubKType), b)
 	store.Set(types.PublicKeyKey(in.PubKID, in.PubKType), b)
 }
 
@@ -4787,6 +4803,9 @@ func (s *qadenaServer) setIntervalPublicKeyIdNoNotify(in types.IntervalPublicKey
 
 	b := s.Cdc.MustMarshal(&in)
 	c.LoggerDebug(logger, "setIntervalPublicKeyIdNoNotify "+c.PrettyPrint(in))
+	// Maintain the shadow accumulator BEFORE the write: an overwrite has to subtract the
+	// row's previous value, which is gone once this store.Set lands.
+	s.accumulateWrite(types.IntervalPublicKeyIDKeyPrefix, types.IntervalPublicKeyIDKey(in.NodeID, in.NodeType), b)
 	store.Set(types.IntervalPublicKeyIDKey(in.NodeID, in.NodeType), b)
 	storeByPubKID.Set(types.IntervalPublicKeyIDByPubKIDKey(in.PubKID), b)
 }
@@ -5381,14 +5400,39 @@ func (s *qadenaServer) setJarRegulatorNoNotify(in types.JarRegulator) {
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.JarRegulatorKeyPrefix))
 
 	b := s.Cdc.MustMarshal(&in)
+	// Maintain the shadow accumulator BEFORE the write: an overwrite has to subtract the
+	// row's previous value, which is gone once this store.Set lands.
+	s.accumulateWrite(types.JarRegulatorKeyPrefix, types.JarRegulatorKey(in.JarID), b)
 	store.Set(types.JarRegulatorKey(in.JarID), b)
 }
 
 func (s *qadenaServer) setPioneerJarNoNotify(in types.PioneerJar) {
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.PioneerJarKeyPrefix))
 
+	// KEYED BY PIONEER-ID, matching both the chain (pioneer_jar.go stores by PioneerID) and this
+	// file's own reader (getPioneerJar takes a pioneerID).  This used to key by JarID, which made
+	// the same row live under "jar1/" here and "pioneer1/" on the chain: identical VALUE, different
+	// KEY, so the store hashes could never agree.  Every restart reported PioneerJar OUT-OF-SYNC,
+	// the seed "repaired" it back into the same mismatched pair, and DIVERGED AT AN AGREED HEIGHT
+	// fired on a chain where nothing had diverged.  It was also data loss waiting to happen: two
+	// pioneers sharing a jar would overwrite each other's row.
+	//
+	// The legacy JarID-keyed row is deleted in passing, so an enclave that stored under the old key
+	// self-heals on the next write instead of carrying a permanent extra row that keeps the hashes
+	// apart.  Guarded, because a network where someone named the jar after the pioneer would
+	// otherwise delete the row it just wrote.
+	if in.JarID != in.PioneerID {
+		if legacy := store.Get(types.PioneerJarKey(in.JarID)); legacy != nil {
+			s.accumulateWrite(types.PioneerJarKeyPrefix, types.PioneerJarKey(in.JarID), nil)
+			store.Delete(types.PioneerJarKey(in.JarID))
+		}
+	}
+
 	b := s.Cdc.MustMarshal(&in)
-	store.Set(types.PioneerJarKey(in.JarID), b)
+	// Maintain the shadow accumulator BEFORE the write: an overwrite has to subtract the
+	// row's previous value, which is gone once this store.Set lands.
+	s.accumulateWrite(types.PioneerJarKeyPrefix, types.PioneerJarKey(in.PioneerID), b)
+	store.Set(types.PioneerJarKey(in.PioneerID), b)
 }
 
 func (s *qadenaServer) validateEnclaveIdentities() {
@@ -5569,6 +5613,9 @@ func (s *qadenaServer) setEnclaveIdentity(in *types.EnclaveIdentity) {
 	c.LoggerDebug(logger, "setEnclaveIdentity "+c.PrettyPrint(in))
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.EnclaveIdentityKeyPrefix))
 	b := s.Cdc.MustMarshal(in)
+	// Maintain the shadow accumulator BEFORE the write: an overwrite has to subtract the
+	// row's previous value, which is gone once this store.Set lands.
+	s.accumulateWrite(types.EnclaveIdentityKeyPrefix, types.EnclaveIdentityKey(in.UniqueID), b)
 	store.Set(types.EnclaveIdentityKey(in.UniqueID), b)
 
 	if in.Status == types.UnvalidatedStatus {
@@ -5660,6 +5707,9 @@ func (s *qadenaServer) setWalletNoNotify(in types.Wallet) {
 	var sw types.StableWallet
 	c.SetStableWallet(in, &sw)
 	b := s.Cdc.MustMarshal(&sw)
+	// Maintain the shadow accumulator BEFORE the write: an overwrite has to subtract the
+	// row's previous value, which is gone once this store.Set lands.
+	s.accumulateWrite(types.WalletKeyPrefix, types.WalletKey(in.WalletID), b)
 	store.Set(types.WalletKey(in.WalletID), b)
 }
 
@@ -5674,6 +5724,9 @@ func (s *qadenaServer) setCredentialNoNotify(credID string, credType string, cre
 
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.CredentialKeyPrefix))
 	b := s.Cdc.MustMarshal(&credential)
+	// Maintain the shadow accumulator BEFORE the write: an overwrite has to subtract the
+	// row's previous value, which is gone once this store.Set lands.
+	s.accumulateWrite(types.CredentialKeyPrefix, types.CredentialKey(credID, credType), b)
 	store.Set(types.CredentialKey(
 		credID,
 		credType,
@@ -5682,6 +5735,9 @@ func (s *qadenaServer) setCredentialNoNotify(credID string, credType string, cre
 
 func (s *qadenaServer) removeCredentialNoNotify(credID string, credType string) {
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.CredentialKeyPrefix))
+	// Maintain the shadow accumulator BEFORE the write: an overwrite has to subtract the
+	// row's previous value, which is gone once this store.Delete lands.
+	s.accumulateWrite(types.CredentialKeyPrefix, types.CredentialKey(credID, credType), nil)
 	store.Delete(types.CredentialKey(
 		credID,
 		credType,
@@ -5803,6 +5859,9 @@ func (s *qadenaServer) setProtectKeyNoNotify(in *types.ProtectKey) {
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.ProtectKeyKeyPrefix))
 
 	b := s.Cdc.MustMarshal(in)
+	// Maintain the shadow accumulator BEFORE the write: an overwrite has to subtract the
+	// row's previous value, which is gone once this store.Set lands.
+	s.accumulateWrite(types.ProtectKeyKeyPrefix, types.ProtectKeyKey(in.WalletID), b)
 	store.Set(types.ProtectKeyKey(in.WalletID), b)
 }
 
@@ -5842,6 +5901,9 @@ func (s *qadenaServer) setRecoverKeyByOriginalWalletIDNoNotify(walletID string, 
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.RecoverKeyKeyPrefix))
 
 	b := s.Cdc.MustMarshal(in)
+	// Maintain the shadow accumulator BEFORE the write: an overwrite has to subtract the
+	// row's previous value, which is gone once this store.Set lands.
+	s.accumulateWrite(types.RecoverKeyKeyPrefix, types.RecoverKeyKey(walletID), b)
 	store.Set(types.RecoverKeyKey(walletID), b)
 }
 
@@ -5982,26 +6044,25 @@ func (s *qadenaServer) enclaveAppendOptionalServiceProvidersCCPubK(ccPubK []c.VS
 func (s *qadenaServer) SyncWallets(ctx context.Context, in *types.MsgSyncWallets) (*types.SyncWalletsReply, error) {
 	//  c.LoggerDebug(logger, "SyncWallets " + c.PrettyPrint(in))
 
-	wallets := []*types.Wallet{}
+	queue := outboxGet[string](s, outboxWalletsKey)
 
-	for _, changedWallet := range outboxGet[string](s, outboxWalletsKey) {
-		c.LoggerDebug(logger, "Wallet changed "+changedWallet)
-		wallet, found := s.getWallet(changedWallet)
-		if found {
-			wallets = append(wallets, &wallet)
-		}
-	}
+	wallets, consumed, more := outboxDrainPage(queue, outboxPageBudget(in.GetMaxBytes()),
+		func(id string) (*types.Wallet, int, bool) {
+			c.LoggerDebug(logger, "Wallet changed "+id)
+			wallet, found := s.getWallet(id)
+			if !found {
+				return nil, 0, false
+			}
+			return &wallet, wallet.Size(), true
+		})
 
 	// The clear goes through the transaction cache (outboxSet), so it becomes durable exactly
 	// when the block that consumed these rows commits at EndBlock -- a crash before that commit
-	// leaves the queue intact for the block's re-execution.  Same guard as before: an entry
-	// whose row did not resolve keeps the queue alive for retry.
-	if in.Clear && len(wallets) > 0 {
-		c.LoggerDebug(logger, "Clearing wallets outbox")
-		outboxSet[string](s, outboxWalletsKey, nil)
-	}
+	// leaves the queue intact for the block's re-execution.  That is also why the caller must
+	// finish paging WITHIN one block: every page's clear commits together with the chain's writes.
+	more = outboxCommitPage(s, outboxWalletsKey, queue, consumed, in.Clear && len(wallets) > 0, more)
 
-	return &types.SyncWalletsReply{Wallets: wallets}, nil
+	return &types.SyncWalletsReply{Wallets: wallets, More: more}, nil
 }
 
 /*
@@ -6030,66 +6091,84 @@ func (s *qadenaServer) SyncEnclaveIdentities(ctx context.Context, in *types.MsgS
 func (s *qadenaServer) SyncCredentials(ctx context.Context, in *types.MsgSyncCredentials) (*types.SyncCredentialsReply, error) {
 	//  c.LoggerDebug(logger, "SyncCredentials " + c.PrettyPrint(in))
 
-	credentials := []*types.Credential{}
+	budget := outboxPageBudget(in.GetMaxBytes())
 
-	for _, changedCredential := range outboxGet[outboxCredentialKey](s, outboxChangedCredentialsKey) {
-		c.LoggerDebug(logger, "Credential changed "+c.PrettyPrint(changedCredential))
-		credential, found := s.getCredential(changedCredential.CredentialID, changedCredential.CredentialType)
-		if found {
-			credentials = append(credentials, &credential)
-		}
+	changedQueue := outboxGet[outboxCredentialKey](s, outboxChangedCredentialsKey)
+
+	credentials, changedConsumed, changedMore := outboxDrainPage(changedQueue, budget,
+		func(k outboxCredentialKey) (*types.Credential, int, bool) {
+			c.LoggerDebug(logger, "Credential changed "+c.PrettyPrint(k))
+			credential, found := s.getCredential(k.CredentialID, k.CredentialType)
+			if !found {
+				return nil, 0, false
+			}
+			return &credential, credential.Size(), true
+		})
+
+	// The two queues share one reply, so they share one budget: whatever the changed credentials
+	// did not use is what the removals get.  Removals are tiny -- an ID and a type -- so in
+	// practice they fit in the remainder of any page, but the floor keeps a full changed page from
+	// starving them entirely and stalling removals behind a long backlog.
+	removedBudget := budget - sizeOfCredentials(credentials)
+	if removedBudget < budget/8 {
+		removedBudget = budget / 8
 	}
-
-	removed := []*types.CredentialRef{}
 
 	removedQueue := outboxGet[outboxCredentialKey](s, outboxRemovedCredentialsKey)
-	for _, removedCredential := range removedQueue {
-		// Re-check the store rather than trusting the note we made.  Now that the queue lives in
-		// the transaction cache a rolled-back removal discards its own entry, so this guard
-		// should never fire -- it stays as defence in depth, because reporting a deletion the
-		// enclave no longer believes in would delete it on chain for good.
-		if _, found := s.getCredential(removedCredential.CredentialID, removedCredential.CredentialType); found {
-			c.LoggerDebug(logger, "Credential removal was rolled back "+c.PrettyPrint(removedCredential))
-			continue
-		}
-		removed = append(removed, &types.CredentialRef{
-			CredentialID:   removedCredential.CredentialID,
-			CredentialType: removedCredential.CredentialType,
+
+	removed, removedConsumed, removedMore := outboxDrainPage(removedQueue, removedBudget,
+		func(k outboxCredentialKey) (*types.CredentialRef, int, bool) {
+			// Re-check the store rather than trusting the note we made.  Now that the queue lives
+			// in the transaction cache a rolled-back removal discards its own entry, so this guard
+			// should never fire -- it stays as defence in depth, because reporting a deletion the
+			// enclave no longer believes in would delete it on chain for good.
+			//
+			// A rolled-back removal resolves to `false`, which drops it from the queue.  That is
+			// the intent: the removal did not happen, so there is nothing left to report.
+			if _, found := s.getCredential(k.CredentialID, k.CredentialType); found {
+				c.LoggerDebug(logger, "Credential removal was rolled back "+c.PrettyPrint(k))
+				return nil, 0, false
+			}
+			ref := &types.CredentialRef{CredentialID: k.CredentialID, CredentialType: k.CredentialType}
+			return ref, ref.Size(), true
 		})
-	}
 
-	if in.Clear && len(credentials) > 0 {
-		c.LoggerDebug(logger, "Clearing changed-credentials outbox")
-		outboxSet[outboxCredentialKey](s, outboxChangedCredentialsKey, nil)
-	}
+	changedMore = outboxCommitPage(s, outboxChangedCredentialsKey, changedQueue, changedConsumed, in.Clear && len(credentials) > 0, changedMore)
+	removedMore = outboxCommitPage(s, outboxRemovedCredentialsKey, removedQueue, removedConsumed, in.Clear && len(removedQueue) > 0, removedMore)
 
-	if in.Clear && len(removedQueue) > 0 {
-		c.LoggerDebug(logger, "Clearing removed-credentials outbox")
-		outboxSet[outboxCredentialKey](s, outboxRemovedCredentialsKey, nil)
-	}
+	return &types.SyncCredentialsReply{
+		Credentials:        credentials,
+		RemovedCredentials: removed,
+		More:               changedMore || removedMore,
+	}, nil
+}
 
-	return &types.SyncCredentialsReply{Credentials: credentials, RemovedCredentials: removed}, nil
+func sizeOfCredentials(credentials []*types.Credential) int {
+	n := 0
+	for _, credential := range credentials {
+		n += credential.Size()
+	}
+	return n
 }
 
 func (s *qadenaServer) SyncRecoverKeys(ctx context.Context, in *types.MsgSyncRecoverKeys) (*types.SyncRecoverKeysReply, error) {
 	//  c.LoggerDebug(logger, "SyncRecoverKeys " + c.PrettyPrint(in))
 
-	recoverKeys := []*types.RecoverKey{}
+	queue := outboxGet[string](s, outboxRecoverKeysKey)
 
-	for _, changedRecoverKey := range outboxGet[string](s, outboxRecoverKeysKey) {
-		c.LoggerDebug(logger, "RecoverKey changed "+changedRecoverKey)
-		recoverKey, found := s.getRecoverKeyByOriginalWalletID(changedRecoverKey)
-		if found {
-			recoverKeys = append(recoverKeys, &recoverKey)
-		}
-	}
+	recoverKeys, consumed, more := outboxDrainPage(queue, outboxPageBudget(in.GetMaxBytes()),
+		func(walletID string) (*types.RecoverKey, int, bool) {
+			c.LoggerDebug(logger, "RecoverKey changed "+walletID)
+			recoverKey, found := s.getRecoverKeyByOriginalWalletID(walletID)
+			if !found {
+				return nil, 0, false
+			}
+			return &recoverKey, recoverKey.Size(), true
+		})
 
-	if in.Clear && len(recoverKeys) > 0 {
-		c.LoggerDebug(logger, "Clearing recover-keys outbox")
-		outboxSet[string](s, outboxRecoverKeysKey, nil)
-	}
+	more = outboxCommitPage(s, outboxRecoverKeysKey, queue, consumed, in.Clear && len(recoverKeys) > 0, more)
 
-	return &types.SyncRecoverKeysReply{RecoverKeys: recoverKeys}, nil
+	return &types.SyncRecoverKeysReply{RecoverKeys: recoverKeys, More: more}, nil
 }
 
 func (s *qadenaServer) SyncSuspiciousTransactions(ctx context.Context, in *types.MsgSyncSuspiciousTransactions) (*types.SyncSuspiciousTransactionsReply, error) {
@@ -6100,18 +6179,20 @@ func (s *qadenaServer) SyncSuspiciousTransactions(ctx context.Context, in *types
 	queue := outboxGet[types.SuspiciousTransaction](s, outboxSuspiciousKey)
 	c.LoggerDebug(logger, "# suspicious outbox "+strconv.Itoa(len(queue)))
 
-	suspiciousTransactions := []*types.SuspiciousTransaction{}
+	// This queue carries the ROWS, not IDs, so nothing has to be resolved and no entry can fail to
+	// resolve.  It is also the one queue whose entries are attacker-influenced in size, which is
+	// the strongest case for a bound.
+	//
+	// The index is taken rather than the loop variable: these pointers outlive the walk.
+	suspiciousTransactions, consumed, more := outboxDrainPage(queue, outboxPageBudget(in.GetMaxBytes()),
+		func(st types.SuspiciousTransaction) (*types.SuspiciousTransaction, int, bool) {
+			row := st
+			return &row, row.Size(), true
+		})
 
-	for i := range queue {
-		suspiciousTransactions = append(suspiciousTransactions, &queue[i])
-	}
+	more = outboxCommitPage(s, outboxSuspiciousKey, queue, consumed, in.Clear && len(queue) > 0, more)
 
-	if in.Clear && len(queue) > 0 {
-		c.LoggerDebug(logger, "Clearing suspicious outbox")
-		outboxSet[types.SuspiciousTransaction](s, outboxSuspiciousKey, nil)
-	}
-
-	return &types.SyncSuspiciousTransactionsReply{SuspiciousTransactions: suspiciousTransactions}, nil
+	return &types.SyncSuspiciousTransactionsReply{SuspiciousTransactions: suspiciousTransactions, More: more}, nil
 }
 
 func slicesEqual(slice1, slice2 []string) bool {
@@ -7538,14 +7619,37 @@ func (s *qadenaServer) GetStoreHash(ctx context.Context, gsh *types.MsgGetStoreH
 	//
 	// EnclaveIdentity and IntervalPublicKeyID therefore come FIRST: identity to authenticate with,
 	// interval keys to find a peer, before anything that needs either.
-	keys := []string{types.EnclaveIdentityKeyPrefix, types.IntervalPublicKeyIDKeyPrefix, types.WalletKeyPrefix, types.CredentialKeyPrefix, types.JarRegulatorKeyPrefix, types.PioneerJarKeyPrefix, types.PublicKeyKeyPrefix, types.ProtectKeyKeyPrefix, types.RecoverKeyKeyPrefix, dsvstypes.AuthorizedSignatoryKeyPrefix}
+	keys := storeHashKeys
+
+	// A caller may ask for a SUBSET.  Hashing a prefix is a full scan of it, and the dsvs module
+	// handles exactly one (AuthorizedSignatory, 167 rows today) -- it was triggering a scan of all
+	// ten, ~16,000 rows, to obtain that one and discarding the rest with "Ignoring key=...".
+	//
+	// Empty means all, so every existing caller is unaffected.  The FILTER RUNS OVER `keys` ABOVE
+	// rather than over the request, so the reply keeps the canonical order whatever order it was
+	// asked in -- see the note above about why that order is load-bearing for seeding.
+	want := map[string]bool{}
+	for _, k := range gsh.GetKeys() {
+		want[k] = true
+	}
 
 	for _, k := range keys {
+		if len(want) > 0 && !want[k] {
+			continue
+		}
 		var sh types.StoreHash
 		h := c.StoreHashByStoreKey(s.ServerCtx, s.StoreKey, k)
 		c.LoggerDebug(logger, "key "+k+" hash "+h)
 		sh.Key = k
 		sh.Hash = h
+
+		// SHADOW ONLY.  The hash returned above is the scan, and it stays the answer; this just
+		// reports whether the incrementally maintained accumulator agrees with it.  Running the two
+		// side by side is the whole point: an accumulator is a maintained invariant, and the two
+		// previous maintained invariants in this codebase -- the iavl fast index and the
+		// CredentialPCXY index -- both drifted from the data they described without saying so.
+		// Here, drift is a log line rather than a wrong answer.
+		s.compareAccumulatorToScan(k)
 
 		storeHashes = append(storeHashes, &sh)
 	}
@@ -7610,6 +7714,11 @@ func (s *qadenaServer) EndBlock(ctx context.Context, tc *types.MsgEndBlock) (*ty
 		// arrive at any height (a node seeded mid-chain by sync-enclave).
 		return nil, fmt.Errorf("EndBlock height %d is not beyond prepared height %d: refusing to commit a replayed or out-of-order block", tc.Height, prepared)
 	}
+
+	// Establish or rebuild any store accumulator that needs it, BEFORE the commit below, so these
+	// writes land in the same version as the block's own.  Doing it here rather than on the next
+	// incidental write is what gives the quiet stores coverage at all.
+	s.maintainAccumulators()
 
 	// the stamp goes through the cache so it lands in the same version as the block's writes
 	s.setPreparedHeight(tc.Height)

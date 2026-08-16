@@ -26,6 +26,9 @@ func (k Keeper) SetEnclaveIdentity(ctx context.Context, enclaveIdentity types.En
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.EnclaveIdentityKeyPrefix))
 	b := k.cdc.MustMarshal(&enclaveIdentity)
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.EnclaveIdentityKeyPrefix, types.EnclaveIdentityKey(enclaveIdentity.UniqueID), b)
 	store.Set(types.EnclaveIdentityKey(
 		enclaveIdentity.UniqueID,
 	), b)
@@ -36,6 +39,9 @@ func (k Keeper) SetEnclaveIdentityNoEnclave(ctx context.Context, enclaveIdentity
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.EnclaveIdentityKeyPrefix))
 	b := k.cdc.MustMarshal(&enclaveIdentity)
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.EnclaveIdentityKeyPrefix, types.EnclaveIdentityKey(enclaveIdentity.UniqueID), b)
 	store.Set(types.EnclaveIdentityKey(
 		enclaveIdentity.UniqueID,
 	), b)
@@ -69,6 +75,9 @@ func (k Keeper) RemoveEnclaveIdentity(
 ) {
 	storeAdapter := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
 	store := prefix.NewStore(storeAdapter, types.KeyPrefix(types.EnclaveIdentityKeyPrefix))
+	// Shadow accumulator, maintained BEFORE the write so an overwrite can subtract the
+	// row's previous value.  The scan in StoreHashByKVStoreService stays authoritative.
+	k.AccumulateWrite(ctx, types.EnclaveIdentityKeyPrefix, types.EnclaveIdentityKey(uniqueID), nil)
 	store.Delete(types.EnclaveIdentityKey(
 		uniqueID,
 	))

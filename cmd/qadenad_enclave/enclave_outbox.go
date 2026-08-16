@@ -37,6 +37,8 @@ package main
 import (
 	"encoding/json"
 
+	"strconv"
+
 	"cosmossdk.io/store/prefix"
 
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
@@ -122,4 +124,79 @@ func outboxAppend[T any](s *qadenaServer, key string, items ...T) {
 	list = append(list, items...)
 	outboxSet(s, key, list)
 	c.LoggerDebug(logger, "outbox append "+key)
+}
+
+// outboxPageTargetBytes bounds one drain's worth of resolved rows.
+//
+// The binding constraint is the EPC, not the wire.  Draining turns each queued ID into a full row
+// and holds every one of them at once, so an unbounded drain makes the enclave's peak memory a
+// function of how busy the block was -- inside an enclave page cache measured in tens of megabytes
+// and shared with everything else running.  The 4 MiB grpc-go default, which neither end overrides,
+// is the second reason and the less pressing one.
+//
+// Matched to privateStatePageTargetBytes, which is the size the private-state sync already pages at
+// inside the same EPC.
+const outboxPageTargetBytes = 1 << 20
+
+func outboxPageBudget(maxBytes uint32) int {
+	b := int(maxBytes)
+	if b <= 0 || b > outboxPageTargetBytes {
+		return outboxPageTargetBytes
+	}
+	return b
+}
+
+// outboxDrainPage walks a queue from the front, resolving entries into rows until the budget is
+// reached, and reports how far it got.
+//
+// resolve returns the row, its size, and whether it resolved at all.  An entry that does not
+// resolve is still WALKED PAST rather than held back: the queue holds IDs, and an ID whose row has
+// since gone is one that will never resolve, so retaining it would grow the queue without bound and
+// make every later drain re-walk it.  This matches what the unpaged drain did by clearing the whole
+// queue at once.
+//
+// `more` means "the walk stopped early", NOT "the queue is non-empty".  That distinction is what
+// makes the caller's loop terminate: it is only ever true when this call consumed entries, so a
+// caller that keeps calling keeps making progress.
+func outboxDrainPage[T any, R any](list []T, budget int, resolve func(T) (R, int, bool)) (rows []R, consumed int, more bool) {
+	used := 0
+	for i, entry := range list {
+		row, size, ok := resolve(entry)
+
+		// Checked BEFORE consuming, so the entry survives for the next page.  `len(rows) > 0`
+		// guarantees forward progress: a single row larger than the whole budget goes on its own
+		// rather than wedging the queue forever.
+		if ok && len(rows) > 0 && used+size > budget {
+			return rows, i, true
+		}
+
+		if ok {
+			rows = append(rows, row)
+			used += size
+		}
+		consumed = i + 1
+	}
+	return rows, consumed, false
+}
+
+// outboxCommitPage writes back what a drain left behind and decides whether the caller should ask
+// again.
+//
+// NOTHING CLEARED MEANS NOTHING MORE, whatever the walk found.  A caller that loops on `more`
+// without the queue having shrunk would loop forever, and there are two ways to reach that: a
+// diagnostic read with Clear unset, and a page in which no entry resolved.  Both are answered the
+// same way -- report the rows, keep the queue, let the next block retry.
+//
+// shouldClear is the CALLER'S, deliberately, because the queues do not agree on it.  The three that
+// carry IDs only clear when something resolved, so an unresolved entry survives to be retried.  The
+// removed-credentials queue clears on having walked entries at all, because there "did not resolve"
+// means the removal was rolled back and there is nothing left to retry -- holding those back would
+// re-check them on every block forever.
+func outboxCommitPage[T any](s *qadenaServer, key string, list []T, consumed int, shouldClear bool, more bool) bool {
+	if !shouldClear {
+		return false
+	}
+	c.LoggerDebug(logger, "outbox drain "+key+" consumed "+strconv.Itoa(consumed)+" of "+strconv.Itoa(len(list)))
+	outboxSet(s, key, list[consumed:])
+	return more
 }
