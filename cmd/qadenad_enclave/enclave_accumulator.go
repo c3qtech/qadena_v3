@@ -212,18 +212,29 @@ func (s *qadenaServer) GetStoreAccumulators(ctx context.Context, in *types.MsgGe
 				if acc, ok := c.ParseStoreAccumulator(stored.Get([]byte(pfx))); ok {
 					entry.Acc, entry.Present = acc[:], true
 				} else {
-					// Never committed yet: establish through the cache (so it lands in this
-					// block's commit, like every other versioned write) and answer the fresh
-					// value this once.  Rows are only counted when the scan happened anyway.
-					acc, ok := s.loadAccumulator(pfx)
-					if !ok {
-						store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(pfx))
-						fresh, rows := c.AccumulatorFromPrefixStore(store)
+					// No committed accumulator row yet.  ANSWER THE ACCUMULATOR OF THE COMMITTED
+					// CONTENT -- a ServerCtx scan, the same store GetStoreHash hashes -- NOT the
+					// cache establishment value.  The distinction is not pedantry: at first boot
+					// the enclave's own startup has already written its identity, interval keys
+					// and pubkeys into the CACHE, so a cache-derived answer describes rows the
+					// committed clock has never seen, and the seam reported the two mechanisms
+					// disagreeing when each was honestly reporting a different commit point
+					// (observed twice, 2026-08-16/17, accAgree=true scanAgree=false on exactly
+					// the enclave's self-written stores).  This scan runs only in the
+					// never-committed window; it is the same cost GetStoreHash pays every call.
+					committed, rows := c.AccumulatorFromPrefixStore(
+						prefix.NewStore(s.ServerCtx.KVStore(s.StoreKey), types.KeyPrefix(pfx)))
+					entry.Acc, entry.Present, entry.Rows = committed[:], true, int64(rows)
+
+					// Maintenance establishment is a SEPARATE concern and keeps its cache
+					// semantics: the maintained value must cover the cache's rows or the first
+					// commit would immediately falsify it.  It just must not leak into the reply.
+					if _, ok := s.loadAccumulator(pfx); !ok {
+						fresh, n := c.AccumulatorFromPrefixStore(
+							prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(pfx)))
 						s.saveAccumulator(pfx, fresh)
-						c.LoggerInfo(logger, "ACCUMULATOR established "+accumulatorLog(pfx, rows, fresh))
-						acc, entry.Rows = fresh, int64(rows)
+						c.LoggerInfo(logger, "ACCUMULATOR established "+accumulatorLog(pfx, n, fresh))
 					}
-					entry.Acc, entry.Present = acc[:], true
 				}
 			}
 

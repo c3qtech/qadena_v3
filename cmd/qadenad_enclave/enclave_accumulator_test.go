@@ -218,31 +218,44 @@ func TestReseedFlagIsOneShot(t *testing.T) {
 	require.False(t, s.takeAccumulatorReseed(types.WalletKeyPrefix), "flag was not cleared")
 }
 
-// The seam RPC's contract: current-height replies ESTABLISH-THEN-ANSWER, so absent is impossible
-// -- the property that lets the chain compare acc-to-acc without an absent-marker fallback.
-func TestGetStoreAccumulatorsEstablishesThenAnswers(t *testing.T) {
+// The seam RPC's contract, both halves:
+//
+//  1. current-height replies are never absent (establish-then-answer), and
+//  2. the ANSWER always describes the COMMITTED clock -- the same one GetStoreHash's hashes
+//     describe -- even in the never-committed window, where the enclave's own startup writes
+//     already sit in the cache.  Answering from the cache there made the seam report the two
+//     mechanisms disagreeing when each was honestly reading a different commit point.
+func TestGetStoreAccumulatorsAnswersTheCommittedClock(t *testing.T) {
 	s := newTestEnclaveServer(t)
+
+	// Rows in the CACHE only -- the first-boot shape (the enclave writes its own identity and
+	// keys before anything commits).
 	putWallet(s, "w1")
 	putWallet(s, "w2")
 
 	r, err := s.GetStoreAccumulators(context.Background(), &types.MsgGetStoreAccumulators{})
 	require.NoError(t, err)
 	require.Len(t, r.Accumulators, len(storeHashKeys), "every mirrored store must be answered")
-
 	for _, e := range r.Accumulators {
 		require.True(t, e.Present, "current-height replies must never be absent: "+e.Key)
 		if e.Key == types.WalletKeyPrefix {
-			want := scanAcc(s, types.WalletKeyPrefix)
-			require.Equal(t, want[:], e.Acc, "the established value must equal the data")
-			require.EqualValues(t, 2, e.Rows, "a fresh establishment scanned, so rows are known")
+			require.Equal(t, make([]byte, 32), e.Acc,
+				"pre-commit, the answer must be the COMMITTED content's accumulator (empty store = zero), "+
+					"not the cache's -- GetStoreHash's scan would say empty here, and the two must agree on the clock")
+			require.EqualValues(t, 0, e.Rows)
 		}
 	}
 
-	// Second call: served from the maintained rows, no scan -- rows now honestly -1.
+	// The maintenance establishment DID cover the cache rows (its separate concern), so after the
+	// commit the maintained row and the content land together and the answer flips to the data.
+	endBlock(t, s, 5)
+
 	r2, err := s.GetStoreAccumulators(context.Background(), &types.MsgGetStoreAccumulators{Keys: []string{types.WalletKeyPrefix}})
 	require.NoError(t, err)
 	require.Len(t, r2.Accumulators, 1, "the keys filter must narrow the reply")
-	require.EqualValues(t, -1, r2.Accumulators[0].Rows, "an already-established store must not be re-scanned just to count")
+	want := scanAcc(s, types.WalletKeyPrefix)
+	require.Equal(t, want[:], r2.Accumulators[0].Acc, "post-commit, the committed row equals the data")
+	require.EqualValues(t, -1, r2.Accumulators[0].Rows, "served from the maintained row, not re-scanned")
 }
 
 // Historical reads are read-only and may honestly be absent: an accumulator did not exist before
