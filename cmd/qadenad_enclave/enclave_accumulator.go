@@ -200,18 +200,31 @@ func (s *qadenaServer) GetStoreAccumulators(ctx context.Context, in *types.MsgGe
 					entry.Acc, entry.Present = acc[:], true
 				}
 			} else {
-				// Current: establish-then-answer.  Rows are only counted when the scan happened
-				// anyway; counting an already-established store would cost the very scan the
-				// accumulator exists to avoid.
-				acc, ok := s.loadAccumulator(pfx)
-				if !ok {
-					store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(pfx))
-					fresh, rows := c.AccumulatorFromPrefixStore(store)
-					s.saveAccumulator(pfx, fresh)
-					c.LoggerInfo(logger, "ACCUMULATOR established "+accumulatorLog(pfx, rows, fresh))
-					acc, entry.Rows = fresh, int64(rows)
+				// Current: establish-then-answer -- but ANSWER FROM THE COMMITTED ROW when one
+				// exists, exactly as compareAccumulatorToScan reads, because GetStoreHash hashes
+				// ServerCtx.  The seam compares this reply against those hashes, and the two must
+				// sample the SAME commit point: answering from CacheCtx made the accumulator see
+				// freshly seeded rows a block before the scan hash did, and the side-by-side
+				// check reported the two mechanisms disagreeing when they were merely reading
+				// different clocks (observed live: accAgree=true scanAgree=false on exactly the
+				// three seeded stores, first boot, 2026-08-16).
+				stored := prefix.NewStore(s.ServerCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveStoreAccumulatorKeyPrefix))
+				if acc, ok := c.ParseStoreAccumulator(stored.Get([]byte(pfx))); ok {
+					entry.Acc, entry.Present = acc[:], true
+				} else {
+					// Never committed yet: establish through the cache (so it lands in this
+					// block's commit, like every other versioned write) and answer the fresh
+					// value this once.  Rows are only counted when the scan happened anyway.
+					acc, ok := s.loadAccumulator(pfx)
+					if !ok {
+						store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(pfx))
+						fresh, rows := c.AccumulatorFromPrefixStore(store)
+						s.saveAccumulator(pfx, fresh)
+						c.LoggerInfo(logger, "ACCUMULATOR established "+accumulatorLog(pfx, rows, fresh))
+						acc, entry.Rows = fresh, int64(rows)
+					}
+					entry.Acc, entry.Present = acc[:], true
 				}
-				entry.Acc, entry.Present = acc[:], true
 			}
 
 			reply.Accumulators = append(reply.Accumulators, entry)
