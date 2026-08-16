@@ -225,6 +225,33 @@ func TestWatchdog_TransientStallRecoversWithoutHalting(t *testing.T) {
 	}
 }
 
+// A node running on debug values must SAY so, and a node on defaults must stay silent.  Both
+// knobs fail quietly when a stale export lingers (a short grace just halts earlier, tiny pages
+// just cost round trips), which is exactly why shipping with them must not be silent.
+func TestDebugOverridesAreAnnouncedAndDefaultsAreSilent(t *testing.T) {
+	var buf syncBuffer
+	announceDebugOverrides(log.NewLogger(&buf))
+	if strings.Contains(buf.String(), "NON-DEFAULT") {
+		t.Fatalf("a node on production defaults must announce nothing; got:\n%s", buf.String())
+	}
+
+	prev := enclaveHealthGrace
+	enclaveHealthGrace = 15 * time.Second
+	t.Cleanup(func() { enclaveHealthGrace = prev })
+
+	t.Setenv("QADENA_PAGE_BUDGET", "2048")
+
+	var buf2 syncBuffer
+	announceDebugOverrides(log.NewLogger(&buf2))
+	out := buf2.String()
+	if !strings.Contains(out, "NON-DEFAULT watchdog grace") {
+		t.Fatalf("an overridden grace must be announced; got:\n%s", out)
+	}
+	if !strings.Contains(out, "NON-DEFAULT page budget") {
+		t.Fatalf("an overridden page budget must be announced; got:\n%s", out)
+	}
+}
+
 // The grace is read from the environment so the crash suite can shorten it without a rebuild; a
 // garbage or negative value must fall back rather than arm a hair-trigger halt.
 func TestEnvDurationFallsBackOnGarbage(t *testing.T) {

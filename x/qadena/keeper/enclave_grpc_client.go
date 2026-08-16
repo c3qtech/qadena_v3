@@ -1160,7 +1160,7 @@ func (k Keeper) EnclaveSyncWallets(sdkctx sdk.Context) (error, []*types.Wallet) 
 		}
 
 		ctx, cancel := enclaveExecContext()
-		r, err := EnclaveGRPCClient.SyncWallets(ctx, &types.MsgSyncWallets{Clear: true})
+		r, err := EnclaveGRPCClient.SyncWallets(ctx, &types.MsgSyncWallets{Clear: true, MaxBytes: drainMaxBytes})
 		cancel()
 		if err != nil {
 			c.ContextError(sdkctx, "error returned by SyncWallets on enclave "+err.Error())
@@ -1197,7 +1197,7 @@ func (k Keeper) EnclaveSyncCredentials(sdkctx sdk.Context) (error, []*types.Cred
 		}
 
 		ctx, cancel := enclaveExecContext()
-		r, err := EnclaveGRPCClient.SyncCredentials(ctx, &types.MsgSyncCredentials{Clear: true})
+		r, err := EnclaveGRPCClient.SyncCredentials(ctx, &types.MsgSyncCredentials{Clear: true, MaxBytes: drainMaxBytes})
 		cancel()
 		if err != nil {
 			c.ContextError(sdkctx, "error returned by SyncCredentials on enclave "+err.Error())
@@ -1232,7 +1232,7 @@ func (k Keeper) EnclaveSyncRecoverKeys(sdkctx sdk.Context) (error, []*types.Reco
 		}
 
 		ctx, cancel := enclaveExecContext()
-		r, err := EnclaveGRPCClient.SyncRecoverKeys(ctx, &types.MsgSyncRecoverKeys{Clear: true})
+		r, err := EnclaveGRPCClient.SyncRecoverKeys(ctx, &types.MsgSyncRecoverKeys{Clear: true, MaxBytes: drainMaxBytes})
 		cancel()
 		if err != nil {
 			c.ContextError(sdkctx, "error returned by SyncRecoverKeys on enclave "+err.Error())
@@ -1263,7 +1263,7 @@ func (k Keeper) EnclaveSyncSuspiciousTransactions(sdkctx sdk.Context) (error, []
 		}
 
 		ctx, cancel := enclaveExecContext()
-		r, err := EnclaveGRPCClient.SyncSuspiciousTransactions(ctx, &types.MsgSyncSuspiciousTransactions{Clear: true})
+		r, err := EnclaveGRPCClient.SyncSuspiciousTransactions(ctx, &types.MsgSyncSuspiciousTransactions{Clear: true, MaxBytes: drainMaxBytes})
 		cancel()
 		if err != nil {
 			c.ContextError(sdkctx, "error returned by SyncSuspiciousTransactions on enclave "+err.Error())

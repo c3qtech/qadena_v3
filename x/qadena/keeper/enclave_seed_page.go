@@ -34,6 +34,8 @@ package keeper
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 
 	"cosmossdk.io/store/prefix"
 	storetypes "cosmossdk.io/store/types"
@@ -50,7 +52,36 @@ import (
 // budget is not the whole message: the key string, the per-row framing accounted for below, and
 // gRPC's own overhead all sit on top.  The margin is wide enough that none of that needs to be
 // exact.
-const mirrorSeedPageTargetBytes = 1 << 20
+//
+// OVERRIDABLE DOWNWARD via QADENA_PAGE_BUDGET, chain-side only, for forced-paging runs.  Real
+// tables are ~1000x too small to page at 1 MiB, so without this the multi-page branches only ever
+// run in unit tests; a debug node started with a few-KiB budget pages constantly under ordinary
+// regression traffic instead.  Safe on three counts: page size is transport batching and never
+// reaches state; the enclave accepts whatever page sizes arrive (SeedStorePage has no floor, and
+// outboxPageBudget clamps only values that exceed ITS ceiling); and values above the default are
+// refused here so the knob cannot push a page toward the 4 MiB transport limit.  This mirrors how
+// TestPrivateStateTransferPagesFaithfully proves the enclave-to-enclave pager -- shrink the
+// budget, force many pages, require identical results.
+var mirrorSeedPageTargetBytes = pageBudgetFromEnv(1 << 20)
+
+func pageBudgetFromEnv(def int) int {
+	if v := os.Getenv("QADENA_PAGE_BUDGET"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n < def {
+			return n
+		}
+	}
+	return def
+}
+
+// drainMaxBytes rides each outbox drain request.  0 means "the enclave's own default"; under a
+// forced-paging run it carries the shrunken budget, which the enclave honours because small values
+// pass its clamp untouched.
+var drainMaxBytes = uint32(func() int {
+	if b := pageBudgetFromEnv(1 << 20); b < 1<<20 {
+		return b
+	}
+	return 0
+}())
 
 // mirrorSeedRowOverheadBytes covers each row's protobuf field tag and length varint.  Counted so
 // that a page of many small rows -- IntervalPublicKeyID, say -- cannot drift over the budget

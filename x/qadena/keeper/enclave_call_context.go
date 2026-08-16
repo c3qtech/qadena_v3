@@ -278,7 +278,28 @@ func envDuration(name string, def time.Duration) time.Duration {
 // Started once, from InitEnclave, right after the dial succeeds.  InitEnclave runs exactly once
 // per process (app/app.go panics if it fails), so there is exactly one watchdog.
 func startEnclaveWatchdog(logger log.Logger, conn *grpc.ClientConn) {
+	announceDebugOverrides(logger)
 	go watchEnclaveLiveness(logger, types.NewGreeterClient(conn))
+}
+
+// announceDebugOverrides screams once, at startup, if any env knob has this node off its
+// production values.  The knobs exist for test cycles (a short grace makes the crash suite fast; a
+// tiny page budget forces the multi-page paths under real traffic), and both fail QUIETLY when a
+// stale export lingers -- a 15s grace just halts earlier under a real stall, tiny pages just cost
+// round trips.  Quiet is the problem: a node must not ship on debug values with nothing in the log
+// saying so.  ERROR level for the same reason OUT-OF-SYNC uses it -- visible at default verbosity.
+func announceDebugOverrides(logger log.Logger) {
+	if enclaveHealthGrace != 2*time.Minute {
+		c.LoggerError(logger, fmt.Sprintf(
+			"NON-DEFAULT watchdog grace %s is active (QADENA_ENCLAVE_HEALTH_GRACE) -- "+
+				"intended for test cycles; a production node should not run with this set",
+			enclaveHealthGrace))
+	}
+	if b := pageBudgetFromEnv(1 << 20); b != 1<<20 {
+		c.LoggerError(logger, fmt.Sprintf(
+			"NON-DEFAULT page budget %d bytes is active (QADENA_PAGE_BUDGET) -- "+
+				"forced-paging is a test mode; a production node should not run with this set", b))
+	}
 }
 
 // watchEnclaveLiveness is the loop, split from the conn plumbing so the tests can stand a fake
