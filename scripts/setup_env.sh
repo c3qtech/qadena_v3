@@ -208,13 +208,23 @@ needs_root_if_real_enclave() {
       exit 1
   fi
 
-  # Present but not ours: name the REAL groups rather than assuming sgx/sgx_prv.
-  local encl prov groups
-  encl=$(sgx_enclave_dev); prov=$(sgx_provision_dev)
-  groups=$(stat -c %G "$encl" 2>/dev/null; stat -c %G "$prov" 2>/dev/null)
-  groups=$(echo "$groups" | sort -u | tr '\n' ',' | sed 's/,$//')
+  # Present but not ours.  Name ONLY the devices that are actually blocking, and only the groups
+  # those devices belong to -- read from stat rather than assumed.
+  #
+  # The two devices routinely differ.  On one of the test machines /dev/sgx_enclave is mode 666 and
+  # openable by anybody while /dev/sgx_provision is 660 root:sgx_prv, so the ONLY thing to join is
+  # sgx_prv.  Telling that operator to join `sgx,sgx_prv` is advice that works but does not match
+  # what is wrong, and advice that overstates the problem trains people to stop reading it.
+  local d g blocked="" groups=""
+  for d in $(sgx_enclave_dev) $(sgx_provision_dev); do
+      [[ -r $d && -w $d ]] && continue
+      g=$(stat -c %G "$d" 2>/dev/null)
+      blocked="$blocked $d${g:+ (group $g)}"
+      [[ -n $g ]] && groups="$groups $g"
+  done
+  groups=$(print -l ${=groups} | sort -u | paste -sd, -)
 
-  echo "$name:  Error: the SGX devices exist but $(id -un) cannot open them." >&2
+  echo "$name:  Error: $(id -un) cannot open:${blocked}" >&2
   echo "$name:         Fix (preferred): join the groups that own them, then log in again --" >&2
   echo "$name:             sudo usermod -aG $groups $(id -un)" >&2
   echo "$name:         Workaround: re-run with sudo.  Note that this makes every file the node" >&2
