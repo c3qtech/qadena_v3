@@ -166,17 +166,32 @@ needs_root_if_real_enclave() {
 # nth_node_bringup.sh.  A plain `pgrep -f qadenad_enclave` matches the shell running this very
 # function when the suite was invoked over ssh.
 as_enclave_owner() {
+  # A DEBUG ENCLAVE NEVER NEEDS ELEVATION, and must never attempt it.  It runs as whoever started
+  # the node -- us -- and a debug machine may have no sudo configured at all, so reaching for it
+  # there would break runs that work today.  This is the FIRST check for that reason: everything
+  # below is about real enclaves only.
+  #
+  # Gating on the BINARY rather than on the hardware is deliberate.  A debug enclave running on SGX
+  # hardware still needs no privilege, which is the same distinction needs_root_if_real_enclave
+  # draws and for the same reason.
+  use_real_enclave "$qadenabin/qadenad_enclave" || { "$@"; return $? }
+
+  # Already root: there is nothing to elevate to.
+  [[ $(id -u) -eq 0 ]] && { "$@"; return $? }
+
+  # A real enclave WE started needs no elevation either.  That is not hypothetical --
+  # setup_qadena_build.sh puts the login user in the sgx and sgx_prv groups, so an SGX node can be
+  # started unprivileged and then owns its own socket (see backlog item 30).
   local pid owner
   pid=$(pgrep -f "ego-host.*qadenad_enclav[e]" 2>/dev/null | head -1)
-  [[ -n "$pid" ]] || pid=$(pgrep -f "qadenad_enclav[e] --home" 2>/dev/null | head -1)
   if [[ -n "$pid" ]]; then
       owner=$(ps -o user= -p "$pid" 2>/dev/null | tr -d ' ')
-      if [[ -n "$owner" && "$owner" != "$(id -un)" ]]; then
-          sudo -n "$@"
-          return $?
-      fi
+      [[ -n "$owner" && "$owner" == "$(id -un)" ]] && { "$@"; return $? }
   fi
-  "$@"
+
+  # A real enclave owned by someone else -- or one we cannot identify, where guessing "no" would
+  # reproduce the EPERM this function exists to fix.
+  sudo -n "$@"
 }
 
 # confirm_tx <hash> [seconds] -- did this transaction land, and did it succeed?
