@@ -183,6 +183,25 @@ repo_on() {
 JOINER_HOME=$(ssh -o ConnectTimeout=10 "$JOINER" 'echo $HOME' 2>/dev/null | tr -d '\r')
 [[ -n "$JOINER_HOME" ]] || fail "cannot resolve the joiner's home directory on $JOINER"
 
+# SGX_PROBE -- run on a target, answers BOTH questions at once via its exit status.
+#
+#   0  both devices present AND openable by the login user   -> SGX, no root needed
+#   1  both present but NOT openable                          -> SGX, root needed
+#   2  not both present                                       -> no usable SGX (debug)
+#
+# BOTH devices, because /dev/sgx_provision holds the key attestation quotes with: a box that has
+# only the enclave node runs an enclave and then fails at JOIN time, naming a measurement rather
+# than the missing device.  /dev/isgx is not accepted -- it is the pre-5.11 out-of-tree driver's
+# single node, has no provisioning device, and nothing in this repo provisions it.
+SGX_PROBE='e=""; p=""
+for d in /dev/sgx_enclave /dev/sgx/enclave;     do [ -e "$d" ] && { e="$d"; break; }; done
+for d in /dev/sgx_provision /dev/sgx/provision; do [ -e "$d" ] && { p="$d"; break; }; done
+[ -n "$e" ] && [ -n "$p" ] || exit 2
+[ -r "$e" ] && [ -w "$e" ] && [ -r "$p" ] && [ -w "$p" ] || exit 1
+exit 0'
+
+sgx_state() { ssh -o ConnectTimeout=10 "$1" "$SGX_PROBE" >/dev/null 2>&1; print $? }
+
 # sudo_for <host> -- "sudo " when that host genuinely needs root, empty otherwise.
 #
 # ROOT IS AN SGX REQUIREMENT, NOT A QADENA ONE.  The enclave needs privilege to open
@@ -208,11 +227,11 @@ fi
 
 sudo_for() {
     local host="$1"
-    if ssh -o ConnectTimeout=10 "$host" 'test -e /dev/sgx_enclave || test -e /dev/isgx' 2>/dev/null; then
-        print "sudo "
-    else
-        print ""
-    fi
+    # Q2 only.  Existence is the WRONG test: on a machine setup_qadena_build.sh has provisioned the
+    # login user is in the device groups and opens them directly, so asking "does a device exist"
+    # returns sudo precisely where it is unnecessary -- and needless sudo is what leaves the tree and
+    # the enclave socket root-owned, breaking the next unprivileged start.
+    [[ $(sgx_state "$host") == 1 ]] && print "sudo " || print ""
 }
 SUDO_P=$(sudo_for "$PRIMARY")
 SUDO_J=$(sudo_for "$JOINER")
@@ -227,9 +246,11 @@ for h in "$PRIMARY" "$JOINER"; do
     ssh -o ConnectTimeout=10 -o BatchMode=yes "$h" true 2>/dev/null || fail "cannot ssh to $h"
 done
 for h in "$PRIMARY" "$JOINER"; do
-    # Only an SGX host needs it; a debug node runs as the login user.
-    if ssh "$h" 'test -e /dev/sgx_enclave || test -e /dev/isgx' 2>/dev/null; then
-        ssh "$h" 'sudo -n true' 2>/dev/null || fail "$h has SGX and therefore needs passwordless sudo (the enclave opens /dev/sgx_enclave)"
+    # Only a host whose devices are OUT OF REACH needs sudo.  A host where the login user is in the
+    # sgx/sgx_prv groups needs none, and demanding it there would fail a perfectly good machine.
+    if [[ $(sgx_state "$h") == 1 ]]; then
+        ssh "$h" 'sudo -n true' 2>/dev/null \
+            || fail "$h has SGX devices this user cannot open, so it needs passwordless sudo -- or, better, add the login user to the groups owning /dev/sgx_enclave and /dev/sgx_provision"
     fi
 done
 info "both nodes reachable"

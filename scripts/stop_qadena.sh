@@ -152,6 +152,27 @@ if is_qadena_running; then
     exit 1
 fi
 
+# REMOVE THE ENCLAVE'S UNIX SOCKET, because a leftover one can make the NEXT start fail in a way
+# that names neither the file nor the reason.
+#
+# /tmp is sticky (1777), so a socket left by a run as another user -- root, typically, after the node
+# was started with sudo -- cannot be unlinked by the login user.  The enclave then fails to bind with
+# "address already in use", and run_enclave.sh retries forever against a condition that will never
+# clear on its own.  (cmd/qadenad_enclave/enclave.go reports this when it hits it; removing the
+# socket here means it usually does not have to.)
+#
+# Best effort: we are the ones who just stopped the enclave, so if we cannot remove it, say so and
+# name the command that will -- do not fail the stop over it.
+for sock in /tmp/qadena_*.sock ; do
+    [[ -e $sock ]] || continue
+    if ! rm -f "$sock" 2>/dev/null; then
+        owner=$(stat -c %U "$sock" 2>/dev/null)
+        echo "stop_qadena.sh: WARNING: could not remove $sock (owned by ${owner:-?}, /tmp is sticky)"
+        echo "stop_qadena.sh:          the next start will fail to bind it.  Remove it with:"
+        echo "stop_qadena.sh:              sudo rm -f $sock"
+    fi
+done
+
 # A qadenad that survived SIGKILL above is still a failure, even though nothing is running under the
 # names is_qadena_running looks for.  Reported here rather than by an early exit, so everything got
 # stopped first.

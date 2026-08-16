@@ -111,23 +111,116 @@ warn_if_sgx_binary_missing() {
   fi
 }
 
+# TWO SEPARATE QUESTIONS, and conflating them is what produced the sudo-everywhere habit:
+#
+#   Q1  Is there SGX here?              -> do we run under `ego` at all, or simulate?
+#   Q2  Can THIS USER open the devices? -> do we need root?
+#
+# Q1 is answered by REAL_ENCLAVE + is_sgx_binary (see use_real_enclave above) and by sgx_present
+# below.  Q2 is answered by sgx_usable_by_me, and is the ONLY question the root decision may
+# consult.  Keeping them apart matters: an earlier single tri-state predicate let "no devices found"
+# satisfy the ROOT check, so a machine with no SGX but an ego-signed binary got neither a root check
+# nor a clear statement that it was about to simulate -- two different conditions sharing one answer.
+
+# sgx_enclave_dev / sgx_provision_dev -- the in-kernel driver's two device nodes, or empty.
+#
+# /dev/sgx/{enclave,provision} are the compatibility symlinks the driver package creates; -e and
+# -r/-w follow them, so either spelling works.
+#
+# /dev/isgx is deliberately NOT accepted.  That is the out-of-tree pre-5.11 driver's single node,
+# which has no separate provisioning device.  ubuntu/setup_qadena_build.sh provisions only the two
+# modern devices, and ego targets the in-kernel driver, so treating an isgx box as SGX-ready would
+# promise attestation it structurally cannot deliver.
+sgx_enclave_dev() {
+  local d
+  for d in /dev/sgx_enclave /dev/sgx/enclave; do [[ -e $d ]] && { print "$d"; return 0 } ; done
+  return 1
+}
+sgx_provision_dev() {
+  local d
+  for d in /dev/sgx_provision /dev/sgx/provision; do [[ -e $d ]] && { print "$d"; return 0 } ; done
+  return 1
+}
+
+# sgx_present -- Q1.  BOTH devices must exist.
+#
+# Both, not either: /dev/sgx_enclave runs the enclave, /dev/sgx_provision holds the provisioning key
+# that ATTESTATION needs.  getRemoteReport/verifyRemoteReport gate sync-enclave, secret shares and
+# the private-state transfer, so a box with only the first will run an enclave and then fail at JOIN
+# time with an error naming a measurement rather than a missing device.
+sgx_present() {
+  sgx_enclave_dev > /dev/null && sgx_provision_dev > /dev/null
+}
+
+# sgx_usable_by_me -- Q2.  Both devices exist AND this user can open them.
+#
+# The test is -r/-w, i.e. access(2), which honours GROUP MEMBERSHIP -- exactly what `id -u` cannot
+# see.  ubuntu/setup_qadena_build.sh adds the login user to the groups owning the devices (`sgx` for
+# the enclave node and the DIFFERENT group `sgx_prv` for provisioning), so on a provisioned machine
+# this is true and root is not needed at all.  Measured on .120:
+#
+#     crw-rw---- 1 root sgx     /dev/sgx_enclave
+#     crw-rw---- 1 root sgx_prv /dev/sgx_provision
+#     uid=1000(alvillarica) groups=...,108(sgx),...,1001(sgx_prv)
+#
+# access(2) is preferred over comparing `id -nG` with `stat -c %G` because it also covers what plain
+# membership would miss: a device relaxed to 666, an ACL, or the caller already being root.  Where
+# the two disagree, this one is right -- it answers "will the open succeed" rather than "does a rule
+# imply it should".
+sgx_usable_by_me() {
+  local encl prov
+  encl=$(sgx_enclave_dev)   || return 1
+  prov=$(sgx_provision_dev) || return 1
+  [[ -r $encl && -w $encl && -r $prov && -w $prov ]]
+}
+
 # needs_root_if_real_enclave <name> [binary]
 #
-# Root is required because `ego run` needs the SGX device -- so it must be decided by the SAME
-# predicate that decides whether ego is used at all.  Gating on REAL_ENCLAVE alone demanded sudo for
-# a debug run on SGX hardware, which never needed it.
+# ROOT IS NOT A QADENA REQUIREMENT.  `ego run` needs to OPEN the SGX devices; whether that takes root
+# depends on their group and this user's membership of it, which setup_qadena_build.sh already
+# arranges.  This used to demand uid 0 whenever the enclave was real -- wrong on every machine that
+# script had provisioned, and expensive: running as root makes every file the node creates
+# root-owned, so `rm -rf ~/qadena` as the login user then fails on every entry, the next install
+# refuses because it cannot overwrite what is there, and the enclave's own unix socket is left in
+# sticky /tmp where only root can unlink it.  That last one is not theoretical -- see the stale
+# socket handling in cmd/qadenad_enclave/enclave.go, which exists because of it.
+#
+# So: refuse only when the devices are genuinely out of reach, and say what to DO about it.  Joining
+# the group is the fix; sudo is the workaround, and the message says what the workaround costs.
 #
 # The binary argument is optional so existing callers keep working; without it the check falls back
 # to the chain enclave, which is what every runtime script is ultimately gating on.
 needs_root_if_real_enclave() {
   name="$1"
   bin="${2:-$qadenabin/qadenad_enclave}"
-  if use_real_enclave "$bin"; then
-      if [[ $(id -u) -ne 0 ]]; then
-          echo "$name:  Error: Qadena must be run as root (real SGX enclave).  Try running with 'sudo'."
-          exit 1
-      fi
+
+  use_real_enclave "$bin" || return 0    # Q1 false: simulating, no device to open
+  [[ $(id -u) -eq 0 ]]    && return 0    # already root, which opens them by definition
+  sgx_usable_by_me        && return 0    # Q2 true: this is the normal, provisioned case
+
+  if ! sgx_present; then
+      echo "$name:  Error: this build is a real SGX enclave, but the SGX devices are not both present." >&2
+      echo "$name:         enclave:    ${$(sgx_enclave_dev):-MISSING}" >&2
+      echo "$name:         provision:  ${$(sgx_provision_dev):-MISSING}" >&2
+      echo "$name:         Provisioning is required for ATTESTATION -- without it the enclave runs but" >&2
+      echo "$name:         cannot quote, and the failure surfaces later as a rejected join." >&2
+      echo "$name:         Install the in-kernel SGX driver (ubuntu/setup_qadena_build.sh)." >&2
+      exit 1
   fi
+
+  # Present but not ours: name the REAL groups rather than assuming sgx/sgx_prv.
+  local encl prov groups
+  encl=$(sgx_enclave_dev); prov=$(sgx_provision_dev)
+  groups=$(stat -c %G "$encl" 2>/dev/null; stat -c %G "$prov" 2>/dev/null)
+  groups=$(echo "$groups" | sort -u | tr '\n' ',' | sed 's/,$//')
+
+  echo "$name:  Error: the SGX devices exist but $(id -un) cannot open them." >&2
+  echo "$name:         Fix (preferred): join the groups that own them, then log in again --" >&2
+  echo "$name:             sudo usermod -aG $groups $(id -un)" >&2
+  echo "$name:         Workaround: re-run with sudo.  Note that this makes every file the node" >&2
+  echo "$name:         creates root-owned, including /tmp/qadena_*.sock in sticky /tmp, which only" >&2
+  echo "$name:         root can then remove -- so the next unprivileged start will fail to bind." >&2
+  exit 1
 }
 
 # as_enclave_owner <command...> -- run one command as whoever owns the enclave.

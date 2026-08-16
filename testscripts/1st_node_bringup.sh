@@ -152,14 +152,34 @@ run_phase() {
     return 0
 }
 
-# sudo_for -- SGX needs root to open the device; a debug node must NOT run as root.  Detect per
-# host rather than assuming, so a mixed pair works unchanged.
+# SGX_PROBE -- run on a target, answers BOTH questions at once via its exit status.
+#
+#   0  both devices present AND openable by the login user   -> SGX, no root needed
+#   1  both present but NOT openable                          -> SGX, root needed
+#   2  not both present                                       -> no usable SGX (debug)
+#
+# -r/-w is access(2), which honours group membership; setup_qadena_build.sh puts the login user in
+# the groups owning the devices, so 0 is the normal case on a provisioned machine.  /dev/isgx is not
+# accepted -- see scripts/setup_env.sh for why.
+SGX_PROBE='e=""; p=""
+for d in /dev/sgx_enclave /dev/sgx/enclave;     do [ -e "$d" ] && { e="$d"; break; }; done
+for d in /dev/sgx_provision /dev/sgx/provision; do [ -e "$d" ] && { p="$d"; break; }; done
+[ -n "$e" ] && [ -n "$p" ] || exit 2
+[ -r "$e" ] && [ -w "$e" ] && [ -r "$p" ] && [ -w "$p" ] || exit 1
+exit 0'
+
+sgx_state() { ssh -o ConnectTimeout=10 "$1" "$SGX_PROBE" >/dev/null 2>&1; print $? }
+
+# sudo_for -- Q2 ONLY: "sudo " when this host's devices are out of reach, empty otherwise.
+#
+# ROOT IS AN SGX REQUIREMENT, NOT A QADENA ONE, and on a machine setup_qadena_build.sh has
+# provisioned it is not even that: the login user is in the device groups and opens them directly.
+# Asking "does a device EXIST" -- which this used to do -- returns sudo on exactly those machines,
+# and using sudo needlessly is actively harmful: every file the node creates becomes root-owned, so
+# the tree cannot be removed or reinstalled unprivileged, and the enclave's socket is left in sticky
+# /tmp where only root can unlink it, breaking the next unprivileged start.
 sudo_for() {
-    if ssh -o ConnectTimeout=10 "$1" 'test -e /dev/sgx_enclave || test -e /dev/isgx' 2>/dev/null; then
-        print "sudo "
-    else
-        print ""
-    fi
+    [[ $(sgx_state "$1") == 1 ]] && print "sudo " || print ""
 }
 
 HOME_DIR=$(rsh_user "$PRIMARY" 'print $HOME' | tr -d '\r') || fail "cannot ssh to $PRIMARY"
@@ -201,8 +221,11 @@ if run_phase 1; then
     if (( BUILD_SGX )); then
         rsh_user "$PRIMARY" 'command -v ego >/dev/null' || fail "--build-sgx needs ego on $PRIMARY (run ubuntu/setup_qadena_build.sh)"
         rsh_user "$PRIMARY" 'command -v docker >/dev/null' || fail "--build-sgx is a docker build; docker is missing on $PRIMARY"
-        rsh_user "$PRIMARY" 'test -e /dev/sgx_enclave' \
-            || fail "--build-sgx but /dev/sgx_enclave is absent: the result would be a debug enclave wearing an SGX label"
+        # Q1: BOTH devices.  Provisioning is what attestation quotes with, so a box with only the
+        # enclave node builds and runs fine and then fails at JOIN time with an error naming a
+        # measurement rather than a missing device.
+        [[ $(sgx_state "$PRIMARY") == 2 ]] \
+            && fail "--build-sgx but the SGX devices are not both present on $PRIMARY: the result would be a debug enclave wearing an SGX label, and it could not attest"
     fi
     avail=$(rsh_user "$PRIMARY" "df --output=avail -BG $HOME_DIR | tail -1 | tr -dc '0-9'" | tr -d '\r')
     [[ -n "$avail" && "$avail" -ge 20 ]] || info "WARNING: only ${avail:-?}G free on $PRIMARY; a build plus a chain wants more"
@@ -226,6 +249,28 @@ if run_phase 2; then
         fail "$left process(es) survived the stop; kill them BY PID and re-run --only 2"
     }
     info "stopped: nothing matching the node or its enclaves is left"
+
+    # CLEAR ROOT-OWNED LEFTOVERS, or an unprivileged start fails in a way that names neither the
+    # file nor the reason.
+    #
+    # /tmp is sticky (1777), so the login user cannot unlink a socket left by a run that WAS root --
+    # which is every run before the sudo gate was fixed.  The enclave then fails to bind with
+    # "address already in use" and run_enclave.sh retries forever against a condition that never
+    # clears.  Same for a root-owned log we might later redirect into: the redirect fails, the
+    # command never runs, and a tail of that path serves the PREVIOUS run's output as if it were
+    # current -- which cost two wrong conclusions on 2026-08-15.
+    #
+    # Done with sudo unconditionally: these files are root-owned precisely when it matters, and
+    # removing a file we own needs no privilege anyway.
+    rsh "$PRIMARY" 'rm -f /tmp/qadena_*.sock' 2>/dev/null || true
+    left=$(ssh -o ConnectTimeout=10 "$PRIMARY" 'ls /tmp/qadena_*.sock 2>/dev/null | wc -l' | tr -d '\r')
+    [[ "$left" == "0" ]] || fail "could not remove /tmp/qadena_*.sock on $PRIMARY; the enclave will not be able to bind"
+    info "cleared stale enclave sockets"
+
+    # $QADENAHOME may be full of root-owned files from earlier sudo runs.  init.sh removes it with
+    # sudo when it has to, but say so here rather than letting phase 4 look like it hung.
+    rootowned=$(rsh "$PRIMARY" "find $NODE_HOME -user root 2>/dev/null | head -1" | tr -d '\r')
+    [[ -n "$rootowned" ]] && info "note: $NODE_HOME contains root-owned files; init.sh will need sudo to remove it"
 fi
 
 # ---------------------------------------------------------------------------------------------
@@ -290,7 +335,11 @@ if run_phase 5; then
     if (( BUILD_SGX )); then
         bin=$(rsh_user "$PRIMARY" "$BUILD_PATH cd $REPO && ego uniqueid cmd/qadenad_enclave/qadenad_enclave 2>/dev/null | head -1" | tr -d '\r')
     else
-        bin=$(rsh_user "$PRIMARY" "strings $REPO/cmd/qadenad_enclave/qadenad_enclave 2>/dev/null | grep -m1 '^unique[0-9]*$'" | tr -d '\r')
+        # EXTRACTED (-o), not line-matched.  Go packs string data without separators, so the
+        # embedded id surfaces from `strings` mid-run ("... failed: unique047signer051 ...") and a
+        # ^whole-line$ match can never hit it -- it matched a stray bare "unique" instead and
+        # failed a build whose measurement was correct.  [0-9]+ so that bare "unique" cannot win.
+        bin=$(rsh_user "$PRIMARY" "strings $REPO/cmd/qadenad_enclave/qadenad_enclave 2>/dev/null | grep -m1 -ohE 'unique[0-9]+'" | tr -d '\r')
     fi
     info "genesis records : ${gen:-<none>}"
     info "binary measures : ${bin:-<unreadable>}"
