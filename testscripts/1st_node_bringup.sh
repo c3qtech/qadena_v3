@@ -190,14 +190,36 @@ case "$REPO" in
     *)   REPO="$HOME_DIR/$REPO" ;;
 esac
 NODE_HOME="$HOME_DIR/qadena"
-SUDO=$(sudo_for "$PRIMARY")
 RUNLOG="$HOME_DIR/primary_bringup.$$.log"   # trap 1: fresh name, user-owned, never /tmp
+
+# REPORT THE STATE, DO NOT INFER IT FROM $SUDO.
+#
+# Under the old existence-based gate, empty SUDO meant exactly one thing -- no SGX device -- so the
+# banner said so.  Now that the gate asks whether the devices are USABLE, empty means EITHER "SGX is
+# present and we can open it" (the normal, provisioned case) OR "there is no SGX", and the old
+# wording picks the wrong one.  On .120 it printed "no SGX device -- this will be a DEBUG enclave
+# regardless of --build-sgx" while sitting on a working SGX box about to do a real SGX build: the
+# reassuring half of the message was true and the informative half was exactly backwards.
+SGX_STATE=$(sgx_state "$PRIMARY")
+case "$SGX_STATE" in
+    0) SUDO=""      ; SGX_DESC="present, devices usable by $(rsh_user "$PRIMARY" 'print $USER' | tr -d '\r') -- no sudo needed" ;;
+    1) SUDO="sudo " ; SGX_DESC="present, but this user cannot open the devices -- commands will use sudo" ;;
+    2) SUDO=""      ; SGX_DESC="NOT present (or only one of the two devices) -- debug enclave" ;;
+    *) fail "could not probe SGX state on $PRIMARY (probe exited $SGX_STATE)" ;;
+esac
 
 info "target        $PRIMARY"
 info "checkout      $REPO"
 info "node home     $NODE_HOME"
-info "privilege     ${SUDO:-none (no SGX device)}"
-[[ -n "$SUDO" ]] || info "NOTE: no SGX device -- this will be a DEBUG enclave regardless of --build-sgx"
+info "sgx           $SGX_DESC"
+info "privilege     ${SUDO:-none needed}"
+
+# The warning belongs to SGX state 2 alone, never to "no sudo".  A provisioned machine reaches state
+# 0 -- no sudo AND a perfectly real SGX build -- which the old condition flagged as debug.
+if (( BUILD_SGX )) && [[ "$SGX_STATE" == 2 ]]; then
+    info "NOTE: --build-sgx asked for, but the SGX devices are not both present -- this would be a"
+    info "      DEBUG enclave wearing an SGX label, and it could not attest.  Phase 1 refuses it."
+fi
 
 # ---------------------------------------------------------------------------------------------
 run_phase 1 && phase "1. preflight"
