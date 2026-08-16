@@ -39,6 +39,7 @@
 #   run_regression_continually.sh --max-runs N       stop after N runs as well
 #   run_regression_continually.sh --floor QDN        treasury floor (default 50000000)
 #   run_regression_continually.sh --pause SECONDS    wait between runs (default 0, back to back)
+#   run_regression_continually.sh --skip a,b,c      forward --skip to every regression.sh run
 #   run_regression_continually.sh --help
 
 # get script dir
@@ -60,11 +61,22 @@ pause=0
 # loop while the chain can still comfortably pay, so keep it generous rather than tuned.
 floor_qdn=50000000
 
+# FORWARDED TO EVERY regression.sh RUN.
+#
+# --skip is the one that matters here: enclave-rollback, enclave-crash and enclave-upgrade STOP AND
+# RESTART the node by design.  That is fine when the suite owns the chain and disastrous when it does
+# not -- a joining node sees the primary's RPC vanish for minutes and dies on it, and an interrupted
+# crash suite can leave the enclave SIGSTOPped with the chain frozen behind it.  This loop is exactly
+# the case where something else is usually using the chain, so it had to be able to say so, and until
+# now it could not: it invoked regression.sh with no arguments at all.
+regression_args=()
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --max-runs) max_runs="$2"; shift 2 ;;
         --floor)    floor_qdn="$2"; shift 2 ;;
         --pause)    pause="$2"; shift 2 ;;
+        --skip)     regression_args+=(--skip "$2"); shift 2 ;;
         --help)
             sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
@@ -114,9 +126,9 @@ while true; do
         echo "======================================================================"
         echo "TREASURY FLOOR REACHED: ${have}qdn left, floor is ${floor_qdn}qdn"
         echo "======================================================================"
-        echo "reclaim_funds() returns the transparent balance but not what crossed into ann's"
-        echo "encrypted one, so the pool drains slowly.  That is recoverable (see reclaim_funds),"
-        echo "but until it is, rebuilding is the way back:"
+        echo "reclaim_funds() unshields AND sweeps, so a run costs gas plus the small per-account"
+        echo "float it leaves behind -- reaching this floor at all suggests the reclaim is not"
+        echo "working, which is worth checking BEFORE rebuilding.  If it is genuinely spent:"
         echo ""
         echo "    testscripts/regression.sh --from-genesis"
         echo ""
@@ -133,7 +145,7 @@ while true; do
     echo "######################################################################"
 
     runlog="$archive/run-$stamp.log"
-    "$qadenatestscripts/regression.sh" > "$runlog" 2>&1
+    "$qadenatestscripts/regression.sh" "${regression_args[@]}" > "$runlog" 2>&1
     rc=$?
     ended=$(date -u +%FT%TZ)
 
