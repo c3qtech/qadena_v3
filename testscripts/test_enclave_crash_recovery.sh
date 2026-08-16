@@ -8,8 +8,18 @@
 # The stall is injected with SIGSTOP, not SIGKILL, for two reasons: it matches the incident (the
 # enclave hung inside an OOM before dying), and it is deterministic -- a SIGKILLed simulation
 # enclave is respawned by run_enclave.sh within a couple of seconds, which can win the race
-# against the chain's next RPC and mask the halt.  A stopped process holds its socket and times
-# out every call (c.DebugTimeout is 2s), so the very next enclave call fails.
+# against the chain's next RPC and mask the halt.
+#
+# HOW THE HALT ARRIVES.  Execution-path enclave calls carry NO deadline (the height-34,025 fix),
+# so a stopped enclave does not fail the next call -- it blocks it, and the chain freezes at once
+# with nothing yet in the log.  The WATCHDOG (x/qadena/keeper/enclave_call_context.go) is what
+# turns that freeze into the named halt: it probes SayHello off the consensus path, and once the
+# enclave has been silent past QADENA_ENCLAVE_HEALTH_GRACE (default 2m) it cancels the shared
+# alive-context, every blocked call unblocks, and haltOnEnclaveFailure panics with the cause.
+# Freezing promptly and halting later are therefore SEPARATE properties, asserted separately
+# below.  (An earlier version of this comment claimed c.DebugTimeout failed the very next call;
+# that was true before the fork fix removed the deadline, and this suite failed silently for as
+# long as the comment outlived the mechanism.)
 #
 # DELIBERATELY FAILS rather than skips when the chain is not running.  Restarts the node; leaves
 # the chain running for the suites after it.
@@ -44,6 +54,20 @@ fi
 [ -n "$enclave_pid" ] || fail "cannot find the enclave process"
 
 echo "stalling enclave pid $enclave_pid at chain height $h0"
+
+# RESUME ON EVERY EXIT PATH.  The SIGCONT used to sit after the assertions, so any `fail` between
+# the STOP and there left the enclave in state T for good -- not a lost test but a wedged machine:
+# with no deadline on execution calls the chain blocks forever, and every suite after this one
+# hangs too.  Observed 2026-08-16: one failed assertion, enclave stopped for 2.5 hours, the whole
+# regression stalled behind it.  The trap fires on normal exit, on `fail`, and on interruption.
+trap 'as_enclave_owner kill -CONT "$enclave_pid" 2>/dev/null || true' EXIT INT TERM
+
+# The log is cumulative across runs -- nothing rotates it -- so a halt message from a PREVIOUS
+# cycle of this very suite would satisfy the poll below instantly and falsely.  Everything this
+# run asserts must come from lines written after this point.
+logfile="$QADENAHOME/logs/qadena.log"
+log_start=$(wc -l < "$logfile" 2>/dev/null || echo 0)
+
 as_enclave_owner kill -STOP "$enclave_pid" || fail "cannot SIGSTOP the enclave"
 
 # ---- 1. the node must stop COMMITTING -- which is not the same as the process exiting ----
@@ -77,18 +101,32 @@ h_final=$(chain_height)
 advanced=$((h_final - h0))
 [ "$advanced" -le 5 ] || fail "chain advanced $advanced blocks after the enclave stalled before stopping; expected it to halt within a block or two"
 
-# and the halt must be the one we mean, not some unrelated stall
-logfile="$QADENAHOME/logs/qadena.log"
-if [ -f "$logfile" ]; then
-    grep -a "halting rather than committing a block without the enclave's state" "$logfile" > /dev/null \
-        || fail "the chain stopped, but haltOnEnclaveFailure's message is not in the log -- it stopped for some other reason"
-fi
+# and the halt must be the one we mean, not some unrelated stall.
+#
+# POLLED, not grepped once: the freeze is immediate (the blocked EndBlock stops commits within a
+# block) but the NAMED halt waits for the watchdog's grace.  The ceiling covers the 2m default
+# plus margin; a node started with a shorter QADENA_ENCLAVE_HEALTH_GRACE (see the restart below)
+# exits this loop as soon as the message lands.
+halted=0
+for i in {1..90}; do
+    if [ -f "$logfile" ] && tail -n "+$((log_start + 1))" "$logfile" | grep -aq "halting rather than committing a block without the enclave's state"; then
+        halted=1; break
+    fi
+    sleep 2
+done
+[ $halted -eq 1 ] || fail "the chain stopped, but haltOnEnclaveFailure's message never appeared (waited 180s) -- either the watchdog did not declare the enclave dead, or the chain stopped for some other reason"
 echo "chain halted at $h_final ($advanced block(s) after the stall began), with haltOnEnclaveFailure in the log"
 
 as_enclave_owner kill -CONT "$enclave_pid" 2>/dev/null || true
 
 # ---- 2. recovery: restart everything, reconciliation sorts the watermarks out ----
 "$qadenascripts/stop_qadena.sh" --all > /dev/null 2>&1 || true
+
+# The restarted node gets a SHORT watchdog grace, inherited through start_qadena.sh's environment.
+# It cannot speed up THIS run -- the node under test was started before this suite ran -- but the
+# chain it leaves behind is the one the next cycle stalls, so every cycle after the first waits
+# ~15s for the named halt instead of the 2m production default.
+export QADENA_ENCLAVE_HEALTH_GRACE=15s
 "$qadenascripts/start_qadena.sh" > /dev/null 2>&1 || fail "start_qadena.sh failed"
 
 resumed=0
@@ -118,7 +156,9 @@ Both were read from a SINGLE enclave height call, so this is a real disagreement
 samples taken a block apart."
 
 logfile="$QADENAHOME/logs/qadena.log"
-if [ -f "$logfile" ] && grep -a "DIVERGED AT AN AGREED HEIGHT" "$logfile" > /dev/null; then
+# Anchored to THIS run's lines, like the halt poll above: the log is cumulative, and a DIVERGED
+# from an earlier suite (or an earlier cycle of this one) must not fail a recovery that was clean.
+if [ -f "$logfile" ] && tail -n "+$((log_start + 1))" "$logfile" | grep -aq "DIVERGED AT AN AGREED HEIGHT"; then
     fail "enclave stores diverged after crash recovery"
 fi
 

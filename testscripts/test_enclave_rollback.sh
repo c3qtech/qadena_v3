@@ -37,6 +37,10 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
+# See the anchored DIVERGED check at the bottom: everything asserted from the log must come from
+# lines this run wrote.
+rollback_log_start=$(wc -l < "$QADENAHOME/logs/qadena.log" 2>/dev/null || echo 0)
+
 RPC="http://localhost:26657"
 
 function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
@@ -266,8 +270,12 @@ confirmed=$(enclave_watermark confirmedHeight)
 [ -n "$prepared" ] || fail "cannot read enclave watermarks"
 [ "$prepared" = "$confirmed" ] || fail "enclave watermarks disagree after restart: prepared=$prepared confirmed=$confirmed"
 
+# Anchored to lines written SINCE THIS SUITE BEGAN.  The log is cumulative across the whole run,
+# so an unanchored grep re-reports any divergence some earlier suite already logged -- which is
+# exactly how a permanent PioneerJar false alarm made this suite fail on rollbacks that were
+# clean (2026-08-16).
 logfile="$QADENAHOME/logs/qadena.log"
-if [ -f "$logfile" ] && grep -a "DIVERGED AT AN AGREED HEIGHT" "$logfile" > /dev/null; then
+if [ -f "$logfile" ] && tail -n "+$((rollback_log_start + 1))" "$logfile" | grep -aq "DIVERGED AT AN AGREED HEIGHT"; then
     fail "enclave stores diverged at an agreed height after rollback"
 fi
 
