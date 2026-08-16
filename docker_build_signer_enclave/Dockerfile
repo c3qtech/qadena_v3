@@ -11,6 +11,40 @@
 # 1.8.1
 FROM ghcr.io/edgelesssys/ego/build-base@sha256:ce58c2c60d94f766a9aa95c11d69ca149eb13e39e72e63ca122e7368c6bba651 AS base
 
+# PIN THE ARCHIVE, NOT JUST THE PACKAGES.
+#
+# The versions pinned below are what make this build reproducible, and reproducibility is what keeps
+# MRENCLAVE stable -- which is what lets the EnclaveIdentity recorded in genesis keep matching.  But
+# apt fetched them from the LIVE Ubuntu archive, and Ubuntu publishes only the CURRENT version per
+# pocket: a superseded version is dropped from the index, not retained.  So the pins expired.
+# Confirmed on Launchpad: curl 7.81.0-1ubuntu1.21 was superseded on 2026-02-25, across every
+# architecture.
+#
+# From that date the build was broken FROM SCRATCH everywhere, while continuing to appear healthy on
+# any machine whose buildx cache still held this layer.  It surfaced only when that cache was pruned
+# on one host -- the prune did not break anything, it revealed that the project's ability to build
+# the enclave at all rested on a cache that nobody was protecting.
+#
+# A snapshot never loses a version, so the pins below keep resolving indefinitely and not one of them
+# has to change -- which matters, because changing any would move MRENCLAVE and force every node to
+# re-register its EnclaveIdentity.
+#
+# ON Verify-Peer=false, which is not as alarming as it looks.  snapshot.ubuntu.com is HTTPS-only and
+# this base image ships no ca-certificates -- ca-certificates is itself one of the packages we are
+# about to install, so there is a genuine bootstrap cycle.  Transport verification is therefore
+# disabled, NOT archive verification: the image does carry ubuntu-keyring-2018-archive.gpg, so apt
+# still checks the InRelease GPG signature on every index it fetches.  Integrity comes from that
+# signature, not from TLS.
+#
+# To move to a newer snapshot, pick a timestamp at which all the pinned versions were still current
+# and verify with:  apt-get install --dry-run <all pins>
+ARG APT_SNAPSHOT=20260220T000000Z
+RUN printf 'deb https://snapshot.ubuntu.com/ubuntu/%s jammy main restricted universe multiverse\n' "$APT_SNAPSHOT"  > /etc/apt/sources.list \
+ && printf 'deb https://snapshot.ubuntu.com/ubuntu/%s jammy-updates main restricted universe multiverse\n' "$APT_SNAPSHOT" >> /etc/apt/sources.list \
+ && printf 'deb https://snapshot.ubuntu.com/ubuntu/%s jammy-security main restricted universe multiverse\n' "$APT_SNAPSHOT" >> /etc/apt/sources.list \
+ && rm -f /etc/apt/sources.list.d/*.list \
+ && echo 'Acquire::https::Verify-Peer "false";' > /etc/apt/apt.conf.d/99snapshot
+
 RUN apt-get update
 
 # CUT/PASTE ALERT:  Get the apt-get info from the docker_chain_build/Dockerfile
