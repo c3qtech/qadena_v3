@@ -721,3 +721,108 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
 
     Note the fix in 7688e6b5 is deliberately ownership-based rather than SGX-based, so it keeps
     working either way and does not have to be reverted if this test succeeds.
+
+## Raised by the accumulator/watchdog/paging work (2026-08-16, Mac + M1/M2)
+
+44. **Accumulator phase 2: compare chain-acc to enclave-acc DIRECTLY, then every block.**
+    Both sides now maintain per-store accumulators (chain side activated in EnclaveEndBlock /
+    dsvs BeginBlock), but they are only compared TRANSITIVELY: each side shadow-verifies its own
+    value against its own scan, and the scans are compared across the boundary by GetStoreHash.
+    The direct compare is an `acc` field beside `hash` in GetStoreHash's per-store reply -- and
+    the elegant cadence is piggybacking the enclave's ten values on the EndBlockReply it already
+    sends every block, giving full content-agreement checking per block for ~330 bytes in an RPC
+    that already happens.  A mismatch halts THIS node with a named cause (node-local, halt-or-
+    proceed, cannot fork).  Proto + enclave handler change, so MRENCLAVE moves: bundle with 45.
+
+    DESIGN (settled 2026-08-16, and it supersedes an earlier fallback note): the vehicle is a
+    PAIRED ESTABLISH-AND-RETURN RPC -- GetStoreAccumulators, the accumulator equivalent of
+    GetStoreHash.  The read-only constraint that forced the enclave's flag/drain/EndBlock
+    establishment dance belongs to GetStoreHash specifically (its commitCache history), not to
+    the seam: a NEW rpc may write, exactly as SeedStorePage does.  So the handler ensures-if-
+    missing (scan once, save) and then returns all values -- after this call "absent" is
+    impossible by construction, the chain ensures its own side at the call site (its sync-loop
+    compare already establishes on first touch), and the exchange compares acc-to-acc directly.
+    One RPC is then establishment + comparison + the CLI access command: this item and 45 are the
+    same change.  The per-block maintain sweeps on both sides remain, demoted from primary
+    establishment to repair-and-insurance (one Get per store per block); the scan-moment shadow
+    compares remain for phase-1 verification.  No absent-marker wire fallback is needed once the
+    seam RPC exists -- establishment happens at the moment of first need, which is the seam.
+
+45. **Accumulator access commands: `enclave store-accumulators --height` and
+    `compare-accumulators --height`.**  Answering "are the accumulators the same across?" took
+    debug-log archaeology plus a three-step syllogism; it should be one command.  The enclave
+    side resolves height->version through the same index export-private-state and rollback use.
+    Accumulators are digests -- same disclosure class as GetStoreHash -- so serve them from real
+    SGX enclaves too, not just debug.  The chain side is a standard module query (--height comes
+    free from the SDK query context) once activation has shipped.  This is also the binary-search
+    tool for WHEN a store diverged, which nothing else in the system can answer.
+
+46. **Accumulator phase 3: swap the hot paths, demote the scans -- but never delete them.**
+    Once the shadow has been quiet across full regressions on both platforms (already true for
+    the enclave half) plus real soak, startup sync and displayStoresSync should compare 33-byte
+    rows instead of scanning ~16k rows per side.  Keep a LOW-FREQUENCY scan audit forever (the
+    existing debug Height%25 cadence is the right shape): the accumulator is a maintained
+    invariant, and only a scan catches a write path added later that forgets to hook it -- the
+    exact rot that emptied the iavl fast index and shorted CredentialPCXY.  Note phase 1 as
+    shipped INCREASES total scanning (value + verification on top of existing scans); the net
+    saving only arrives with this item.
+
+47. **Chain-side accumulator activation is consensus-visible: nodes must cross it together.**
+    maintainStoreAccumulators writes ten rows into the qadena store (dsvs one more), which feeds
+    the app hash.  Deterministic, so upgraded nodes agree with each other -- and disagree with
+    un-upgraded ones from the first post-swap block.  Single-node chains swap freely; the M1+M2
+    pair must swap binaries at the same halt or the full node forks off with an apphash mismatch.
+    Any future chain with independent validators needs a coordinated upgrade height.
+
+48. **CredentialHashMap and the other enclave-private derived indexes have NO comparison of any
+    kind.**  Not mirrored, not hashed by GetStoreHash, not accumulated: corruption is invisible
+    to everything except update_credentials case 6b, which only exists because the suite happens
+    to recover through the primary hash.  This is the third member of the CredentialPCXY bug
+    class (derived index, conditionally maintained, no ground-truth check).  Enclave-private
+    accumulators would cost nothing consensus-wise -- enclave state never touches the app hash --
+    and the machinery is already there; it is a prefix list away.
+
+49. **displayStoresSync still ignores PioneerJar in its scan display.**  The store that produced
+    a day of DIVERGED false alarms is compared at startup only; a mid-run divergence stays
+    invisible until the next restart.  (The new accumulator shadow DOES cover it per checkSync
+    block, but the enclave-vs-chain scan comparison -- the authoritative one until item 46 --
+    does not.)  Add the case to the switch; it is one fallthrough.
+
+50. **Codegen toolchain skew: M1's ignite regenerates 9 pb.go files without
+    `var Msg_serviceDesc = _Msg_serviceDesc`.**  ignite chain init on a machine with a different
+    protoc-gen version dirties the tree (one dead alias line per service file), which correctly
+    trips package_release.sh's clean-tree guard and blocks phase 7 of 1st_node_bringup.  Worked
+    around by `git checkout -- .` before packaging; the fix is pinning the codegen toolchain
+    version across machines, or teaching the build to refuse mismatched generator versions with
+    a message that names them.
+
+51. **Real-loop-against-real-handler multi-page paging has still never run over actual gRPC.**
+    Unit tests force it on each side separately (real keeper loop vs fake enclave; real enclave
+    handler vs test-local loop); live tables are ~1000x under the 1 MiB budget.  QADENA_PAGE_BUDGET
+    now exists (chain-side only, shrink-only, announced at ERROR when active): add an opt-in
+    forced-paging regression cycle that starts the node with a few-KiB budget and asserts
+    `outbox drain ... consumed X of Y` with X<Y appears -- evidence of a mid-queue page boundary
+    crossing the real wire.
+
+52. **Four pre-existing x/qadena/keeper test failures predate everything above.**
+    TestGetParams/TestParamsQuery fail on a cosmetic big.Int nil-vs-zero mismatch after a marshal
+    round trip; TestRecoverKeyQuerySingle/Paginated expect pagination from a query that is a
+    committed `Unimplemented` stub ("intentionally mnot implemented", typo included).  Either fix
+    the comparisons/stub or delete the tests; today they train people to ignore red.
+
+53. **1st_node_bringup phase 8 decides "same enclave already installed" BY NAME.**  Debug
+    placeholder ids never change with code, so a stale pre-fix enclave was kept while the check
+    reported it current; only the qadenad content mismatch exposed it.  Compare binary content
+    (hash), not the unique-id string, before skipping an install.
+
+54. **M2 is joined but not finished: phases 6-7 never ran.**  Validator conversion and
+    test_peer_agreement -- the first SCRIPTED cross-node comparison -- are the natural completion
+    of the two-node bring-up, and peer-agreement would exercise the accumulator comparison from
+    item 44 the moment it exists.
+
+55. **Watchdog numbers are judgement, not measurement -- and the crash suite leaks its short
+    grace.**  5s/3s/2m are unprofiled (zero false misses across full regressions on two
+    platforms so far -- keep watching that stat); and the suite's QADENA_ENCLAVE_HEALTH_GRACE=15s
+    export persists on the node it restarts.  The NON-DEFAULT announcement now makes that leak
+    loud, but the suite could also re-export the default on its final restart at the cost of the
+    next cycle's fast halt.
