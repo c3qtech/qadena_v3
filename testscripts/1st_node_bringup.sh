@@ -455,7 +455,10 @@ if run_phase 8 && [[ -n "$JOINER" ]]; then
     if (( BUILD_SGX )); then
         jbin=$(rsh_user "$JOINER" "$BUILD_PATH ego uniqueid $JHOME/qadena/bin/qadenad_enclave 2>/dev/null | head -1" | tr -d '\r')
     else
-        jbin=$(rsh_user "$JOINER" "strings $JHOME/qadena/bin/qadenad_enclave 2>/dev/null | grep -m1 '^unique[0-9]*\$'" | tr -d '\r')
+        # Same extraction as phase 5, for the same reason: Go packs string data, so the embedded
+        # id never sits on its own line in `strings` output and a ^whole-line$ match can only ever
+        # find a stray bare "unique".
+        jbin=$(rsh_user "$JOINER" "strings $JHOME/qadena/bin/qadenad_enclave 2>/dev/null | grep -m1 -ohE 'unique[0-9]+'" | tr -d '\r')
     fi
     info "primary genesis records : ${gen:-<none>}"
     info "joiner binary measures  : ${jbin:-<unreadable>}"
