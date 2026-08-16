@@ -21,7 +21,9 @@
       "Bash(~/qadena/bin/qadenad enclave *)",
       "Bash(python3 -c ' *)",
       "Bash(./testscripts/test_enclave_rollback.sh)",
-      "Bash(ssh -o ConnectTimeout=15 -o BatchMode=yes 192.168.86.140 'bash -lc \" *)"
+      "Bash(ssh -o ConnectTimeout=15 -o BatchMode=yes 192.168.86.140 'bash -lc \" *)",
+      "Bash(ssh -o ConnectTimeout=15 -o BatchMode=yes 192.168.86.140 'grep -inE \"error|failed|cannot|no space|denied\" /tmp/build140.log | grep -viE \"^\\\\s*$\" | tail -15 | cut -c1-190')",
+      "Bash(ssh -o ConnectTimeout=15 -o BatchMode=yes 192.168.86.140 'ls -ld ~/qadena ~/qadena/bin ~/qadena/config 2>/dev/null | awk \"{print \\\\$1,\\\\$3,\\\\$4,\\\\$9}\"; echo \"--- node still running? ---\"; ps -eo pid,args | grep -cE \"[q]adenad --home\" ; echo \"--- archive intact ---\"; du -sh ~/qadena-archive-20260810')"
     ]
   }
 }
