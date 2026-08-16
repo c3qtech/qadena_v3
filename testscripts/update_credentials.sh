@@ -49,12 +49,26 @@
 # checked with an inverted exit status, so a policy that silently starts accepting them breaks the
 # script rather than passing quietly.
 #
-# The KEY RECOVERY cases (6, 6a, 6b) are still opt-in, via UPDATE_CREDENTIALS_WITH_RECOVERY=1.
-# They are not merely single-shot: a wallet can be recovered ONCE, permanently
-# (getRecoverKeyByOriginalWalletID refuses a second), and they need three recovery partners
-# resolved three different ways -- service provider, pioneer, and a user matched through a
-# nameservice email binding -- which means provisioning the whole prefixed user set rather than
-# four of them.  Repeating those is a separate piece of work.
+# The KEY RECOVERY cases (6, 6a, 6b) are opt-in, via UPDATE_CREDENTIALS_WITH_RECOVERY=1, and they
+# run against THIS RUN'S jill like every other case.
+#
+# They used to run against the shared jill, justified by two claims.  One was simply wrong: a wallet
+# can be recovered more than once -- case 6b is itself a second recovery, and asserts that the
+# earlier signatures do not carry over.  The other was a real constraint read one step too far: the
+# three partners must be resolvable three different ways (service provider, pioneer, and a user
+# matched through a nameservice email binding), which was taken to mean the whole prefixed user set
+# had to be provisioned.  It does not.  PARTNERS ONLY SIGN, and setup.sh's --prefix generator copies
+# .recovery verbatim, so a per-run user already names the SHARED partners.
+#
+# The actual blocker was neither: setup.sh --specific-user used to `exit 0` before its recovery
+# section, so a prefixed user was provisioned but never got a protect-key.  With that fixed, these
+# cases cost one protect-key.
+#
+# Running them against the shared jill is what silently broke them.  The marriage in case 2 renames
+# PER-RUN jill, so 6b asked to recover SHARED jill through a married name she had never been given,
+# and failed; while case 6 kept passing for the wrong reason, because shared jill was never married
+# and "her old surname" was simply her only one -- so the alias lookup it exists to test was never
+# tested at all.
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
@@ -156,18 +170,41 @@ al_email_bf="5678$suffix"
 subcred_a="${suffix}11"
 subcred_bf="5678$suffix"
 
-# override the value from setup_mnemonic.sh so this script owns every code it burns
-jill_recover_a="31234"
-jill_recover_bf="5678"
+# Claim codes for the two recoveries.  PER-RUN like every other code in this file: a claim code is
+# the find-credential commitment's amount, so a fixed one collides in credentialByPCXYExists on the
+# second run and the create is refused with ErrCredentialExists.
+jill_recover_a="${suffix}12"
+jill_recover_bf="5678$suffix"
 
 # case 6b: jill's SECOND recovery, keyed on her current surname
-jill_recover2_a="32234"
-jill_recover2_bf="5678"
-recoverjill2mnemonic="ten slot supply correct long special favorite that bracket paper banner neutral risk scatter lion mansion jacket drink mean tennis original tail pave laundry"
+jill_recover2_a="${suffix}13"
+jill_recover2_bf="5678$suffix"
 
-# the seed phrase both recoveries must return, read from the same file setup.sh seeded jill from
-# rather than duplicated here
-jillmnemonic=$(jq -r '.[] | select(.name=="jill") | .mnemonic' "$qadenatestdata/users.json")
+# The wallets the recoveries land in, and the seed phrase they must return.
+#
+# ALL PER-RUN, which is the point of this block.  These cases used to run against the SHARED jill
+# that setup.sh seeds, because setup.sh --specific-user skipped recovery provisioning entirely and a
+# prefixed user therefore never got a protect-key.  With that skip removed, per-run jill has her own
+# protect-key -- filed with the SAME shared partners, because the generator copies .recovery verbatim
+# and partners only sign -- so the recovery cases can finally test the identity this run actually
+# married.
+#
+# That drift is what broke case 6b: the marriage in case 2 renamed PER-RUN jill, while 6b asked to
+# recover SHARED jill through a married name nobody had ever given her.  It also left case 6 passing
+# for the wrong reason -- shared jill was never married, so "her old surname" was simply her only
+# surname, and the alias lookup it claims to exercise was never exercised at all.
+recover_jill_wallet="recover-jill$suffix"
+recover_jill2_wallet="recover-jill2$suffix"
+recoverjillmnemonic=$(qadenad_alias keys mnemonic --keyring-backend test)
+recoverjill2mnemonic=$(qadenad_alias keys mnemonic --keyring-backend test)
+
+# jill's protect-key is filed under her eph1, by msg.Creator -- see the note in case 6a.
+jill_protect_wallet="$u_jill-eph1"
+
+# The seed phrase both recoveries must return: PER-RUN jill's, from the generated file setup.sh
+# seeded her from.  setup.sh mints a fresh mnemonic per prefixed user, so this cannot be read from
+# the shared users.json.
+jillmnemonic=$(jq -r --arg n "$u_jill" '.[] | select(.name==$n) | .mnemonic' "$qadenatestdata/users${suffix}.gen.json")
 
 # al's seeded contact values, and the new phone/email the contact cases move him to
 al_old_phone="+63288888801$suffix"
@@ -227,21 +264,21 @@ expect_ok qadenad_alias tx qadena update-credential $swap_a $swap_bf personal-in
 
 if [[ -n "$UPDATE_CREDENTIALS_WITH_RECOVERY" ]]; then
 
-# OPT-IN, and against the SHARED setup users rather than this run's.  Recovery cannot be made
-# per-run by naming alone: a wallet may be recovered exactly ONCE, permanently
-# (getRecoverKeyByOriginalWalletID refuses a second), and the partner approvals below need three
-# signatories resolved three different ways -- service provider, pioneer, and a user matched
-# through a nameservice email binding -- which means provisioning the whole prefixed user set,
-# not the four identities this suite otherwise needs.  So these keep testing shared jill, and
-# they still burn her single recovery when they run.
+# OPT-IN, and against THIS RUN'S jill -- see the header for why these used to use the shared one
+# and what that cost.  The partners stay shared on purpose: they only sign, and the generator copies
+# .recovery verbatim, so per-run jill's protect-key already names them.
     echo "========================="
     echo "6. key recovery with jill's OLD surname (Quimba) must still work"
     echo "========================="
-    # the decisive test of hash aliasing: the pre-marriage identity still resolves to the same
-    # credential, so recovery keeps working with the information jill remembers
-    expect_ok qadenad_alias tx qadena create-wallet recover-jill pioneer1 --account-mnemonic="$recoverjillmnemonic" create-wallet-sponsor --yes
-    expect_ok qadenad_alias tx qadena create-credential $jill_recover_a $jill_recover_bf personal-info "Jill" "Lava" "Quimba" "1980-Jan-01" "PH" "PH" "F" --from $identityprovider --yes
-    expect_ok qadenad_alias tx qadena claim-credential $jill_recover_a $jill_recover_bf personal-info --from recover-jill --recover-key --yes
+    # THE DECISIVE TEST OF HASH ALIASING, and only now that it runs against the jill case 2 actually
+    # married: her pre-marriage identity is a genuine ALIAS on her credential, so recovery keeps
+    # working with the information she remembers rather than the name she now has.
+    #
+    # Against the shared jill this passed while testing nothing -- she was never married, so Quimba
+    # was simply her only surname and the lookup never went through an alias at all.
+    expect_ok qadenad_alias tx qadena create-wallet $recover_jill_wallet pioneer1 --account-mnemonic="$recoverjillmnemonic" create-wallet-sponsor --yes
+    expect_ok qadenad_alias tx qadena create-credential $jill_recover_a $jill_recover_bf personal-info "Jill$suffix" "Lava$suffix" "Quimba$suffix" "1980-Jan-01" "PH" "PH" "F" --from $identityprovider --yes
+    expect_ok qadenad_alias tx qadena claim-credential $jill_recover_a $jill_recover_bf personal-info --from $recover_jill_wallet --recover-key --yes
 
     echo "-------------------------"
     echo "6a. partner approvals: jill needs all 3 of her users.json recovery partners"
@@ -261,15 +298,13 @@ if [[ -n "$UPDATE_CREDENTIALS_WITH_RECOVERY" ]]; then
     #                                                          the pioneer enclave, it only signs
     #   victor's email      resolved via nameservice to the sub-wallet that bound
     #                       victortorres@c3qtech.com, which is victor-eph1 -> --is-user
-    jill_protect_wallet="jill-eph1"
-
     expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from $identityprovider --is-service-provider --yes
     expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from pioneer1 --yes
 
     echo "-------------------------"
     echo "2 of 3 signatories: the seed phrase must still be withheld"
     echo "-------------------------"
-    expect_reject qadenad_alias query qadena show-recover-key recover-jill
+    expect_reject qadenad_alias query qadena show-recover-key $recover_jill_wallet
 
     expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from victor-eph1 --is-user --yes
 
@@ -278,7 +313,7 @@ if [[ -n "$UPDATE_CREDENTIALS_WITH_RECOVERY" ]]; then
     echo "-------------------------"
     # Assert the RECOVERED VALUE, not merely that the query succeeded.  The whole point of recovery is
     # getting the original seed back, and a query that returned the wrong phrase would still exit 0.
-    recovered=$(qadenad_alias query qadena show-recover-key recover-jill 2>&1 | sed -n 's/^seed phrase: //p')
+    recovered=$(qadenad_alias query qadena show-recover-key $recover_jill_wallet 2>&1 | sed -n 's/^seed phrase: //p')
     [ -n "$recovered" ] || fail "no seed phrase released after 3 of 3 signatories"
     [ "$recovered" = "$jillmnemonic" ] || fail "recovered seed phrase does not match jill's mnemonic"
     echo "recovered seed phrase matches jill's original mnemonic"
@@ -294,14 +329,14 @@ if [[ -n "$UPDATE_CREDENTIALS_WITH_RECOVERY" ]]; then
     # 2. Losing a key twice is normal, so recovery must work more than once.  This second claim
     #    replaces jill's RecoverKey and resets its signatory list, which is why all three partners
     #    have to sign again rather than the earlier signatures still counting.
-    expect_ok qadenad_alias tx qadena create-wallet recover-jill2 pioneer1 --account-mnemonic="$recoverjill2mnemonic" create-wallet-sponsor --yes
-    expect_ok qadenad_alias tx qadena create-credential $jill_recover2_a $jill_recover2_bf personal-info "Jill" "Lava" "Villarica" "1980-Jan-01" "PH" "PH" "F" --from $identityprovider --yes
-    expect_ok qadenad_alias tx qadena claim-credential $jill_recover2_a $jill_recover2_bf personal-info --from recover-jill2 --recover-key --yes
+    expect_ok qadenad_alias tx qadena create-wallet $recover_jill2_wallet pioneer1 --account-mnemonic="$recoverjill2mnemonic" create-wallet-sponsor --yes
+    expect_ok qadenad_alias tx qadena create-credential $jill_recover2_a $jill_recover2_bf personal-info "Jill$suffix" "Lava$suffix" "Villarica$suffix" "1980-Jan-01" "PH" "PH" "F" --from $identityprovider --yes
+    expect_ok qadenad_alias tx qadena claim-credential $jill_recover2_a $jill_recover2_bf personal-info --from $recover_jill2_wallet --recover-key --yes
 
     echo "-------------------------"
     echo "the earlier signatures must NOT carry over -- withheld until all three sign again"
     echo "-------------------------"
-    expect_reject qadenad_alias query qadena show-recover-key recover-jill2
+    expect_reject qadenad_alias query qadena show-recover-key $recover_jill2_wallet
 
     expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from $identityprovider --is-service-provider --yes
     expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from pioneer1 --yes
@@ -310,7 +345,7 @@ if [[ -n "$UPDATE_CREDENTIALS_WITH_RECOVERY" ]]; then
     echo "-------------------------"
     echo "the second recovery must return the SAME mnemonic as the first"
     echo "-------------------------"
-    recovered2=$(qadenad_alias query qadena show-recover-key recover-jill2 2>&1 | sed -n 's/^seed phrase: //p')
+    recovered2=$(qadenad_alias query qadena show-recover-key $recover_jill2_wallet 2>&1 | sed -n 's/^seed phrase: //p')
     [ -n "$recovered2" ] || fail "no seed phrase released on the second recovery"
     [ "$recovered2" = "$jillmnemonic" ] || fail "second recovery returned a different seed phrase than jill's mnemonic"
     [ "$recovered2" = "$recovered" ] || fail "the two recoveries returned different seed phrases"

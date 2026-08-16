@@ -305,21 +305,32 @@ if [[ $errors -gt 0 ]]; then
 else
     echo "✅ All users have been processed successfully."
 
-    if [[ -n "$specific_user" ]]; then
-      echo "Skipping user recovery setup because a specific user was specified."
-      exit 0
-    fi
-
     echo "Now processing user recovery setup..."
 
     pid_list=()
 
     jq -c '.[]' "$usersjson" | while read -r user; do
-        # if not the specific user and $user matches specific user
         name=$(echo "$user" | jq -r '.name')
         mnemonic=$(echo "$user" | jq -r '.mnemonic')
         required=$(echo "$user" | jq -r '.recovery.required // ""')
+
+        # PARTNERS ARE NOT PREFIXED, and that is deliberate rather than an oversight: the generator
+        # copies .recovery verbatim (see the --prefix block above), so a per-run user names the
+        # SHARED partners -- testidentitysrvprv, pioneer1, and a user resolved through a nameservice
+        # email binding.  Partners only sign; nothing about them has to be per-run, which is what
+        # makes a per-run user's recovery cost one protect-key rather than a whole prefixed user set.
         partners=$(echo "$user" | jq -r '.recovery.partners // [] | join(" ")')
+
+        # --specific-user FILTERS this loop; it used to skip the whole section with `exit 0`.
+        #
+        # That skip is why a prefixed user could be provisioned but never got a protect-key, and so
+        # why update_credentials.sh had to run its key-recovery cases against the shared users --
+        # which in turn is how the marriage in case 2 (per-run jill) and the recovery in case 6b
+        # (shared jill) drifted onto two different people, leaving 6b asking for an identity nobody
+        # had ever married.
+        if [[ -n "$specific_user" && "$name" != "$specific_user" ]]; then
+            continue
+        fi
 
         # Call setup_user.sh in parallel and store the process ID
         if [[ -z "$required"  ]]; then
