@@ -170,7 +170,13 @@ func (am AppModule) BeginBlock(goCtx context.Context) error {
 
 // EndBlock contains the logic that is automatically triggered at the end of each block.
 // The end block implementation is optional.
-func (am AppModule) EndBlock(_ context.Context) error {
+func (am AppModule) EndBlock(goCtx context.Context) error {
+	// Establish this module's store accumulator if it has none -- at END of block, mirroring the
+	// enclave's maintainAccumulators (its EndBlock, before commit) and the qadena keeper's
+	// maintainStoreAccumulators (its EnclaveEndBlock, last), so an establishing scan covers
+	// everything the block wrote.  One Get per block once established.  CONSENSUS STATE: nodes
+	// must cross this change together, same property as the qadena side.
+	am.keeper.MaintainStoreAccumulators(sdk.UnwrapSDKContext(goCtx))
 	return nil
 }
 

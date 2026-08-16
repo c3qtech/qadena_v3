@@ -1691,8 +1691,22 @@ func (k Keeper) displayStoresSync(sdkctx sdk.Context) error {
 		return err
 	}
 
+	enclaveAccs := k.fetchEnclaveAccumulators(sdkctx)
+
 	for _, sh := range storeHashes.GetHashes() {
+		// The chain-side shadow, wired where the chain already scans (this loop's own
+		// StoreHashByKVStoreService below walks every row anyway): the maintained accumulator is
+		// re-derived from the data and any disagreement means a write path is not maintaining it.
+		// Covers every mirrored store, including the ones the display switch below ignores.
+		if mirroredStores[sh.Key] {
+			k.CompareStoreAccumulator(sdkctx, sh.Key)
+		}
+
 		h := c.StoreHashByKVStoreService(sdkctx, k.storeService, sh.Key)
+
+		if mirroredStores[sh.Key] {
+			k.compareAccumulatorSeam(sdkctx, sh.Key, enclaveAccs, sh.Hash == h)
+		}
 		switch sh.Key {
 		case types.WalletKeyPrefix:
 			fallthrough
@@ -1739,6 +1753,12 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 
 	checkSync := false
 
+	// The accumulator seam, fetched at the SAME pre-seed instant as the scan hashes above: the
+	// establish-then-answer RPC guarantees every entry exists, and capturing both replies before
+	// any seeding keeps the side-by-side comparison honest -- a successful seed would otherwise
+	// make the accumulators agree while the scans, sampled earlier, did not.
+	enclaveAccs := k.fetchEnclaveAccumulators(sdkctx)
+
 	// Push failures, counted per prefix.  Every one of these call sites used to discard the error.
 	// That is not a theoretical loss: SetProtectKey and SetRecoverKey decrypt a vshare with a
 	// HISTORICAL SS interval private key before they write anything, and obtaining one means an
@@ -1758,7 +1778,17 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 			continue
 		}
 
+		// The chain-side shadow, in the same structural place as the enclave's: the enclave runs
+		// compareAccumulatorToScan inside GetStoreHash, so EVERY moment it scans for hashes it
+		// also checks its maintained value.  This loop and displayStoresSync are the chain's two
+		// hash-scan moments; both now do the same.
+		k.CompareStoreAccumulator(sdkctx, sh.Key)
+
 		h := c.StoreHashByKVStoreService(sdkctx, k.storeService, sh.Key)
+
+		// Side-by-side: does the acc-to-acc verdict agree with this scan-to-scan verdict?
+		k.compareAccumulatorSeam(sdkctx, sh.Key, enclaveAccs, sh.Hash == h)
+
 		if sh.Hash == h {
 			c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
 			continue
@@ -1926,6 +1956,13 @@ func (k Keeper) EnclaveEndBlock(sdkctx sdk.Context) {
 		c.ContextDebug(sdkctx, "Checking Sync after enclave->chain synchronization")
 		k.displayStoresSync(sdkctx)
 	}
+
+	// Establish any chain-side store accumulator that does not exist yet -- LAST, mirroring the
+	// enclave, whose maintainAccumulators runs in its EndBlock just before commitCache.  Placed
+	// after the drains so an establishing scan covers everything this block wrote, exactly as the
+	// enclave's placement does.  One Get per mirrored store per block once established.  These
+	// writes are consensus state -- see maintainStoreAccumulators for the upgrade property.
+	k.maintainStoreAccumulators(sdkctx)
 
 	k.EnclaveInvokeEndBlock(sdkctx)
 }

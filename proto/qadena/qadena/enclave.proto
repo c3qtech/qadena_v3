@@ -117,6 +117,13 @@ service QadenaEnclave {
   // Seeding a store, a page at a time.  Replaces one RPC per row -- ~10k of them per table on a
   // state-synced joiner -- with one per page.  See MsgSeedStorePage.
   rpc SeedStorePage (MsgSeedStorePage) returns (SeedStorePageReply) {}
+
+  // The accumulator seam: GetStoreHash's equivalent for the maintained per-store accumulators,
+  // and DELIBERATELY A WRITING RPC where GetStoreHash must not be -- the handler establishes any
+  // missing accumulator before answering, so "absent" is impossible in a current-height reply and
+  // both sides of a comparison are guaranteed to exist at the moment of exchange.  See
+  // MsgGetStoreAccumulators.
+  rpc GetStoreAccumulators (MsgGetStoreAccumulators) returns (GetStoreAccumulatorsReply) {}
   rpc RemoveCredential (EnclaveRemoveCredentialRequest) returns (RemoveCredentialReply) {}
   rpc RecoverKeyByCredential (Credential) returns (RecoverKeyReply) {}
   rpc ClaimCredential(MsgClaimCredential) returns (MsgClaimCredentialResponse) {}
@@ -582,6 +589,34 @@ message MsgSeedStorePage {
 message SeedStorePageReply {
   uint32 accepted = 1;
   uint32 failed = 2;
+}
+
+// MsgGetStoreAccumulators asks for the maintained per-store accumulators.
+//
+// height 0 means CURRENT, and current is establish-then-answer: the handler scans-and-saves any
+// store that has no accumulator yet, so every requested key is present in the reply.  A non-zero
+// height reads the versioned store as of that height WITHOUT establishing (history cannot be
+// written), so historical entries may honestly report absent -- an accumulator did not exist
+// before the block that established it, and inventing a zero would read as "empty store".
+message MsgGetStoreAccumulators {
+  // empty = all mirrored stores, same identifiers GetStoreHash reports
+  repeated string keys = 1;
+  int64 height = 2;
+}
+
+message StoreAccumulatorEntry {
+  string key = 1;
+  // the 32-byte accumulator value; meaningful only when present = true
+  bytes acc = 2;
+  // rows counted when the handler had to SCAN (establishment, or a historical read that walked
+  // the store); -1 when the value was served from the maintained row without a scan, because
+  // counting would cost the very scan the accumulator exists to avoid
+  int64 rows = 3;
+  bool present = 4;
+}
+
+message GetStoreAccumulatorsReply {
+  repeated StoreAccumulatorEntry accumulators = 1;
 }
 
 // Outbox drains are PAGED.  Each Msg carries a byte budget and each Reply reports whether the

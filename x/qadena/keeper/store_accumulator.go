@@ -11,6 +11,7 @@ package keeper
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"cosmossdk.io/store/prefix"
 	"github.com/cosmos/cosmos-sdk/runtime"
@@ -75,6 +76,92 @@ func (k Keeper) EnsureStoreAccumulator(ctx context.Context, pfx string) c.StoreA
 // digest, or the two halves disagree.
 func accumulatorLog(pfx string, rows int, acc c.StoreAccumulator) string {
 	return fmt.Sprintf("key=%s rows=%d acc=%s", pfx, rows, c.AccumulatorHex(acc))
+}
+
+// maintainStoreAccumulators establishes any missing accumulator, for every mirrored store, once
+// per block -- the chain-side twin of the enclave's maintainAccumulators, called from
+// EnclaveEndBlock.  After the first block each pass costs one store Get per prefix.
+//
+// THIS IS THE ACTIVATION POINT, and it is CONSENSUS-VISIBLE: the rows it writes live in the
+// qadena module store, which feeds the app hash.  The arithmetic is deterministic -- every node
+// running this code computes byte-identical rows from byte-identical writes -- so upgraded nodes
+// agree with each other, but they disagree with un-upgraded ones from the first block after the
+// swap.  All nodes of a chain must cross this change together.
+//
+// dsvs's AuthorizedSignatory is deliberately absent: that store lives in the dsvs module's own
+// store space, which this keeper cannot reach; the dsvs keeper establishes it from its own
+// per-block hook.
+func (k Keeper) maintainStoreAccumulators(sdkctx sdk.Context) {
+	// Sorted, not ranged: map order varies per process, and while the WRITE-SET is identical
+	// either way (commits sort by key), nobody should have to prove that to review this.
+	prefixes := make([]string, 0, len(mirroredStores))
+	for pfx := range mirroredStores {
+		prefixes = append(prefixes, pfx)
+	}
+	sort.Strings(prefixes)
+	for _, pfx := range prefixes {
+		k.EnsureStoreAccumulator(sdkctx, pfx)
+	}
+}
+
+// fetchEnclaveAccumulators calls the accumulator seam (GetStoreAccumulators) and returns the
+// enclave's current values by store key.  Advisory in phase 1: any failure returns nil and the
+// caller proceeds on scans alone -- an old enclave that lacks the RPC must not break sync.
+func (k Keeper) fetchEnclaveAccumulators(sdkctx sdk.Context) map[string][]byte {
+	ctx, cancel := enclaveExecContext()
+	defer cancel()
+
+	r, err := EnclaveGRPCClient.GetStoreAccumulators(ctx, &types.MsgGetStoreAccumulators{})
+	if err != nil {
+		c.ContextError(sdkctx, "Qadena: GetStoreAccumulators unavailable (proceeding on scans alone): "+err.Error())
+		return nil
+	}
+	out := map[string][]byte{}
+	for _, e := range r.GetAccumulators() {
+		if e.GetPresent() {
+			out[e.GetKey()] = e.GetAcc()
+		}
+	}
+	return out
+}
+
+// compareAccumulatorSeam is the SIDE-BY-SIDE check for one store: does the acc-to-acc verdict
+// agree with the scan-to-scan verdict, taken at the same instant?
+//
+// This is phase 1 of replacing the scans (backlog items 44/46): the scan verdict remains the one
+// that acts; the accumulator verdict only reports.  The one line that matters is the DISAGREES
+// one -- the two mechanisms claiming different answers about the same store at the same moment
+// means one of them is wrong, and that must be understood before the cheap one is ever trusted.
+//
+// CALL WITH VERDICTS FROM THE SAME INSTANT: both replies captured before any seeding, or a
+// successful seed makes the accumulators agree while the scans (sampled pre-seed) did not, and
+// the alarm fires on a phantom.
+func (k Keeper) compareAccumulatorSeam(sdkctx sdk.Context, key string, enclaveAccs map[string][]byte, scanAgree bool) {
+	if enclaveAccs == nil {
+		return // seam unavailable; nothing to compare
+	}
+	encAcc, ok := enclaveAccs[key]
+	if !ok {
+		c.ContextError(sdkctx, "Qadena: ACC-SEAM enclave returned no accumulator for key="+key)
+		return
+	}
+	chainAcc, ok := k.LoadStoreAccumulator(sdkctx, key)
+	if !ok {
+		// Cannot happen after CompareStoreAccumulator ran for this key (it establishes on
+		// absence), so reaching here means the call order in the sync loop changed.
+		c.ContextError(sdkctx, "Qadena: ACC-SEAM chain has no accumulator for key="+key+" -- call order bug")
+		return
+	}
+
+	accAgree := string(chainAcc[:]) == string(encAcc)
+	if accAgree != scanAgree {
+		c.ContextError(sdkctx, fmt.Sprintf(
+			"Qadena: ACC-SEAM VERDICT DISAGREES WITH SCAN key=%s accAgree=%t scanAgree=%t "+
+				"chainAcc=%s enclaveAcc=%x -- one mechanism is wrong; do not trust the accumulator path until this is understood",
+			key, accAgree, scanAgree, c.AccumulatorHex(chainAcc), encAcc))
+		return
+	}
+	c.ContextDebug(sdkctx, fmt.Sprintf("Qadena: ACC-SEAM agrees with scan key=%s inSync=%t", key, accAgree))
 }
 
 // CompareStoreAccumulator is the shadow check, run where the chain already scans.

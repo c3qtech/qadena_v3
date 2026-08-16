@@ -25,6 +25,8 @@ func (k Keeper) displayStoresSync(sdkctx sdk.Context) error {
 	for _, sh := range storeHashes.GetHashes() {
 		switch sh.Key {
 		case types.AuthorizedSignatoryKeyPrefix:
+			// The chain-side shadow, wired where this module already scans.
+			k.CompareStoreAccumulator(sdkctx, sh.Key)
 			h := c.StoreHashByKVStoreService(sdkctx, k.storeService, sh.Key)
 			if sh.Hash != h {
 				c.ContextError(sdkctx, "DSVS: displayStoresSync OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
@@ -59,6 +61,11 @@ func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
 	checkSync := false
 
 	for _, sh := range storeHashes.GetHashes() {
+		if sh.Key == types.AuthorizedSignatoryKeyPrefix {
+			// Same structural place as the enclave's shadow (inside its GetStoreHash): every
+			// moment this module scans for hashes, it also checks its maintained accumulator.
+			k.CompareStoreAccumulator(sdkctx, sh.Key)
+		}
 		h := c.StoreHashByKVStoreService(sdkctx, k.storeService, sh.Key)
 		switch sh.Key {
 		case types.AuthorizedSignatoryKeyPrefix:

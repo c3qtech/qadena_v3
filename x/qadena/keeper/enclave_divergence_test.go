@@ -38,7 +38,18 @@ type divergentEnclave struct {
 	types.QadenaEnclaveClient
 	mu     sync.Mutex
 	hashes map[string]string
+	accs   map[string][]byte // nil map = seam answers with no entries (advisory path)
 	pages  []*types.MsgSeedStorePage
+}
+
+func (f *divergentEnclave) GetStoreAccumulators(_ context.Context, _ *types.MsgGetStoreAccumulators, _ ...grpc.CallOption) (*types.GetStoreAccumulatorsReply, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	reply := &types.GetStoreAccumulatorsReply{}
+	for k, a := range f.accs {
+		reply.Accumulators = append(reply.Accumulators, &types.StoreAccumulatorEntry{Key: k, Acc: a, Rows: -1, Present: true})
+	}
+	return reply, nil
 }
 
 func (f *divergentEnclave) GetStoreHash(_ context.Context, _ *types.MsgGetStoreHash, _ ...grpc.CallOption) (*types.GetStoreHashReply, error) {
@@ -148,4 +159,62 @@ func TestAgreeingStoresAreNeitherSeededNorAlarmed(t *testing.T) {
 	if strings.Contains(logbuf.String(), "OUT-OF-SYNC") {
 		t.Fatalf("no store should read OUT-OF-SYNC when hashes agree; log:\n%s", logbuf.String())
 	}
+}
+
+// The seam, side by side with the scans (backlog 44 phase 1): when the enclave's accumulator
+// genuinely matches the chain's, the acc verdict and the scan verdict must agree -- and when the
+// two MECHANISMS disagree about the same store at the same instant, that must be screamed about,
+// because it means one of them is wrong.
+func TestSeamVerdictAgreesWithScanVerdict(t *testing.T) {
+	k, ctx := keepertest.QadenaKeeper(t)
+
+	var logbuf bytes.Buffer
+	ctx = ctx.WithLogger(log.NewLogger(&logbuf))
+
+	for i := 0; i < 3; i++ {
+		k.SetWalletNoEnclave(ctx, types.Wallet{WalletID: fmt.Sprintf("seam-%d", i)})
+	}
+
+	// A truthful enclave on BOTH channels: scan hash and accumulator each equal the chain's own.
+	k.MaintainStoreAccumulatorsForTest(ctx)
+	chainAcc, ok := k.LoadStoreAccumulator(ctx, types.WalletKeyPrefix)
+	require.True(t, ok)
+
+	fake := withDivergentEnclave(t, map[string]string{
+		types.WalletKeyPrefix: k.StoreHashForTest(ctx, types.WalletKeyPrefix),
+	})
+	fake.accs = map[string][]byte{types.WalletKeyPrefix: chainAcc[:]}
+
+	require.NoError(t, k.EnclaveSynchronizeStoresForTest(ctx))
+
+	require.NotContains(t, logbuf.String(), "ACC-SEAM VERDICT DISAGREES",
+		"matching content on both channels must produce agreeing verdicts")
+	require.NotContains(t, logbuf.String(), "ACC-SEAM enclave returned no accumulator",
+		"the establish-then-answer contract means every mirrored store must be present in the reply")
+	// The positive "agrees" line is DEBUG (per store per checkSync block would drown an info log);
+	// liveness of the seam comparison is proven by TestSeamScreamsWhenMechanismsDisagree, so
+	// absence of both failure lines here is unambiguous.
+}
+
+func TestSeamScreamsWhenMechanismsDisagree(t *testing.T) {
+	k, ctx := keepertest.QadenaKeeper(t)
+
+	var logbuf bytes.Buffer
+	ctx = ctx.WithLogger(log.NewLogger(&logbuf))
+
+	k.SetWalletNoEnclave(ctx, types.Wallet{WalletID: "seam-w"})
+	k.MaintainStoreAccumulatorsForTest(ctx)
+
+	// The pathological case: the enclave's SCAN hash matches the chain's (scan verdict: in sync)
+	// but its ACCUMULATOR does not (acc verdict: differ).  One mechanism is wrong.
+	fake := withDivergentEnclave(t, map[string]string{
+		types.WalletKeyPrefix: k.StoreHashForTest(ctx, types.WalletKeyPrefix),
+	})
+	fake.accs = map[string][]byte{types.WalletKeyPrefix: bytes.Repeat([]byte{0xee}, 32)}
+
+	require.NoError(t, k.EnclaveSynchronizeStoresForTest(ctx))
+
+	require.Contains(t, logbuf.String(), "ACC-SEAM VERDICT DISAGREES WITH SCAN",
+		"two mechanisms giving different answers about the same store at the same instant is the "+
+			"one condition the side-by-side period exists to catch")
 }

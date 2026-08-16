@@ -14,9 +14,11 @@ package keeper
 
 import (
 	"context"
+	"fmt"
 
 	"cosmossdk.io/store/prefix"
 	"github.com/cosmos/cosmos-sdk/runtime"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/c3qtech/qadena_v3/x/dsvs/types"
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
@@ -56,7 +58,49 @@ func (k Keeper) EnsureStoreAccumulator(ctx context.Context, pfx string) c.StoreA
 	if acc, ok := k.LoadStoreAccumulator(ctx, pfx); ok {
 		return acc
 	}
-	acc, _ := c.AccumulatorFromPrefixStore(k.tableStore(ctx, pfx))
+	acc, rows := c.AccumulatorFromPrefixStore(k.tableStore(ctx, pfx))
 	k.accumulatorStore(ctx).Set([]byte(pfx), c.StoreAccumulatorBytes(acc))
+	if sdkctx, ok := ctx.(sdk.Context); ok {
+		c.ContextInfo(sdkctx, "ACCUMULATOR established "+accumulatorLog(pfx, rows, acc))
+	}
 	return acc
+}
+
+// CompareStoreAccumulator is the shadow check, run where this module already scans (its
+// displayStoresSync).  Same shape and same log format as the qadena keeper's, so the two modules'
+// lines grep and diff identically.  May write: it runs from block execution, so a mismatch or a
+// missing value is repaired immediately rather than deferred.
+func (k Keeper) CompareStoreAccumulator(sdkctx sdk.Context, pfx string) {
+	scanned, rows := c.AccumulatorFromPrefixStore(k.tableStore(sdkctx, pfx))
+
+	acc, ok := k.LoadStoreAccumulator(sdkctx, pfx)
+	if !ok {
+		c.ContextInfo(sdkctx, "ACCUMULATOR established "+accumulatorLog(pfx, rows, scanned))
+		k.accumulatorStore(sdkctx).Set([]byte(pfx), c.StoreAccumulatorBytes(scanned))
+		return
+	}
+	if acc != scanned {
+		c.ContextError(sdkctx, "ACCUMULATOR MISMATCH key="+pfx+
+			" rows="+fmt.Sprint(rows)+
+			" maintained="+c.AccumulatorHex(acc)+
+			" scanned="+c.AccumulatorHex(scanned)+
+			" -- a write path is not maintaining it; re-seeding from the scan")
+		k.accumulatorStore(sdkctx).Set([]byte(pfx), c.StoreAccumulatorBytes(scanned))
+		return
+	}
+	c.ContextDebug(sdkctx, "ACCUMULATOR ok "+accumulatorLog(pfx, rows, acc))
+}
+
+// accumulatorLog matches the qadena keeper's and the enclave's format exactly -- the three are
+// meant to be compared line-for-line.
+func accumulatorLog(pfx string, rows int, acc c.StoreAccumulator) string {
+	return fmt.Sprintf("key=%s rows=%d acc=%s", pfx, rows, c.AccumulatorHex(acc))
+}
+
+// MaintainStoreAccumulators establishes this module's accumulator if it has none, once per block
+// from the module's EndBlock -- the dsvs twin of the qadena keeper's maintainStoreAccumulators, in
+// this module's own store space, which the qadena keeper cannot reach.  Exported because the
+// module package calls it.
+func (k Keeper) MaintainStoreAccumulators(sdkctx sdk.Context) {
+	k.EnsureStoreAccumulator(sdkctx, types.AuthorizedSignatoryKeyPrefix)
 }

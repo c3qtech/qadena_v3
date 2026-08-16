@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -215,4 +216,55 @@ func TestReseedFlagIsOneShot(t *testing.T) {
 	s.markAccumulatorForReseed(types.WalletKeyPrefix)
 	require.True(t, s.takeAccumulatorReseed(types.WalletKeyPrefix))
 	require.False(t, s.takeAccumulatorReseed(types.WalletKeyPrefix), "flag was not cleared")
+}
+
+// The seam RPC's contract: current-height replies ESTABLISH-THEN-ANSWER, so absent is impossible
+// -- the property that lets the chain compare acc-to-acc without an absent-marker fallback.
+func TestGetStoreAccumulatorsEstablishesThenAnswers(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	putWallet(s, "w1")
+	putWallet(s, "w2")
+
+	r, err := s.GetStoreAccumulators(context.Background(), &types.MsgGetStoreAccumulators{})
+	require.NoError(t, err)
+	require.Len(t, r.Accumulators, len(storeHashKeys), "every mirrored store must be answered")
+
+	for _, e := range r.Accumulators {
+		require.True(t, e.Present, "current-height replies must never be absent: "+e.Key)
+		if e.Key == types.WalletKeyPrefix {
+			want := scanAcc(s, types.WalletKeyPrefix)
+			require.Equal(t, want[:], e.Acc, "the established value must equal the data")
+			require.EqualValues(t, 2, e.Rows, "a fresh establishment scanned, so rows are known")
+		}
+	}
+
+	// Second call: served from the maintained rows, no scan -- rows now honestly -1.
+	r2, err := s.GetStoreAccumulators(context.Background(), &types.MsgGetStoreAccumulators{Keys: []string{types.WalletKeyPrefix}})
+	require.NoError(t, err)
+	require.Len(t, r2.Accumulators, 1, "the keys filter must narrow the reply")
+	require.EqualValues(t, -1, r2.Accumulators[0].Rows, "an already-established store must not be re-scanned just to count")
+}
+
+// Historical reads are read-only and may honestly be absent: an accumulator did not exist before
+// the block that established it, and absent != zero.
+func TestGetStoreAccumulatorsHistoricalIsReadOnlyAndHonestlyAbsent(t *testing.T) {
+	s := newTestEnclaveServer(t)
+
+	// Block 5 commits WITHOUT accumulators having ever been established... except endBlock now
+	// runs maintainAccumulators, so establishment happens AT block 5.  Height 5 therefore has
+	// values; the interesting assertion is that they are served without establishing anything new.
+	putWallet(s, "w1")
+	endBlock(t, s, 5)
+	putWallet(s, "w2")
+	endBlock(t, s, 6)
+
+	r5, err := s.GetStoreAccumulators(context.Background(), &types.MsgGetStoreAccumulators{Keys: []string{types.WalletKeyPrefix}, Height: 5})
+	require.NoError(t, err)
+	require.True(t, r5.Accumulators[0].Present)
+	r6, err := s.GetStoreAccumulators(context.Background(), &types.MsgGetStoreAccumulators{Keys: []string{types.WalletKeyPrefix}, Height: 6})
+	require.NoError(t, err)
+	require.True(t, r6.Accumulators[0].Present)
+	require.NotEqual(t, r5.Accumulators[0].Acc, r6.Accumulators[0].Acc,
+		"the height-5 and height-6 values must differ -- w2 was written between them; identical "+
+			"values would mean the historical read is not actually pinned to the height")
 }

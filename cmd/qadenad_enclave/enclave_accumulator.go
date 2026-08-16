@@ -18,6 +18,7 @@ package main
 // MetaDB would survive a rollback and then describe state that no longer exists.
 
 import (
+	"context"
 	"fmt"
 
 	"cosmossdk.io/store/prefix"
@@ -164,6 +165,63 @@ func (s *qadenaServer) compareAccumulatorToScan(pfx string) {
 	// comparison".  This is also the line to compare BETWEEN NODES: same store, same row count,
 	// same digest means two enclaves hold identical content.
 	c.LoggerDebug(logger, "ACCUMULATOR ok "+accumulatorLog(pfx, rows, acc))
+}
+
+// GetStoreAccumulators is the accumulator seam: GetStoreHash's equivalent for the maintained
+// values, and DELIBERATELY A WRITING RPC where GetStoreHash must not be.  The read-only constraint
+// that forced establishment into a flag-then-next-write dance belongs to GetStoreHash specifically
+// (its commitCache history), not to the seam: this handler establishes any missing accumulator
+// before answering, so "absent" is impossible in a current-height reply and both sides of a
+// comparison exist at the moment of exchange.
+//
+// A NON-ZERO HEIGHT is a read of the versioned store as of that height, WITHOUT establishing --
+// history cannot be written.  Historical entries may honestly be absent: an accumulator did not
+// exist before the block that established it, and absent != zero (a zero would read as "empty
+// store" and fail every non-empty comparison).
+func (s *qadenaServer) GetStoreAccumulators(ctx context.Context, in *types.MsgGetStoreAccumulators) (*types.GetStoreAccumulatorsReply, error) {
+	want := map[string]bool{}
+	for _, k := range in.GetKeys() {
+		want[k] = true
+	}
+
+	reply := &types.GetStoreAccumulatorsReply{}
+
+	err := s.withHeightPinned(in.GetHeight(), func(view *qadenaServer) error {
+		for _, pfx := range storeHashKeys {
+			if len(want) > 0 && !want[pfx] {
+				continue
+			}
+
+			entry := &types.StoreAccumulatorEntry{Key: pfx, Rows: -1}
+
+			if in.GetHeight() > 0 {
+				// Historical: read-only, absent stays absent.
+				if acc, ok := view.loadAccumulator(pfx); ok {
+					entry.Acc, entry.Present = acc[:], true
+				}
+			} else {
+				// Current: establish-then-answer.  Rows are only counted when the scan happened
+				// anyway; counting an already-established store would cost the very scan the
+				// accumulator exists to avoid.
+				acc, ok := s.loadAccumulator(pfx)
+				if !ok {
+					store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(pfx))
+					fresh, rows := c.AccumulatorFromPrefixStore(store)
+					s.saveAccumulator(pfx, fresh)
+					c.LoggerInfo(logger, "ACCUMULATOR established "+accumulatorLog(pfx, rows, fresh))
+					acc, entry.Rows = fresh, int64(rows)
+				}
+				entry.Acc, entry.Present = acc[:], true
+			}
+
+			reply.Accumulators = append(reply.Accumulators, entry)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return reply, nil
 }
 
 // maintainAccumulators establishes anything missing and rebuilds anything flagged, for every

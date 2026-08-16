@@ -76,6 +76,7 @@ rollback        - Roll the enclave's store back to a chain height`,
 		newEnclaveHeightCmd(),
 		newEnclaveRollbackCmd(),
 		newEnclaveStoreHashCmd(),
+		newEnclaveStoreAccumulatorsCmd(),
 	)
 
 	return cmd
@@ -136,6 +137,39 @@ func newEnclaveStoreHashCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newEnclaveStoreAccumulatorsCmd() *cobra.Command {
+	var height int64
+	cmd := &cobra.Command{
+		Use:   "store-accumulators",
+		Short: "Show the enclave's per-store accumulators (digests only -- safe on real SGX); --height reads history",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			enclaveClient, err := getEnclaveConnection(cmd)
+			if err != nil {
+				return err
+			}
+			grpcctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			r, err := enclaveClient.GetStoreAccumulators(grpcctx, &types.MsgGetStoreAccumulators{Height: height})
+			if err != nil {
+				return err
+			}
+			for _, e := range r.GetAccumulators() {
+				if !e.GetPresent() {
+					// Only reachable with --height: an accumulator did not exist before the block
+					// that established it, and absent is reported honestly rather than as zero.
+					fmt.Printf("%-64s %s (absent at this height)\n", "-", e.GetKey())
+					continue
+				}
+				fmt.Printf("%x %s rows=%d\n", e.GetAcc(), e.GetKey(), e.GetRows())
+			}
+			return nil
+		},
+	}
+	cmd.Flags().Int64Var(&height, "height", 0, "read the accumulators as of this chain height (0 = current; current establishes any missing value first)")
+	return cmd
 }
 
 func newEnclaveRollbackCmd() *cobra.Command {

@@ -25,3 +25,21 @@ func (k Keeper) StoreHashForTest(sdkctx sdk.Context, key string) string {
 // SetEnclaveHeightsAgreedForTest drives the flag that separates "seeding a fresh enclave"
 // (expected) from "stores diverged at an agreed height" (the alarm).  Callers must restore false.
 func SetEnclaveHeightsAgreedForTest(v bool) { enclaveHeightsAgreedAtStartup = v }
+
+// MaintainStoreAccumulatorsForTest exposes the per-block establishment pass.
+func (k Keeper) MaintainStoreAccumulatorsForTest(sdkctx sdk.Context) { k.maintainStoreAccumulators(sdkctx) }
+
+// RawStoreSetForTest writes a row directly, bypassing every setter and hook -- the injection the
+// unhooked-write tests need.
+func (k Keeper) RawStoreSetForTest(sdkctx sdk.Context, pfx string, key, value []byte) {
+	k.tableStore(sdkctx, pfx).Set(key, value)
+}
+
+// MirroredStorePrefixesForTest lists the prefixes maintainStoreAccumulators covers.
+func MirroredStorePrefixesForTest() []string {
+	out := make([]string, 0, len(mirroredStores))
+	for pfx := range mirroredStores {
+		out = append(out, pfx)
+	}
+	return out
+}
