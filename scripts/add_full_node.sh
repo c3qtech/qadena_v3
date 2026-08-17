@@ -560,6 +560,44 @@ if [[ "$STOP_FOR_FUNDING" == "true" ]] ; then
 	echo "The key is minted and kept.  When the funds have arrived, run the SAME command without"
 	echo "--stop-for-funding and answer [c] to continue -- answering [s] would erase this key and"
 	echo "mint a new one, stranding whatever was sent to the address above."
+
+	# STOP THE ENCLAVE WE STARTED, or the resume run fights it for the socket.
+	#
+	# This path used to `exit 0` with the enclave still running -- and since we were started in the
+	# background by a driver that then exits, it is left ORPHANED to init, still holding
+	# /tmp/qadena_50051.sock.  The resume run starts its OWN enclave, and the enclave removes a
+	# "stale" socket before binding, so the second one takes the path out from under the first.
+	#
+	# The result is a race whose symptom names neither cause: sync-enclave's readiness probe reaches
+	# the ORPHAN (fully loaded, answers in milliseconds), and then the real call dies with
+	#     rpc error: code = Unavailable desc = error reading from server: EOF
+	# because the socket it was using has been replaced underneath it.  Observed repeatedly on a
+	# real SGX joiner, where the second enclave takes tens of seconds to load and the window is
+	# wide; on a debug box the two starts are close enough together that it usually goes unnoticed.
+	#
+	# Whoever resumes will start a fresh enclave anyway, so nothing is lost by stopping this one.
+	# STOP THE ENCLAVE WE STARTED, and CHECK THAT IT STOPPED.
+	#
+	# This path used to `exit 0` with the enclave still running.  Started in the background by a
+	# driver that then exits, it is left ORPHANED to init, still holding /tmp/qadena_50051.sock --
+	# and the resume run starts its OWN enclave, which UNLINKS the "stale" socket before binding.
+	# The two then overlap: a client's readiness probe reaches the OLD enclave (loaded, answers in
+	# milliseconds) and its next call dies with
+	#     rpc error: code = Unavailable desc = error reading from server: EOF
+	# because the socket underneath it has been replaced.  Wide open on real SGX, where the second
+	# enclave takes tens of seconds to load; usually invisible on a debug box.
+	#
+	# The status is CHECKED rather than discarded: stop_qadena.sh now waits for the enclave to
+	# actually exit and escalates to SIGKILL, so a non-zero return means something is genuinely
+	# still holding that socket -- which the resume run must not walk into.
+	echo "add_full_node.sh: stopping the enclave this run started (the resume will start its own)"
+	if $qadenascripts/stop_qadena.sh --enclave ; then
+		echo "add_full_node.sh: the enclave is stopped; safe to resume"
+	else
+		echo "add_full_node.sh: WARNING: the enclave did not stop cleanly."
+		echo "  Resuming now would start a second enclave and they would fight over"
+		echo "  /tmp/qadena_50051.sock.  Check with:  pgrep -af qadenad_enclave"
+	fi
 	exit 0
 fi
 

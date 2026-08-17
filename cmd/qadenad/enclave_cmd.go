@@ -305,20 +305,29 @@ func newSyncEnclaveCmd() *cobra.Command {
 				return err
 			}
 
-			grpcctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			// MINUTES, NOT SECONDS.  SyncEnclave is not a request/response: it generates a
+			// remote report, queries a PEER ENCLAVE through the seed node, waits for a fee-paying
+			// registration tx to be accepted by the chain, and seals the result to disk.  Any of
+			// those can take tens of seconds on a busy chain -- and a client that gives up at 15s
+			// tears the call down MID-FLIGHT, which surfaces as a transport error and reads like
+			// the enclave failed rather than like we stopped listening.
+			grpcctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
 			r2, err := enclaveClient.SyncEnclave(grpcctx, &e)
 			if err != nil {
 				c.LoggerError(logger, "could not sync enclave", err)
 				return err
 			}
-			c.LoggerDebug(logger, "SyncEnclave returns", r2)
 			if r2.Status {
 				c.LoggerInfo(logger, "SyncEnclave SUCCEEDED")
 				return nil
 			}
 
-			return fmt.Errorf("init enclave failed")
+			// The reply carries a single bool, so this is all the enclave can tell us -- but say
+			// so at ERROR with the reply, and name the RIGHT COMMAND.  This used to return
+			// "init enclave failed" from sync-enclave, sending the reader after the wrong thing.
+			c.LoggerError(logger, "SyncEnclave returned failure (reply:", r2, ") -- the enclave's own log has the reason")
+			return fmt.Errorf("sync enclave failed (the enclave refused; see its log for why)")
 		},
 	}
 }
@@ -357,7 +366,10 @@ func newInitEnclaveCmd() *cobra.Command {
 				UniqueID:               uniqueID,
 			}
 
-			grpcctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			// Minutes, for the same reason as sync-enclave: InitEnclave generates the jar and
+			// regulator keys, builds a remote report per message, and broadcasts about ten of
+			// them as a fee-paying tx before it answers.
+			grpcctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
 			r2, err := enclaveClient.InitEnclave(grpcctx, &e)
 			if err != nil {

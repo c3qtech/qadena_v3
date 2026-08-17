@@ -111,6 +111,42 @@ if [[ $stop_enclave -eq 1 ]] ; then
       pkill -INT -f "ego-host.*qadenad_enclave"
     fi
     pkill -INT -f "qadenad_enclave"
+
+    # SIGNALLING IS NOT STOPPING, and for an SGX enclave the gap is tens of seconds.
+    #
+    # `ego run` is a launcher that forks /opt/ego/bin/ego-host, and the enclave inside unwinds
+    # slowly: the SOCKET disappears almost at once while the process pair lives on.  This block
+    # used to send SIGINT and return, so the script could report a stopped enclave that was still
+    # running -- the same shape as the process-group problem the in-process supervisor had, where
+    # signalling the launcher left the grandchild alive.
+    #
+    # That is not cosmetic here.  add_full_node.sh --stop-for-funding stops the enclave and exits;
+    # the resume run starts a new one, and the new enclave UNLINKS the "stale" socket before
+    # binding.  If the old one is still dying, the two overlap: a client's readiness probe reaches
+    # the OLD enclave (loaded, answers in milliseconds) and its next call dies with
+    #     rpc error: code = Unavailable desc = error reading from server: EOF
+    # because the socket underneath it has been replaced.  Measured on real SGX: still present 20s
+    # after the stop, gone by 80s.
+    #
+    # So wait for it, and escalate rather than wait forever -- exactly what the chain block above
+    # already does with its SIGINT -> SIGKILL.
+    for i in {1..60}; do
+        pgrep -f "qadenad_encla[v]e" > /dev/null 2>&1 || break
+        sleep 1
+    done
+    if pgrep -f "qadenad_encla[v]e" > /dev/null 2>&1 ; then
+        echo "stop_qadena.sh: the enclave did not exit on SIGINT after 60s, escalating to SIGKILL"
+        if use_real_enclave "$qadenabin/qadenad_enclave" ; then
+          pkill -KILL -f "ego-host.*qadenad_enclave"
+        fi
+        pkill -KILL -f "qadenad_enclave"
+        sleep 2
+    fi
+    if pgrep -f "qadenad_encla[v]e" > /dev/null 2>&1 ; then
+        echo "stop_qadena.sh: Error: the enclave is STILL running after SIGKILL"
+        pgrep -af "qadenad_encla[v]e" | sed "s/^/    /"
+        stop_failed=1
+    fi
 fi
 
 if [[ $stop_signer_enclave -eq 1 ]] ; then
