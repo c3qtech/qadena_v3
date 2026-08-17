@@ -48,3 +48,15 @@ func MirroredStorePrefixesForTest() []string {
 
 // AuditStoreAccumulatorsForTest exposes the honesty audit (panics on violation, exactly as live).
 func (k Keeper) AuditStoreAccumulatorsForTest(sdkctx sdk.Context) { k.auditStoreAccumulators(sdkctx) }
+
+// ResetInitEnclaveDispatchForTest clears the package-level gate state between cases, so one test's
+// doneForGood cannot silence the next one's dispatch.
+func ResetInitEnclaveDispatchForTest() {
+	initEnclaveDispatch.mu.Lock()
+	defer initEnclaveDispatch.mu.Unlock()
+	initEnclaveDispatch.jarID = ""
+	initEnclaveDispatch.fn = nil
+	initEnclaveDispatch.inFlight = false
+	initEnclaveDispatch.lastAttempt = 0
+	initEnclaveDispatch.doneForGood = false
+}

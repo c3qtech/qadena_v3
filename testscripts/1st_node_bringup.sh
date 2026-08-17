@@ -318,7 +318,32 @@ if run_phase 3; then
 
     if [[ -n "$REF" ]]; then
         rsh_user "$PRIMARY" "git -C $REPO fetch --quiet --all --prune" || fail "git fetch failed on $PRIMARY"
-        rsh_user "$PRIMARY" "git -C $REPO reset --quiet --hard $REF" || fail "git reset --hard $REF failed on $PRIMARY"
+
+        # RESOLVE THE REF ON THE TARGET, because a fetch creates REMOTE-TRACKING refs, not local
+        # branches.  `--ref enclave-selfstart` names a branch that exists on origin and, on a
+        # machine that has never checked it out, nowhere else -- so the reset died with
+        #
+        #     fatal: ambiguous argument 'enclave-selfstart': unknown revision or path not in the
+        #     working tree
+        #
+        # which reads like the branch was never pushed.  It was; the target simply has it as
+        # origin/enclave-selfstart.  Prefer an exact match (a tag, a sha, or a branch the target
+        # really does have locally), then fall back to origin/<ref>, and SAY which was used --
+        # "the ref I asked for" and "the commit it built" must stay distinguishable.
+        # Plain, not `local`: this block runs at TOP LEVEL (phase 3 is an `if run_phase 3` block,
+        # not a function), and zsh refuses `local` outside a function at RUNTIME -- which zsh -n
+        # does not catch.
+        resolved=""
+        if rsh_user "$PRIMARY" "git -C $REPO rev-parse --verify --quiet '$REF^{commit}'" > /dev/null 2>&1; then
+            resolved="$REF"
+        elif rsh_user "$PRIMARY" "git -C $REPO rev-parse --verify --quiet 'origin/$REF^{commit}'" > /dev/null 2>&1; then
+            resolved="origin/$REF"
+            info "ref           $REF is not local on the target; using $resolved"
+        else
+            fail "neither '$REF' nor 'origin/$REF' exists on $PRIMARY after a fetch -- is it pushed?"
+        fi
+
+        rsh_user "$PRIMARY" "git -C $REPO reset --quiet --hard $resolved" || fail "git reset --hard $resolved failed on $PRIMARY"
         rsh_user "$PRIMARY" "git -C $REPO clean -qfd" || fail "git clean failed on $PRIMARY"
     else
         info "no --ref: leaving the checkout where it is"

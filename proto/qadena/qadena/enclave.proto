@@ -55,6 +55,16 @@ message HelloReply {
 }
 
 service QadenaEnclave {
+  // Asked once at startup, before deciding whether to initialize: is this enclave already
+  // initialized?  The chain cannot infer this -- InitEnclaveReply is a single bool that means
+  // "accepted", identically for "I initialized now" and "I was already initialized" -- and every
+  // proxy for it is wrong somewhere: chain state rewinds during block replay, and a node's
+  // identity in genesis says who it is rather than what its enclave holds.
+  //
+  // ADDITIVE ON PURPOSE.  An enclave that predates this answers Unimplemented, and the caller
+  // treats that as "cannot tell, fall back", the same shape rollback.go uses for GetEnclaveHeight.
+  rpc GetEnclaveStatus (MsgGetEnclaveStatus) returns (GetEnclaveStatusReply) {}
+
   // these are called from init_enclave
   rpc InitEnclave (MsgInitEnclave) returns (InitEnclaveReply) {}
   rpc SyncEnclave (MsgSyncEnclave) returns (SyncEnclaveReply) {}
@@ -717,6 +727,19 @@ message SyncSuspiciousTransactionsReply {
 
 message InitEnclaveReply {
   bool status = 1;
+}
+
+message MsgGetEnclaveStatus {
+}
+
+message GetEnclaveStatusReply {
+  // true once InitEnclave or SyncEnclave has given this enclave its sealed params.  Read from the
+  // same field InitEnclave short-circuits on, so the two can never disagree.
+  bool initialized = 1;
+  // The pioneer this enclave was initialized AS, empty when uninitialized.  Not used by the
+  // startup gate; it makes the answer diagnosable in a log ("initialized as pioneer3") instead of
+  // a bare bool, which is the difference between a useful and a useless line at 3am.
+  string pioneerID = 2;
 }
 
 message UpdateHeightReply {

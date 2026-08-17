@@ -359,6 +359,15 @@ func startChild(logger log.Logger, name string, cmd *exec.Cmd) {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
+	// ITS OWN PROCESS GROUP, so we can signal the whole tree rather than just the process we
+	// forked.  On SGX `ego run` is a LAUNCHER, not the enclave: it forks /opt/ego/bin/ego-host,
+	// which is the process actually holding the socket.  Signalling only our direct child left
+	// ego-host alive for a moment after Wait returned -- long enough that `qadenad rollback`
+	// returned with an enclave still running and the rollback suite's leak check fired.  (Debug
+	// mode never showed this: there the child IS the enclave, so a single signal was enough --
+	// which is exactly why only the SGX box caught it.)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
 	if err := cmd.Start(); err != nil {
 		panic(fmt.Sprintf("enclave supervisor: could not start %s: %v", name, err))
 	}
@@ -382,7 +391,7 @@ func installSignalForwarding() {
 			<-ch
 			supervisorShutdown.Store(true)
 			for _, child := range spawnedEnclaves {
-				_ = child.cmd.Process.Signal(os.Interrupt)
+				signalChildGroup(child, syscall.SIGINT)
 			}
 		}()
 	})
@@ -427,18 +436,57 @@ func monitorChild(logger log.Logger, child *spawnedEnclave) {
 func StopSpawnedEnclaves() {
 	supervisorShutdown.Store(true)
 	for _, child := range spawnedEnclaves {
-		_ = child.cmd.Process.Signal(os.Interrupt)
+		signalChildGroup(child, syscall.SIGINT)
 	}
 	deadline := time.After(30 * time.Second)
 	for _, child := range spawnedEnclaves {
 		select {
 		case <-child.done:
 		case <-deadline:
-			_ = child.cmd.Process.Kill()
+			signalChildGroup(child, syscall.SIGKILL)
 			<-child.done
 		}
 	}
+	// WAIT FOR THE GROUP TO BE EMPTY, not just for our child to be reaped.  Wait() returns when
+	// the process WE forked exits; under `ego run` the enclave itself is a grandchild that may
+	// still be unwinding.  Callers -- `qadenad rollback` above all -- promise that nothing is
+	// left holding the enclave socket when they return, so the promise has to cover the tree.
+	for _, child := range spawnedEnclaves {
+		waitForGroupExit(child, 15*time.Second)
+	}
 	spawnedEnclaves = nil
+}
+
+// signalChildGroup signals the child's whole process group, falling back to the process itself if
+// the group is not available (Setpgid failed, or the process is already gone).  The negative pid
+// is the Unix spelling of "the group led by that pid".
+func signalChildGroup(child *spawnedEnclave, sig syscall.Signal) {
+	if child.cmd.Process == nil {
+		return
+	}
+	pid := child.cmd.Process.Pid
+	if err := syscall.Kill(-pid, sig); err != nil {
+		_ = child.cmd.Process.Signal(sig)
+	}
+}
+
+// waitForGroupExit blocks until no process remains in the child's group, or the timeout expires.
+// `kill(-pgid, 0)` asks "does this group still have members?" without sending anything.
+func waitForGroupExit(child *spawnedEnclave, timeout time.Duration) {
+	if child.cmd.Process == nil {
+		return
+	}
+	pgid := child.cmd.Process.Pid
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(-pgid, 0); err != nil {
+			return // ESRCH: the group is empty
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// Still there after the grace: escalate once and give it a moment.
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	time.Sleep(500 * time.Millisecond)
 }
 
 // signerEnclaveSpawned reports whether this process spawned a signer (start mode, not adopted).

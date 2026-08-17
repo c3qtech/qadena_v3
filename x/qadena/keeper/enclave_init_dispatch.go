@@ -12,15 +12,27 @@ package keeper
 // height-anchored; the CALL is dispatched async, because the tx the enclave broadcasts can only
 // be admitted and included in a LATER block than the one executing.
 //
-// THE GATE IS CHAIN STATE, not RPC polling: fire only when the JarRegulator row for this node's
-// jar id is absent from the store -- the precise on-chain fact init-enclave exists to create.
-// That one predicate covers every case the scripts special-cased:
-//   - first pioneer, fresh chain: row absent at height 2 -> fire.  This is the ONLY case that
-//     needs it.
-//   - joiners: their enclave was initialized by `enclave sync-enclave` during promotion
-//     (add_full_node.sh), and the jar row arrives WITH the history they replay -> never fires.
-//     (Belt and braces: the enclave's InitEnclave handler is idempotent anyway.)
-//   - any node replaying its own history: same.
+// THE GATE HAS TWO PARTS, and the second one was learned the hard way.
+//
+//  1. CHAIN STATE: the JarRegulator row for this node's jar id is absent -- the precise on-chain
+//     fact init-enclave exists to create.
+//  2. THE BLOCK IS LIVE, not history being replayed.
+//
+// Part 2 is not optional, and an earlier version of this file argued it was.  The claim was that a
+// joiner never fires because "the jar row arrives with the history it replays".  That is false:
+// a block-syncing joiner EXECUTES BLOCK 2, and at that point in history the row genuinely did not
+// exist yet -- so the gate fired on a joiner whose enclave `sync-enclave` had already initialized
+// minutes earlier.  Observed on a real two-node join; harmless only because the enclave's
+// InitEnclave handler is idempotent and answered "already initialized".  The version of that story
+// with teeth is a joiner whose enclave is NOT yet initialized (started before sync-enclave, or
+// re-joining with wiped enclave state): it would initialize mid-replay and broadcast a SECOND
+// registration -- a duplicate jar and regulator on a chain that already has one.
+//
+// "Live" is decided by the BLOCK'S OWN TIMESTAMP against the wall clock: a block being produced
+// now is seconds old, a block being replayed is as old as the history.  Reading the wall clock is
+// safe HERE for the same reason the trigger is safe at all -- it writes no state and changes
+// nothing any node computes; it only decides whether THIS node sends a transaction.
+//
 // Consensus-safe: the trigger writes no state -- it only sends a tx, which every node then
 // validates like any other.
 //
@@ -30,10 +42,14 @@ package keeper
 
 import (
 	"sync"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 )
 
 const (
@@ -46,15 +62,44 @@ const (
 	// again -- covers a broadcast that was admitted and then dropped.  The enclave side is
 	// idempotent, so a re-dispatch can never double-initialize.
 	initEnclaveRedispatchBlocks = 25
+
+	// How fresh a block must be for this node to treat it as LIVE rather than replayed history.
+	// Generous by design: block times are a second or two apart, so anything within a couple of
+	// minutes is unambiguously current, while replayed history is minutes-to-months old.  Being
+	// too generous only means a joiner that is nearly caught up might fire -- and by then the jar
+	// row it checks has already arrived, so the gate is closed anyway.
+	initEnclaveLiveBlockWindow = 2 * time.Minute
 )
 
 var initEnclaveDispatch struct {
-	mu           sync.Mutex
-	jarID        string
-	fn           func() error // set only by the start command; nil = inert
-	inFlight     bool
-	lastAttempt  int64
-	doneForGood  bool
+	mu          sync.Mutex
+	jarID       string
+	fn          func() error // set only by the start command; nil = inert
+	inFlight    bool
+	lastAttempt int64
+	doneForGood bool
+}
+
+// enclaveInitialized asks the enclave whether it already holds sealed params.  Returns
+// (initialized, pioneerID, known); known is false when the question could not be answered -- an
+// enclave too old to have the RPC, or one that did not respond -- in which case the caller must
+// fall back rather than treat silence as "no".
+func (k Keeper) enclaveInitialized() (bool, string, bool) {
+	if EnclaveGRPCClient == nil {
+		return false, "", false
+	}
+	ctx, cancel := enclaveQueryContext()
+	defer cancel()
+	r, err := EnclaveGRPCClient.GetEnclaveStatus(ctx, &types.MsgGetEnclaveStatus{})
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			c.LoggerInfo(k.logger, "init-enclave: this enclave predates GetEnclaveStatus, so it cannot say whether it is initialized -- falling back to InitEnclave's own idempotence")
+		} else {
+			c.LoggerError(k.logger, "init-enclave: could not read enclave status:", err.Error())
+		}
+		return false, "", false
+	}
+	return r.GetInitialized(), r.GetPioneerID(), true
 }
 
 // ArmInitEnclaveDispatch installs the dispatch closure.  jarID doubles as the gate's key: the
@@ -81,6 +126,11 @@ func (k Keeper) MaybeDispatchInitEnclave(ctx sdk.Context) {
 	if height < initEnclaveMinHeight {
 		return
 	}
+	// REPLAYED HISTORY IS NOT AN INVITATION TO INITIALIZE.  Checked before the store read because
+	// it is the cheaper question and the one that disqualifies whole syncs at a time.
+	if bt := ctx.BlockTime(); !bt.IsZero() && time.Since(bt) > initEnclaveLiveBlockWindow {
+		return
+	}
 	if _, found := k.GetJarRegulator(ctx, d.jarID); found {
 		// The on-chain fact exists; nothing to do, ever again.  This is the branch every block
 		// on every initialized chain takes (after one store read; doneForGood makes the NEXT
@@ -91,6 +141,22 @@ func (k Keeper) MaybeDispatchInitEnclave(ctx sdk.Context) {
 	if d.lastAttempt != 0 && height < d.lastAttempt+initEnclaveRedispatchBlocks {
 		return
 	}
+
+	// THE FINAL AUTHORITY, asked only now -- once every cheaper gate has already said "this looks
+	// like a chain that needs initializing".  Every check above is a proxy; this is the fact.  It
+	// is also the one answer that does not rewind during replay: the enclave's sealed params are
+	// the same at replay height 2 as at live height 5000, which is exactly what chain state is not.
+	//
+	// An enclave predating this RPC answers Unimplemented; that is "cannot tell", not "no", so we
+	// fall through to dispatching and rely on InitEnclave's own idempotence -- the behaviour before
+	// this call existed.  Same shape as rollback.go's handling of an older enclave.
+	if initialized, pioneerID, known := k.enclaveInitialized(); known && initialized {
+		c.LoggerInfo(k.logger, "init-enclave: the enclave reports it is already initialized as", pioneerID,
+			"-- not initializing (this is the normal answer on a joiner, whose enclave sync-enclave set up before the node started)")
+		d.doneForGood = true
+		return
+	}
+
 	d.lastAttempt = height
 	d.inFlight = true
 
@@ -109,6 +175,16 @@ func (k Keeper) MaybeDispatchInitEnclave(ctx sdk.Context) {
 			c.LoggerError(logger, "init-enclave dispatch failed (will retry in", initEnclaveRedispatchBlocks, "blocks):", err.Error())
 			return
 		}
-		c.LoggerInfo(logger, "init-enclave dispatch succeeded -- the enclave has broadcast its registration; the JarRegulator row should appear within a few blocks")
+		// DELIBERATELY VAGUE, because InitEnclaveReply carries a single bool and the two outcomes
+		// are indistinguishable from here: the enclave either initialized now and broadcast its
+		// registration, or short-circuited on "already initialized" and did nothing at all
+		// (enclave.go:1624).  An earlier version of this line asserted the first -- "the enclave
+		// has broadcast its registration; the JarRegulator row should appear within a few blocks"
+		// -- which a joiner's log then printed while nothing whatsoever was broadcast, pointing
+		// whoever read it at a row that was never coming.  The gate itself reports the truth a
+		// block or two later: the row appears (and this goes quiet for good), or it does not (and
+		// the dispatch is retried).  Widening the reply would move MRENCLAVE, which this change
+		// deliberately does not do.
+		c.LoggerInfo(logger, "init-enclave: the enclave accepted the request (it either initialized now, or was already initialized -- the reply cannot say which)")
 	}()
 }

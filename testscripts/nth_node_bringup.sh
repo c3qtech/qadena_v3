@@ -65,6 +65,10 @@ JOINER=""
 FROM=1
 UNTIL=7
 ONLY=""
+# Off by default: phase 2 only LOOKS at the primary.  --quiesce opts into stopping its continuous
+# regression loop and waiting out the in-flight run, which is authority over a machine the operator
+# did not necessarily ask us to change.
+QUIESCE=0
 VALIDATOR_STAKE="110000"
 FUND_QDN="200000"
 PIONEER_NAME="pioneer2"
@@ -79,6 +83,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --primary) PRIMARY="$2"; shift 2 ;;
         --joiner)  JOINER="$2";  shift 2 ;;
+        --quiesce) QUIESCE=1; shift ;;
         --from)    FROM="$2";    shift 2 ;;
         --until)   UNTIL="$2";   shift 2 ;;
         --only)    ONLY="$2";    shift 2 ;;
@@ -88,9 +93,14 @@ while [[ $# -gt 0 ]]; do
         --seed2)   SEED2="$2"; shift 2 ;;
         --help)
             print "Usage: nth_node_bringup.sh --primary <ip> --joiner <ip> [--from N] [--until N] [--only N]"
-            print "                          [--stake qdn]"
+            print "                          [--stake qdn] [--quiesce]"
             print "                          [--pioneer <name>] [--state-sync] [--seed2 <ip>]"
             print ""
+            print "  --quiesce     stop the primary's continuous-regression loop and WAIT for the"
+            print "                in-flight run to finish before joining.  OFF by default: phase 2"
+            print "                only looks and warns.  Worth passing when the primary is running"
+            print "                the loop, because enclave-rollback/crash/upgrade restart the"
+            print "                chain and a joiner cannot survive its primary's RPC vanishing."
             print "  --from/--until  run a RANGE of phases, inclusive: --from 1 --until 5 brings a node"
             print "                up and stops short of converting it to a validator.  --only runs one."
             print "  --pioneer     the joiner's pioneer name (default pioneer2).  MUST BE UNUSED ON"
@@ -109,7 +119,8 @@ while [[ $# -gt 0 ]]; do
             print "                and hash are then corroborated by an independent source."
             print ""
             print "  1 preflight      both reachable, measurements match genesis, primary healthy"
-            print "  2 quiesce        stop continuous regression on the primary (it restarts the chain)"
+            print "  2 check          warn if the primary is running regression (it restarts the"
+            print "                   chain); --quiesce stops it and waits instead"
             print "  3 fund           send qdn to the joiner's pioneer key"
             print "  4 join           drive add_full_node.sh over a PTY; does NOT start the node"
             print "  5 start          start the joiner separately and wait for catch-up"
@@ -295,40 +306,141 @@ Install the joiner from a package BUILT ON THE PRIMARY (buildscripts/package_rel
 than building locally: EnclaveIdentity is keyed by measurement, so anything else is refused."
 [[ "$gen_uid" == "$prim_uid" ]] || fail "genesis records a different measurement than the running enclave"
 info "measurements agree -- attestation can succeed"
+
+# THE JOINER MUST NOT BE CARRYING A FOREIGN GENESIS.  A machine that was a node on a PREVIOUS chain
+# still has that chain's genesis, data and pioneer key -- and the chain-id string is identical
+# across rebuilds ("qadena_4444-1"), so nothing downstream notices.
+#
+# It gets through because phase 3 mints the key only when one is ABSENT, and the WIPE lives inside
+# that same branch (add_full_node.sh does it under --stop-for-funding; the phase-4 resume
+# deliberately skips it).  So a leftover pioneer key means: no mint, no wipe, and the joiner then
+# "joins" while still running its old chain.  Observed exactly once, and it cost an hour: the
+# joiner sat at height 7400 with earliest=2001 and peers=0 against a primary at 1572, reporting
+# catching_up=true forever, while every check that names an identity -- measurement, chain-id --
+# said the two machines agreed.
+#
+# COMPARED BY genesis_time + app_state, NOT by the file's bytes.
+#
+# The raw file is the obvious thing to hash and the wrong one: a joiner fetches genesis over the
+# primary's RPC, and what comes back is re-serialized -- app_hash null becomes "", app_name and
+# app_version are absent, the consensus block is reshaped.  Hashing the file therefore reports
+# "different chain" for a node that joined perfectly (it did, on the first attempt at this check),
+# and a preflight that fails valid setups is worse than no preflight.
+#
+# genesis_time is stamped once when the chain is created and survives the round trip, so it
+# distinguishes two rebuilds that share a chain-id -- which is precisely the case here.  app_state
+# is hashed with it because time alone would not notice a genesis edited in place.
+gen_ident() {   # host -> "<genesis_time> <sha of sorted app_state>"
+    ssh "$1" "jq -r '.genesis_time' ~/qadena/config/genesis.json 2>/dev/null; \
+              jq -S -c '.app_state' ~/qadena/config/genesis.json 2>/dev/null | sha256sum | cut -d' ' -f1" \
+        | tr -d '\r' | tr '\n' ' '
+}
+if ssh "$JOINER" 'test -f ~/qadena/config/genesis.json' 2>/dev/null; then
+    prim_gen=$(gen_ident "$PRIMARY")
+    join_gen=$(gen_ident "$JOINER")
+    if [[ -n "${prim_gen// /}" && -n "${join_gen// /}" && "$prim_gen" != "$join_gen" ]]; then
+        join_h=$(height "$JOINER")
+        fail "the joiner is carrying a DIFFERENT chain's genesis (it was a node on an earlier chain).
+       primary genesis_time + app_state  $prim_gen
+       joiner  genesis_time + app_state  $join_gen${join_h:+
+       joiner is serving its old chain at height $join_h}
+       Joining would not wipe it: phase 3 mints (and wipes) only when the pioneer key is ABSENT,
+       and this joiner still has one.  Clear it with add_full_node.sh's OWN list, which removes
+       node state file by file and leaves PACKAGE state alone -- 'rm -rf ~/qadena/config' does not
+       work: it also takes public.pem (the enclave signer's public key) and node_params.json, and
+       nothing puts either back except another install.  Losing node_params.json fails the next
+       join with the misleading 'Failed to copy genesis file' (it is setPioneerID.sh that failed).
+           ssh $JOINER '~/qadena/scripts/stop_qadena.sh
+               cd ~/qadena/config && rm -f *.toml *.1 genesis.json node_key.json priv_validator_key.json
+               cd ~/qadena && rm -rf data keyring-test enclave_config enclave_data enclave_secrets'
+       Or, simplest and safest: pass an unused --pioneer name, and let phase 3 do the wipe."
+    fi
+    info "joiner's genesis matches the primary's"
 fi
 
-# ---------------------------------------------------------------------------- 2. quiesce
+# THE PIONEER NAME MUST BE UNUSED ON THE CHAIN.  add_full_node.sh refuses a name already in the
+# IntervalPublicKeyID list ("The Pioneer <name> already exists, please choose a different Pioneer
+# name") -- and it refuses it in phase 4, after the wipe, after the funding, several minutes in.
+#
+# The trap is that the name outlives the machine: wiping a joiner removes its key but the CHAIN
+# still remembers the registration, so the default pioneer2 is burned by any previous join attempt
+# that got as far as sync-enclave.  Asked here, it costs one query and names the fix.
+registered=$(ssh "$PRIMARY" "~/qadena/bin/qadenad --home ~/qadena query qadena list-interval-public-key-id --output json 2>/dev/null \
+    | jq -r '.intervalPublicKeyID[].nodeID' 2>/dev/null" | tr -d '\r')
+if print -r -- "$registered" | grep -qx "$PIONEER_NAME"; then
+    # Suggest the next free pioneerN, counting only pioneer names -- the list also holds jar1,
+    # regulator1, treasury and the service providers, so a bare count suggests nonsense.
+    suggest=2
+    while print -r -- "$registered" | grep -qx "pioneer$suggest"; do (( suggest++ )); done
+    fail "the pioneer name '$PIONEER_NAME' is ALREADY REGISTERED on this chain.
+       add_full_node.sh will refuse it in phase 4, after wiping and funding the joiner.  The name
+       outlives the machine: wiping a joiner clears its key, but the chain keeps the registration.
+       Names already taken: $(print -r -- "$registered" | tr '\n' ' ')
+       Pass an unused one:  --pioneer pioneer$suggest"
+fi
+info "pioneer name '$PIONEER_NAME' is free on this chain"
+fi
+
+# ---------------------------------------------------------------------------- 2. check/quiesce
+#
+# LOOKING IS THE DEFAULT; STOPPING THINGS IS OPT-IN (--quiesce).  This phase used to kill the
+# primary's continuous-regression loop and then block for up to an hour waiting for the in-flight
+# run to finish -- on every join, whether or not anything was running.  That is a lot of authority
+# to exercise by default over a machine the operator did not ask us to change, and on an idle
+# primary (the normal state before a join) it was pure latency.
+#
+# The SAFETY INFORMATION is what actually matters, so that is what stays unconditional: a
+# regression run RESTARTS THE CHAIN, and a joiner cannot survive its primary's RPC vanishing
+# mid-join.  So we always look, and we always say what we found -- loudly, because proceeding into
+# a join while a suite is running is how a join fails in a way that looks like a joiner bug.
 if run_phase 2; then
-phase "2. quiesce the primary"
+phase "2. check the primary$([[ $QUIESCE -eq 1 ]] && print " (--quiesce: will stop continuous regression)")"
 
 # Kill the LOOP by PID, never by pattern (trap 1).  The in-flight regression run is left to finish:
 # killing it mid-suite can leave the chain stopped by enclave-crash.
 loop_pids=$(ssh "$PRIMARY" 'pgrep -f "[r]un_regression_continually" 2>/dev/null' | tr '\n' ' ')
-if [[ -n "${loop_pids// /}" ]]; then
-    info "stopping continuous regression (pids: $loop_pids)"
-    for p in ${=loop_pids}; do ssh "$PRIMARY" "${SUDO_P}kill $p" 2>/dev/null; done
-    sleep 3
+if [[ $QUIESCE -eq 1 ]]; then
+    if [[ -n "${loop_pids// /}" ]]; then
+        info "stopping continuous regression (pids: $loop_pids)"
+        for p in ${=loop_pids}; do ssh "$PRIMARY" "${SUDO_P}kill $p" 2>/dev/null; done
+        sleep 3
+    else
+        info "continuous regression not running"
+    fi
+
+    info "waiting for any in-flight regression run to finish (it restarts the chain; a joiner cannot survive that)"
+    for i in {1..120}; do
+        # `pgrep -c` PRINTS the count and EXITS NON-ZERO when it is zero, so `|| echo 0` appended a
+        # second line and the arithmetic below saw "0\n0" -- "bad math expression: operator expected".
+        # The effect was perverse: this loop worked while regression WAS running (one line, exit 0)
+        # and crashed when the primary was already idle, which is the normal state before a join.
+        n=$(ssh "$PRIMARY" 'pgrep -cf "[r]egression.sh" 2>/dev/null; true' | tr -d '\r' | head -1)
+        [[ "${n:-0}" -eq 0 ]] && break
+        sleep 30
+    done
+    [[ "${n:-0}" -eq 0 ]] || fail "regression still running after an hour; stop it before joining"
+
+    for i in {1..40}; do
+        PH=$(height "$PRIMARY"); [[ -n "$PH" ]] && break; sleep 15
+    done
+    [[ -n "$PH" ]] || fail "primary RPC did not come back after regression"
+    info "primary quiescent and producing at $PH"
 else
-    info "continuous regression not running"
-fi
-
-info "waiting for any in-flight regression run to finish (it restarts the chain; a joiner cannot survive that)"
-for i in {1..120}; do
-    # `pgrep -c` PRINTS the count and EXITS NON-ZERO when it is zero, so `|| echo 0` appended a
-    # second line and the arithmetic below saw "0\n0" -- "bad math expression: operator expected".
-    # The effect was perverse: this loop worked while regression WAS running (one line, exit 0) and
-    # crashed when the primary was already idle, which is the normal state before a join.
+    # Report only.  Both findings are warnings rather than failures: a join against a busy primary
+    # usually works, and the operator may know something we do not (a run that is nearly done, a
+    # --skip list that omits the chain-restarting suites).  Refusing outright would be wrong; being
+    # quiet about it would be worse.
     n=$(ssh "$PRIMARY" 'pgrep -cf "[r]egression.sh" 2>/dev/null; true' | tr -d '\r' | head -1)
-    [[ "${n:-0}" -eq 0 ]] && break
-    sleep 30
-done
-[[ "${n:-0}" -eq 0 ]] || fail "regression still running after an hour; stop it before joining"
-
-for i in {1..40}; do
-    PH=$(height "$PRIMARY"); [[ -n "$PH" ]] && break; sleep 15
-done
-[[ -n "$PH" ]] || fail "primary RPC did not come back after regression"
-info "primary quiescent and producing at $PH"
+    if [[ -n "${loop_pids// /}" || "${n:-0}" -ne 0 ]]; then
+        info "WARNING: the primary is running regression${loop_pids:+ (continuous loop pids: ${loop_pids% })}"
+        info "         enclave-rollback, enclave-crash and enclave-upgrade RESTART the chain, and a"
+        info "         joiner cannot survive its primary's RPC vanishing mid-join."
+        info "         Re-run with --quiesce to stop the loop and wait it out, or --skip those suites."
+    else
+        info "no regression running on the primary"
+    fi
+    info "primary producing at $PH"
+fi
 fi
 
 # THE PROMPT FEEDER, defined once and used by BOTH phase 3 (which mints the key with

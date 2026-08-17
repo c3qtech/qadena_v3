@@ -1611,6 +1611,26 @@ func (s *qadenaServer) GenerateSecretShare(nodeID string, nodeType string) (msgP
 	return
 }
 
+// GetEnclaveStatus answers the one question the chain cannot work out for itself: has this enclave
+// already been given its sealed params, by InitEnclave or by SyncEnclave?
+//
+// The chain needs it at startup to decide whether to initialize, and every alternative it has is a
+// proxy that is wrong somewhere.  InitEnclaveReply is a single bool meaning "accepted", identical
+// for "I initialized now" and "I was already initialized".  Chain state (is there a JarRegulator
+// row?) REWINDS during block replay -- a joiner executing block 2 sees no row, because at that
+// point in history there was none, and would re-initialize an enclave that SyncEnclave had already
+// set up minutes earlier.  Genesis membership answers who the node is, not what its enclave holds.
+//
+// Read from the same field InitEnclave short-circuits on, so the answer and the behaviour cannot
+// drift apart.  Side-effect free: it is a read, safe to call before the chain has decided anything.
+func (s *qadenaServer) GetEnclaveStatus(ctx context.Context, in *types.MsgGetEnclaveStatus) (*types.GetEnclaveStatusReply, error) {
+	pioneerID := s.getPrivateEnclaveParamsPioneerID()
+	return &types.GetEnclaveStatusReply{
+		Initialized: pioneerID != "",
+		PioneerID:   pioneerID,
+	}, nil
+}
+
 func (s *qadenaServer) InitEnclave(ctx context.Context, in *types.MsgInitEnclave) (*types.InitEnclaveReply, error) {
 	if s.RealEnclave {
 		c.LoggerDebug(logger, "InitEnclave")
