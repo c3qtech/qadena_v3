@@ -389,9 +389,14 @@ if run_phase 5; then
     # Compare while both are in reach.  Later this failure appears on the JOINER, as
     # verifyRemoteReport naming a measurement, with nothing to say it came from a rebuild here.
     gen=$(rsh_user "$PRIMARY" "jq -r '.app_state.qadena.enclaveIdentityList[0].uniqueID' $NODE_HOME/config/genesis.json" | tr -d '\r')
-    if (( BUILD_SGX )); then
-        bin=$(rsh_user "$PRIMARY" "$BUILD_PATH cd $REPO && ego uniqueid cmd/qadenad_enclave/qadenad_enclave 2>/dev/null | head -1" | tr -d '\r')
-    else
+    # ASK THE BINARY, NOT THE FLAG -- same reasoning as phase 8 below.  Keying on (( BUILD_SGX ))
+    # describes this invocation's command line, not the artefact: `--only 5` on an SGX box without
+    # the flag would read the EMBEDDED id, which every enclave carries (test_unique_id.txt is
+    # //go:embed-ed) and which does not describe an ego-signed one.  Here the flag is usually right
+    # because phase 4 just built, but "usually right" is how the phase-8 version passed review.
+    bin=$(rsh_user "$PRIMARY" "$BUILD_PATH cd $REPO && ego uniqueid cmd/qadenad_enclave/qadenad_enclave 2>/dev/null | head -1" | tr -d '\r')
+    if [[ ! "$bin" =~ ^[0-9a-f]{64}$ ]]; then
+        # A genuinely debug enclave, whose identity IS the embedded string.
         # EXTRACTED (-o), not line-matched.  Go packs string data without separators, so the
         # embedded id surfaces from `strings` mid-run ("... failed: unique047signer051 ...") and a
         # ^whole-line$ match can never hit it -- it matched a stray bare "unique" instead and
@@ -487,12 +492,26 @@ if run_phase 8 && [[ -n "$JOINER" ]]; then
 
     # Verify against the PRIMARY's genesis: the joiner has no genesis of its own until it joins.
     gen=$(rsh_user "$PRIMARY" "jq -r '.app_state.qadena.enclaveIdentityList[0].uniqueID' $NODE_HOME/config/genesis.json" | tr -d '\r')
-    if (( BUILD_SGX )); then
-        jbin=$(rsh_user "$JOINER" "$BUILD_PATH ego uniqueid $JHOME/qadena/bin/qadenad_enclave 2>/dev/null | head -1" | tr -d '\r')
-    else
-        # Same extraction as phase 5, for the same reason: Go packs string data, so the embedded
-        # id never sits on its own line in `strings` output and a ^whole-line$ match can only ever
-        # find a stray bare "unique".
+    # ASK THE BINARY, NOT THE FLAG.  This used to branch on (( BUILD_SGX )) -- whether THIS
+    # INVOCATION was told to build for SGX -- which is a statement about the command line, not
+    # about the artefact sitting on the joiner.  Distributing a package built earlier
+    # (--from 7, no --build-sgx) therefore took the debug branch and read the EMBEDDED id.
+    #
+    # That branch cannot fail, which is what makes it dangerous: cmd/qadenad_enclave/
+    # test_unique_id.txt is //go:embed-ed (enclave.go:198), so the literal "unique047" is compiled
+    # into EVERY enclave -- including a real ego-signed one, where it does not describe the binary
+    # at all.  So a correctly installed SGX enclave measuring b43e245d... reported "unique047",
+    # was compared against genesis, and the joiner was refused over a measurement it does not have.
+    # (test_enclave_upgrade.sh's header says this outright: on SGX the *.txt files are still
+    # embedded but the MEASUREMENT is the identity.)
+    #
+    # ego first, because only ego can compute a measurement; the embedded string is the fallback
+    # for a genuinely debug enclave, where it IS the identity.
+    jbin=$(rsh_user "$JOINER" "$BUILD_PATH ego uniqueid $JHOME/qadena/bin/qadenad_enclave 2>/dev/null | head -1" | tr -d '\r')
+    if [[ ! "$jbin" =~ ^[0-9a-f]{64}$ ]]; then
+        # Not ego-signed (or no ego here): a debug enclave, whose identity really is the embedded
+        # string.  Extracted with -o because Go packs string data -- the id never sits on its own
+        # line, so a ^whole-line$ match can only ever find a stray bare "unique".
         jbin=$(rsh_user "$JOINER" "strings $JHOME/qadena/bin/qadenad_enclave 2>/dev/null | grep -m1 -ohE 'unique[0-9]+'" | tr -d '\r')
     fi
     info "primary genesis records : ${gen:-<none>}"
