@@ -39,8 +39,22 @@ Always `source scripts/setup_env.sh` first. It exports `$qadenabin`, `$QADENAHOM
 ```
 
 `--from-genesis` deletes `$QADENAHOME` outright — chain data **and the keyring** — and rebuilds from
-`config/config.yml`. It implies `--with-setup` and `--with-credentials`. Takes ~20 minutes. It is
-the only run that proves genesis construction, so it is the run that counts before publishing.
+`config/config.yml`. Takes ~20 minutes. It is the only run that proves genesis construction, so it
+is the run that counts before publishing.
+
+`setup.sh` has **no flag**. It runs automatically whenever the test users are incomplete — checked
+against `test_data/users.json` in the keyring, and against the wallets this chain actually holds —
+so a plain `./testscripts/regression.sh` provisions them itself on a fresh or half-provisioned
+chain, and does nothing when they are all present. `--skip setup` suppresses it.
+
+There is deliberately no way to force a re-run: `create_user.sh` issues `create-wallet`
+unconditionally under `set -e`, and the chain refuses a second wallet for an address it already has
+(`ErrWalletExists`), so a forced run would abort on its first user rather than repair anything.
+
+`./testscripts/regression.sh --help` prints the options **and the list of suite names `--skip`
+accepts**, read out of the script itself so it cannot drift. One `--skip` name is not a suite:
+`recovery` drops the key-recovery cases (6, 6a, 6b) from inside the credentials suite while the
+rest of it still runs. They run by default.
 
 Run it in the background and watch for failures rather than polling:
 

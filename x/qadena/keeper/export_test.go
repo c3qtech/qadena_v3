@@ -27,7 +27,9 @@ func (k Keeper) StoreHashForTest(sdkctx sdk.Context, key string) string {
 func SetEnclaveHeightsAgreedForTest(v bool) { enclaveHeightsAgreedAtStartup = v }
 
 // MaintainStoreAccumulatorsForTest exposes the per-block establishment pass.
-func (k Keeper) MaintainStoreAccumulatorsForTest(sdkctx sdk.Context) { k.maintainStoreAccumulators(sdkctx) }
+func (k Keeper) MaintainStoreAccumulatorsForTest(sdkctx sdk.Context) {
+	k.maintainStoreAccumulators(sdkctx)
+}
 
 // RawStoreSetForTest writes a row directly, bypassing every setter and hook -- the injection the
 // unhooked-write tests need.
@@ -43,3 +45,6 @@ func MirroredStorePrefixesForTest() []string {
 	}
 	return out
 }
+
+// AuditStoreAccumulatorsForTest exposes the honesty audit (panics on violation, exactly as live).
+func (k Keeper) AuditStoreAccumulatorsForTest(sdkctx sdk.Context) { k.auditStoreAccumulators(sdkctx) }

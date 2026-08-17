@@ -1,6 +1,8 @@
 package keeper
 
 import (
+	"fmt"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/c3qtech/qadena_v3/x/dsvs/types"
@@ -8,69 +10,37 @@ import (
 	qadenatypes "github.com/c3qtech/qadena_v3/x/qadena/types"
 )
 
-func (k Keeper) displayStoresSync(sdkctx sdk.Context) error {
-	ctx, cancel := enclaveExecContext()
-	defer cancel()
-
-	gsh := &qadenatypes.MsgGetStoreHash{}
-
-	enclaveGRPCClient := k.qadenaKeeper.GetEnclaveRPCClient()
-
-	storeHashes, err := enclaveGRPCClient.GetStoreHash(ctx, gsh)
-	if err != nil {
-		c.ContextDebug(sdkctx, "DSVS: displayStoresSync error returned by GetStoreHash on enclave "+err.Error())
-		return err
-	}
-
-	for _, sh := range storeHashes.GetHashes() {
-		switch sh.Key {
-		case types.AuthorizedSignatoryKeyPrefix:
-			// The chain-side shadow, wired where this module already scans.
-			k.CompareStoreAccumulator(sdkctx, sh.Key)
-			h := c.StoreHashByKVStoreService(sdkctx, k.storeService, sh.Key)
-			if sh.Hash != h {
-				c.ContextError(sdkctx, "DSVS: displayStoresSync OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
-			} else {
-				c.ContextDebug(sdkctx, "DSVS: displayStoresSync in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
-			}
-		default:
-			c.ContextDebug(sdkctx, "DSVS: displayStoresSync Ignoring key="+sh.Key+" in DSVS module")
-		}
-	}
-
-	return nil
-}
-
-// sync DB between chain and enclave
 func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
 	c.ContextDebug(sdkctx, "DSVS: EnclaveSynchronizeStores -- Chain initialized and ready for business, synchronizing enclave...")
 
 	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
-	gsh := &qadenatypes.MsgGetStoreHash{}
-
 	enclaveGRPCClient := k.qadenaKeeper.GetEnclaveRPCClient()
 
-	storeHashes, err := enclaveGRPCClient.GetStoreHash(ctx, gsh)
+	// Decision by accumulator rows, exactly as the qadena keeper's sync (backlog item 46).
+	reply, err := enclaveGRPCClient.GetStoreAccumulators(ctx, &qadenatypes.MsgGetStoreAccumulators{
+		Keys: []string{types.AuthorizedSignatoryKeyPrefix},
+	})
 	if err != nil {
-		c.ContextDebug(sdkctx, "DSVS: EnclaveSynchronizeStores error returned by GetStoreHash on enclave "+err.Error())
+		c.ContextError(sdkctx, "DSVS: EnclaveSynchronizeStores error returned by GetStoreAccumulators on enclave "+err.Error())
 		return err
 	}
 
 	checkSync := false
 
-	for _, sh := range storeHashes.GetHashes() {
-		if sh.Key == types.AuthorizedSignatoryKeyPrefix {
-			// Same structural place as the enclave's shadow (inside its GetStoreHash): every
-			// moment this module scans for hashes, it also checks its maintained accumulator.
-			k.CompareStoreAccumulator(sdkctx, sh.Key)
+	for _, e := range reply.GetAccumulators() {
+		if e.GetKey() != types.AuthorizedSignatoryKeyPrefix {
+			continue
 		}
-		h := c.StoreHashByKVStoreService(sdkctx, k.storeService, sh.Key)
-		switch sh.Key {
-		case types.AuthorizedSignatoryKeyPrefix:
-			if sh.Hash != h {
-				c.ContextError(sdkctx, "DSVS: EnclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
+		if !e.GetPresent() {
+			return fmt.Errorf("DSVS: enclave returned no accumulator for %s -- establish-then-answer makes this impossible", e.GetKey())
+		}
+		chainAcc := k.EnsureStoreAccumulator(sdkctx, e.GetKey())
+		{
+			if string(chainAcc[:]) != string(e.GetAcc()) {
+				c.ContextError(sdkctx, "DSVS: EnclaveSynchronizeStores OUT-OF-SYNC store:  key="+e.GetKey()+
+					" enclave-acc="+fmt.Sprintf("%x", e.GetAcc())+" chain-acc="+c.AccumulatorHex(chainAcc))
 
 				authorizedSignatories := k.GetAllAuthorizedSignatory(sdkctx)
 				for _, authorizedSignatory := range authorizedSignatories {
@@ -120,17 +90,11 @@ func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
 					checkSync = true
 				}
 			} else {
-				c.ContextDebug(sdkctx, "DSVS: EnclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
+				c.ContextDebug(sdkctx, "DSVS: EnclaveSynchronizeStores in-sync store:  key="+e.GetKey()+" acc="+c.AccumulatorHex(chainAcc))
 			}
-		default:
-			c.ContextDebug(sdkctx, "DSVS: EnclaveSynchronizeStores Ignoring key="+sh.Key+" in DSVS module")
 		}
 	}
-
-	if checkSync {
-		c.ContextDebug(sdkctx, "DSVS: EnclaveSynchronizeStores Checking Sync after chain->enclave synchronization")
-		k.displayStoresSync(sdkctx)
-	}
+	_ = checkSync
 
 	return nil
 }
@@ -145,13 +109,6 @@ func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
 			c.ContextError(sdkCtx, "DSVS: enclaveSynchronizeStores failed: "+err.Error())
 		} else {
 			synchronizedWithEnclave = true
-		}
-	} else {
-		if c.LogLevelDebugEnabled {
-			header := k.headerService.GetHeaderInfo(sdkCtx)
-			if header.Height%25 == 0 {
-				k.displayStoresSync(sdkCtx)
-			}
 		}
 	}
 }

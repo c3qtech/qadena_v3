@@ -126,13 +126,6 @@ type qadenaServer struct {
 	Cdc           *amino.ProtoCodec
 	StoreKey      storetypes.StoreKey
 
-	// Prefixes whose shadow accumulator disagreed with a scan, or was never established.  Written
-	// by the READ path (compareAccumulatorToScan, called from GetStoreHash, which must not write to
-	// the store) and drained by the next write to that prefix.  In memory on purpose: losing it on
-	// restart costs nothing, because the next comparison re-derives it.
-	accMu          sync.Mutex
-	accNeedsReseed map[string]bool
-
 	// The same goleveldb that backs the multistore, held directly for the raw (non-IAVL)
 	// height-bookkeeping keys under qmeta/ -- confirmedHeight and the height->version index must
 	// live OUTSIDE the tree so a tree rollback cannot rewrite them.  See enclave_height.go.
@@ -7649,7 +7642,6 @@ func (s *qadenaServer) GetStoreHash(ctx context.Context, gsh *types.MsgGetStoreH
 		// previous maintained invariants in this codebase -- the iavl fast index and the
 		// CredentialPCXY index -- both drifted from the data they described without saying so.
 		// Here, drift is a log line rather than a wrong answer.
-		s.compareAccumulatorToScan(k)
 
 		storeHashes = append(storeHashes, &sh)
 	}
@@ -7719,6 +7711,13 @@ func (s *qadenaServer) EndBlock(ctx context.Context, tc *types.MsgEndBlock) (*ty
 	// writes land in the same version as the block's own.  Doing it here rather than on the next
 	// incidental write is what gives the quiet stores coverage at all.
 	s.maintainAccumulators()
+
+	// The every-Nth-block honesty audit: recompute from the block-end data, halt on mismatch.
+	// After maintain (so establishment precedes it) and before capture/commit, so what it audits
+	// is exactly what this block ships and commits.
+	if err := s.auditAccumulators(tc.Height); err != nil {
+		return nil, err
+	}
 
 	// Capture the accumulators THIS BLOCK COMMITS -- after the maintain pass, before the commit
 	// below, so the values are exactly the block-end state the chain's own maintain pass (which

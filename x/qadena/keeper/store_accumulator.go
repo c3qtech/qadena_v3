@@ -104,96 +104,6 @@ func (k Keeper) maintainStoreAccumulators(sdkctx sdk.Context) {
 	}
 }
 
-// fetchEnclaveAccumulators calls the accumulator seam (GetStoreAccumulators) and returns the
-// enclave's current values by store key.  Advisory in phase 1: any failure returns nil and the
-// caller proceeds on scans alone -- an old enclave that lacks the RPC must not break sync.
-func (k Keeper) fetchEnclaveAccumulators(sdkctx sdk.Context) map[string][]byte {
-	ctx, cancel := enclaveExecContext()
-	defer cancel()
-
-	r, err := EnclaveGRPCClient.GetStoreAccumulators(ctx, &types.MsgGetStoreAccumulators{})
-	if err != nil {
-		c.ContextError(sdkctx, "Qadena: GetStoreAccumulators unavailable (proceeding on scans alone): "+err.Error())
-		return nil
-	}
-	out := map[string][]byte{}
-	for _, e := range r.GetAccumulators() {
-		if e.GetPresent() {
-			out[e.GetKey()] = e.GetAcc()
-		}
-	}
-	return out
-}
-
-// compareAccumulatorSeam is the SIDE-BY-SIDE check for one store: does the acc-to-acc verdict
-// agree with the scan-to-scan verdict, taken at the same instant?
-//
-// This is phase 1 of replacing the scans (backlog items 44/46): the scan verdict remains the one
-// that acts; the accumulator verdict only reports.  The one line that matters is the DISAGREES
-// one -- the two mechanisms claiming different answers about the same store at the same moment
-// means one of them is wrong, and that must be understood before the cheap one is ever trusted.
-//
-// CALL WITH VERDICTS FROM THE SAME INSTANT: both replies captured before any seeding, or a
-// successful seed makes the accumulators agree while the scans (sampled pre-seed) did not, and
-// the alarm fires on a phantom.
-func (k Keeper) compareAccumulatorSeam(sdkctx sdk.Context, key string, enclaveAccs map[string][]byte, scanAgree bool) {
-	if enclaveAccs == nil {
-		return // seam unavailable; nothing to compare
-	}
-	encAcc, ok := enclaveAccs[key]
-	if !ok {
-		c.ContextError(sdkctx, "Qadena: ACC-SEAM enclave returned no accumulator for key="+key)
-		return
-	}
-	chainAcc, ok := k.LoadStoreAccumulator(sdkctx, key)
-	if !ok {
-		// Cannot happen after CompareStoreAccumulator ran for this key (it establishes on
-		// absence), so reaching here means the call order in the sync loop changed.
-		c.ContextError(sdkctx, "Qadena: ACC-SEAM chain has no accumulator for key="+key+" -- call order bug")
-		return
-	}
-
-	accAgree := string(chainAcc[:]) == string(encAcc)
-	if accAgree != scanAgree {
-		c.ContextError(sdkctx, fmt.Sprintf(
-			"Qadena: ACC-SEAM VERDICT DISAGREES WITH SCAN key=%s accAgree=%t scanAgree=%t "+
-				"chainAcc=%s enclaveAcc=%x -- one mechanism is wrong; do not trust the accumulator path until this is understood",
-			key, accAgree, scanAgree, c.AccumulatorHex(chainAcc), encAcc))
-		return
-	}
-	c.ContextDebug(sdkctx, fmt.Sprintf("Qadena: ACC-SEAM agrees with scan key=%s inSync=%t", key, accAgree))
-}
-
-// CompareStoreAccumulator is the shadow check, run where the chain already scans.
-//
-// Unlike the enclave's, this one MAY write -- it is reached from block execution rather than from a
-// read-only RPC -- so it repairs immediately instead of deferring.  A mismatch logs at ERROR, which
-// is visible at info level exactly as OUT-OF-SYNC is, because it means some write path is not
-// maintaining the accumulator and that has to be known before this is trusted.
-func (k Keeper) CompareStoreAccumulator(ctx sdk.Context, pfx string) {
-	scanned, rows := c.AccumulatorFromPrefixStore(k.tableStore(ctx, pfx))
-
-	acc, ok := k.LoadStoreAccumulator(ctx, pfx)
-	if !ok {
-		c.ContextInfo(ctx, "ACCUMULATOR established "+accumulatorLog(pfx, rows, scanned))
-		k.saveStoreAccumulator(ctx, pfx, scanned)
-		return
-	}
-	if acc != scanned {
-		c.ContextError(ctx, "ACCUMULATOR MISMATCH key="+pfx+
-			" rows="+fmt.Sprint(rows)+
-			" maintained="+c.AccumulatorHex(acc)+
-			" scanned="+c.AccumulatorHex(scanned)+
-			" -- a write path is not maintaining it; re-seeding from the scan")
-		k.saveStoreAccumulator(ctx, pfx, scanned)
-		return
-	}
-
-	// Debug for the same reason as the enclave's: it runs wherever the chain already scans, so at
-	// info it would be noise -- but without it, silence cannot be told apart from never having run.
-	c.ContextDebug(ctx, "ACCUMULATOR ok "+accumulatorLog(pfx, rows, acc))
-}
-
 // comparePerBlockAccumulators is the EVERY-BLOCK content-agreement check, fed by the accumulators
 // the enclave returns on its EndBlock reply (captured there after its maintain pass, before its
 // commit -- the same block-end clock this keeper's maintainStoreAccumulators, which runs just
@@ -239,4 +149,36 @@ func (k Keeper) comparePerBlockAccumulators(sdkctx sdk.Context, entries []*types
 		agree++
 	}
 	c.ContextDebug(sdkctx, fmt.Sprintf("Qadena: per-block accumulators agree on %d store(s) at height %d", agree, sdkctx.BlockHeight()))
+}
+
+// accumulatorAuditInterval mirrors the enclave's: every Nth block each side re-derives its
+// accumulators from its own rows.  See the enclave's constant for the full rationale.
+const accumulatorAuditInterval = 25
+
+// auditStoreAccumulators is the chain half of the honesty audit.  Panics on mismatch -- see the
+// call site in EnclaveEndBlock for why halting is correct and what chain-wide means.
+func (k Keeper) auditStoreAccumulators(sdkctx sdk.Context) {
+	if sdkctx.BlockHeight()%accumulatorAuditInterval != 0 {
+		return
+	}
+	prefixes := make([]string, 0, len(mirroredStores))
+	for pfx := range mirroredStores {
+		prefixes = append(prefixes, pfx)
+	}
+	sort.Strings(prefixes)
+	for _, pfx := range prefixes {
+		maintained, ok := k.LoadStoreAccumulator(sdkctx, pfx)
+		if !ok {
+			panic(fmt.Sprintf("qadena: accumulator audit: no maintained value for %s after the maintain pass -- call order bug", pfx))
+		}
+		scanned, rows := c.AccumulatorFromPrefixStore(k.tableStore(sdkctx, pfx))
+		if maintained != scanned {
+			panic(fmt.Sprintf(
+				"qadena: accumulator audit FAILED for %s at height %d: maintained=%s scanned=%s rows=%d -- "+
+					"an unhooked write path or corrupted data; halting rather than repairing, because repair "+
+					"would either mask the defect or bless the corruption",
+				pfx, sdkctx.BlockHeight(), c.AccumulatorHex(maintained), c.AccumulatorHex(scanned), rows))
+		}
+	}
+	c.ContextDebug(sdkctx, fmt.Sprintf("Qadena: accumulator audit clean at height %d (%d stores)", sdkctx.BlockHeight(), len(prefixes)))
 }

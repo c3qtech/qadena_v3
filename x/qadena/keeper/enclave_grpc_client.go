@@ -1037,13 +1037,6 @@ func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
 			}
 			synchronizedWithEnclave = true
 		}
-	} else {
-		if c.LogLevelDebugEnabled {
-			header := k.headerService.GetHeaderInfo(sdkCtx)
-			if header.Height%25 == 0 {
-				k.displayStoresSync(sdkCtx)
-			}
-		}
 	}
 
 	header := k.headerService.GetHeaderInfo(sdkCtx)
@@ -1682,86 +1675,23 @@ func (k Keeper) EndTransaction(ctx sdk.Context, logger log.Logger, success bool)
 
 	return nil
 }
-
-func (k Keeper) displayStoresSync(sdkctx sdk.Context) error {
-	ctx, cancel := enclaveExecContext()
-	defer cancel()
-
-	gsh := &types.MsgGetStoreHash{}
-
-	storeHashes, err := EnclaveGRPCClient.GetStoreHash(ctx, gsh)
-	if err != nil {
-		c.ContextDebug(sdkctx, "Qadena: displayStoresSync error returned by GetStoreHash on enclave "+err.Error())
-		return err
-	}
-
-	enclaveAccs := k.fetchEnclaveAccumulators(sdkctx)
-
-	for _, sh := range storeHashes.GetHashes() {
-		// The chain-side shadow, wired where the chain already scans (this loop's own
-		// StoreHashByKVStoreService below walks every row anyway): the maintained accumulator is
-		// re-derived from the data and any disagreement means a write path is not maintaining it.
-		// Covers every mirrored store, including the ones the display switch below ignores.
-		if mirroredStores[sh.Key] {
-			k.CompareStoreAccumulator(sdkctx, sh.Key)
-		}
-
-		h := c.StoreHashByKVStoreService(sdkctx, k.storeService, sh.Key)
-
-		if mirroredStores[sh.Key] {
-			k.compareAccumulatorSeam(sdkctx, sh.Key, enclaveAccs, sh.Hash == h)
-		}
-		switch sh.Key {
-		case types.WalletKeyPrefix:
-			fallthrough
-		case types.CredentialKeyPrefix:
-			fallthrough
-		case types.PublicKeyKeyPrefix:
-			fallthrough
-		case types.JarRegulatorKeyPrefix:
-			fallthrough
-		case types.IntervalPublicKeyIDKeyPrefix:
-			fallthrough
-		case types.ProtectKeyKeyPrefix:
-			fallthrough
-		case types.RecoverKeyKeyPrefix:
-			fallthrough
-		case types.EnclaveIdentityKeyPrefix:
-			if sh.Hash != h {
-				c.ContextError(sdkctx, "Qadena: displayStoresSync OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
-			} else {
-				c.ContextDebug(sdkctx, "Qadena: displayStoresSync in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
-			}
-		default:
-			c.ContextDebug(sdkctx, "Qadena: displayStoresSync Ignoring key="+sh.Key+" in Qadena module")
-		}
-	}
-
-	return nil
-}
-
-// sync DB between chain and enclave
 func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 	c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores -- Chain initialized and ready for business, synchronizing enclave...")
 
+	// THE DECISION RUNS ON ACCUMULATOR ROWS, not scans (backlog item 46).  The seam RPC is
+	// establish-then-answer on the committed clock, so every mirrored store has a value; the
+	// chain establishes its own below before comparing.  Ten 33-byte comparisons decide the
+	// seeding; nothing scans unless a store actually needs establishing.
 	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
-	gsh := &types.MsgGetStoreHash{}
-
-	storeHashes, err := EnclaveGRPCClient.GetStoreHash(ctx, gsh)
+	reply, err := EnclaveGRPCClient.GetStoreAccumulators(ctx, &types.MsgGetStoreAccumulators{})
 	if err != nil {
-		c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores error returned by GetStoreHash on enclave "+err.Error())
+		c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores error returned by GetStoreAccumulators on enclave "+err.Error())
 		return err
 	}
 
 	checkSync := false
-
-	// The accumulator seam, fetched at the SAME pre-seed instant as the scan hashes above: the
-	// establish-then-answer RPC guarantees every entry exists, and capturing both replies before
-	// any seeding keeps the side-by-side comparison honest -- a successful seed would otherwise
-	// make the accumulators agree while the scans, sampled earlier, did not.
-	enclaveAccs := k.fetchEnclaveAccumulators(sdkctx)
 
 	// Push failures, counted per prefix.  Every one of these call sites used to discard the error.
 	// That is not a theoretical loss: SetProtectKey and SetRecoverKey decrypt a vshare with a
@@ -1776,33 +1706,32 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 	// exists to eliminate, so collect the failures and refuse to proceed with them.
 	pushFailures := map[string]int{}
 
-	for _, sh := range storeHashes.GetHashes() {
-		if !mirroredStores[sh.Key] {
-			c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores Ignoring key="+sh.Key+" in Qadena module")
+	// The reply preserves the enclave's storeHashKeys order, which is LOAD-BEARING for seeding:
+	// EnclaveIdentity and IntervalPublicKeyID must arrive before ProtectKey and RecoverKey rows
+	// can be applied.  Iterating the reply keeps that order without a second list.
+	for _, e := range reply.GetAccumulators() {
+		if !mirroredStores[e.GetKey()] {
+			c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores Ignoring key="+e.GetKey()+" in Qadena module")
+			continue
+		}
+		if !e.GetPresent() {
+			return fmt.Errorf("enclaveSynchronizeStores: enclave returned no accumulator for %s -- "+
+				"establish-then-answer makes this impossible; refusing to guess", e.GetKey())
+		}
+
+		chainAcc := k.EnsureStoreAccumulator(sdkctx, e.GetKey())
+
+		if string(chainAcc[:]) == string(e.GetAcc()) {
+			c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+e.GetKey()+" acc="+c.AccumulatorHex(chainAcc))
 			continue
 		}
 
-		// The chain-side shadow, in the same structural place as the enclave's: the enclave runs
-		// compareAccumulatorToScan inside GetStoreHash, so EVERY moment it scans for hashes it
-		// also checks its maintained value.  This loop and displayStoresSync are the chain's two
-		// hash-scan moments; both now do the same.
-		k.CompareStoreAccumulator(sdkctx, sh.Key)
+		c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+e.GetKey()+
+			" enclave-acc="+fmt.Sprintf("%x", e.GetAcc())+" chain-acc="+c.AccumulatorHex(chainAcc))
 
-		h := c.StoreHashByKVStoreService(sdkctx, k.storeService, sh.Key)
-
-		// Side-by-side: does the acc-to-acc verdict agree with this scan-to-scan verdict?
-		k.compareAccumulatorSeam(sdkctx, sh.Key, enclaveAccs, sh.Hash == h)
-
-		if sh.Hash == h {
-			c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores in-sync store:  key="+sh.Key+" hash="+c.DisplayHash(h))
-			continue
-		}
-
-		c.ContextError(sdkctx, "Qadena: enclaveSynchronizeStores OUT-OF-SYNC store:  key="+sh.Key+" enclave-hash="+c.DisplayHash(sh.Hash)+" chain-hash="+c.DisplayHash(h))
-
-		rows, failed := k.seedEnclaveStore(sdkctx, sh.Key)
+		rows, failed := k.seedEnclaveStore(sdkctx, e.GetKey())
 		if failed > 0 {
-			pushFailures[sh.Key] += failed
+			pushFailures[e.GetKey()] += failed
 		}
 		if rows > 0 {
 			checkSync = true
@@ -1835,9 +1764,6 @@ func (k Keeper) enclaveSynchronizeStores(sdkctx sdk.Context) error {
 	}
 
 	if checkSync {
-		c.ContextDebug(sdkctx, "Qadena: enclaveSynchronizeStores Checking Sync after chain->enclave synchronization")
-		k.displayStoresSync(sdkctx)
-
 		// A mismatch on a FRESH enclave is seeding, and expected.  A mismatch when chain and
 		// enclave already agreed on their height is neither: the same blocks produced different
 		// mirror state, which points at non-deterministic enclave execution, a partial wipe, or
@@ -1915,13 +1841,11 @@ func haltOnEnclaveFailure(sdkctx sdk.Context, step string, err error) {
 // and why enclave rollback re-executes blocks rather than re-delivering their rows.
 func (k Keeper) EnclaveEndBlock(sdkctx sdk.Context) {
 	err, changedWallets := k.EnclaveSyncWallets(sdkctx)
-	checkSync := false
 
 	haltOnEnclaveFailure(sdkctx, "wallet sync", err)
 
 	for _, wallet := range changedWallets {
 		k.SetWalletNoEnclave(sdkctx, *wallet)
-		checkSync = true
 	}
 
 	err, changedCredentials, removedCredentials := k.EnclaveSyncCredentials(sdkctx)
@@ -1930,12 +1854,10 @@ func (k Keeper) EnclaveEndBlock(sdkctx sdk.Context) {
 
 	for _, credential := range changedCredentials {
 		k.SetCredentialNoEnclave(sdkctx, *credential)
-		checkSync = true
 	}
 
 	for _, removed := range removedCredentials {
 		k.RemoveCredentialNoEnclave(sdkctx, removed.CredentialID, removed.CredentialType)
-		checkSync = true
 	}
 
 	err, changedRecoverKeys := k.EnclaveSyncRecoverKeys(sdkctx)
@@ -1944,7 +1866,6 @@ func (k Keeper) EnclaveEndBlock(sdkctx sdk.Context) {
 
 	for _, recoverKey := range changedRecoverKeys {
 		k.SetRecoverKey(sdkctx, *recoverKey)
-		checkSync = true
 	}
 
 	err, newSuspiciousTransactions := k.EnclaveSyncSuspiciousTransactions(sdkctx)
@@ -1953,12 +1874,6 @@ func (k Keeper) EnclaveEndBlock(sdkctx sdk.Context) {
 
 	for _, st := range newSuspiciousTransactions {
 		k.AppendSuspiciousTransaction(sdkctx, *st)
-		checkSync = true
-	}
-
-	if checkSync {
-		c.ContextDebug(sdkctx, "Checking Sync after enclave->chain synchronization")
-		k.displayStoresSync(sdkctx)
 	}
 
 	// Establish any chain-side store accumulator that does not exist yet -- LAST, mirroring the
@@ -1967,6 +1882,18 @@ func (k Keeper) EnclaveEndBlock(sdkctx sdk.Context) {
 	// enclave's placement does.  One Get per mirrored store per block once established.  These
 	// writes are consensus state -- see maintainStoreAccumulators for the upgrade property.
 	k.maintainStoreAccumulators(sdkctx)
+
+	// The every-Nth-block honesty audit, chain side: recompute each mirrored store's accumulator
+	// from the block-end data and compare to the maintained row.  Same store, same context, same
+	// instant, same arithmetic -- no clocks to misalign -- so a mismatch means the invariant is
+	// genuinely violated (an unhooked write path, or corrupted data) and the reaction is a HALT,
+	// not a repair: repair would either mask the defect forever or bless the corruption.
+	//
+	// DETERMINISTIC, AND THEREFORE CHAIN-WIDE: every node audits the same state at the same
+	// height, so a chain-side violation halts all of them together.  That is the correct shape
+	// for a broken state invariant -- it is morally a consensus failure -- but it is a property
+	// to know, not to discover.
+	k.auditStoreAccumulators(sdkctx)
 
 	k.EnclaveInvokeEndBlock(sdkctx)
 }

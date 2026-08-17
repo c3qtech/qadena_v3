@@ -105,30 +105,6 @@ func TestEmptyTableAccumulatesToAStoredZero(t *testing.T) {
 	require.Equal(t, c.StoreAccumulator{}, stored)
 }
 
-// The shadow must catch a write path that does not maintain the accumulator -- which is the entire
-// reason the scan keeps running alongside it.
-func TestShadowComparisonDetectsAnUnhookedWrite(t *testing.T) {
-	s := newTestEnclaveServer(t)
-	s.ensureAccumulator(types.WalletKeyPrefix)
-	putWallet(s, "w1")
-
-	// Simulate a write path nobody hooked: straight to the store, no accumulateWrite.
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.WalletKeyPrefix))
-	store.Set([]byte("smuggled"), []byte("row"))
-
-	maintained, _ := s.loadAccumulator(types.WalletKeyPrefix)
-	require.NotEqual(t, scanAcc(s, types.WalletKeyPrefix), maintained,
-		"an unhooked write should make the maintained value wrong -- that is the hazard being tested")
-
-	// The next hooked write repairs it, because the comparison scheduled a rebuild.
-	s.markAccumulatorForReseed(types.WalletKeyPrefix)
-	putWallet(s, "w2")
-
-	repaired, _ := s.loadAccumulator(types.WalletKeyPrefix)
-	require.Equal(t, scanAcc(s, types.WalletKeyPrefix), repaired,
-		"the scheduled rebuild did not repair the accumulator")
-}
-
 // THE GAP THIS CLOSES: establishment used to piggyback on the next ordinary write to a store, so a
 // store nobody writes to never got an accumulator at all.  EnclaveIdentity, PioneerJar and
 // JarRegulator can go an entire run without a single write, which meant the shadow covered exactly
@@ -169,53 +145,11 @@ func TestEndBlockEstablishmentCountsRowsThatBypassedTheSetters(t *testing.T) {
 		"the establishing scan missed rows that bypassed the setters")
 }
 
-// A flagged accumulator must be repaired by the block too, not left waiting for a write to that
-// store -- otherwise a detected mismatch on a quiet store would persist indefinitely.
-func TestEndBlockRebuildsAFlaggedAccumulator(t *testing.T) {
-	s := newTestEnclaveServer(t)
-	endBlock(t, s, 5)
-
-	// Corrupt it the way an unhooked write path would: change the data, leave the accumulator.
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.WalletKeyPrefix))
-	store.Set([]byte("unhooked"), []byte("row"))
-	require.NotEqual(t, scanAcc(s, types.WalletKeyPrefix), mustLoadAcc(t, s, types.WalletKeyPrefix))
-
-	s.markAccumulatorForReseed(types.WalletKeyPrefix)
-	endBlock(t, s, 6)
-
-	require.Equal(t, scanAcc(s, types.WalletKeyPrefix), mustLoadAcc(t, s, types.WalletKeyPrefix),
-		"the block did not rebuild a flagged accumulator")
-}
-
 func mustLoadAcc(t *testing.T, s *qadenaServer, pfx string) c.StoreAccumulator {
 	t.Helper()
 	acc, ok := s.loadAccumulator(pfx)
 	require.True(t, ok)
 	return acc
-}
-
-// Marking must report whether it CHANGED anything.  A quiet store stays marked indefinitely --
-// only a write to it clears the flag -- so the comparison uses this to announce the condition once
-// rather than on every GetStoreHash, which EnclaveEndBlock runs unguarded whenever it checks sync.
-func TestMarkingForReseedReportsOnlyTheTransition(t *testing.T) {
-	s := newTestEnclaveServer(t)
-
-	require.True(t, s.markAccumulatorForReseed(types.PioneerJarKeyPrefix), "first mark should report the change")
-	require.False(t, s.markAccumulatorForReseed(types.PioneerJarKeyPrefix), "re-marking an already-marked store would log on every comparison")
-	require.False(t, s.markAccumulatorForReseed(types.PioneerJarKeyPrefix))
-
-	// Once drained, the condition can be announced again -- it is genuinely new at that point.
-	require.True(t, s.takeAccumulatorReseed(types.PioneerJarKeyPrefix))
-	require.True(t, s.markAccumulatorForReseed(types.PioneerJarKeyPrefix))
-}
-
-// The reseed flag must be one-shot: draining it twice would rebuild on every subsequent write,
-// silently turning an O(1) update back into a full scan per write.
-func TestReseedFlagIsOneShot(t *testing.T) {
-	s := newTestEnclaveServer(t)
-	s.markAccumulatorForReseed(types.WalletKeyPrefix)
-	require.True(t, s.takeAccumulatorReseed(types.WalletKeyPrefix))
-	require.False(t, s.takeAccumulatorReseed(types.WalletKeyPrefix), "flag was not cleared")
 }
 
 // The seam RPC's contract, both halves:
@@ -300,4 +234,31 @@ func TestEndBlockReplyCarriesTheCommittedAccumulators(t *testing.T) {
 			require.Equal(t, want[:], e.Acc, "the reply must carry exactly what this block committed")
 		}
 	}
+}
+
+// The honesty audit, enclave side (every accumulatorAuditInterval-th block, inside EndBlock):
+// an unhooked write violates the invariant and the reaction is a HALT -- EndBlock returns an
+// error, which reaches the chain's haltOnEnclaveFailure -- never a silent repair.
+func TestAuditHaltsOnAnUnhookedWrite(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	endBlock(t, s, 5) // establishes everything
+
+	// Clean audits pass: a multiple of the interval with an intact invariant commits fine.
+	_, err := s.EndBlock(context.Background(), &types.MsgEndBlock{Height: accumulatorAuditInterval})
+	require.NoError(t, err, "a clean audit must not halt")
+
+	// The hazard: a row written past every setter and hook.
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.WalletKeyPrefix))
+	store.Set([]byte("smuggled"), []byte("row"))
+
+	// Off-cadence blocks commit without auditing...
+	_, err = s.EndBlock(context.Background(), &types.MsgEndBlock{Height: accumulatorAuditInterval + 1})
+	require.NoError(t, err)
+
+	// ...and the next audit block halts, naming what happened.
+	_, err = s.EndBlock(context.Background(), &types.MsgEndBlock{Height: 2 * accumulatorAuditInterval})
+	require.Error(t, err, "a violated invariant must halt the block, not be repaired")
+	require.Contains(t, err.Error(), "accumulator audit FAILED")
+	require.Contains(t, err.Error(), types.WalletKeyPrefix)
+	require.Contains(t, err.Error(), "halting rather than repairing")
 }

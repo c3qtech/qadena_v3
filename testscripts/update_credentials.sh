@@ -6,7 +6,7 @@
 # al, jill, dory, ann straight out of test_data/users.json -- which made it single-shot twice over:
 # a claim code is single use, and correcting an identity puts it inside
 # update_credential_min_blocks_between_updates (10000 blocks, ~2.8 hours) so the same user cannot
-# be corrected again.  That is why it lived behind --with-credentials and never ran in the
+# be corrected again.  That is why it lived behind a regression.sh opt-in flag and never ran in the
 # continuous loop, and why the UPDATED walletID sentinel had no repeating coverage at all.
 #
 # Now it provisions its OWN copies of the four users it needs, with setup.sh --prefix.  That
@@ -49,8 +49,17 @@
 # checked with an inverted exit status, so a policy that silently starts accepting them breaks the
 # script rather than passing quietly.
 #
-# The KEY RECOVERY cases (6, 6a, 6b) are opt-in, via UPDATE_CREDENTIALS_WITH_RECOVERY=1, and they
-# run against THIS RUN'S jill like every other case.
+# The KEY RECOVERY cases (6, 6a, 6b) RUN BY DEFAULT, against THIS RUN'S jill like every other case.
+# Set UPDATE_CREDENTIALS_SKIP_RECOVERY=1 to leave them out -- an escape hatch, not a gate: they cost
+# one protect-key and a handful of transactions, so the reason to skip them is a chain that cannot
+# afford the traffic, not a correctness constraint.  regression.sh reaches this through its ordinary
+# --skip recovery.
+#
+# THEY WERE OPT-IN UNTIL THE PER-RUN MOVE, and the opt-in was load-bearing then: against the shared
+# jill a wallet's protect-key could be filed once and her claim codes burned once, so a second run
+# had nothing left to recover.  Per-run jill files a per-run protect-key with per-run recovery
+# wallets, mnemonics and claim codes, so nothing carries between runs and the cases repeat.  That is
+# the whole reason the flag could go: what it was protecting no longer exists.
 #
 # They used to run against the shared jill, justified by two claims.  One was simply wrong: a wallet
 # can be recovered more than once -- case 6b is itself a second recovery, and asserts that the
@@ -262,11 +271,12 @@ echo "========================="
 expect_ok qadenad_alias tx qadena create-credential $swap_a $swap_bf personal-info "Rhodora Roxas$suffix" "Roxas$suffix" "Villarica$suffix" "1970-Mar-02" "PH" "PH" "F" --from $identityprovider --yes
 expect_ok qadenad_alias tx qadena update-credential $swap_a $swap_bf personal-info --from $u_dory --yes
 
-if [[ -n "$UPDATE_CREDENTIALS_WITH_RECOVERY" ]]; then
+if [[ -z "$UPDATE_CREDENTIALS_SKIP_RECOVERY" ]]; then
 
-# OPT-IN, and against THIS RUN'S jill -- see the header for why these used to use the shared one
-# and what that cost.  The partners stay shared on purpose: they only sign, and the generator copies
-# .recovery verbatim, so per-run jill's protect-key already names them.
+# ON BY DEFAULT, and against THIS RUN'S jill -- see the header for why these used to use the shared
+# one, what that cost, and why they are no longer opt-in.  The partners stay shared on purpose: they
+# only sign, and the generator copies .recovery verbatim, so per-run jill's protect-key already
+# names them.
     echo "========================="
     echo "6. key recovery with jill's OLD surname (Quimba) must still work"
     echo "========================="
@@ -353,7 +363,7 @@ if [[ -n "$UPDATE_CREDENTIALS_WITH_RECOVERY" ]]; then
 
 else
     echo "========================="
-    echo "6, 6a, 6b. key recovery -- SKIPPED (set UPDATE_CREDENTIALS_WITH_RECOVERY=1)"
+    echo "6, 6a, 6b. key recovery -- SKIPPED (UPDATE_CREDENTIALS_SKIP_RECOVERY is set)"
     echo "========================="
 fi
 

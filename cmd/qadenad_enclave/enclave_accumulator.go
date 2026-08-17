@@ -69,18 +69,6 @@ func (s *qadenaServer) saveAccumulator(pfx string, acc c.StoreAccumulator) {
 // covering only the rows seen since the process started.  ensureAccumulator builds it once, by
 // scanning, at the point it is first needed.
 func (s *qadenaServer) accumulateWrite(pfx string, key []byte, newValue []byte) {
-	// A shadow mismatch, or a table whose accumulator was never established, is repaired HERE --
-	// the first write after the problem was noticed, which is a context where writing is expected.
-	if s.takeAccumulatorReseed(pfx) {
-		store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(pfx))
-		rebuilt, rows := c.AccumulatorFromPrefixStore(store)
-		s.saveAccumulator(pfx, rebuilt)
-		// Info, not debug: this is rare (once per prefix in the normal case) and it is the moment
-		// the accumulator starts making a claim.  A rebuild appearing repeatedly for the same store
-		// means something keeps invalidating it, which is the signal worth catching early.
-		c.LoggerInfo(logger, "ACCUMULATOR built by scan "+accumulatorLog(pfx, rows, rebuilt))
-	}
-
 	acc, ok := s.loadAccumulator(pfx)
 	if !ok {
 		return // not established yet; the shadow comparison will schedule a rebuild
@@ -111,60 +99,6 @@ func (s *qadenaServer) ensureAccumulator(pfx string) c.StoreAccumulator {
 	s.saveAccumulator(pfx, acc)
 	c.LoggerInfo(logger, "ACCUMULATOR established "+accumulatorLog(pfx, rows, acc))
 	return acc
-}
-
-// compareAccumulatorToScan is the shadow check.  READ-ONLY BY CONSTRUCTION.
-//
-// It is called from GetStoreHash, which must not write: that RPC used to commitCache() first and
-// thereby promoted a partially executed transaction's writes into the store -- a write side effect
-// on a read path, reachable from enclaveSynchronizeStores at startup.  So a mismatch here records
-// an intent to re-seed rather than re-seeding, and the next ordinary write to that prefix does the
-// work, where writing is already expected.
-//
-// It reads through ServerCtx, the same context GetStoreHash hashes, so the two describe the same
-// committed state.  Comparing a CacheCtx accumulator against a ServerCtx scan would report
-// uncommitted writes as drift.
-//
-// The log is at ERROR so it shows at info level, the way OUT-OF-SYNC already does: a mismatch means
-// some write path is not maintaining the accumulator, which is the one thing that must be known
-// before this is ever trusted for anything.
-func (s *qadenaServer) compareAccumulatorToScan(pfx string) {
-	store := prefix.NewStore(s.ServerCtx.KVStore(s.StoreKey), types.KeyPrefix(pfx))
-	scanned, rows := c.AccumulatorFromPrefixStore(store)
-
-	stored := prefix.NewStore(s.ServerCtx.KVStore(s.StoreKey), types.KeyPrefix(EnclaveStoreAccumulatorKeyPrefix))
-	acc, ok := c.ParseStoreAccumulator(stored.Get([]byte(pfx)))
-	if !ok {
-		// Info rather than debug: on a fresh or restored enclave this is the FIRST thing the
-		// accumulator says, and its absence from the log would make the silence ambiguous -- no
-		// output could mean "agreeing quietly" or "never ran at all".
-		//
-		// ONLY WHEN THE FLAG ACTUALLY CHANGES, though.  A store is only established by a WRITE to
-		// it, so a quiet store -- EnclaveIdentity, PioneerJar, JarRegulator go whole runs without
-		// one -- stays absent indefinitely while GetStoreHash keeps asking.  Logging every
-		// comparison would emit this on every EnclaveEndBlock that checks sync, forever.
-		if s.markAccumulatorForReseed(pfx) { // never established, or lost to a restore
-			c.LoggerInfo(logger, "ACCUMULATOR absent, will build on the next write to this store "+
-				accumulatorLog(pfx, rows, scanned))
-		}
-		return
-	}
-	if acc != scanned {
-		c.LoggerError(logger, "ACCUMULATOR MISMATCH key="+pfx+
-			" rows="+fmt.Sprint(rows)+
-			" maintained="+c.AccumulatorHex(acc)+
-			" scanned="+c.AccumulatorHex(scanned)+
-			" -- a write path is not maintaining it; re-seeding on the next write")
-		s.markAccumulatorForReseed(pfx)
-		return
-	}
-
-	// THE AGREEMENT IS THE POINT, so it is logged rather than left implicit.  Debug, because this
-	// runs on every GetStoreHash and would otherwise drown the log -- but without it there is no
-	// positive evidence the shadow ever ran, and "no mismatch" is indistinguishable from "no
-	// comparison".  This is also the line to compare BETWEEN NODES: same store, same row count,
-	// same digest means two enclaves hold identical content.
-	c.LoggerDebug(logger, "ACCUMULATOR ok "+accumulatorLog(pfx, rows, acc))
 }
 
 // GetStoreAccumulators is the accumulator seam: GetStoreHash's equivalent for the maintained
@@ -265,47 +199,53 @@ func (s *qadenaServer) GetStoreAccumulators(ctx context.Context, in *types.MsgGe
 // store has no accumulator or has just been flagged, which is once per store in the normal case.
 func (s *qadenaServer) maintainAccumulators() {
 	for _, pfx := range storeHashKeys {
-		// Flagged wins: the value is present but known wrong, so re-reading it would be pointless.
-		if s.takeAccumulatorReseed(pfx) {
-			store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(pfx))
-			rebuilt, rows := c.AccumulatorFromPrefixStore(store)
-			s.saveAccumulator(pfx, rebuilt)
-			c.LoggerInfo(logger, "ACCUMULATOR rebuilt at end of block "+accumulatorLog(pfx, rows, rebuilt))
-			continue
-		}
 		if _, ok := s.loadAccumulator(pfx); !ok {
 			s.ensureAccumulator(pfx)
 		}
 	}
 }
 
-// markAccumulatorForReseed records that a prefix's accumulator must be rebuilt from a scan.  Kept
-// in memory rather than the store precisely because the caller is a read path; the flag costs
-// nothing to lose on restart, since a fresh process re-derives it from the same comparison.
-// Returns whether this call actually CHANGED the flag.  Callers use that to announce the condition
-// once instead of on every comparison: a prefix can sit marked for a long time, because only a write
-// to it clears the flag.
-func (s *qadenaServer) markAccumulatorForReseed(pfx string) bool {
-	s.accMu.Lock()
-	defer s.accMu.Unlock()
-	if s.accNeedsReseed == nil {
-		s.accNeedsReseed = map[string]bool{}
-	}
-	if s.accNeedsReseed[pfx] {
-		return false
-	}
-	s.accNeedsReseed[pfx] = true
-	return true
-}
+// accumulatorAuditInterval is how often each side re-derives every accumulator from its own
+// store's rows and compares it to the maintained value.  The audit is the one scan-shaped thing
+// that survives the phase-out, because a maintained invariant can never self-certify: an unhooked
+// write path leaves BOTH sides' accumulators stale in unison, so every cross-boundary comparison
+// keeps passing while the summaries drift from the data -- the exact rot that emptied the iavl
+// fast index and shorted CredentialPCXY.  Only re-deriving from the data catches it.
+//
+// The same cadence the old debug-gated hash display used; at 1/25th frequency the scans cost
+// almost nothing.
+const accumulatorAuditInterval = 25
 
-func (s *qadenaServer) takeAccumulatorReseed(pfx string) bool {
-	s.accMu.Lock()
-	defer s.accMu.Unlock()
-	if s.accNeedsReseed[pfx] {
-		delete(s.accNeedsReseed, pfx)
-		return true
+// auditAccumulators recomputes every mirrored store's accumulator from the block-end data and
+// compares it to the maintained row -- same store, same context, same instant, same arithmetic,
+// so there are no clocks to misalign and a mismatch means the invariant is genuinely violated:
+// an unhooked write path, or data corruption.
+//
+// A MISMATCH HALTS, IT DOES NOT REPAIR.  Repairing would either mask a code defect forever (the
+// unhooked path keeps corrupting the summary and the node keeps quietly patching it) or bless
+// corrupted data as the new truth.  The error returns through EndBlock into the chain's
+// haltOnEnclaveFailure -- the loud, named, recoverable stop.
+func (s *qadenaServer) auditAccumulators(height int64) error {
+	if height%accumulatorAuditInterval != 0 {
+		return nil
 	}
-	return false
+	for _, pfx := range storeHashKeys {
+		maintained, ok := s.loadAccumulator(pfx)
+		if !ok {
+			// maintainAccumulators runs first; absent here is a call-order bug, not a violation
+			return fmt.Errorf("accumulator audit: no maintained value for %s after the maintain pass", pfx)
+		}
+		store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(pfx))
+		scanned, rows := c.AccumulatorFromPrefixStore(store)
+		if maintained != scanned {
+			return fmt.Errorf("accumulator audit FAILED for %s at height %d: maintained=%s scanned=%s rows=%d -- "+
+				"an unhooked write path or corrupted data; halting rather than repairing, because repair "+
+				"would either mask the defect or bless the corruption",
+				pfx, height, c.AccumulatorHex(maintained), c.AccumulatorHex(scanned), rows)
+		}
+	}
+	c.LoggerDebug(logger, fmt.Sprintf("accumulator audit clean at height %d (%d stores)", height, len(storeHashKeys)))
+	return nil
 }
 
 // collectAccumulatorEntries snapshots every mirrored store's maintained accumulator for the

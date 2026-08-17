@@ -9,7 +9,7 @@
 #   sgx-build     the SGX build is signed and REPRODUCIBLE                (--with-sgx)
 #   prerequisites providers, oracles and the create-wallet sponsor, onboarded at runtime
 #   idempotency   prerequisites re-run, asserting it issues ZERO transactions
-#   setup         the test users                                           (--with-setup)
+#   setup         the test users, provisioned automatically when any is missing
 #   pricefeed     oracle posting, per-market isolation, unregistered poster refused
 #   pf-expiry     a posted price stops counting toward the median once it expires
 #   transfers     transfer -> eph-wallet queue -> receive
@@ -24,8 +24,8 @@
 #   enf           enf-smart-contracts: the ENF notarial book (ENP registry + entries)
 #   enclave-rollback  send a tx, roll chain+enclave back past it, prove the state reverted
 #   enclave-crash     stall the enclave: the node must HALT, not fork, then recover
-#   credentials   update_credentials.sh -- corrections, rejections, contacts, anti-squat
-#                 (its single-shot KEY RECOVERY cases additionally need --with-credentials)
+#   credentials   update_credentials.sh -- corrections, rejections, contacts, anti-squat,
+#                 and key recovery (--skip recovery drops just the recovery cases)
 #   replenish     al's ENCRYPTED balance is topped back up before anything spends it
 #   peer-agreement   every peer computed the SAME app hash -- i.e. no fork
 #   reclaim       the TRANSPARENT balance the suites accumulated goes back to the treasury
@@ -53,18 +53,12 @@
 # balance they accumulate as well.  replenish_funds() mints al's encrypted float from al's own
 # transparent balance rather than borrowing it, so nothing has to be held back for it.
 #
-# TWO LAYERS ARE NOT REPEATABLE, and are therefore opt-in:
+# WHAT IS NOT REPEATABLE IS OPT-IN.  Only two layers are left -- the credentials suite and its key
+# recovery cases both came off this list once they provisioned per-run identities -- plus --with-sgx,
+# which is opt-in for a different reason: it needs hardware, not a fresh chain.
 #
 #   --from-genesis   DESTRUCTIVE.  init.sh deletes $QADENAHOME outright -- chain data AND the
 #                    keyring.  Everything is rebuilt from config/config.yml.
-#   --with-credentials  NO LONGER GATES THE CREDENTIALS SUITE, which now runs by default: it
-#                    provisions its own four identities per run with setup.sh --prefix, so the
-#                    single-use claim codes and the 10000-block update cool-down that made it
-#                    single-shot no longer apply.  The flag now adds only the KEY RECOVERY cases
-#                    inside it, which remain genuinely once-per-chain -- a wallet may be recovered
-#                    exactly ONCE (getRecoverKeyByOriginalWalletID refuses a second) and the
-#                    partner approvals need three signatories resolved three different ways, i.e.
-#                    the whole seeded user set.  Implied by --from-genesis.
 #   --with-enclave-upgrade  registers a new enclave identity on chain PERMANENTLY, then stops the
 #                    node, swaps the enclave binary and restarts.  Runs last, after credentials,
 #                    because nothing after it would be measuring the same process -- and because it
@@ -88,19 +82,28 @@
 #
 # Usage:
 #   regression.sh                     the repeatable suite against a running chain
-#   regression.sh --from-genesis      wipe, rebuild, and run everything (implies the two below)
-#   regression.sh --with-setup        run setup.sh first (slow; needed on a fresh chain)
-#   regression.sh --with-credentials  also run the single-shot key-recovery cases in credentials
+#   regression.sh --from-genesis      wipe, rebuild, and run everything
 #   regression.sh --with-enclave-upgrade  also upgrade the enclave to a new measurement, last
 #   regression.sh --with-sgx          also verify the SGX build is signed and reproducible (SGX hw only)
 #   regression.sh --stop-on-fail      stop at the first failure
 #   regression.sh --skip a,b,c        do not run these suites
+#
+# SETUP HAS NO FLAG.  setup.sh runs automatically whenever the test users are incomplete -- checked
+# against test_data/users.json in the keyring AND against the wallets this chain actually holds --
+# and is skipped when they are all present.  --skip setup suppresses it.  There is deliberately no
+# way to force a re-run; see the detection block further down for why forcing cannot repair anything.
 #
 # --skip exists for runs that must not lose the chain.  enclave-rollback, enclave-crash and
 # enclave-upgrade STOP AND RESTART the node by design, which is correct when the suite is the only
 # thing using it and disastrous when it is not: a joining node sees the primary's RPC vanish for
 # minutes, and snapshot accumulation restarts.  For a continuous run alongside a second node, use
 #   --skip enclave-rollback,enclave-crash,enclave-upgrade
+#
+# ONE --skip NAME IS NOT A SUITE:  `recovery` drops the key-recovery cases (6, 6a, 6b) from INSIDE
+# the credentials suite while the rest of it still runs.  They run by default now -- they became
+# repeatable when they moved to the per-run jill -- and the skip is an escape hatch for a chain that
+# cannot spare the traffic, not a correctness gate.  It does not appear in the summary as its own
+# line, because it is not its own suite; the run prints a note and the credentials log says SKIPPED.
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
@@ -113,8 +116,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 from_genesis=false
-with_setup=false
-with_credentials=false
 with_enclave_upgrade=false
 with_sgx=false
 stop_on_fail=false
@@ -124,8 +125,6 @@ advertise_ip=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --from-genesis)     from_genesis=true; shift ;;
-        --with-setup)       with_setup=true; shift ;;
-        --with-credentials) with_credentials=true; shift ;;
         --with-enclave-upgrade) with_enclave_upgrade=true; shift ;;
         --with-sgx)         with_sgx=true; shift ;;
         --stop-on-fail)     stop_on_fail=true; shift ;;
@@ -133,17 +132,26 @@ while [[ $# -gt 0 ]]; do
         --advertise-ip-address) advertise_ip="$2"; shift 2 ;;
         --help)
             sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+
+            # THE SKIPPABLE NAMES ARE READ OUT OF THIS FILE, not typed into the help text.  They are
+            # exactly the labels run_test is called with, so a suite that is added, renamed or
+            # removed shows up here correctly without anyone remembering to update a list -- and a
+            # help text that names a suite --skip does not recognise is worse than none, because
+            # --skip silently ignores a name it does not match and the suite runs anyway.
+            echo "Skippable suites (--skip takes a comma-separated list of these):"
+            grep -oE '^[[:space:]]*run_test "[a-z0-9-]+"' "$0" \
+                | sed -E 's/.*run_test "([a-z0-9-]+)".*/\1/' | sort -u | tr '\n' ' ' \
+                | fold -s -w 72 | sed 's/^/  /'
+            echo ""
+            echo "  genesis-init, genesis-check and chain-start exist only under --from-genesis,"
+            echo "  sgx-build only under --with-sgx, enclave-upgrade only under --with-enclave-upgrade."
+            echo ""
+            echo "  Plus one name that is NOT a suite: recovery -- see above."
             exit 0
             ;;
         *) echo "Unknown option: $1"; echo "try: $0 --help"; exit 1 ;;
     esac
 done
-
-# a chain built from genesis has never seen any of it, so both of these become available
-if [ "$from_genesis" = "true" ]; then
-    with_setup=true
-    with_credentials=true
-fi
 
 logdir="$qadenabuild/logs/regression"
 mkdir -p "$logdir"
@@ -153,13 +161,19 @@ results=()
 seconds=()
 failed=0
 
+# Is <label> named in --skip?  Shared by run_test and by the case-group gates below (recovery), so
+# both understand one spelling of --skip and cannot drift apart on how it is matched.
+is_skipped() {
+    [[ -n "$skip_list" ]] && print -r -- ",$skip_list," | grep -q ",$1,"
+}
+
 # run_test <label> <command> [args...]
 run_test() {
     local label="$1"; shift
 
     # SKIPPED IS RECORDED, NOT SILENT.  A suite that vanishes from the summary is indistinguishable
     # from one that passed, and this runner's whole value is that its output means something.
-    if [[ -n "$skip_list" ]] && print -r -- ",$skip_list," | grep -q ",$label,"; then
+    if is_skipped "$label"; then
         echo ""
         echo "======================================================================"
         echo ">>> $label"
@@ -515,6 +529,90 @@ start_chain() {
     done
     echo "the enclave did not initialise within 180s -- scanned bank sends would all be refused"
     return 1
+}
+
+# WHAT IS MISSING FROM THE SEEDED TEST USERS -- empty output means setup.sh has nothing to do.
+#
+# This replaced a single `keys show al` probe, which answered a much weaker question than the one
+# the runner is actually asking.  al is the FIRST user setup.sh provisions, so his key exists after
+# the very first thing it does; a setup killed halfway through -- or one whose parallel per-user
+# jobs partly failed -- left al present and the runner declared the users fine, then handed the
+# suites a chain missing dory (case 5), ann (case 13) or victor (the suspicious aggregates).  Those
+# fail far from the cause, naming a credential or a balance rather than a user that was never made.
+#
+# Two things are checked, because either alone is misleading:
+#
+#   the keyring   every name in test_data/users.json.  This is what setup.sh iterates, so it is the
+#                 definition of a complete set rather than a hand-copied list that can drift.
+#   the chain     each of those keys must own a wallet HERE.  A keyring outlives the chain it was
+#                 built against -- restore a snapshot, join a different network, or wipe chain data
+#                 without wiping ~/.qadena, and every key still answers `keys show` while none of
+#                 them exists on chain.
+#
+# THE CHAIN CHECK USES list-wallet, NOT show-wallet, and the difference is not stylistic.
+# `show-wallet <addr>` EXITS 0 FOR A WALLET THAT DOES NOT EXIST: it prints
+#
+#     err rpc error: code = NotFound desc = ... not found: key not found
+#
+# and returns success, because it is a balance view that reports the wallet lookup as one line among
+# others.  An `if ! show-wallet ... ; then` check therefore never fires -- it silently passes for
+# every address, existing or not, which is the worst kind of check.  (pioneer1 makes the same point
+# from the other side: it holds a transparent balance and no qadena wallet at all, so even reading
+# show-wallet's output would misclassify it.)  list-wallet answers the membership question directly,
+# in ONE query rather than one per user.
+#
+# A FAILED QUERY IS NOT AN EMPTY CHAIN.  If list-wallet cannot be read at all, this reports nothing
+# missing rather than everything missing: "the chain did not answer" must not be turned into a
+# reason to re-provision every user.  `jq -e has("wallet")` separates the two -- a real empty chain
+# still returns the key with an empty list.
+#
+# The ephemeral wallets are checked too, but only the four the suites hard-depend on: they are made
+# by create_user.sh in the same pass as their owner, so they are a cheap way to notice a user whose
+# provisioning died partway rather than a separate thing to verify.
+setup_missing() {
+    local usersjson="$qadenabuild/test_data/users.json"
+    local names keyring name addr missing=""
+
+    [ -f "$usersjson" ] || { echo "test_data/users.json"; return 0; }
+    names=$(jq -r '.[].name' "$usersjson" 2>/dev/null)
+    [ -n "$names" ] || { echo "test_data/users.json (unreadable)"; return 0; }
+
+    # One keyring read for all of them; `keys show` per user would be a subprocess each.
+    keyring=$(qadenad_alias keys list --keyring-backend test --output json 2>/dev/null \
+        | jq -r '.[].name' 2>/dev/null)
+
+    for name in ${(f)names} al-eph1 ann-eph1 ann-eph2 victor-eph1; do
+        if ! print -r -- "$keyring" | grep -qx "$name"; then
+            missing="$missing $name"
+        fi
+    done
+    if [ -n "$missing" ]; then
+        print -r -- "${missing# }"
+        return 0
+    fi
+
+    # Keys all present -- now confirm they belong to THIS chain.
+    local walletjson walletids
+    walletjson=$(qadenad_alias query qadena list-wallet --limit 5000 --output json 2>/dev/null)
+    # THE VALUE IS COMPARED, not jq's exit status.  `jq -e` exits 0 on EMPTY INPUT in jq 1.6 -- so
+    # `if ! ... | jq -e 'has("wallet")'` accepted a query that returned nothing at all, and the guard
+    # this line exists to be did not exist.  Demanding the literal "true" cannot be satisfied by
+    # silence: empty input and unparseable output both print nothing.
+    if [[ "$(print -r -- "$walletjson" | jq -r 'has("wallet")' 2>/dev/null)" != "true" ]]; then
+        echo "  (could not read the wallet list; judged the test users on the keyring alone)" >&2
+        return 0
+    fi
+    walletids=$(print -r -- "$walletjson" | jq -r '.wallet[].walletID' 2>/dev/null)
+
+    for name in ${(f)names}; do
+        addr=$(qadenad_alias keys show "$name" -a --keyring-backend test 2>/dev/null) || continue
+        [ -n "$addr" ] || continue
+        if ! print -r -- "$walletids" | grep -qx "$addr"; then
+            missing="$missing $name"
+        fi
+    done
+    [ -n "$missing" ] && print -r -- "${missing# } (keys exist, but no wallet on THIS chain)"
+    return 0
 }
 
 # The prerequisites are idempotent by design; this proves it rather than assuming it.  A second run
@@ -1019,17 +1117,55 @@ echo "chain up at height $(qadenad_alias status 2>/dev/null | jq -r '.sync_info.
 run_test "prerequisites" "$qadenatestscripts/setup_prerequisites.sh"
 run_test "idempotency"   prerequisites_idempotent
 
-if [ "$with_setup" = "true" ]; then
-    run_test "setup" "$qadenatestscripts/setup.sh"
-else
-    if ! qadenad_alias keys show al -a --keyring-backend test > /dev/null 2>&1; then
+# SETUP RUNS WHEN IT IS NEEDED, rather than when someone remembered the flag.
+#
+# The runner already knew how to tell -- it just refused to act on the answer: it checked for al,
+# printed "run: regression.sh --with-setup" and exited 1.  That was a fully-diagnosed problem with a
+# known fix, handed back to the operator to retype.  Worse, it is the shape of failure that wastes
+# the most time in a continuous loop or an unattended bring-up, where nobody is watching to retype
+# anything and the run simply stops.
+#
+# THERE IS NO --with-setup, and there deliberately is no way to force a re-run.  Forcing was never
+# a repair: setup.sh provisions through create_user.sh, which issues `tx qadena create-wallet`
+# UNCONDITIONALLY under `set -e`, and the chain refuses a second wallet for an address it already
+# knows (ErrWalletExists, x/qadena/types/errors.go:28; msg_server_create_wallet.go:26).  So a forced
+# run against a populated chain aborts on its first user instead of fixing anything -- a flag whose
+# only outcomes are "unnecessary" and "broken".  What replaced it is the detection below, which is
+# the question the flag was standing in for anyway.
+#
+# --skip setup means never, and is honoured even when users are missing -- the run then proceeds and
+# fails in whichever suite needs them, which is what an explicit skip asks for.
+if is_skipped "setup"; then
+    setup_missing_names=$(setup_missing)
+    if [ -n "$setup_missing_names" ]; then
         echo ""
-        echo "FAILED: the test users do not exist (al is missing)."
-        echo "  run:  $0 --with-setup"
-        summarize
-        exit 1
+        echo "WARNING: --skip setup, but the test users are incomplete:"
+        echo "  $setup_missing_names"
+        echo "  suites that need them will fail; drop --skip setup to provision them"
     fi
-    echo "test users present (skipping setup.sh; use --with-setup to force)"
+    run_test "setup" "$qadenatestscripts/setup.sh"   # records the SKIP in the summary
+else
+    setup_missing_names=$(setup_missing)
+    if [ -n "$setup_missing_names" ]; then
+        echo ""
+        echo "the test users are incomplete -- missing:"
+        echo "  $setup_missing_names"
+        echo "running setup.sh automatically (--skip setup to suppress this)"
+        run_test "setup" "$qadenatestscripts/setup.sh"
+
+        # A FAILED SETUP MUST STOP THE RUN, regardless of --stop-on-fail.  Every suite below reads
+        # these users, so continuing produces a wall of failures that all describe the same cause
+        # once and the summary loses which one was real.
+        if [ "${results[-1]}" = "FAIL" ]; then
+            echo ""
+            echo "setup.sh FAILED and every suite below depends on the users it provisions."
+            echo "The run stops here rather than reporting the same cause a dozen times."
+            summarize
+            exit 1
+        fi
+    else
+        echo "test users complete and on this chain -- setup.sh has nothing to do"
+    fi
 fi
 
 # BEFORE the suites that spend, so al is solvent in both pools when they start.
@@ -1059,14 +1195,26 @@ run_test "uniqueness"  "$qadenatestscripts/test_credential_uniqueness.sh"
 # constraint applies and it can sit here with the other credential suites.  Skippable like any
 # other: --skip credentials.
 #
-# --with-credentials no longer gates it; it now only adds the single-shot KEY RECOVERY cases (6,
-# 6a, 6b) inside it, which genuinely cannot repeat -- a wallet may be recovered exactly ONCE,
-# permanently, and their partner approvals need three signatories resolved three different ways,
-# which is the whole seeded user set rather than the four this suite provisions.  Implied by
-# --from-genesis, so a fresh chain still gets that coverage, including the hash-aliasing case that
-# is the only test anywhere of recovery via a PRE-MARRIAGE surname.
-if [ "$with_credentials" = "true" ]; then
-    export UPDATE_CREDENTIALS_WITH_RECOVERY=1
+# ITS KEY RECOVERY CASES (6, 6a, 6b) RUN TOO, and used to need a --with-credentials opt-in.  They
+# were once-per-chain only because they ran against the SHARED jill: one protect-key, one set of
+# claim codes, both consumed on the first run.  Now they file a per-run protect-key against the
+# per-run jill this suite provisions, with per-run recovery wallets, mnemonics and claim codes, so
+# nothing carries between runs and they repeat like everything else -- which finally puts the
+# hash-aliasing case, the only test anywhere of recovery via a PRE-MARRIAGE surname, into the
+# continuous loop instead of only into --from-genesis runs.
+#
+# Skippable ON ITS OWN, without losing the rest of the suite: --skip recovery.  That is one --skip
+# vocabulary for both, and run_regression_continually.sh already forwards --skip verbatim.
+if is_skipped "recovery"; then
+    export UPDATE_CREDENTIALS_SKIP_RECOVERY=1
+    # Only worth saying when credentials is actually going to run -- "credentials will run without
+    # its recovery cases" is a confusing thing to print immediately above `credentials  SKIP`.
+    if ! is_skipped "credentials"; then
+        echo ""
+        echo "note: --skip recovery -- credentials will run WITHOUT its key-recovery cases (6, 6a, 6b)"
+    fi
+else
+    unset UPDATE_CREDENTIALS_SKIP_RECOVERY
 fi
 run_test "credentials" "$qadenatestscripts/update_credentials.sh"
 # Immediately after uniqueness because that is the suite the rotation race kept breaking: a VShare
@@ -1097,11 +1245,10 @@ run_test "enclave-crash"     "$qadenatestscripts/test_enclave_crash_recovery.sh"
 # suites above left this node disagreeing with a peer.
 run_test "peer-agreement" "$qadenatestscripts/test_peer_agreement.sh"
 
-# AFTER every suite that spends, and before the two opt-in ones.  The opt-in suites are excluded
-# deliberately: --with-credentials runs once per chain and --with-enclave-upgrade stops the node,
-# swaps the enclave binary and restarts it, so reclaiming after either would be transacting against
-# a chain this run has just finished disturbing.  Neither is part of a repeat run, which is the case
-# that needed the treasury back.
+# AFTER every suite that spends, and before the opt-in one.  --with-enclave-upgrade is excluded
+# deliberately: it stops the node, swaps the enclave binary and restarts it, so reclaiming after it
+# would be transacting against a chain this run has just finished disturbing.  It is not part of a
+# repeat run, which is the case that needed the treasury back.
 run_test "reclaim" reclaim_funds
 
 

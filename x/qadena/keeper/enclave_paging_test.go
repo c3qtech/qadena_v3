@@ -122,7 +122,8 @@ func TestMirrorSeedSplitsAnOversizeTableIntoPages(t *testing.T) {
 		})
 	}
 
-	fake := withDivergentEnclave(t, map[string]string{types.WalletKeyPrefix: "wrong-so-it-seeds"})
+	fake := withDivergentEnclave(t, nil)
+	fake.accs = map[string][]byte{types.WalletKeyPrefix: bytes.Repeat([]byte{0x5e}, 32)} // wrong, so it seeds
 
 	require.NoError(t, k.EnclaveSynchronizeStoresForTest(ctx))
 

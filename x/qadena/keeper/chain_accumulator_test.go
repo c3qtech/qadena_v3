@@ -12,7 +12,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 
 	"cosmossdk.io/log"
@@ -45,14 +44,9 @@ func TestChainMaintainEstablishesEveryMirroredAccumulator(t *testing.T) {
 		require.True(t, ok, "the per-block pass must establish every mirrored store, traffic or not: "+pfx)
 	}
 
-	// And the established values must equal the data: the shadow compare repairs on mismatch and
-	// logs MISMATCH at ERROR, so a clean log IS the assertion.
-	var buf bytes.Buffer
-	ctx2 := ctx.WithLogger(log.NewLogger(&buf))
-	for _, pfx := range keeper.MirroredStorePrefixesForTest() {
-		k.CompareStoreAccumulator(ctx2, pfx)
-	}
-	require.NotContains(t, buf.String(), "ACCUMULATOR MISMATCH",
+	// And the established values must equal the data: the audit HALTS on violation, so simply not
+	// panicking at an audit height IS the assertion.
+	require.NotPanics(t, func() { k.AuditStoreAccumulatorsForTest(ctx.WithBlockHeight(25)) },
 		"an establishing scan must reproduce the data exactly")
 }
 
@@ -66,33 +60,34 @@ func TestChainHooksMaintainExactlyAfterEstablishment(t *testing.T) {
 	k.SetWalletNoEnclave(ctx, types.Wallet{WalletID: "w1", HomePioneerID: "pioneer1"}) // overwrite
 	k.SetWalletNoEnclave(ctx, types.Wallet{WalletID: "w2"})
 
-	var buf bytes.Buffer
-	k.CompareStoreAccumulator(ctx.WithLogger(log.NewLogger(&buf)), types.WalletKeyPrefix)
-	require.NotContains(t, buf.String(), "ACCUMULATOR MISMATCH",
+	require.NotPanics(t, func() { k.AuditStoreAccumulatorsForTest(ctx.WithBlockHeight(25)) },
 		"incremental maintenance must land exactly on the from-scratch scan -- the overwrite is "+
 			"the classic miss (forgetting to subtract leaves both contributions in the sum forever)")
 }
 
-func TestChainUnhookedWriteIsDetectedThenRepaired(t *testing.T) {
+// An unhooked write violates the maintained invariant, and the audit's reaction is a HALT, not a
+// repair: repairing would either mask the code defect forever (the unhooked path keeps corrupting
+// the summary while the node quietly patches it) or bless corrupted data as the new truth.
+func TestChainUnhookedWriteHaltsTheAudit(t *testing.T) {
 	k, ctx := keepertest.QadenaKeeper(t)
 	k.MaintainStoreAccumulatorsForTest(ctx)
 
-	// The hazard: a row written past every setter, so no hook fires.  This is the write shape the
-	// scan audit exists to catch for as long as the accumulator lives (backlog item 46).
+	// The hazard: a row written past every setter, so no hook fires.
 	k.RawStoreSetForTest(ctx, types.WalletKeyPrefix, []byte("smuggled"), []byte("row"))
 
-	var buf bytes.Buffer
-	k.CompareStoreAccumulator(ctx.WithLogger(log.NewLogger(&buf)), types.WalletKeyPrefix)
-	require.Contains(t, buf.String(), "ACCUMULATOR MISMATCH",
-		"an unhooked write must be detected -- silence here means the shadow is dead")
+	// Off-cadence heights do not audit -- the invariant is checked every Nth block, not every one.
+	require.NotPanics(t, func() { k.AuditStoreAccumulatorsForTest(ctx.WithBlockHeight(26)) })
 
-	// The chain-side compare repairs immediately (it runs from block execution, where writing is
-	// expected), so a second compare must be clean.
-	var buf2 bytes.Buffer
-	k.CompareStoreAccumulator(ctx.WithLogger(log.NewLogger(&buf2)), types.WalletKeyPrefix)
-	if strings.Contains(buf2.String(), "ACCUMULATOR MISMATCH") {
-		t.Fatalf("the first compare must have repaired the value; log:\n%s", buf2.String())
-	}
+	var got interface{}
+	func() {
+		defer func() { got = recover() }()
+		k.AuditStoreAccumulatorsForTest(ctx.WithBlockHeight(50))
+	}()
+	require.NotNil(t, got, "the audit must halt on a violated invariant")
+	msg := fmt.Sprint(got)
+	require.Contains(t, msg, "accumulator audit FAILED", "the panic is all an operator gets; it must say what happened")
+	require.Contains(t, msg, types.WalletKeyPrefix, "and name the store")
+	require.Contains(t, msg, "halting rather than repairing", "and say why it did not silently fix it")
 }
 
 // endBlockEnclave models the per-block ride-along: EndBlock succeeds and returns whatever

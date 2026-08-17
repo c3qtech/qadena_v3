@@ -589,6 +589,20 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     The third is worth doing even if the first two happen, because it is the only one
     that keeps working on a chain whose history nobody replayed.
 
+    PARTLY RESOLVED 2026-08-17 -- the second bullet, for update_credentials.sh.  It now
+    provisions its own four identities per run (setup.sh --prefix) AND its key-recovery
+    cases run against the per-run jill with per-run recovery wallets, mnemonics and claim
+    codes.  Nothing is consumed irreversibly, so the whole suite repeats, and the
+    --with-credentials opt-in that gated it has been REMOVED from regression.sh: both the
+    UPDATED and RECOVERKEY sentinels above now execute on every cycle of the continuous
+    loop, which is what the coverage table said they never did.  --skip recovery drops
+    just the recovery cases, for a chain that cannot spare the traffic.
+
+    STILL OPEN: test_key_recovery.sh remains wired into no harness (fixed recover-al /
+    recover-ann wallet names, fixed claim codes -- genuinely single-shot), and the first
+    and third bullets are untouched.  The structural point above stands: this closed one
+    instance, not the class.
+
 41. **setup.sh --prefix silently produces unclaimable credentials unless the prefix is
     NUMERIC, because the CLI throws away a parse error.**  Found 2026-08-15 while making
     update_credentials.sh repeatable.

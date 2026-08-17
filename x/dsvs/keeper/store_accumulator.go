@@ -66,31 +66,6 @@ func (k Keeper) EnsureStoreAccumulator(ctx context.Context, pfx string) c.StoreA
 	return acc
 }
 
-// CompareStoreAccumulator is the shadow check, run where this module already scans (its
-// displayStoresSync).  Same shape and same log format as the qadena keeper's, so the two modules'
-// lines grep and diff identically.  May write: it runs from block execution, so a mismatch or a
-// missing value is repaired immediately rather than deferred.
-func (k Keeper) CompareStoreAccumulator(sdkctx sdk.Context, pfx string) {
-	scanned, rows := c.AccumulatorFromPrefixStore(k.tableStore(sdkctx, pfx))
-
-	acc, ok := k.LoadStoreAccumulator(sdkctx, pfx)
-	if !ok {
-		c.ContextInfo(sdkctx, "ACCUMULATOR established "+accumulatorLog(pfx, rows, scanned))
-		k.accumulatorStore(sdkctx).Set([]byte(pfx), c.StoreAccumulatorBytes(scanned))
-		return
-	}
-	if acc != scanned {
-		c.ContextError(sdkctx, "ACCUMULATOR MISMATCH key="+pfx+
-			" rows="+fmt.Sprint(rows)+
-			" maintained="+c.AccumulatorHex(acc)+
-			" scanned="+c.AccumulatorHex(scanned)+
-			" -- a write path is not maintaining it; re-seeding from the scan")
-		k.accumulatorStore(sdkctx).Set([]byte(pfx), c.StoreAccumulatorBytes(scanned))
-		return
-	}
-	c.ContextDebug(sdkctx, "ACCUMULATOR ok "+accumulatorLog(pfx, rows, acc))
-}
-
 // accumulatorLog matches the qadena keeper's and the enclave's format exactly -- the three are
 // meant to be compared line-for-line.
 func accumulatorLog(pfx string, rows int, acc c.StoreAccumulator) string {
@@ -103,4 +78,23 @@ func accumulatorLog(pfx string, rows int, acc c.StoreAccumulator) string {
 // module package calls it.
 func (k Keeper) MaintainStoreAccumulators(sdkctx sdk.Context) {
 	k.EnsureStoreAccumulator(sdkctx, types.AuthorizedSignatoryKeyPrefix)
+
+	// The every-Nth-block honesty audit for this module's one store.  Same semantics as the
+	// qadena keeper's auditStoreAccumulators: same-context recompute, HALT on mismatch (no
+	// repair), deterministic and therefore chain-wide.  25 matches the other side's cadence.
+	if sdkctx.BlockHeight()%25 != 0 {
+		return
+	}
+	maintained, ok := k.LoadStoreAccumulator(sdkctx, types.AuthorizedSignatoryKeyPrefix)
+	if !ok {
+		panic("dsvs: accumulator audit: no maintained value after the maintain pass -- call order bug")
+	}
+	scanned, rows := c.AccumulatorFromPrefixStore(k.tableStore(sdkctx, types.AuthorizedSignatoryKeyPrefix))
+	if maintained != scanned {
+		panic(fmt.Sprintf(
+			"dsvs: accumulator audit FAILED for %s at height %d: maintained=%s scanned=%s rows=%d -- "+
+				"an unhooked write path or corrupted data; halting rather than repairing",
+			types.AuthorizedSignatoryKeyPrefix, sdkctx.BlockHeight(), c.AccumulatorHex(maintained), c.AccumulatorHex(scanned), rows))
+	}
+	c.ContextDebug(sdkctx, fmt.Sprintf("DSVS: accumulator audit clean at height %d", sdkctx.BlockHeight()))
 }

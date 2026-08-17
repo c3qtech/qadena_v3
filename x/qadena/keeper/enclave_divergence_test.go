@@ -12,7 +12,8 @@ package keeper_test
 // The injection is real: rows are written to the CHAIN's actual store (the keeper fixture backs it
 // with a KVStore) through SetWalletNoEnclave -- the chain-only setter, exactly how a divergence
 // arises when an enclave misses writes.  Only the transport is faked: the "enclave" is a stub
-// whose reported hashes and accepted pages the test controls and records.
+// whose reported ACCUMULATORS (the decision inputs, since the item-46 swap) and accepted pages
+// the test controls and records.
 
 import (
 	"bytes"
@@ -110,9 +111,9 @@ func TestInjectedDivergenceIsDetectedSeededAndAlarmed(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		k.SetWalletNoEnclave(ctx, types.Wallet{WalletID: fmt.Sprintf("diverged-wallet-%d", i)})
 	}
-	require.NotEqual(t, "", k.StoreHashForTest(ctx, types.WalletKeyPrefix))
 
-	fake := withDivergentEnclave(t, map[string]string{types.WalletKeyPrefix: "an-enclave-hash-that-matches-nothing"})
+	fake := withDivergentEnclave(t, nil)
+	fake.accs = map[string][]byte{types.WalletKeyPrefix: bytes.Repeat([]byte{0xd0}, 32)}
 
 	keeper.SetEnclaveHeightsAgreedForTest(true)
 	t.Cleanup(func() { keeper.SetEnclaveHeightsAgreedForTest(false) })
@@ -143,10 +144,12 @@ func TestAgreeingStoresAreNeitherSeededNorAlarmed(t *testing.T) {
 		k.SetWalletNoEnclave(ctx, types.Wallet{WalletID: fmt.Sprintf("agreed-wallet-%d", i)})
 	}
 
-	// A truthful enclave: it reports the hash the chain computes over its own store.
-	fake := withDivergentEnclave(t, map[string]string{
-		types.WalletKeyPrefix: k.StoreHashForTest(ctx, types.WalletKeyPrefix),
-	})
+	// A truthful enclave: it reports the accumulator the chain itself holds for the store.
+	k.MaintainStoreAccumulatorsForTest(ctx)
+	chainAcc, ok := k.LoadStoreAccumulator(ctx, types.WalletKeyPrefix)
+	require.True(t, ok)
+	fake := withDivergentEnclave(t, nil)
+	fake.accs = map[string][]byte{types.WalletKeyPrefix: chainAcc[:]}
 
 	keeper.SetEnclaveHeightsAgreedForTest(true)
 	t.Cleanup(func() { keeper.SetEnclaveHeightsAgreedForTest(false) })
@@ -159,62 +162,4 @@ func TestAgreeingStoresAreNeitherSeededNorAlarmed(t *testing.T) {
 	if strings.Contains(logbuf.String(), "OUT-OF-SYNC") {
 		t.Fatalf("no store should read OUT-OF-SYNC when hashes agree; log:\n%s", logbuf.String())
 	}
-}
-
-// The seam, side by side with the scans (backlog 44 phase 1): when the enclave's accumulator
-// genuinely matches the chain's, the acc verdict and the scan verdict must agree -- and when the
-// two MECHANISMS disagree about the same store at the same instant, that must be screamed about,
-// because it means one of them is wrong.
-func TestSeamVerdictAgreesWithScanVerdict(t *testing.T) {
-	k, ctx := keepertest.QadenaKeeper(t)
-
-	var logbuf bytes.Buffer
-	ctx = ctx.WithLogger(log.NewLogger(&logbuf))
-
-	for i := 0; i < 3; i++ {
-		k.SetWalletNoEnclave(ctx, types.Wallet{WalletID: fmt.Sprintf("seam-%d", i)})
-	}
-
-	// A truthful enclave on BOTH channels: scan hash and accumulator each equal the chain's own.
-	k.MaintainStoreAccumulatorsForTest(ctx)
-	chainAcc, ok := k.LoadStoreAccumulator(ctx, types.WalletKeyPrefix)
-	require.True(t, ok)
-
-	fake := withDivergentEnclave(t, map[string]string{
-		types.WalletKeyPrefix: k.StoreHashForTest(ctx, types.WalletKeyPrefix),
-	})
-	fake.accs = map[string][]byte{types.WalletKeyPrefix: chainAcc[:]}
-
-	require.NoError(t, k.EnclaveSynchronizeStoresForTest(ctx))
-
-	require.NotContains(t, logbuf.String(), "ACC-SEAM VERDICT DISAGREES",
-		"matching content on both channels must produce agreeing verdicts")
-	require.NotContains(t, logbuf.String(), "ACC-SEAM enclave returned no accumulator",
-		"the establish-then-answer contract means every mirrored store must be present in the reply")
-	// The positive "agrees" line is DEBUG (per store per checkSync block would drown an info log);
-	// liveness of the seam comparison is proven by TestSeamScreamsWhenMechanismsDisagree, so
-	// absence of both failure lines here is unambiguous.
-}
-
-func TestSeamScreamsWhenMechanismsDisagree(t *testing.T) {
-	k, ctx := keepertest.QadenaKeeper(t)
-
-	var logbuf bytes.Buffer
-	ctx = ctx.WithLogger(log.NewLogger(&logbuf))
-
-	k.SetWalletNoEnclave(ctx, types.Wallet{WalletID: "seam-w"})
-	k.MaintainStoreAccumulatorsForTest(ctx)
-
-	// The pathological case: the enclave's SCAN hash matches the chain's (scan verdict: in sync)
-	// but its ACCUMULATOR does not (acc verdict: differ).  One mechanism is wrong.
-	fake := withDivergentEnclave(t, map[string]string{
-		types.WalletKeyPrefix: k.StoreHashForTest(ctx, types.WalletKeyPrefix),
-	})
-	fake.accs = map[string][]byte{types.WalletKeyPrefix: bytes.Repeat([]byte{0xee}, 32)}
-
-	require.NoError(t, k.EnclaveSynchronizeStoresForTest(ctx))
-
-	require.Contains(t, logbuf.String(), "ACC-SEAM VERDICT DISAGREES WITH SCAN",
-		"two mechanisms giving different answers about the same store at the same instant is the "+
-			"one condition the side-by-side period exists to catch")
 }

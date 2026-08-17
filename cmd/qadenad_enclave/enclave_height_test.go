@@ -64,9 +64,13 @@ func newTestEnclaveServer(t *testing.T) *qadenaServer {
 }
 
 // setMirrorRow / getMirrorRow write and read a row under a mirror prefix through the transaction
-// cache, standing in for real block execution.
+// cache, standing in for real block execution -- INCLUDING the accumulator hook, because every
+// real execution write path maintains it and the EndBlock audit halts on any that does not.
+// (The audit caught this helper writing raw on its first day; tests that deliberately violate
+// the invariant do so explicitly, not through this helper.)
 func setMirrorRow(s *qadenaServer, key, val string) {
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.WalletKeyPrefix))
+	s.accumulateWrite(types.WalletKeyPrefix, []byte(key), []byte(val))
 	store.Set([]byte(key), []byte(val))
 }
 
