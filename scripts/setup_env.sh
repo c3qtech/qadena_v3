@@ -297,6 +297,70 @@ user_log_path() {
     print -r -- "$path"
 }
 
+# A KILLABLE UNIT FOR A SCRIPT-STARTED ENCLAVE.
+#
+# `ego run` is a launcher: it forks /opt/ego/bin/ego-host, and the enclave lives inside THAT.  A
+# script that starts the launcher therefore holds a pid which is not the thing doing the work, so
+# signalling it leaves the host running -- the same shape as the bug the in-process supervisor had
+# before it grew Setpgid (x/qadena/keeper/enclave_supervisor.go).  stop_qadena.sh compensated with
+# pattern kills across BOTH command lines plus a wait-and-escalate, which works but depends on the
+# patterns continuing to match argv we do not control.
+#
+# The structural fix is the one the Go side already uses: put the launcher in its own PROCESS GROUP
+# and signal the group.  Every descendant inherits the group id, whatever it is called.
+#
+# Getting a new process group from a script is the awkward part.  `setsid` does not exist on macOS,
+# and zsh's monitor mode (`set -m`) fails outright with "can't change option: -m" when the script
+# has no controlling terminal -- which is exactly how these run (ssh, nohup, PTY drivers).  perl is
+# present by default on macOS and is Essential on Debian/Ubuntu, and setpgrp(0,0) followed by exec
+# leaves the SAME pid as the group leader, so the caller's $! is both the pid and the pgid.
+#
+# Used as:   run_in_new_process_group cmd args... &
+#            pgid=$!
+# If perl is missing the command still runs -- just in the caller's group, with no pgid recorded,
+# and stop_qadena.sh falls back to its pattern kills.
+#
+# IT ALSO RESTORES SIGINT, which is not incidental -- it is a bug fix.  A shell without job control
+# sets SIGINT and SIGQUIT to SIG_IGN for every command started with `&` (POSIX), and exec PRESERVES
+# an ignored disposition.  run_enclave_standalone.sh is itself started with `&` by add_full_node.sh
+# and used to exec the enclave, so the enclave inherited SIG_IGN for SIGINT and could not shut down
+# gracefully at all: stop_qadena.sh's SIGINT was silently discarded and the enclave only ever died
+# at the 60s SIGKILL escalation.  That matches what was measured chasing the .140 socket handover --
+# the SGX enclave still present 20s after the stop and gone by 80s.  Setting the disposition back to
+# default before exec is what makes a clean stop possible; verify with:
+#     kill -INT -- -$(cat $QADENAHOME/enclave.pgid)   # the enclave must exit, not sit there
+run_in_new_process_group() {
+    if command -v perl > /dev/null 2>&1 ; then
+        exec perl -e '
+            setpgrp(0,0) or die "setpgrp: $!\n";
+            $SIG{INT} = $SIG{QUIT} = "DEFAULT";
+            exec { $ARGV[0] } @ARGV or die "exec $ARGV[0]: $!\n"' -- "$@"
+    fi
+    print -u2 "run_in_new_process_group: no perl -- running in the caller's process group instead."
+    print -u2 "    (stopping will fall back to pattern matching; see stop_qadena.sh)"
+    trap - INT QUIT   # best effort at the same disposition reset; zsh may decline for a signal
+    exec "$@"         # that was already ignored on entry, hence the SIGKILL escalation downstream
+}
+
+# Where run_enclave_standalone.sh records the group it started, for stop_qadena.sh to signal.
+# Per-home, because two homes on one machine are two independent enclaves.
+export qadena_enclave_pgidfile="$QADENAHOME/enclave.pgid"
+
+# Members of process group $1 whose command line matches $2 -- prints "pid pgid command" lines and
+# returns 0 only if there was at least one.
+#
+# A PGID IS NOT A CAPABILITY: pids and process-group ids are recycled, and a pgid file outlives the
+# run that wrote it (a machine that lost power never got to clean it up).  `kill -- -$pgid` on a
+# stale file signals whatever now owns that number, which on a busy machine is somebody else's job.
+# So the group is only ever signalled after this confirms it still contains an enclave.
+process_group_members() {
+    local pgid="$1" pattern="$2" found
+    [[ -n $pgid ]] || return 1
+    found=$(ps -ax -o pid=,pgid=,command= 2>/dev/null | awk -v g="$pgid" -v p="$pattern" '$2==g && $0 ~ p {print}')
+    [[ -n $found ]] || return 1
+    print -r -- "$found"
+}
+
 # nth_node_bringup.sh.  A plain `pgrep -f qadenad_enclave` matches the shell running this very
 # function when the suite was invoked over ssh.
 as_enclave_owner() {

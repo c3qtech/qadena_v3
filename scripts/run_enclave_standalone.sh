@@ -58,7 +58,48 @@ echo "$(basename $0): chain pruning: $pruning_strategy keep-recent=$pruning_keep
 
 if use_real_enclave "$qadenabin/qadenad_enclave" ; then
     "$qadenascripts/ensure_sgx_attestation.sh" || exit 1
-    exec ego run $qadenabin/qadenad_enclave --realenclave --home=$QADENAHOME --chain-id=$CHAINID --log-level $log_level --pruning=$pruning_strategy --pruning-keep-recent=$pruning_keep_recent --pruning-interval=$pruning_interval
+    enclave_cmd=(ego run $qadenabin/qadenad_enclave --realenclave)
 else
-    exec $qadenabin/qadenad_enclave --home=$QADENAHOME --chain-id=$CHAINID --log-level $log_level --pruning=$pruning_strategy --pruning-keep-recent=$pruning_keep_recent --pruning-interval=$pruning_interval
+    enclave_cmd=($qadenabin/qadenad_enclave)
 fi
+enclave_cmd+=(--home=$QADENAHOME --chain-id=$CHAINID --log-level $log_level --pruning=$pruning_strategy --pruning-keep-recent=$pruning_keep_recent --pruning-interval=$pruning_interval)
+
+# START IT IN ITS OWN PROCESS GROUP AND RECORD THE GROUP, instead of exec'ing and leaving the
+# stopper to find it by name.
+#
+# This script used to `exec`, which made the enclave -- or, on SGX, the `ego run` LAUNCHER, with the
+# real work in a forked ego-host -- a member of whatever group the caller happened to be in.  Nobody
+# could then signal "the enclave" as a unit: stop_qadena.sh had to match two different command lines
+# and hope, and add_full_node.sh --stop-for-funding once left an ego-host alive holding
+# /tmp/qadena_50051.sock, so the next run's enclave unlinked the socket underneath a client that had
+# already probed the OLD one -- surfacing as an unexplained
+#     rpc error: code = Unavailable desc = error reading from server: EOF
+# in the middle of sync-enclave.  A recorded pgid makes the whole tree addressable, which is what
+# the in-process supervisor gets from Setpgid.
+#
+# The script stays alive as the group's anchor rather than exec'ing away, so it can clean the file
+# up and forward signals -- a debugger user pressing ^C should still stop the enclave.
+run_in_new_process_group "${enclave_cmd[@]}" &
+enclave_pgid=$!
+
+print -r -- "$enclave_pgid" > "$qadena_enclave_pgidfile" 2>/dev/null \
+    || echo "$(basename $0): WARNING: could not write $qadena_enclave_pgidfile -- stopping will fall back to pattern matching"
+
+cleanup() {
+    # Only remove OUR file: a second standalone enclave under a different home writes a different
+    # path, and one under the same home would have overwritten this one, in which case the newer
+    # pgid is the correct one to leave behind.
+    [[ $(cat "$qadena_enclave_pgidfile" 2>/dev/null) == $enclave_pgid ]] && rm -f "$qadena_enclave_pgidfile"
+}
+forward() {
+    kill -INT -- -$enclave_pgid 2>/dev/null
+    wait $enclave_pgid 2>/dev/null
+    cleanup
+    exit 130
+}
+trap forward INT TERM
+trap cleanup EXIT
+
+echo "$(basename $0): enclave process group $enclave_pgid (recorded in $qadena_enclave_pgidfile)"
+wait $enclave_pgid
+exit $?

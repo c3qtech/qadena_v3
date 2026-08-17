@@ -103,6 +103,39 @@ fi
 
 if [[ $stop_enclave -eq 1 ]] ; then
     echo "stop_qadena.sh: Stopping Qadena Enclave"
+
+    # FIRST CHOICE: THE RECORDED PROCESS GROUP.  run_enclave_standalone.sh starts the enclave as the
+    # leader of a new process group and writes the pgid here, so the launcher and the ego-host it
+    # forks can be signalled as ONE unit -- no argv matching, nothing to miss.  This is the same
+    # discipline x/qadena/keeper/enclave_supervisor.go applies to the enclaves qadenad spawns.
+    #
+    # Enclaves started any OTHER way -- as children of qadenad, or by upgrade_enclave.sh's direct
+    # execs -- write no such file, so the pattern kills below remain the general path and run
+    # regardless.  This block is an addition to them, not a replacement.
+    enclave_pgid=$(cat "$qadena_enclave_pgidfile" 2>/dev/null)
+    if [[ -n $enclave_pgid ]] ; then
+        # The bracket class keeps the `ps | awk` inside process_group_members from matching itself,
+        # exactly as it does for pgrep.
+        if process_group_members "$enclave_pgid" "qadenad_encla[v]e" > /dev/null ; then
+            echo "stop_qadena.sh: signalling enclave process group $enclave_pgid"
+            kill -INT -- -$enclave_pgid 2>/dev/null
+            for i in {1..60}; do
+                process_group_members "$enclave_pgid" "qadenad_encla[v]e" > /dev/null || break
+                sleep 1
+            done
+            if process_group_members "$enclave_pgid" "qadenad_encla[v]e" > /dev/null ; then
+                echo "stop_qadena.sh: process group $enclave_pgid did not exit on SIGINT after 60s, escalating to SIGKILL"
+                kill -KILL -- -$enclave_pgid 2>/dev/null
+                sleep 2
+            fi
+        else
+            # Left by a run that was killed outright or a machine that lost power.  Say so rather
+            # than silently deleting it: a stale file here is the only evidence of an unclean stop.
+            echo "stop_qadena.sh: stale enclave pgid $enclave_pgid (no enclave in that group), ignoring"
+        fi
+        rm -f "$qadena_enclave_pgidfile" 2>/dev/null
+    fi
+
     # BOTH forms are attempted, deliberately.  Which one is running depends on how the enclave was
     # STARTED, not on what is installed now -- a rebuild between start and stop would otherwise
     # strand a live enclave that this script believes it killed.  pkill on an absent pattern is a
