@@ -16,7 +16,9 @@ import (
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -218,11 +220,40 @@ func newCheckEnclaveCmd() *cobra.Command {
 		Short: "Check the enclave status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := getEnclaveConnection(cmd)
+			// AN ANSWERED RPC, not a constructed dial.  grpc.Dial is LAZY: it returns a
+			// ClientConn without connecting to anything and defers that to the first call.  So
+			// this command used to report "Enclave is running" whenever the ADDRESS PARSED --
+			// true with nothing listening at all -- which made every caller's readiness poll
+			// vacuous.
+			//
+			// add_full_node.sh polls this up to 90 times before running sync-enclave.  On a debug
+			// box the enclave happened to be serving by then and the bug stayed hidden; on real
+			// SGX, `[erthost] loading enclave` takes tens of seconds, the poll passed on its first
+			// try against nothing, and sync-enclave -- the first REAL rpc -- died with
+			//     rpc error: code = Unavailable desc = error reading from server: EOF
+			// which reads like a peer problem and is in fact "we never waited".
+			//
+			// Waiting longer would not have fixed it: the check has to require a ROUND TRIP.
+			enclaveClient, err := getEnclaveConnection(cmd)
 			if err != nil {
 				c.LoggerError(logger, "Enclave is not running", err)
 				os.Exit(10)
 				return err
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			// GetEnclaveStatus is a read with no side effects, so it is safe to call before the
+			// enclave has been initialized -- which is exactly when this is polled.  An enclave
+			// too old to have it answers Unimplemented, and that is still proof it is SERVING:
+			// the request reached a running gRPC server and was understood well enough to be
+			// refused, so treat it as up rather than demanding a newer enclave.
+			if _, err := enclaveClient.GetEnclaveStatus(ctx, &types.MsgGetEnclaveStatus{}); err != nil {
+				if status.Code(err) != codes.Unimplemented {
+					c.LoggerError(logger, "Enclave is not answering", err)
+					os.Exit(10)
+					return err
+				}
 			}
 
 			c.LoggerInfo(logger, "Enclave is running")
@@ -260,6 +291,20 @@ func newSyncEnclaveCmd() *cobra.Command {
 				PioneerArmorPassPhrase: ArmorPassPhrase,
 				SeedNode:               args[2],
 			}
+			// WAIT FOR THE ENCLAVE TO BE SERVING, rather than trusting the caller to have waited.
+			//
+			// "The enclave is still loading" is a normal state, not an error: on real SGX
+			// `[erthost] loading enclave` takes tens of seconds before anything listens.  This
+			// call is the FIRST real RPC in the promotion flow, so it is where that shows up --
+			// as `Unavailable: error reading from server: EOF`, which reads like the peer refused
+			// us and actually means nobody was home yet.  add_full_node.sh does poll first, but a
+			// correctness property should not rest on every caller polling correctly; it already
+			// failed to once, when check-enclave's poll turned out to be vacuous.
+			if err := awaitEnclaveServing(enclaveClient, 3*time.Minute); err != nil {
+				c.LoggerError(logger, "the enclave never started serving", err)
+				return err
+			}
+
 			grpcctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			r2, err := enclaveClient.SyncEnclave(grpcctx, &e)
@@ -525,4 +570,41 @@ func getEnclaveConnection(cmd *cobra.Command) (types.QadenaEnclaveClient, error)
 	enclaveClient := types.NewQadenaEnclaveClient(conn)
 
 	return enclaveClient, nil
+}
+
+// awaitEnclaveServing blocks until the enclave answers an RPC, or the deadline passes.
+//
+// The distinction that matters: a CONNECTION FAILURE means "not serving yet" and is worth waiting
+// on, while any answer -- including Unimplemented from an enclave too old to know the method --
+// means the server is up and we should stop waiting.  Unavailable and the EOF that a not-yet-bound
+// unix socket produces are the transient shapes; anything else is a real answer.
+//
+// Exists because grpc.Dial is lazy, so "I have a connection" is not evidence of anything, and
+// because SGX enclave startup is slow enough that the gap is measured in tens of seconds rather
+// than milliseconds.  Both facts are invisible on a debug build, which is why this went unnoticed
+// until a real SGX joiner tried to promote.
+func awaitEnclaveServing(enclaveClient types.QadenaEnclaveClient, within time.Duration) error {
+	deadline := time.Now().Add(within)
+	var lastErr error
+	for attempt := 1; time.Now().Before(deadline); attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := enclaveClient.GetEnclaveStatus(ctx, &types.MsgGetEnclaveStatus{})
+		cancel()
+		if err == nil || status.Code(err) == codes.Unimplemented {
+			if attempt > 1 {
+				c.LoggerInfo(logger, "the enclave is serving (it needed", attempt, "attempts -- SGX enclave loading is slow)")
+			}
+			return nil
+		}
+		lastErr = err
+		if status.Code(err) != codes.Unavailable {
+			// A real, non-transport answer: waiting will not improve it.
+			return err
+		}
+		if attempt == 1 || attempt%10 == 0 {
+			c.LoggerInfo(logger, "waiting for the enclave to start serving (attempt", attempt, ")")
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("the enclave did not start serving within %s: %w", within, lastErr)
 }
