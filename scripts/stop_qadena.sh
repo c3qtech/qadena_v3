@@ -17,7 +17,6 @@ fi
 # get argument "--enclave-only"
 stop_enclave=0
 stop_qadena=0
-stop_init_enclave=0
 stop_signer_enclave=0
 
 while [[ $# -gt 0 ]]; do
@@ -31,7 +30,9 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --init-enclave)
-      stop_init_enclave=1
+      # The delayed_init_enclave.sh process this stopped no longer exists (init runs inside
+      # qadenad since the enclave-selfstart change).  Accepted and ignored so older callers and
+      # muscle memory keep working.
       shift
       ;;
     --signer-enclave)
@@ -41,14 +42,13 @@ while [[ $# -gt 0 ]]; do
     --all)
       stop_enclave=1
       stop_qadena=1
-      stop_init_enclave=1
       stop_signer_enclave=1
       shift
       ;;
     --help)
-      echo "stop_qadena.sh:  Usage: stop_qadena.sh [--enclave] [--chain] [--init-enclave] [--signer-enclave]"
+      echo "stop_qadena.sh:  Usage: stop_qadena.sh [--enclave] [--chain] [--signer-enclave]"
       exit 0
-      ;;      
+      ;;
     *)
       echo "stop_qadena.sh:  Unknown option: $1"
       exit 1
@@ -56,11 +56,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ $stop_qadena -eq 0 && $stop_enclave -eq 0 && $stop_init_enclave -eq 0 ]] ; then
+if [[ $stop_qadena -eq 0 && $stop_enclave -eq 0 && $stop_signer_enclave -eq 0 ]] ; then
     # assume all
     stop_qadena=1
     stop_enclave=1
-    stop_init_enclave=1
     stop_signer_enclave=1
 fi
 
@@ -71,22 +70,16 @@ echo "stop_qadena.sh: -----------"
 
 stop_failed=0
 
-# SUPERVISORS DIE FIRST.  run_enclave.sh and run_signerenclave.sh are `while true` respawn loops, so
-# killing an enclave while its supervisor lives just produces another one -- inside the two-second
-# window this script then uses to decide whether the kill worked.
+# THE RESPAWN SUPERVISORS ARE GONE.  This script used to `pkill -KILL` the run_enclave.sh /
+# run_signerenclave.sh `while true` loops FIRST, unconditionally, because killing an enclave while
+# its supervisor lived just produced another one inside the verification window (one such loop
+# survived four stop attempts across an hour).  Since the enclave-selfstart change the enclaves
+# are children of qadenad with no respawn loop anywhere, so there is no supervisor to race --
+# what remains below is plain process kills.
 #
-# That produced a supervisor nothing could stop.  `pkill -f "qadenad"` also matches qadenad_ENCLAVE
-# (substring), so the chain block below would kill the enclave, run_enclave.sh would restart it, the
-# "still running" check would trip, and the script would exit 1 -- BEFORE reaching the enclave block
-# that kills run_enclave.sh.  Every subsequent stop repeated it.  One survived four attempts across
-# an hour, kept respawning a DEBUG enclave, and made is_qadena_running true forever; start_qadena.sh
-# then reported "already running" and never launched the chain, so a --from-genesis run failed with
-# "chain did not produce a block within 120s" and no mention of any of this.
-#
-# Unconditional, and before the flag checks: a stray supervisor is never wanted, whichever subset of
-# components this invocation was asked to stop.
-pkill -KILL -f "run_enclave.sh"
-pkill -KILL -f "run_signerenclave.sh"
+# ORDER STILL MATTERS, for a different reason: `pkill -f "qadenad"` also matches qadenad_ENCLAVE
+# (substring), so the chain block below takes the enclave down with the chain -- which is fine,
+# and the dedicated blocks after it mop up whatever form is left.
 
 if [[ $stop_qadena -eq 1 ]] ; then
     echo "stop_qadena.sh: Stopping Qadena"
@@ -117,13 +110,7 @@ if [[ $stop_enclave -eq 1 ]] ; then
     if use_real_enclave "$qadenabin/qadenad_enclave" ; then
       pkill -INT -f "ego-host.*qadenad_enclave"
     fi
-    pkill -KILL -f "run_enclave.sh"
     pkill -INT -f "qadenad_enclave"
-fi
-
-if [[ $stop_init_enclave -eq 1 ]] ; then
-    echo "stop_qadena.sh: Stopping Qadena Init Enclave"
-    pkill -INT -f "delayed_init_enclave.sh"
 fi
 
 if [[ $stop_signer_enclave -eq 1 ]] ; then
@@ -132,7 +119,6 @@ if [[ $stop_signer_enclave -eq 1 ]] ; then
     if use_real_enclave "$qadenabin/signer_enclave" ; then
       pkill -KILL -f "ego-host.*signer_enclave"
     fi
-    pkill -KILL -f "run_signerenclave.sh"
     pkill -INT -f "signer_enclave"
 fi
 
@@ -157,9 +143,9 @@ fi
 #
 # /tmp is sticky (1777), so a socket left by a run as another user -- root, typically, after the node
 # was started with sudo -- cannot be unlinked by the login user.  The enclave then fails to bind with
-# "address already in use", and run_enclave.sh retries forever against a condition that will never
-# clear on its own.  (cmd/qadenad_enclave/enclave.go reports this when it hits it; removing the
-# socket here means it usually does not have to.)
+# "address already in use" and exits, which now takes the whole node down with it.
+# (cmd/qadenad_enclave/enclave.go reports this when it hits it; removing the socket here means it
+# usually does not have to.)
 #
 # Best effort: we are the ones who just stopped the enclave, so if we cannot remove it, say so and
 # name the command that will -- do not fail the stop over it.

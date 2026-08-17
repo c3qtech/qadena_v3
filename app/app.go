@@ -619,6 +619,11 @@ func New(
 	}
 	app.SetPostHandler(postHandler)
 
+	// Hand the supervisor the values a spawn needs (home, pruning, log level), derived from the
+	// same appOpts the chain itself runs on.  Whether InitEnclave then spawns at all is decided
+	// per command (start and rollback opt in; everything else dials an external enclave, as
+	// before) -- see x/qadena/keeper/enclave_supervisor.go.
+	qadenamodulekeeper.ConfigureEnclaveSupervisor(logger, appOpts)
 	if !app.QadenaKeeper.InitEnclave() {
 		panic("Unable to connect to enclave")
 	}

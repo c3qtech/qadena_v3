@@ -204,6 +204,10 @@ func (am AppModule) BeginBlock(goCtx context.Context) error {
 
 	am.keeper.EnclaveBeginBlock(ctx)
 
+	// The height-anchored trigger for first-pioneer enclave initialization; inert unless the
+	// start command armed it and the JarRegulator row is absent.  See enclave_init_dispatch.go.
+	am.keeper.MaybeDispatchInitEnclave(ctx)
+
 	return nil
 }
 

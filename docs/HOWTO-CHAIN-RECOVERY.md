@@ -86,13 +86,11 @@ This is written down because it was re-derived wrongly more than once, in both d
 started; `SyncEnclave` persists what it receives with `saveEnclaveParams()`, so it survives the
 enclave restart that follows.
 
-`delayed_init_enclave.sh` **does** run on a joining node — `start_qadena.sh` →
-`restart_qadena.sh` → `run.sh` launches it on every start — but it is not what supplies the
-params, and its wait for `catching_up == false` gates only the `init-enclave` call it makes
-afterwards. It matters here for a different reason: it is also the block-sync watchdog, and it
-stops the node when height has not advanced. The first block a joining node executes can
-legitimately take minutes (see below), so that watchdog requires a *sustained* stall rather than
-a single 30-second window.
+(Historical note: `delayed_init_enclave.sh` used to run on every start and doubled as a
+block-sync stall watchdog that stopped the node after ~10 minutes without progress. Both are gone
+— enclave init now triggers from the node's own BeginBlock, gated on the JarRegulator row being
+absent, so on a joining node it simply never fires; and nothing kills a slow sync from the init
+path anymore. A first block that takes minutes is expected, see below.)
 
 | key material | how a joining node obtains it |
 |---|---|

@@ -1,39 +1,49 @@
 #!/bin/zsh
 
+# Runs a Qadena node.  Since the enclave-selfstart change this is a thin wrapper: `qadenad start`
+# itself spawns and supervises both enclave processes (x/qadena/keeper/enclave_supervisor.go) and
+# initializes a fresh chain's enclave from BeginBlock (enclave_init_dispatch.go).  What remains
+# here is host-side preparation that the chain binary should not do:
+#
+#   - the SGX device / root preflight, loudly and BEFORE output disappears into rotatelogs
+#   - the enclave-upgrade check (swaps binaries; must precede any process starting)
+#   - the DCAP/PCCS attestation sidecar for real enclaves (managing docker is host provisioning)
+#
+# The five-script choreography this replaced -- run_enclave.sh, run_realenclave.sh,
+# run_signerenclave.sh, run_realsignerenclave.sh, delayed_init_enclave.sh, init_enclave.sh, each
+# started in strict order with poll loops between -- is gone.  The enclave death policy changed
+# with it, deliberately: a spawned enclave that exits takes the node down with a named error
+# instead of being silently respawned, so the process supervisor (systemd Restart=on-failure)
+# restarts the node and the startup reconcile path recovers.  See the supervisor's file comment
+# for why the respawn loops had to go.
+
 # get script dir
 SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 # Root is needed only when we will actually run an ego enclave -- i.e. SGX hardware AND a signed
-# binary.  See use_real_enclave in setup_env.sh: REAL_ENCLAVE alone only says the CPU supports SGX,
-# not that this binary was built for it.
+# binary.  qadenad re-checks this in its spawn preflight with the same remedies, but failing HERE
+# keeps the message on the operator's terminal instead of inside the log pipe.
 warn_if_sgx_binary_missing "run.sh" "$qadenabin/qadenad_enclave"
 needs_root_if_real_enclave "run.sh" "$qadenabin/qadenad_enclave"
 
-# get argument "--sync-with-pioneer X"
-SYNC_WITH_PIONEER=""
-DEBUG=""
+EXTERNAL_ENCLAVE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --sync-with-pioneer)
-      if [[ -n "$2" && "$2" != --* ]]; then
-        SYNC_WITH_PIONEER="$2"
-        shift 2
-      else
-        echo "run.sh:  Error: --sync-with-pioneer requires a node argument"
-        exit 1
-      fi
-      ;;
-    --no-qadenad-enclave)
-      DEBUG="no_qadenad_enclave"
+    --external-enclave)
+      # Forwarded to qadenad: dial an externally started enclave (run_enclave_standalone.sh,
+      # typically under a debugger) instead of spawning one.
+      EXTERNAL_ENCLAVE="--external-enclave"
       shift
       ;;
     --help)
-      echo "run.sh:  Usage: run.sh [--no-qadenad-enclave] [--sync-with-pioneer <node>]"
+      echo "run.sh:  Usage: run.sh [--external-enclave]"
+      echo "run.sh:    --external-enclave   do not spawn enclaves; dial one started separately"
+      echo "run.sh:                         (see run_enclave_standalone.sh)"
       exit 0
-      ;;      
+      ;;
     *)
       echo "run.sh:  Unknown option: $1"
       exit 1
@@ -41,6 +51,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Fail before anything starts: a node with no external_address cannot register itself, and
+# qadenad start would refuse a few seconds later anyway -- this keeps the message here.
 EXT_ADDR=`$qadenascripts/get_external_address.sh`
 if [[ $EXT_ADDR == "" ]] ; then
     echo "run.sh:  Error, config.toml's external_address is not defined.  Try running init.sh"
@@ -58,177 +70,35 @@ if [ $RET -ne 0 ] ; then
     exit $RET
 fi
 
-PIDS=()
-declare -A PROC_NAMES
-
-if [[ $DEBUG != "no_qadenad_enclave" ]] ; then
-        if use_real_enclave "$qadenabin/qadenad_enclave" ; then
-            $qadenascripts/run_realenclave.sh &
-            PIDS+=$!
-            PROC_NAMES[$!]="run_realenclave.sh"
-            echo "run.sh: enclave started by script, PID: $!"
-        else
-            $qadenascripts/run_enclave.sh &
-            PIDS+=$!
-            PROC_NAMES[$!]="run_enclave.sh"
-            echo "run.sh: enclave started by script, PID: $!"
-        fi
+# Attestation must be available before qadenad spawns a REAL enclave.  Skipped entirely for a
+# debug build; skipped for --external-enclave because whoever started that enclave prepared it.
+if [[ -z $EXTERNAL_ENCLAVE ]] && use_real_enclave "$qadenabin/qadenad_enclave" ; then
+    $qadenascripts/ensure_sgx_attestation.sh || exit 1
 fi
-
-
-IS_UP=0
-for i in {90..1}
-do
-    if qadenad_alias enclave check-enclave ; then
-        echo "run.sh: qadenad_enclave is up and running!"
-        IS_UP=1
-        break
-    else
-        echo "run.sh: qadenad_enclave is not yet up, waiting...$i"
-        sleep 1
-    fi
-done
-if [ $IS_UP -ne 1 ] ; then
-    echo "run.sh: Could not run the qadenad_enclave"
-    exit 1
-fi
-
-if [[ $DEBUG != "no_signer_enclave" ]] ; then
-        # gated on signer_enclave, not qadenad_enclave: they are separate binaries and can be built
-        # differently, so one being signed says nothing about the other
-        if use_real_enclave "$qadenabin/signer_enclave" ; then
-            $qadenascripts/run_realsignerenclave.sh &
-            PIDS+=$!
-            PROC_NAMES[$!]="run_realsignerenclave.sh"
-            echo "run.sh: signer enclave started by script, PID: $!"
-        else
-            $qadenascripts/run_signerenclave.sh &
-            PIDS+=$!
-            PROC_NAMES[$!]="run_signerenclave.sh"
-            echo "run.sh: signer enclave started by script, PID: $!"
-        fi
-fi
-
-# check if the signer enclave is up
-IS_UP=0
-for i in {90..1}
-do
-    # check via curl
-    curl -s http://localhost:26661/ping > /dev/null
-    if [ $? -eq 0 ] ; then
-        echo "run.sh: signer_enclave is up and running!"
-        IS_UP=1
-        break
-    else
-        echo "run.sh: signer_enclave is not yet up, waiting...$i"
-        sleep 1
-    fi
-done
-if [ $IS_UP -ne 1 ] ; then
-    echo "run.sh: Could not run the signer_enclave"
-    exit 1
-fi
-
-if [[ $SYNC_WITH_PIONEER != "" ]] ; then
-    $qadenascripts/delayed_init_enclave.sh --sync-with-pioneer $SYNC_WITH_PIONEER &
-else
-    $qadenascripts/delayed_init_enclave.sh &
-fi
-PIDS+=$!
-PROC_NAMES[$!]="delayed_init_enclave.sh"
-echo "run.sh: delayed_init_enclave.sh started, PID: $!"
 
 echo "run.sh: ------------"
 echo "run.sh: START QADENA"
 echo "run.sh: ------------"
+
+# Foreground: qadenad is now the whole node -- it spawns the enclaves, and this script has
+# nothing to monitor.  Note what is GONE from this line versus the old one: --enclave-addr and
+# the id flags were inert (the unix-domain-socket branch never read them), and --log-level was a
+# lossy re-derivation of the config.toml value qadenad reads natively.
+$qadenabin/qadenad start --json-rpc.api eth,txpool,personal,net,debug,web3 --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --home=$QADENAHOME $EXTERNAL_ENCLAVE
+RC=$?
+
+echo "run.sh: ------------"
+echo "run.sh: QADENA ENDED (rc $RC)"
 echo "run.sh: ------------"
 
-# read the config and check log level
-log_level=$(grep "log_level" $QADENAHOME/config/config.toml | awk '{print $3}' | tr -d '"' | tr -d "'")
-if [[ $log_level == "debug" ]] ; then
-    log_level="debug"
-else
-    log_level="info"
+# Belt and braces: a clean shutdown already took the spawned enclaves along (SIGINT forwarding in
+# the supervisor), but a PANIC exits without running handlers and orphans them.  Harmless -- the
+# next start would adopt the orphan -- but a stopped node should leave a stopped machine.
+if [[ -z $EXTERNAL_ENCLAVE ]] ; then
+    if is_qadena_running ; then
+        echo "run.sh: cleaning up enclave processes the node left behind"
+        $qadenascripts/stop_qadena.sh --all
+    fi
 fi
 
-
-if use_real_enclave "$qadenabin/qadenad_enclave" ; then
-    # SUBSTITUTED INLINE, THESE FAIL SILENTLY.  `ego signerid` writes "ERROR: reading key file: ..."
-    # to STDOUT (not stderr) and exits 1, so a missing public.pem used to become the literal
-    # argument `--enclave-signer-id ERROR:` with the rest of the message trailing as stray
-    # positional args -- and the node started anyway, because keeper.InitEnclave takes the
-    # unix-domain-socket branch and never reads the value.  Extract first, and say so if it failed.
-    signer_id=`ego signerid $QADENAHOME/config/public.pem` || signer_id=""
-    unique_id=`ego uniqueid $qadenabin/qadenad_enclave` || unique_id=""
-    if [[ -z "$signer_id" || "$signer_id" == ERROR:* ]]; then
-        echo "run.sh: WARNING: could not read a signer id from $QADENAHOME/config/public.pem"
-        echo "run.sh:          ($signer_id)"
-        echo "run.sh:          Starting anyway -- the chain reaches its enclave over a unix domain"
-        echo "run.sh:          socket and does not check this today -- but reinstall public.pem."
-        signer_id=""
-    fi
-    if [[ -z "$unique_id" || "$unique_id" == ERROR:* ]]; then
-        echo "run.sh: WARNING: could not read a unique id from $qadenabin/qadenad_enclave ($unique_id)"
-        unique_id=""
-    fi
-    qadenad_alias start --json-rpc.api eth,txpool,personal,net,debug,web3 --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --enclave-addr localhost:50051 --enclave-signer-id "$signer_id" --enclave-unique-id "$unique_id" --home=$QADENAHOME --log-level $log_level &
-    PIDS+=$!
-    PROC_NAMES[$!]="qadenad (real enclave)"
-else
-    qadenad_alias start --json-rpc.api eth,txpool,personal,net,debug,web3 --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --enclave-addr localhost:50051 --home=$QADENAHOME --log-level $log_level &
-    PIDS+=$!
-    PROC_NAMES[$!]="qadenad"
-fi
-
-trap 'echo "run.sh: Got SIGINT"; KILLED=1' SIGINT
-
-# Monitor all background PIDs
-KILLED=0
-
-# while not KILLED
-while [ $KILLED -eq 0 ] ; do
-  for pid in ${PIDS[@]}; do
-    if ! kill -0 $pid 2>/dev/null; then
-      wait $pid
-      RC=$?
-
-      proc_name=${PROC_NAMES[$pid]}
-      # if proc_name is delayed_init_enclave.sh, and RC is 0, report is as normal exit
-      if [ "$proc_name" = "delayed_init_enclave.sh" ] && [ $RC -eq 0 ] ; then
-        echo "run.sh: Process ${proc_name} (PID $pid) is done."
-      else
-        echo "run.sh: Process ${proc_name} (PID $pid) has exited with RC $RC."
-      fi
-
-      # remove $pid from arrays
-      unset "PROC_NAMES[$pid]"
-      new_PIDS=()
-      for p in "${PIDS[@]}"; do
-        [[ "$p" != "$pid" ]] && new_PIDS+=("$p")
-      done
-      PIDS=("${new_PIDS[@]}")
-    fi
-  done
-
-  if [ -z "$PIDS" ] ; then
-    KILLED=1
-  else
-    # display PIDS
-    # echo "run.sh: PIDs: '$PIDS'"
-  fi
-  sleep 2
-done
-
-echo "run.sh: ------------"
-echo "run.sh: QADENA ENDED "
-echo "run.sh: ------------"
-echo "run.sh: ------------"
-
-trap SIGINT
-
-if [[ $DEBUG != "no_qadenad_enclave" ]] ; then
-    echo "run.sh: Stopping Qadena"
-    $qadenascripts/stop_qadena.sh --all
-else
-    echo "run.sh: Won't stop Enclave, this script didn't start it."
-fi
+exit $RC

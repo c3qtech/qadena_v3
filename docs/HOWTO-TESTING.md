@@ -107,9 +107,10 @@ that references a key by placeholder and it just works; `genesis-check` fails th
 
 ### A reachable chain is not a ready one
 
-`scripts/start_qadena.sh` returns once blocks are produced, but the enclave is initialised by
-`delayed_init_enclave.sh`, which waits for **height ≥ 4**. Until `InitEnclave` runs there is no jar
-regulator, and every AML-scanned send is refused. Anything that transacts must wait for:
+`scripts/start_qadena.sh` returns once blocks are produced, but the enclave is initialised from
+the node's own BeginBlock (trigger at **height 2**, then the enclave's registration tx must land —
+see `x/qadena/keeper/enclave_init_dispatch.go`). Until that lands there is no jar regulator, and
+every AML-scanned send is refused. Anything that transacts must wait for:
 
 ```sh
 qadenad query qadena list-jar-regulator --output json | jq -r '.jarRegulator | length'   # > 0

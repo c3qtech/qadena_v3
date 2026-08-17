@@ -476,30 +476,22 @@ else
 
 fi
 
-echo "DEBUG $DEBUG"
+# The enclave ALONE, no chain: this phase mints/funds the pioneer key and runs sync-enclave (the
+# attested key fetch from a peer enclave) BEFORE the node's first start.  run_enclave_standalone.sh
+# is the single-shot form -- the old respawn-loop scripts are gone; `qadenad start` spawns its own
+# enclave for normal operation.
+$qadenascripts/run_enclave_standalone.sh &
 
-if use_real_enclave "$qadenabin/qadenad_enclave" ; then
-	$qadenascripts/run_realenclave.sh &
-	sleep 10
-else
-	$qadenascripts/run_enclave.sh $DEBUG &
-fi
-
-# wait for socket to come up
+# Wait for the socket to answer.  The old netstat probe here watched TCP port 50051, which nothing
+# has bound since the enclave moved to a unix domain socket -- it worked only because netstat -an
+# happens to print the SOCKET PATH containing "50051".  Test the socket file directly, the way
+# qadena_status.sh does.
 IS_UP=0
 for i in {90..1}
 do
-	if [[ "$(uname -s)" == "Darwin" ]] ; then
-	listen=`netstat -an`
-	else
-	listen=`netstat -l`
-	fi
-	
-	if echo $listen | grep 50051 > /dev/null ; then
+	if [ -S /tmp/qadena_50051.sock ] && qadenad_alias enclave check-enclave > /dev/null 2>&1 ; then
 	echo "qadenad_enclave is up and running!"
 	IS_UP=1
-
-
 	break
 	else
 	echo "qadenad_enclave is not yet up, waiting...$i"

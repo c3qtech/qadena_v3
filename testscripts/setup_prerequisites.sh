@@ -227,9 +227,10 @@ key_exists "$pioneer" || fail "pioneer key '$pioneer' not found in the keyring"
 # A REACHABLE CHAIN IS NOT A READY ONE.
 #
 # The first thing this script does is fund accounts by direct bank send, and every such send is now
-# AML-scanned in the enclave.  The enclave is initialised by delayed_init_enclave.sh, which waits for
-# block height 4 -- so for the first few blocks the chain answers `status` perfectly well while every
-# scanned send is refused, and the funding fails with nothing to say why.
+# AML-scanned in the enclave.  The enclave is initialised from the node's own BeginBlock (trigger
+# height 2, then the enclave's registration tx must land) -- so for the first few blocks the chain
+# answers `status` perfectly well while every scanned send is refused, and the funding fails with
+# nothing to say why.
 #
 # This did not matter while the treasuries were exempt from scanning: their sends never reached the
 # enclave, so it did not have to be up.  Removing that exemption made chain readiness depend on

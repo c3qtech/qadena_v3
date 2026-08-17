@@ -107,9 +107,11 @@ if ! "$qadenascripts/stop_qadena.sh" --all ; then
     exit 1
 fi
 
-# Confirmed independently: a respawn loop can restart a process after the script has finished
-# checking, and resetting underneath a live node corrupts both.
-leftover=$(pgrep -af "qadenad|run_enclave.sh|run_signerenclave.sh|ego-host" 2>/dev/null \
+# Confirmed independently: something can restart a process after the script has finished
+# checking, and resetting underneath a live node corrupts both.  (The run_enclave.sh /
+# run_signerenclave.sh respawn loops this once guarded against are gone -- qadenad spawns its
+# enclaves now -- but qadenad_enclave/signer_enclave still match the qadenad pattern.)
+leftover=$(pgrep -af "qadenad|ego-host|signer_enclave" 2>/dev/null \
            | grep -v "reset_qadena_fast" || true)
 if [[ -n "$leftover" ]] ; then
     echo "processes still alive after stop_qadena.sh:"

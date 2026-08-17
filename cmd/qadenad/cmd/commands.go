@@ -111,6 +111,10 @@ func addModuleInitFlags(startCmd *cobra.Command) {
 	startCmd.Flags().StringVar(&c.EnclaveSignerID, "enclave-signer-id", "", "signer-id of enclave")
 	startCmd.Flags().StringVar(&c.EnclaveUniqueID, "enclave-unique-id", "", "unique-id of enclave")
 
+	// The self-starting enclave: spawn flags plus the PreRunE that arms spawning and the
+	// BeginBlock init dispatch.  evmserver hands this function the start command only, which is
+	// exactly the one command that should spawn.
+	addEnclaveSelfStartFlags(startCmd)
 }
 
 // genesisCommand builds genesis-related `qadenad genesis` command. Users may provide application specific commands as a parameter

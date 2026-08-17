@@ -287,8 +287,8 @@ if run_phase 2; then
     #
     # /tmp is sticky (1777), so the login user cannot unlink a socket left by a run that WAS root --
     # which is every run before the sudo gate was fixed.  The enclave then fails to bind with
-    # "address already in use" and run_enclave.sh retries forever against a condition that never
-    # clears.  Same for a root-owned log we might later redirect into: the redirect fails, the
+    # "address already in use" and exits, taking the node down with it.  Same for a
+    # root-owned log we might later redirect into: the redirect fails, the
     # command never runs, and a tail of that path serves the PREVIOUS run's output as if it were
     # current -- which cost two wrong conclusions on 2026-08-15.
     #

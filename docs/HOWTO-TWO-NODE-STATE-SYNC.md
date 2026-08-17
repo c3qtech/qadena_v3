@@ -40,9 +40,9 @@ mechanism because the failure mode below hinges on it:
 - So `getEnclaveIdentity("unique047", "signer051", …)` finds an active row and verification
   succeeds.
 
-(The `SIGNER_ID="*"` / `UNIQUE_ID="*"` you will see in `init_enclave.sh` on a debug build is a
-different thing — arguments to the enclave's own `init-enclave` registration, not the genesis
-identity. Do not be misled by it, as an earlier draft of this document was.)
+(The `SignerID: "*"` / `UniqueID: "*"` a debug build sends in its `init-enclave` registration —
+now built in-process, see `cmd/qadenad/cmd/enclave_selfstart.go` — is a different thing from the
+genesis identity. Do not be misled by it, as an earlier draft of this document was.)
 
 ### The check that actually matters: do the two machines agree on the placeholder?
 
@@ -222,7 +222,8 @@ empty private tables rather than forking. Read the panic text; it names both cau
 
 Expect the first block after restore to take **minutes**. It is blocking and synchronous by
 necessity — `BeginBlock` is the last point before the block's transactions read the AML window.
-`delayed_init_enclave.sh`'s stall watchdog tolerates ~10 minutes for exactly this reason.
+(The old `delayed_init_enclave.sh` stall watchdog existed to tolerate exactly this; it is gone,
+and nothing kills a slow first block anymore.)
 
 ---
 

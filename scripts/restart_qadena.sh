@@ -41,10 +41,15 @@ if [[ $skip_stop -eq 0 ]]; then
 fi
 
 
+# `set -o pipefail` for the same reason the systemd unit needs it: a pipeline exits with the status
+# of its LAST command, and both `logger` and `rotatelogs` exit 0 whenever their stdin closes -- so
+# without it the backgrounded job's status says "clean exit" no matter how the node died.  Nothing
+# reads it here today (the job is backgrounded and this script returns), but a status that is
+# always 0 is a trap for whoever eventually does.
 if [[ $syslog_logger -eq 1 ]]; then
     echo "restart_qadena.sh: Running in background with syslog (check /var/log/syslog)"
-    nohup bash -c "$qadenascripts/run.sh 2>&1 | logger -t qadena" &
+    nohup bash -c "set -o pipefail; $qadenascripts/run.sh 2>&1 | logger -t qadena" &
 else
     echo "restart_qadena.sh: Running in background with local logger (check $QADENAHOME/logs)"
-    nohup bash -c "$qadenascripts/run.sh 2>&1 | rotatelogs -l -D -L $QADENAHOME/logs/qadena.log $QADENAHOME/logs/qadena-%Y-%m-%d.log 86400" &
+    nohup bash -c "set -o pipefail; $qadenascripts/run.sh 2>&1 | rotatelogs -l -D -L $QADENAHOME/logs/qadena.log $QADENAHOME/logs/qadena-%Y-%m-%d.log 86400" &
 fi

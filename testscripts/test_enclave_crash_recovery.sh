@@ -6,9 +6,11 @@
 # and after the enclave returns, a restart must reconcile and resume.
 #
 # The stall is injected with SIGSTOP, not SIGKILL, for two reasons: it matches the incident (the
-# enclave hung inside an OOM before dying), and it is deterministic -- a SIGKILLed simulation
-# enclave is respawned by run_enclave.sh within a couple of seconds, which can win the race
-# against the chain's next RPC and mask the halt.
+# enclave hung inside an OOM before dying), and it isolates the property under test -- the
+# WATCHDOG's hung-enclave detection.  A SIGKILLed enclave exercises a different, faster path now:
+# qadenad supervises its spawned enclave and exits immediately with a named cause when the child
+# DIES, no watchdog involved.  A stopped process is alive-but-silent, which only the watchdog
+# can call.
 #
 # HOW THE HALT ARRIVES.  Execution-path enclave calls carry NO deadline (the height-34,025 fix),
 # so a stopped enclave does not fail the next call -- it blocks it, and the chain freezes at once

@@ -511,9 +511,9 @@ start_chain() {
     # This used to return here, at height 1 or 2, and the suites that follow started transacting
     # immediately.  That worked only because the funding treasuries were exempt from AML scanning, so
     # the very first transactions never touched the enclave.  Now every account-to-account send is
-    # scanned, and the enclave does not exist yet: delayed_init_enclave.sh waits for height 4 before
-    # running InitEnclave.  Returning early therefore handed the next suite a chain that answers
-    # every query and refuses every send.
+    # scanned, and the enclave is not initialised yet: the node's BeginBlock triggers init at height
+    # 2 and the enclave's registration tx must then land.  Returning early therefore handed the next
+    # suite a chain that answers every query and refuses every send.
     #
     # The jar regulator is created by InitEnclave, so its presence on chain is the readiness signal --
     # and it is also precisely what a report needs, so once it exists the scan can measure AND report.
@@ -1039,10 +1039,10 @@ if [ "$from_genesis" = "true" ]; then
     # the node has to be down before its home directory is removed out from under it
     #
     # THE RESULT IS CHECKED.  This used to discard both output and exit status, which hid a
-    # stop_qadena.sh that could not kill a run_enclave.sh respawn loop: the loop kept restarting a
-    # DEBUG enclave, is_qadena_running stayed true, and start_qadena.sh then reported "already
-    # running" and never launched the chain.  The run failed 25 minutes later with "chain did not
-    # produce a block within 120s", naming nothing that had gone wrong.
+    # stop_qadena.sh that could not kill a (since-deleted) run_enclave.sh respawn loop: the loop
+    # kept restarting a DEBUG enclave, is_qadena_running stayed true, and start_qadena.sh then
+    # reported "already running" and never launched the chain.  The run failed 25 minutes later with
+    # "chain did not produce a block within 120s", naming nothing that had gone wrong.
     if ! "$qadenascripts/stop_qadena.sh"; then
         echo "stop_qadena.sh reported failure; refusing to rebuild on top of a node that is still running"
         summarize

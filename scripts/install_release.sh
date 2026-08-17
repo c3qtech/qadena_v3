@@ -108,8 +108,8 @@ export LD_LIBRARY_PATH="$qadenabin:$LD_LIBRARY_PATH"
 echo "node home: $QADENAHOME"
 
 # WHAT THE TARGET MACHINE MUST ALREADY HAVE.  ego is required for an SGX package and ONLY for one:
-# run.sh derives --enclave-signer-id and --enclave-unique-id from it on every start, but only when
-# the enclave is ego-signed.  A debug enclave is a plain Go binary that reports those ids itself
+# qadenad runs the ego-signed enclave under `ego run` and derives the measurement ids from ego for
+# its init-enclave registration.  A debug enclave is a plain Go binary that reports those ids itself
 # (-unique-id / -signer-id), and a machine installing a debug package needs no ego at all -- which is
 # what makes the debug path usable, since ego ships as an amd64-only .deb and cannot be installed on
 # ARM under any circumstances.
@@ -207,8 +207,8 @@ echo "  enclave identity: $identity_mode"
 
 if [[ "$identity_mode" == "sgx" ]]; then
     command -v ego > /dev/null 2>&1 || fail "this package carries an ego-signed (SGX) enclave, and ego
-       is not installed here.  run.sh derives --enclave-signer-id and --enclave-unique-id from it on
-       every start, so this machine could not run the node even once installed.
+       is not installed here.  qadenad runs the enclave under 'ego run' and reads its measurement
+       ids from ego, so this machine could not run the node even once installed.
 
        This package ships the setup script that installs it, along with the SGX quote
        provider, the PCCS configuration and the sgx/sgx_prv group membership:

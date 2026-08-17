@@ -57,18 +57,13 @@ else
     pid=$!
 fi
 
-# wait for the enclave to start
-# wait for socket to come up
+# Wait for the enclave's unix socket to answer.  The old probe here watched netstat for "50051",
+# a TCP port nothing has bound since the enclave moved to /tmp/qadena_50051.sock -- it matched the
+# socket PATH in the netstat output by accident.  Test the socket file directly.
 IS_UP=0
 for i in {90..1}
 do
-    if [[ "$(uname -s)" == "Darwin" ]] ; then
-	listen=`netstat -an`
-    else
-	listen=`netstat -l`
-    fi
-    
-    if echo $listen | grep 50051 > /dev/null ; then
+    if [ -S /tmp/qadena_50051.sock ] ; then
 	echo "qadenad_enclave is up and running!"
 	IS_UP=1
 	break

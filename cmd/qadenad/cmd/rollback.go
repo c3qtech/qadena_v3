@@ -64,8 +64,9 @@ blocks above H, as --hard does).  Without it, rolls back exactly one height; the
 transactions in block n are re-executed against the application on restart unless --hard
 also removed the block.
 
-The enclave must be RUNNING (the same requirement app construction already imposes);
-qadenad itself must be stopped.
+qadenad itself must be stopped.  The enclave need not be: if none is serving, this command
+spawns one for the duration and stops it before returning; one already running (started
+externally) is used and left running.
 `,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := server.GetServerContextFromCmd(cmd)
@@ -76,6 +77,14 @@ qadenad itself must be stopped.
 			if err != nil {
 				return err
 			}
+			// SELF-CONTAINED: if no enclave is serving, app construction below spawns one, and
+			// the deferred stop takes it down again on every exit path -- so the operator runs
+			// ONE command with the node stopped, nothing else.  An enclave that is already
+			// running (started externally, e.g. under a debugger) is adopted instead, and the
+			// deferred stop leaves it alone: StopSpawnedEnclaves only stops what THIS process
+			// spawned.  No signer is needed for a rollback.
+			keeper.EnableEnclaveSpawn(keeper.SpawnModeRollback)
+			defer keeper.StopSpawnedEnclaves()
 			// constructing the app dials the enclave and panics if it is unreachable
 			// (app.New -> QadenaKeeper.InitEnclave), so from here on the enclave is known live
 			app := appCreator(ctx.Logger, db, nil, ctx.Viper)

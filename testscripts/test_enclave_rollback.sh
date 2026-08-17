@@ -188,21 +188,17 @@ hash_after=$(as_enclave_owner "$qadenad_binary" --home "$QADENAHOME" enclave sto
 target=$((h_tx - 1))
 "$qadenascripts/stop_qadena.sh" --all > /dev/null 2>&1 || true
 
-# rollback needs the enclave running and qadenad stopped
-if use_real_enclave "$qadenabin/qadenad_enclave" ; then
-    "$qadenascripts/run_realenclave.sh" > /dev/null 2>&1 &
-else
-    "$qadenascripts/run_enclave.sh" > /dev/null 2>&1 &
-fi
-enclave_up=0
-for i in {1..60}; do
-    if qadenad_alias enclave check-enclave > /dev/null 2>&1; then enclave_up=1; break; fi
-    sleep 1
-done
-[ $enclave_up -eq 1 ] || fail "enclave did not come up standalone"
-
+# SELF-CONTAINED: rollback spawns its own enclave when none is serving and stops it before
+# returning (cmd/qadenad/cmd/rollback.go) -- this used to be a manual standalone enclave start,
+# a 60s readiness poll, and a stop, all of which the command now owns.
 qadenad_alias rollback --height "$target" || fail "qadenad rollback --height $target failed"
 echo "rolled back to $target"
+
+# The command must leave no enclave of its own behind -- the restart below wants a clean machine,
+# and a leak here would be adopted silently by the next start and mask the bug.
+if pgrep -f "qadenad_enclave" > /dev/null 2>&1 ; then
+    fail "rollback left an enclave process running -- it must stop what it spawned"
+fi
 
 # ---- 3. restart and verify -- the assertion depends on the topology ----
 "$qadenascripts/stop_qadena.sh" --all > /dev/null 2>&1 || true

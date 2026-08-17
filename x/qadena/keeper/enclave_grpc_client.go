@@ -234,8 +234,13 @@ func (k Keeper) InitEnclave() bool {
 	signerID := c.EnclaveSignerID
 	uniqueID := c.EnclaveUniqueID
 
+	// Spawn (or adopt) the enclave processes if the running command opted in -- see
+	// enclave_supervisor.go.  Returns how patient the dial loop below should be: a freshly
+	// spawned enclave (especially real SGX) warms up on its own schedule.
+	attempts := prepareEnclaveProcesses(k.logger)
+
 	if addr != "" {
-		for i := 0; i < 5; i++ {
+		for i := 0; i < attempts; i++ {
 
 			var conn *grpc.ClientConn
 			var err error
@@ -271,6 +276,15 @@ func (k Keeper) InitEnclave() bool {
 					c.LoggerError(k.logger, "Could not ping the enclave "+err.Error())
 				} else {
 					c.LoggerDebug(k.logger, "Greeting "+r.GetMessage())
+
+					// The signer readiness gate the deleted run.sh poll used to be; only
+					// meaningful when this process spawned a signer.
+					if serr := awaitSignerEnclave(k.logger); serr != nil {
+						c.LoggerError(k.logger, serr.Error())
+						StopSpawnedEnclaves()
+						return false
+					}
+
 					EnclaveGRPCClient = types.NewQadenaEnclaveClient(conn)
 					// The dial succeeded and the enclave answered a ping, so liveness is
 					// established -- from here the watchdog owns the question.  Started exactly
@@ -281,12 +295,30 @@ func (k Keeper) InitEnclave() bool {
 			}
 			time.Sleep(time.Second)
 		}
+		// Do not leave freshly spawned children behind a node that cannot come up.
+		StopSpawnedEnclaves()
 		return false
 	} else {
 		c.LoggerError(k.logger, "No enclave address provided")
 	}
 
 	return false
+}
+
+// pingEnclaveSocket is the supervisor's adoption probe: one dial + SayHello against the fixed
+// unix socket, bounded by timeout.  Used before spawning, so a stale socket FILE (dead server)
+// reads as "nobody there" rather than blocking the spawn.
+func pingEnclaveSocket(timeout time.Duration) bool {
+	addr := fmt.Sprintf("unix:///tmp/qadena_%d.sock", DefaultPort)
+	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithTimeout(timeout))
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	_, err = types.NewGreeterClient(conn).SayHello(ctx, &types.HelloRequest{Name: "Ping"})
+	return err == nil
 }
 
 func (k Keeper) ClientVerifyRemoteReport(sdkctx sdk.Context, remoteReportBytes []byte, certifyData string) bool {

@@ -1,14 +1,42 @@
 [Unit]
 Description=Qadena Run Script
 After=network.target
+# A crash loop should stop, not spin: if the node fails 5 times within 5 minutes, systemd gives up
+# and leaves the unit failed (visible in `systemctl status qadena`).  Without this, a persistently
+# broken enclave -- one that cannot open the SGX devices, say -- would restart forever every 5s.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
+# THE USER IS THE HUMAN WHO RAN install_qadena_service.sh (its $SUDO_USER); the node never runs as
+# root.  qadenad spawns qadenad_enclave and signer_enclave as its children, and they inherit this
+# uid -- so on REAL SGX this user must be able to open /dev/sgx_enclave and /dev/sgx_provision,
+# i.e. be a member of the groups owning them (typically sgx and sgx_prv):
+#     sudo usermod -aG sgx,sgx_prv <username>     # then log in again, and restart the unit
+# systemd applies the user's supplementary groups automatically, so group membership is enough and
+# running the unit as root is not required (and is discouraged -- it leaves root-owned sockets in
+# /tmp and root-owned files in the node home).  qadenad's spawn preflight names the exact device
+# and group if this is wrong.
 User=<username>
-ExecStart=nohup bash -c "/home/<username>/qadena/scripts/run.sh 2>&1 | rotatelogs -l -D -L /home/<username>/qadena/logs/qadena.log /home/<username>/qadena/logs/qadena-%%Y-%%m-%%d.log 86400"
+# `set -o pipefail` IS LOAD-BEARING, not tidiness.  A bash pipeline exits with the status of its
+# LAST command -- rotatelogs -- and rotatelogs exits 0 whenever its stdin closes, whatever killed
+# the writer.  Without pipefail, systemd saw EVERY node death as a clean exit, so Restart=on-failure
+# below never fired: verified with `bash -c '(exit 1) | cat'; echo $?` -> 0.  That was survivable
+# while the enclaves had their own respawn loops; it is not now that a dying enclave deliberately
+# takes the node down for this line to restart.
+ExecStart=/bin/bash -c "set -o pipefail; /home/<username>/qadena/scripts/run.sh 2>&1 | rotatelogs -l -D -L /home/<username>/qadena/logs/qadena.log /home/<username>/qadena/logs/qadena-%%Y-%%m-%%d.log 86400"
 WorkingDirectory=/home/<username>/qadena
+# Restart=on-failure is the ENCLAVE-CRASH recovery path, not just the node's: qadenad spawns and
+# owns its enclave processes, and a spawned enclave that dies takes the node down with a named,
+# non-zero exit precisely so this line restarts the whole stack and startup reconciliation
+# recovers.  There is deliberately no in-process respawn.
 Restart=on-failure
 RestartSec=5s
+# systemd's default KillMode=control-group SIGTERMs every process in the unit's cgroup on stop, so
+# the spawned enclaves are stopped even if qadenad dies without running its own signal forwarding.
+# 90s because a real SGX enclave can take a while to unwind cleanly.
+TimeoutStopSec=90
 
 [Install]
 WantedBy=multi-user.target
