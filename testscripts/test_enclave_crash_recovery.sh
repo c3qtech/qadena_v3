@@ -149,11 +149,32 @@ done
 # A watermark pair that is impossible by construction is a measurement artefact, not a finding.
 #
 # Reported from a parallel ARM run; the two-call structure is the whole cause.
-watermarks=$(qadenad_alias enclave height 2>/dev/null)
-prepared=$(print -r -- "$watermarks" | grep preparedHeight | awk '{print $2}')
-confirmed=$(print -r -- "$watermarks" | grep confirmedHeight | awk '{print $2}')
+# AND SAMPLED UNTIL THEY SETTLE, because one invocation is still not one instant on a chain that
+# is producing.  prepared LEADING confirmed by one is not a disagreement, it is the normal window
+# between the enclave's EndBlock (which prepares H) and the chain's Commit (which confirms it).  A
+# sample that lands inside that window sees prepared=H confirmed=H-1 on a perfectly healthy node.
+#
+# Observed on real SGX, where the window is widest: prepared=1057 confirmed=1056, on a run whose
+# halt and recovery had both worked.  The Mac and ARM passed the same code by being fast enough to
+# miss the window, which is the definition of a flaky assertion rather than a finding.
+#
+# So: poll for equality, which a live chain reaches every block; fail only if they never converge.
+# confirmed AHEAD of prepared is still failed IMMEDIATELY -- that one is impossible by
+# construction, so it means something real rather than a badly timed look.
+prepared=""; confirmed=""; settled=0
+for i in {1..20}; do
+    watermarks=$(qadenad_alias enclave height 2>/dev/null)
+    prepared=$(print -r -- "$watermarks" | grep preparedHeight | awk '{print $2}')
+    confirmed=$(print -r -- "$watermarks" | grep confirmedHeight | awk '{print $2}')
+    [ -n "$prepared" ] || { sleep 1; continue }
+    if [ -n "$confirmed" ] && [ "$confirmed" -gt "$prepared" ] 2>/dev/null; then
+        fail "enclave reports confirmed AHEAD of prepared (confirmed=$confirmed prepared=$prepared), which cannot happen: confirming a height follows preparing it"
+    fi
+    [ "$prepared" = "$confirmed" ] && { settled=1; break }
+    sleep 1
+done
 [ -n "$prepared" ] || fail "cannot read enclave watermarks after recovery"
-[ "$prepared" = "$confirmed" ] || fail "watermarks disagree after recovery: prepared=$prepared confirmed=$confirmed
+[ $settled -eq 1 ] || fail "watermarks disagree after recovery: prepared=$prepared confirmed=$confirmed
 Both were read from a SINGLE enclave height call, so this is a real disagreement rather than two
 samples taken a block apart."
 

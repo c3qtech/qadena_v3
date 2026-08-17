@@ -150,7 +150,8 @@ func (k Keeper) MaybeDispatchInitEnclave(ctx sdk.Context) {
 	// An enclave predating this RPC answers Unimplemented; that is "cannot tell", not "no", so we
 	// fall through to dispatching and rely on InitEnclave's own idempotence -- the behaviour before
 	// this call existed.  Same shape as rollback.go's handling of an older enclave.
-	if initialized, pioneerID, known := k.enclaveInitialized(); known && initialized {
+	initialized, pioneerID, statusKnown := k.enclaveInitialized()
+	if statusKnown && initialized {
 		c.LoggerInfo(k.logger, "init-enclave: the enclave reports it is already initialized as", pioneerID,
 			"-- not initializing (this is the normal answer on a joiner, whose enclave sync-enclave set up before the node started)")
 		d.doneForGood = true
@@ -163,6 +164,9 @@ func (k Keeper) MaybeDispatchInitEnclave(ctx sdk.Context) {
 	c.LoggerInfo(k.logger, "init-enclave: no JarRegulator on chain -- dispatching enclave initialization (trigger height", height, ")")
 	fn := d.fn
 	logger := k.logger
+	// Captured for the success message: whether the enclave was able to tell us, a moment ago,
+	// that it holds nothing.  When it could, the outcome below is not ambiguous.
+	confirmedUninitialized := statusKnown
 	go func() {
 		err := fn()
 		d.mu.Lock()
@@ -175,16 +179,22 @@ func (k Keeper) MaybeDispatchInitEnclave(ctx sdk.Context) {
 			c.LoggerError(logger, "init-enclave dispatch failed (will retry in", initEnclaveRedispatchBlocks, "blocks):", err.Error())
 			return
 		}
-		// DELIBERATELY VAGUE, because InitEnclaveReply carries a single bool and the two outcomes
-		// are indistinguishable from here: the enclave either initialized now and broadcast its
-		// registration, or short-circuited on "already initialized" and did nothing at all
-		// (enclave.go:1624).  An earlier version of this line asserted the first -- "the enclave
-		// has broadcast its registration; the JarRegulator row should appear within a few blocks"
-		// -- which a joiner's log then printed while nothing whatsoever was broadcast, pointing
-		// whoever read it at a row that was never coming.  The gate itself reports the truth a
-		// block or two later: the row appears (and this goes quiet for good), or it does not (and
-		// the dispatch is retried).  Widening the reply would move MRENCLAVE, which this change
-		// deliberately does not do.
-		c.LoggerInfo(logger, "init-enclave: the enclave accepted the request (it either initialized now, or was already initialized -- the reply cannot say which)")
+		// SAY ONLY WHAT WE KNOW, which now depends on whether the enclave could answer.
+		//
+		// InitEnclaveReply is a single bool meaning "accepted", identical for "I initialized now"
+		// and "I short-circuited on already-initialized" (enclave.go:1624).  On its own that makes
+		// any claim about a broadcast unfalsifiable -- an earlier version asserted "the enclave has
+		// broadcast its registration; the JarRegulator row should appear within a few blocks", and
+		// a joiner duly printed it while broadcasting nothing, pointing whoever read it at a row
+		// that was never coming.
+		//
+		// But we asked GetEnclaveStatus moments ago.  When it answered, we know the enclave held
+		// nothing, so the ambiguity is gone and the stronger sentence is the true one.  When it
+		// could not answer (an older enclave), the hedge is still the honest form.
+		if confirmedUninitialized {
+			c.LoggerInfo(logger, "init-enclave: the enclave was uninitialized and has now broadcast its registration -- the JarRegulator row should appear within a few blocks")
+		} else {
+			c.LoggerInfo(logger, "init-enclave: the enclave accepted the request; this enclave cannot report its status, so it either initialized now or was already initialized")
+		}
 	}()
 }
