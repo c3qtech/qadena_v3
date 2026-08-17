@@ -69,6 +69,14 @@ const (
 	// too generous only means a joiner that is nearly caught up might fire -- and by then the jar
 	// row it checks has already arrived, so the gate is closed anyway.
 	initEnclaveLiveBlockWindow = 2 * time.Minute
+
+	// The same question -- is this block current or replayed history -- asked on behalf of the
+	// enclave, which cannot answer it (no trusted clock, no view of the head).  Shared with the
+	// dispatch gate above deliberately: two predicates that mean "live" and drift apart would be
+	// worse than one, and both exist because replayed history reads exactly like current state to
+	// anything that only sees block contents.  Passed on every UpdateHeight; the enclave gates
+	// trust changes on it.
+	enclaveLiveBlockWindow = initEnclaveLiveBlockWindow
 )
 
 var initEnclaveDispatch struct {

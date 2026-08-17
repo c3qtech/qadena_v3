@@ -248,6 +248,20 @@ message MsgPioneerUpdateEnclaveIdentity {
   string productID = 4;
   string status = 5;
   bytes remoteReport = 6;
+  // THE HEIGHT THE ATTESTATION WAS MADE AT, so its age is measurable rather than guessed.
+  //
+  // An SGX quote carries no trusted clock, and an attestation is a statement about a MOMENT: this
+  // measurement was running, on a machine at this TCB level, then.  Verifying one months later
+  // answers a different question -- DCAP collateral has validity windows and TCB levels are revised
+  // when vulnerabilities are found, so a stale quote may fail for reasons that say nothing about
+  // the enclave, and a stale quote that passes still does not show it is running now.
+  //
+  // The chain's height is the one monotonic reference both ends share, so it goes INSIDE the
+  // certified data (uniqueID|signerID|productID|status|height).  Restating it forges the report;
+  // the verifier reconstructs the same string and compares the claimed height against the height it
+  // is executing, so a report replayed out of its era is recognisable as historical even when it
+  // arrives on a live block.
+  int64 height = 7;
 }
 
 message MsgPioneerUpdateEnclaveIdentityResponse {}

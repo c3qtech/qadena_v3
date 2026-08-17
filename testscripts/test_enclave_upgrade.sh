@@ -391,8 +391,17 @@ if [ $sgx_mode -eq 1 ]; then
         || fail "could not install $next_unique as the main enclave"
     echo "swapped $next_unique in as the main enclave"
 else
-    "$qadenabuildscripts/build_enclave.sh" > /dev/null 2>&1 \
-        || fail "could not build the enclave at $next_unique"
+    # KEEP THE BUILD OUTPUT.  This was `> /dev/null 2>&1`, so every way the build can fail arrived
+    # as the same four words -- "could not build the enclave" -- with the reason discarded.  It cost
+    # a diagnosis round trip for a build whose only complaint was `command not found: go`, printed
+    # and thrown away: a suite launched over ssh or from nohup gets a non-login shell, and
+    # /usr/local/go/bin is not on that PATH.
+    build_log=$(user_log_path enclave_upgrade_build) || fail "no writable path for the build log"
+    if ! "$qadenabuildscripts/build_enclave.sh" > "$build_log" 2>&1 ; then
+        echo "--- last 15 lines of $build_log ---"
+        tail -15 "$build_log" | sed 's/^/    /'
+        fail "could not build the enclave at $next_unique (full output in $build_log)"
+    fi
 fi
 
 [ -x "$qadenabin/qadenad_enclave.$next_unique" ] \

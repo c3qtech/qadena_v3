@@ -95,6 +95,8 @@ service QadenaEnclave {
   rpc QueryEnclaveSecretShare (QueryEnclaveSecretShareRequest) returns (QueryEnclaveSecretShareResponse) {}
   rpc QueryEnclaveRecoverKeyShare (QueryEnclaveRecoverKeyShareRequest) returns (QueryEnclaveRecoverKeyShareResponse) {}
   rpc QueryEnclaveValidateEnclaveIdentity (QueryEnclaveValidateEnclaveIdentityRequest) returns (QueryEnclaveValidateEnclaveIdentityResponse) {}
+  // which build am I, and do I hold a trusted set -- see query.proto for why this is unauthenticated
+  rpc QueryEnclaveMeasurement (QueryEnclaveMeasurementRequest) returns (QueryEnclaveMeasurementResponse) {}
 
   rpc SetEnclaveIdentity (EnclaveIdentity) returns (SetEnclaveIdentityReply) {}
 
@@ -501,6 +503,16 @@ message SetAuthorizedSignatoryReply {
 message MsgUpdateHeight {
   int64 height = 1;
   bool isProposer = 2;
+  // Is this block CURRENT, or is the node replaying history?  Set by the keeper from
+  // ctx.BlockTime(), the same predicate the enclave-init dispatch uses.
+  //
+  // The enclave cannot work this out for itself -- it has no clock it can trust and no view of the
+  // chain head -- and it must not confuse the two.  Replayed blocks carry historical state
+  // transitions: an identity deactivated years ago and reactivated since would, applied naively,
+  // strip trust that is currently valid, and a months-old attestation would be checked against
+  // collateral that has long since moved on.  Trust changes therefore act on LIVE blocks only;
+  // during replay the enclave keeps what the sync-enclave bootstrap gave it, which describes now.
+  bool isLive = 3;
 }
 
 message MsgScanTransactions {
@@ -773,6 +785,9 @@ message SetEnclaveIdentityReply {
 message PioneerUpdateEnclaveIdentity {
   EnclaveIdentity enclaveIdentity = 1;
   bytes remoteReport = 2;
+  // The chain height the report was generated at, BOUND INTO the certified data so it cannot be
+  // restated -- see MsgPioneerUpdateEnclaveIdentity.height.
+  int64 height = 3;
 }
 
 message UpdateEnclaveIdentityReply {

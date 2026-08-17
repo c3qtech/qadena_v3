@@ -233,6 +233,38 @@ else
 		fi
 	done
 
+	# DO THE ENCLAVE BUILDS MATCH?  Asked here, before anything is stopped, wiped, minted or funded.
+	#
+	# A joiner bootstraps its trusted set from the seed during sync-enclave, and it can only accept
+	# that from a seed running its OWN measurement -- that is the single anchor a fresh enclave can
+	# verify (see enclave_trusted_identities.go).  A mismatch therefore cannot succeed, and finding
+	# out at the handshake means discovering it after this script has wiped the node's state and
+	# spent a funding transfer, from an error that names neither build.
+	#
+	# Advisory rather than fatal on a failed QUERY: an older seed has no enclave-measurement command,
+	# and refusing to join a chain that predates this check would be worse than proceeding.  A
+	# genuine MISMATCH is fatal.
+	local_measurement=$($qadenabin/qadenad_enclave --unique-id 2>/dev/null)
+	seed_measurement=$(qadenad_alias q qadena enclave-measurement --node "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657" -o json 2>/dev/null | jq -r '.uniqueID // empty' 2>/dev/null)
+	if [[ -z $seed_measurement ]] ; then
+		echo "add_full_node.sh: could not ask $GENESIS_PIONEER_FIRST_IP_ADDRESS which enclave it runs"
+		echo "                  (an older seed predates 'q qadena enclave-measurement') -- continuing."
+	elif [[ "$seed_measurement" != "$local_measurement" ]] ; then
+		echo "add_full_node.sh: ENCLAVE MISMATCH -- this join cannot succeed."
+		echo "    the seed at $GENESIS_PIONEER_FIRST_IP_ADDRESS runs:  $seed_measurement"
+		echo "    this node was built as:                              ${local_measurement:-unknown}"
+		echo ""
+		echo "    A joiner takes its initial trusted set from the seed, over a channel it can only"
+		echo "    authenticate by recognising the seed as its own build.  sync-enclave will refuse."
+		echo ""
+		echo "    Fix it either way round:"
+		echo "      - install this node from a package built on the seed, or"
+		echo "      - point --genesis-pioneer-first-ip-address at a node running $local_measurement."
+		exit 1
+	else
+		echo "add_full_node.sh: seed and joiner both run enclave $local_measurement"
+	fi
+
 	echo "Stopping any running qadenad and qadenad_enclave processes..."
 	$qadenascripts/stop_qadena.sh --all > /dev/null
 

@@ -1100,7 +1100,15 @@ func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
 		proposerAddress := strings.ToUpper(hex.EncodeToString(blockInfo.GetProposerAddress()))
 		//    fmt.Println("ProposerAddress", proposerAddress)
 		//    fmt.Println("My ValidatorAddress", validatorAddress)
-		_, _ = EnclaveGRPCClient.UpdateHeight(ctx, &types.MsgUpdateHeight{Height: header.Height, IsProposer: proposerAddress == validatorAddress})
+		// IsLive tells the enclave whether it is watching the chain or replaying it, which it cannot
+		// work out for itself -- it has no trusted clock and no view of the head.  Same predicate
+		// the enclave-init dispatch uses, and for the same reason: replayed history must not be
+		// mistaken for current state.  Trust changes act on live blocks only.
+		_, _ = EnclaveGRPCClient.UpdateHeight(ctx, &types.MsgUpdateHeight{
+			Height:     header.Height,
+			IsProposer: proposerAddress == validatorAddress,
+			IsLive:     time.Since(header.Time) <= enclaveLiveBlockWindow,
+		})
 	}
 }
 
@@ -1528,6 +1536,19 @@ func (k Keeper) EnclaveQueryValidateEnclaveIdentity(sdkctx sdk.Context, msg *typ
 	r, err := EnclaveGRPCClient.QueryEnclaveValidateEnclaveIdentity(ctx, msg)
 	if err != nil {
 		c.ContextError(sdkctx, "error returned by EnclaveQueryValidateEnclaveIdentity on enclave "+err.Error())
+		return err, nil
+	}
+
+	return nil, r
+}
+
+func (k Keeper) EnclaveQueryMeasurement(sdkctx sdk.Context, msg *types.QueryEnclaveMeasurementRequest) (error, *types.QueryEnclaveMeasurementResponse) {
+	ctx, cancel := enclaveQueryContext()
+	defer cancel()
+
+	r, err := EnclaveGRPCClient.QueryEnclaveMeasurement(ctx, msg)
+	if err != nil {
+		c.ContextError(sdkctx, "error returned by QueryEnclaveMeasurement on enclave "+err.Error())
 		return err, nil
 	}
 

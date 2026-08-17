@@ -1988,6 +1988,18 @@ func (s *qadenaServer) InitEnclave(ctx context.Context, in *types.MsgInitEnclave
 func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeight) (*types.UpdateHeightReply, error) {
 	c.LoggerDebug(logger, "UpdateHeight "+c.PrettyPrint(in))
 
+	// Remember where the chain is and whether we are watching it happen or replaying it.  Every
+	// trust decision below consults these two: an attestation's age is measured against the height,
+	// and historical blocks must not restate current trust.  Logged on transition only -- per-block
+	// would drown the log, and the transition is the interesting event.
+	if setChainPosition(in.Height, in.IsLive) {
+		if in.IsLive {
+			c.LoggerInfo(logger, "chain is LIVE at height "+strconv.FormatInt(in.Height, 10)+" -- trust changes now apply")
+		} else {
+			c.LoggerInfo(logger, "chain is REPLAYING at height "+strconv.FormatInt(in.Height, 10)+" -- trust changes are deferred until caught up")
+		}
+	}
+
 	if in.IsProposer {
 		if !s.getPrivateEnclaveParamsPioneerIsValidator() {
 			go func() {
@@ -2342,6 +2354,19 @@ func (s *qadenaServer) QueryEnclaveSyncEnclave(goCtx context.Context, in *types.
 
 	// clear out our enclave/pioneer-specific keys before transmitting
 	tmpEnclaveParams := s.sharedEnclaveParams
+
+	// ADVERTISE OUR TRUSTED SET.  This is the joiner's root of trust: it arrives with {self} and no
+	// way to establish anything else -- genesis names measurements with no attestation attached, and
+	// every quorum query it could make is itself gated on trust it does not yet have.
+	//
+	// Active entries only.  A joiner should not inherit trust the chain has already retired, and an
+	// unvalidated entry is a judgement still in progress which it will see resolve through the
+	// normal broadcast like everyone else.
+	//
+	// It rides inside the encrypted payload, so the remote report generated over the ciphertext
+	// below already covers it: no new plaintext field, no second attestation.
+	tmpEnclaveParams.ActiveEnclaveIdentities = s.activeTrustedEnclaveIdentities()
+	c.LoggerInfo(logger, "sync-enclave: advertising "+strconv.Itoa(len(tmpEnclaveParams.ActiveEnclaveIdentities))+" active enclave identities to the joiner")
 
 	// send these for now
 	//	JarID         string
@@ -3030,40 +3055,32 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 		c.LoggerDebug(logger, "private enclave params", c.PrettyPrint(s.privateEnclaveParams))
 	}
 
-	// NOTE ON THE MISSING REPLY-SIDE ATTESTATION CHECK, which is deliberate rather than forgotten.
+	// THE REPLY IS NOW VERIFIED, by verifySeedIsOurBuild above.  This used to be one-directional --
+	// we proved ourselves to the seed, the seed proved nothing back -- and the comment here recorded
+	// why: verifying an attestation establishes "a genuine SGX enclave with measurement X", and
+	// deciding whether X is one of OURS needed an anchor, of which the three candidates were all
+	// wrong.  The chain's EnclaveIdentity table is empty at this point in a node's life; MRSIGNER
+	// admits every build the project ever signed, and the signing key ships in the repo besides.
 	//
-	// The handshake is authenticated in one direction: we prove ourselves to the seed above, and
-	// QueryEnclaveSyncEnclave verifies that report against an ACTIVE on-chain EnclaveIdentity
-	// before parting with any keys.  That is the direction that protects the secrets, and it is
-	// the one that matters.
+	// The third candidate -- requiring the seed's measurement to EQUAL ours -- was rejected for
+	// refusing joins during an upgrade window, when old and new measurements are deliberately both
+	// active.  That is now the one we take, deliberately, because it is the only anchor left that a
+	// fresh enclave can actually check, and the cost turns out to be small: a joiner's trusted set
+	// is empty precisely when it needs a seed, so a laxer rule buys nothing at the moment it would
+	// matter.  add_full_node.sh checks the two measurements up front (QueryEnclaveMeasurement) and
+	// tells the operator to rebuild or pick another seed, so the constraint surfaces as a named
+	// precondition in one second rather than a rejected handshake several minutes in.
 	//
-	// The seed does not prove itself back, and at this point in a node's life it cannot usefully
-	// be made to.  Verifying an attestation only establishes "a genuine SGX enclave with
-	// measurement X"; deciding whether X is one of OURS needs a trust anchor, and every anchor
-	// available here is wrong:
-	//
-	//   - the chain's EnclaveIdentity table is the right anchor, but it is empty -- add_full_node.sh
-	//     runs sync-enclave before the full node starts, and the guard at the top of this function
-	//     means we are always a node that has never synchronized;
-	//   - requiring the seed's measurement to equal ours refuses joins for the whole of any upgrade
-	//     window: old and new measurements are deliberately active at the same time and nodes
-	//     upgrade one at a time, so this rejects a valid seed merely for being the stale one;
-	//   - accepting any measurement with our MRSIGNER accepts every build the project ever signed,
-	//     including ones governance explicitly marked inactive -- which is precisely the judgment
-	//     the EnclaveIdentity table exists to make.
-	//
-	// So the params are accepted here and checked against CONSENSUS state once we have some: see
-	// SetJarRegulator, which the mirror push reaches during the first BeginBlock and which compares
-	// the jar->regulator binding the chain records against the one this seed handed us.  That
-	// anchors the check in the chain the node is actually joining rather than in a trust list it
-	// cannot yet read.  It catches a seed that invented identities; a seed that supplied real
-	// identities with its own key material still gets through and surfaces later, when the first
-	// VShare fails to decrypt.
+	// The old deferred check still stands behind this: SetJarRegulator compares the jar->regulator
+	// binding the chain records against the one this seed handed us, during the first BeginBlock.
 	var fromRemoteEnclaveParams types.EncryptableSharedEnclaveParams
 	allOwners := &types.EncryptableEnclaveSSOwnerMap{Pioneers: make(map[string]*types.EncryptablePioneerIDs)}
 
 	if len(res.GetEncSyncEnclavePagePubK()) == 0 {
 		// An older seed that does not page.  Everything arrives at once, as it always did.
+		if !s.verifySeedIsOurBuild(res.GetRemoteReport(), res.GetEncEnclaveParamsEnclavePubK()) {
+			return nil, types.ErrRemoteReportNotVerified
+		}
 		_, err = c.BDecryptAndProtoUnmarshal(s.getPrivateEnclaveParamsEnclavePrivK(), res.GetEncEnclaveParamsEnclavePubK(), &fromRemoteEnclaveParams)
 		if err != nil {
 			c.LoggerError(logger, "couldn't decrypt")
@@ -3077,6 +3094,11 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 		gotParams := false
 		for pages := 1; ; pages++ {
 			var page types.EncryptableSyncEnclavePage
+			// EVERY page, not just the first: a report certifies exactly the ciphertext bytes it
+			// arrived with, so checking one page says nothing about the next.
+			if !s.verifySeedIsOurBuild(res.GetRemoteReport(), res.GetEncSyncEnclavePagePubK()) {
+				return nil, types.ErrRemoteReportNotVerified
+			}
 			_, err = c.BDecryptAndProtoUnmarshal(s.getPrivateEnclaveParamsEnclavePrivK(), res.GetEncSyncEnclavePagePubK(), &page)
 			if err != nil {
 				c.LoggerError(logger, "couldn't decrypt sync-enclave page")
@@ -3132,6 +3154,21 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 	s.setSharedEnclaveParamsJarInfo(fromRemoteEnclaveParams.JarID, fromRemoteEnclaveParams.JarPubK, fromRemoteEnclaveParams.JarPrivK, fromRemoteEnclaveParams.JarArmorPrivK)
 
 	s.setSharedEnclaveParamsRegulatorInfo(fromRemoteEnclaveParams.RegulatorID, fromRemoteEnclaveParams.RegulatorPubK, fromRemoteEnclaveParams.RegulatorPrivK, fromRemoteEnclaveParams.RegulatorArmorPrivK)
+
+	// INSTALL THE BOOTSTRAP.  Everything above arrived from an enclave running our own build, over a
+	// channel it attested; this is the same evidence that justifies taking its jar and regulator
+	// private keys, applied to a strictly smaller claim.
+	//
+	// Without it the node comes up trusting only itself: it would refuse to serve any peer, and --
+	// worse -- every replayed promotion would fail to verify for want of a trusted promoter, so it
+	// could never rebuild the set from history either.
+	if len(fromRemoteEnclaveParams.ActiveEnclaveIdentities) == 0 {
+		c.LoggerError(logger, "the seed advertised NO active enclave identities -- this node will trust only itself and cannot serve peers")
+	}
+	for _, id := range fromRemoteEnclaveParams.ActiveEnclaveIdentities {
+		s.trustEnclaveIdentity(id, "bootstrapped from a seed running our own measurement")
+	}
+	c.LoggerInfo(logger, "sync-enclave: trusted set bootstrapped with "+strconv.Itoa(len(fromRemoteEnclaveParams.ActiveEnclaveIdentities))+" identities from the seed")
 
 	// store the owners -- accumulated across every page, installed once
 	s.setAllOwners(allOwners)
@@ -3397,6 +3434,22 @@ func (s *qadenaServer) UpdateEnclaveIdentity(ctx context.Context, in *types.Pion
 		c.LoggerDebug(logger, "UpdateEnclaveIdentity "+c.PrettyPrint(in))
 	}
 
+	// THE ROW FIRST, UNCONDITIONALLY.  What follows decides whether to TRUST the identity, and that
+	// decision legitimately differs between nodes and over time -- it depends on attestation
+	// freshness, which depends on DCAP collateral.  The mirrored row must not: it is consensus
+	// state, replayed identically on every node forever.  The keeper matches this by recording the
+	// row whatever this call returns.
+	s.setEnclaveIdentity(in.EnclaveIdentity)
+
+	subject := in.EnclaveIdentity.UniqueID + " -> " + in.EnclaveIdentity.Status
+	c.LoggerInfo(logger, "UpdateEnclaveIdentity: attested claim "+subject+" made at height "+strconv.FormatInt(in.Height, 10))
+
+	// Age before signature: verifying a stale quote is the expensive way to learn it is stale, and
+	// during replay we would be checking a months-old report against today's collateral.
+	if !attestationIsCurrent(in.Height, "identity claim "+subject) {
+		return &types.UpdateEnclaveIdentityReply{Status: true}, nil
+	}
+
 	if !s.verifyRemoteReport(
 		in.RemoteReport,
 		strings.Join([]string{
@@ -3404,12 +3457,28 @@ func (s *qadenaServer) UpdateEnclaveIdentity(ctx context.Context, in *types.Pion
 			in.EnclaveIdentity.SignerID,
 			in.EnclaveIdentity.ProductID,
 			in.EnclaveIdentity.Status,
+			strconv.FormatInt(in.Height, 10),
 		}, "|")) {
-		c.LoggerError(logger, "remote report unverified")
-		return nil, types.ErrRemoteReportNotVerified
+		// NOT an error return any more.  This used to fail the transaction, which made a consensus
+		// outcome depend on whether a quote still verified -- two nodes checking the same historical
+		// report on different days can legitimately disagree, and a replaying node would diverge on
+		// the app hash and halt.  Declining to trust is this enclave's own business.
+		c.LoggerError(logger, "remote report unverified for "+subject+" -- recording the row, but NOT trusting the identity")
+		return &types.UpdateEnclaveIdentityReply{Status: true}, nil
 	}
 
-	s.setEnclaveIdentity(in.EnclaveIdentity)
+	// THE ATTESTED ROUTE INTO THE TRUSTED SET.  verifyRemoteReport above already established that
+	// the enclave vouching for this identity is one we trust -- that is what makes this different
+	// from a mirror push, which carries no evidence and may only downgrade.
+	//
+	// This is also what rebuilds the set during a replay: each historical promotion re-derives from
+	// the one before it, rooted in whatever the sync-enclave bootstrap supplied.  A verdict of
+	// inactive removes rather than adds, so a deactivation propagates the same way it was decided.
+	if in.EnclaveIdentity.Status == types.InactiveStatus {
+		s.untrustEnclaveIdentity(in.EnclaveIdentity.UniqueID, "attested deactivation")
+	} else {
+		s.trustEnclaveIdentity(in.EnclaveIdentity, "attested by an enclave we trust")
+	}
 	return &types.UpdateEnclaveIdentityReply{Status: true}, nil
 }
 
@@ -3420,18 +3489,73 @@ func (s *qadenaServer) SetEnclaveIdentity(ctx context.Context, in *types.Enclave
 		c.LoggerDebug(logger, "SetEnclaveIdentity "+c.PrettyPrint(in))
 	}
 
-	if in.UniqueID == uniqueID && in.SignerID == signerID {
-		c.LoggerDebug(logger, "SetEnclaveIdentity matches our enclave identity")
-		s.setEnclaveIdentity(in)
-		return &types.SetEnclaveIdentityReply{Status: true}, nil
-	}
-
-	if in.Status != "inactive" && in.Status != "unvalidated" {
-		c.LoggerError(logger, "status must be \"inactive\" or \"unvalidated\"")
-		return nil, types.ErrInvalidStatus
-	}
+	// THE ROW IS ALWAYS STORED.  This used to reject any foreign identity claiming a status other
+	// than inactive/unvalidated, and a rejection here is fatal on the chain side -- the keeper
+	// panics.  Genesis names the launch enclave `active`, so once a chain upgraded its enclave, no
+	// new node could replay its genesis again: it died at height 0 with code 1146 before CometBFT
+	// ever started.  State-sync seeding (SeedStorePage) fed rows through this same handler and hit
+	// it for the same reason.
+	//
+	// Refusing was also not optional in the other direction: the mirrored store is accumulated and
+	// audited against the chain's, so a row the chain wrote and the enclave did not is a permanent
+	// divergence.  Storing was never the dangerous part -- TRUSTING was, and that now lives
+	// separately.  See enclave_trusted_identities.go.
 	s.setEnclaveIdentity(in)
+
+	switch {
+	case isSelf(in.UniqueID, in.SignerID):
+		// Self-evident and unforgeable: we can check this measurement against our own report.  This
+		// is what lets a launch node trust the identity genesis records for it, with no peer to ask.
+		s.trustEnclaveIdentity(in, "mirror push naming our own measurement")
+	case in.Status == types.InactiveStatus:
+		// A mirror push may REMOVE trust but never add it -- governance or a quorum deactivation
+		// flowing in.  The asymmetry is the point: a hostile node can only ever reduce what it is
+		// trusted with.
+		//
+		// LIVE BLOCKS ONLY, because replay would apply the deactivation out of its era.  An identity
+		// whose history reads active -> inactive -> active would lose trust at the middle step, and
+		// the final `active` cannot restore it: mirror pushes do not add.  The node would end up
+		// distrusting a measurement the chain currently considers active.  The trusted set describes
+		// NOW -- it arrived from the sync-enclave bootstrap or was carried through an upgrade -- so
+		// only current transitions may alter it.
+		if _, isLive, known := currentChainPosition(); known && !isLive {
+			c.LoggerInfo(logger, "replaying: NOT dropping trust in "+in.UniqueID+" on a historical deactivation")
+		} else {
+			s.untrustEnclaveIdentity(in.UniqueID, "chain reports it inactive")
+		}
+	default:
+		// Stored, not trusted.  A foreign identity becomes trusted only through an attested route:
+		// UpdateEnclaveIdentity with a report from an enclave we already trust, our own quorum
+		// verdict, or the sync-enclave bootstrap.
+		if _, known := s.trustedEnclaveIdentity(in.UniqueID); !known {
+			c.LoggerDebug(logger, "SetEnclaveIdentity stored "+in.UniqueID+" ("+in.Status+") without trusting it -- no attestation accompanies a mirrored row")
+		}
+	}
 	return &types.SetEnclaveIdentityReply{Status: true}, nil
+}
+
+// QueryEnclaveMeasurement answers "which build are you, and can you bootstrap a joiner".
+//
+// Unauthenticated on purpose.  A measurement is not a secret -- it is written into genesis and
+// published on chain as an EnclaveIdentity -- and the caller needs it BEFORE it can attest anything,
+// which is the entire point: add_full_node.sh compares the seed's build with the joiner's before
+// minting keys or funding anything, so a mismatch is reported in one second instead of surfacing as
+// a refused handshake several minutes in.
+//
+// It deliberately carries no report.  A report here would prove the answer came from a genuine
+// enclave, but the joiner cannot act on that either way: this is a precondition check whose only
+// consequence is a clearer error message.  The real authentication happens in the handshake itself.
+func (s *qadenaServer) QueryEnclaveMeasurement(ctx context.Context, in *types.QueryEnclaveMeasurementRequest) (*types.QueryEnclaveMeasurementResponse, error) {
+	c.LoggerDebug(logger, "QueryEnclaveMeasurement")
+	return &types.QueryEnclaveMeasurementResponse{
+		UniqueID: uniqueID,
+		SignerID: signerID,
+		// ProductID is left empty: the enclave keeps no notion of its own product id.  It appears in
+		// identity records only because it travels with them from whoever registered them.  Empty is
+		// honest here; inventing a value would make the precondition check compare fiction.
+		Version:      version,
+		Bootstrapped: s.bootstrapped(),
+	}, nil
 }
 
 func (s *qadenaServer) SetWallet(ctx context.Context, in *types.Wallet) (*types.SetWalletReply, error) {
@@ -5479,6 +5603,19 @@ func (s *qadenaServer) setPioneerJarNoNotify(in types.PioneerJar) {
 }
 
 func (s *qadenaServer) validateEnclaveIdentities() {
+	// AN UNBOOTSTRAPPED ENCLAVE MUST NOT VOTE.  The verdict below is "how many pioneers I TRUST
+	// confirmed this", and a fresh enclave trusts only itself -- so it would count zero, conclude
+	// `inactive` for a perfectly good identity, and broadcast that verdict to the entire network.
+	// One node that joined without a sync-enclave bootstrap, proposing at the wrong moment, could
+	// deactivate the measurement everyone else is running.
+	//
+	// Latent before the trusted set existed too: an enclave whose peers were all unreachable would
+	// reach the same conclusion for the same reason.
+	if !s.bootstrapped() {
+		c.LoggerInfo(logger, "skipping enclave identity validation: this enclave has no trusted set yet, so every peer would count as unconfirmed")
+		return
+	}
+
 	// get the unvalidated identities
 	unvalidated := s.getUnvalidatedEnclaveIdentities()
 	c.LoggerDebug(logger, "unvalidateEnclaveIdentities "+c.PrettyPrint(unvalidated))
@@ -5567,23 +5704,36 @@ func (s *qadenaServer) validateEnclaveIdentities() {
 			// mark as valid
 			identity.Status = types.ActiveStatus
 			c.LoggerDebug(logger, "enclave identity is valid", identity)
+			// Our own quorum verdict is evidence we gathered ourselves, so it is one of the four
+			// routes into the trusted set.  Recorded before the broadcast: if the broadcast fails we
+			// still hold the judgement we reached, and every other node reaches its own.
+			s.trustEnclaveIdentity(identity, "our own quorum confirmed it")
 		} else {
 			// mark as inactive
 			identity.Status = types.InactiveStatus
 			c.LoggerDebug(logger, "enclave identity is INVALID", identity)
+			s.untrustEnclaveIdentity(identity.UniqueID, "our own quorum could not confirm it")
 		}
 
 		pwalletID, pwalletAddr, _, _, err := c.GetAddressByNameNoArmor(clientCtx, s.getPrivateEnclaveParamsPioneerID())
+
+		// The height goes INSIDE the certified data, so the receiving enclave can measure the
+		// report's age instead of guessing it.  Restating it in the message forges the report.
+		attestHeight, _, _ := currentChainPosition()
 		report, err := s.getRemoteReport(strings.Join([]string{
 			identity.UniqueID,
 			identity.SignerID,
 			identity.ProductID,
 			identity.Status,
+			strconv.FormatInt(attestHeight, 10),
 		}, "|"))
 		if err != nil {
 			c.LoggerError(logger, "couldn't getRemoteReport "+err.Error())
 			continue
 		}
+		c.LoggerInfo(logger, "broadcasting identity verdict "+identity.UniqueID+" -> "+identity.Status+
+			" attested at height "+strconv.FormatInt(attestHeight, 10)+
+			" (confirmed by "+strconv.Itoa(activeCount)+" of "+strconv.Itoa(len(pioneers))+" pioneers, threshold "+strconv.Itoa(threshold)+")")
 		msg := types.NewMsgPioneerUpdateEnclaveIdentity(
 			pwalletAddr.String(),
 			identity.UniqueID,
@@ -5591,6 +5741,7 @@ func (s *qadenaServer) validateEnclaveIdentities() {
 			identity.ProductID,
 			identity.Status,
 			report,
+			attestHeight,
 		)
 
 		msgs := make([]sdk.Msg, 0)
@@ -5672,22 +5823,15 @@ func (s *qadenaServer) setEnclaveIdentity(in *types.EnclaveIdentity) {
 	}
 }
 
+// getEnclaveIdentity answers "may this measurement have secrets?", not "is this row present".
+//
+// It reads the TRUSTED SET, not the mirrored store.  The mirrored row is the chain's opinion,
+// delivered by the node, and a node replaying a genesis or snapshot it was handed can put anything
+// in it -- see enclave_trusted_identities.go for what that made possible.  The name is unchanged
+// because every caller already means the trust question: verifyRemoteReport gates every peer-facing
+// handler on it, and QueryEnclaveValidateEnclaveIdentity reports our judgement to a peer asking.
 func (s *qadenaServer) getEnclaveIdentity(uniqueID string, signerID string, includeUnvalidated bool) (found bool) {
-	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.EnclaveIdentityKeyPrefix))
-
-	b := store.Get(types.EnclaveIdentityKey(
-		uniqueID,
-	))
-	if b == nil {
-		return false
-	}
-
-	var id types.EnclaveIdentity
-	s.Cdc.MustUnmarshal(b, &id)
-	if includeUnvalidated {
-		return id.SignerID == signerID && id.Status != types.InactiveStatus
-	}
-	return id.SignerID == signerID && id.Status == types.ActiveStatus
+	return s.trusts(uniqueID, signerID, includeUnvalidated)
 }
 
 func (s *qadenaServer) getEnclaveIdentityByUniqueID(uniqueID string) (found bool, id types.EnclaveIdentity) {

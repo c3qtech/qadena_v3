@@ -171,7 +171,20 @@ service Query {
 
   rpc EnclaveValidateEnclaveIdentity (QueryEnclaveValidateEnclaveIdentityRequest) returns (QueryEnclaveValidateEnclaveIdentityResponse) {
     option (google.api.http).get = "/qadena/qadena/enclave_validate_enclave_identity/{remoteReport}/{uniqueID}/{signerID}/{productID}";
-  
+
+  }
+
+  // What enclave build is this node running?  Unauthenticated on purpose: a measurement is not a
+  // secret -- it is written into genesis and published on chain as an EnclaveIdentity -- and the
+  // caller needs it BEFORE it can attest anything, which is the whole point.
+  //
+  // add_full_node.sh asks the seed this and compares it with the joiner's own before minting keys.
+  // A joiner can only bootstrap its trusted set from a seed running its own measurement, so a
+  // mismatch means sync-enclave will refuse; without this the operator finds out several minutes
+  // in, from a rejected handshake that names neither side's build.
+  rpc EnclaveMeasurement (QueryEnclaveMeasurementRequest) returns (QueryEnclaveMeasurementResponse) {
+    option (google.api.http).get = "/qadena/qadena/enclave_measurement";
+
   }
   
   // Queries a list of FindCredential items.
@@ -410,6 +423,19 @@ message QueryEnclaveValidateEnclaveIdentityRequest {
 message QueryEnclaveValidateEnclaveIdentityResponse {
   bytes remoteReport = 1;
   string status        = 2;
+}
+
+message QueryEnclaveMeasurementRequest {
+}
+
+message QueryEnclaveMeasurementResponse {
+  string uniqueID  = 1;
+  string signerID  = 2;
+  string productID = 3;
+  string version   = 4;
+  // Whether this enclave holds a trusted set at all.  A seed with none cannot bootstrap anyone,
+  // and saying so here turns a silent, much later failure into a precondition the joiner reports.
+  bool   bootstrapped = 5;
 }
 
 message QueryEnclaveSyncEnclaveRequest {

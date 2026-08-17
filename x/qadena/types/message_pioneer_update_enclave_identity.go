@@ -8,7 +8,10 @@ import (
 
 var _ sdk.Msg = &MsgPioneerUpdateEnclaveIdentity{}
 
-func NewMsgPioneerUpdateEnclaveIdentity(creator string, uniqueID string, signerID string, productID string, status string, remoteReport []byte) *MsgPioneerUpdateEnclaveIdentity {
+// height is the chain height the remote report was generated at, and is bound INTO the report's
+// certified data -- see MsgPioneerUpdateEnclaveIdentity.height in tx.proto.  Restating it here
+// without regenerating the report simply makes the report fail to verify.
+func NewMsgPioneerUpdateEnclaveIdentity(creator string, uniqueID string, signerID string, productID string, status string, remoteReport []byte, height int64) *MsgPioneerUpdateEnclaveIdentity {
 	return &MsgPioneerUpdateEnclaveIdentity{
 		Creator:      creator,
 		UniqueID:     uniqueID,
@@ -16,6 +19,7 @@ func NewMsgPioneerUpdateEnclaveIdentity(creator string, uniqueID string, signerI
 		ProductID:    productID,
 		Status:       status,
 		RemoteReport: remoteReport,
+		Height:       height,
 	}
 }
 

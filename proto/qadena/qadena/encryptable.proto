@@ -8,6 +8,7 @@ import "cosmos/base/v1beta1/coin.proto";
 
 import "gogoproto/gogo.proto";
 import "qadena/qadena/params.proto";
+import "qadena/qadena/enclave_identity.proto";
 import "qadena/qadena/suspicious_transaction.proto";
 import "qadena/qadena/pedersen_commit.proto";
 import "qadena/qadena/bind_data.proto";
@@ -306,6 +307,24 @@ message EncryptableSharedEnclaveParams {
 	// these only used temporarily to sync data from enclave to enclave
 	EncryptableEnclaveSSOwnerMap SSIntervalOwners = 9;
 	EncryptableEnclavePubKCacheMap SSIntervalPubKCache = 10;
+
+	// THE TRUSTED SET: which enclave measurements this enclave will release secrets to.
+	//
+	// Distinct from the mirrored EnclaveIdentity store, which holds the CHAIN's opinion and is
+	// accumulated and audited against it.  Mirrored rows arrive from the node, and a node with no
+	// history to contradict it -- one whose data/ was wiped, replaying a genesis or a state-sync
+	// snapshot it was handed -- can assert anything.  Genesis in particular names the launch
+	// enclave `active` with no attestation attached and no field to carry one, so an enclave that
+	// derived trust from mirrored status would take an unverifiable claim as authority over every
+	// secret it holds (QueryEnclaveSyncEnclave, SecretShare, RecoverKeyShare, GetRecoverKey all
+	// gate on it through verifyRemoteReport).
+	//
+	// Living HERE rather than in a store of its own is what makes the lifecycle work: this message
+	// is the sync-enclave payload, so a joiner inherits the set over the seed's attested channel;
+	// it is sealed into enclave_params_<uniqueID>.json, so it survives restarts and a wiped data/;
+	// and UpgradeEnclave hands the whole storedEnclaveParams to the next measurement, so an upgrade
+	// carries it forward.  It is never accumulated, so it cannot diverge the store audit.
+	repeated EnclaveIdentity ActiveEnclaveIdentities = 11;
 }
 
 // One page of the sync-enclave handshake.
