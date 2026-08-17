@@ -10,6 +10,8 @@ build_sgx_flag=""
 update_build_number=0
 TITLE="FINAL"
 skip_enclave=0
+force_sgx=0
+no_sgx=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -27,6 +29,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --build-sgx|--build-reproducible)
       build_sgx_flag="--build-sgx"
+      force_sgx=1
+      shift
+      ;;
+    --no-sgx|--debug-build)
+      # The opt-OUT.  Needed on a machine that has ego but wants debug artifacts (a dev box
+      # building for a debug chain, say).  Explicit, because the mistake this guards against is
+      # silent and the mistake it enables is loud.
+      no_sgx=1
       shift
       ;;
     --title)
@@ -39,7 +49,9 @@ while [[ $# -gt 0 ]]; do
       fi
       ;;
     --help)
-      echo "Usage: build.sh [--update-test-unique-id] [--update-build-number] [--skip-enclave] [--build-sgx] [--title <title>]"
+      echo "Usage: build.sh [--update-test-unique-id] [--update-build-number] [--skip-enclave] [--build-sgx] [--no-sgx] [--title <title>]"
+      echo "  SGX is the DEFAULT when ego is installed (it decides -tags realenclave, which"
+      echo "  silently controls whether real attestation is verified).  --no-sgx opts out."
       exit 0
       ;;      
     *)
@@ -48,6 +60,35 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# EGO INSTALLED MEANS SGX, UNLESS YOU SAY OTHERWISE.
+#
+# --build-sgx does two things, and only one of them is loud.  It builds the enclave reproducibly
+# (whose failure mode is a measurement mismatch -- impossible to miss), and it adds `-tags
+# realenclave` to the CHAIN binary, which decides whether ClientVerifyRemoteReport uses the real
+# SGX verifier or DebugVerifyRemoteReport.  That second one is SILENT: a chain binary built without
+# the tag on an SGX node verifies real quotes with the debug verifier, which means it ACCEPTS
+# FORGED DEBUG REPORTS while believing it has attestation.
+#
+# `build.sh --skip-enclave` did exactly that here: it was meant to rebuild only the chain binary
+# and leave MRENCLAVE alone, and it silently dropped the tag as well.  Every joiner was then
+# refused with a bare "Invalid enclave" and nothing in the log said why.
+#
+# So the default follows the TOOLCHAIN: ego present means this machine builds SGX artefacts.  ego
+# is a build dependency, not a runtime one -- an x86 box with no SGX devices can still produce SGX
+# binaries -- which is why this keys on ego rather than on /dev/sgx*.  A machine without ego (the
+# ARM boxes, a Mac) cannot build SGX at all and is unaffected.
+#
+# The asymmetry justifies the default: forgetting the flag is silent and dangerous, while opting
+# out is one word and its failure ("Invalid enclave" on every message) is immediate and obvious.
+if [[ $no_sgx -eq 1 ]]; then
+    build_sgx_flag=""
+    echo "build.sh: --no-sgx: building DEBUG artifacts (chain binary WITHOUT -tags realenclave)"
+elif [[ $force_sgx -eq 0 ]] && command -v ego > /dev/null 2>&1; then
+    build_sgx_flag="--build-sgx"
+    echo "build.sh: ego is installed, so building for SGX (chain binary WITH -tags realenclave)."
+    echo "build.sh: pass --no-sgx for a debug build."
+fi
 
 VERSION_FILE="$qadenabuild/cmd/qadenad/version.txt"
 # update version
