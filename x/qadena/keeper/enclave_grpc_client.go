@@ -340,16 +340,32 @@ func (k Keeper) ClientVerifyRemoteReport(sdkctx sdk.Context, remoteReportBytes [
 	}
 	remoteReportBytes = buf.Bytes()
 
+	// SAY WHICH VERIFIER REJECTED IT, and that one ran at all.
+	//
+	// Both branches used to `return false` in silence, so a rejected enclave message surfaced only
+	// as a bare "Invalid enclave" from the handler, with NOTHING in the log to say why or even
+	// that verification had been attempted.  That cost an hour: a chain binary built without
+	// -tags realenclave was silently verifying a real SGX quote with the DEBUG verifier, and the
+	// only evidence anywhere was the absence of the success lines below.
+	//
+	// Naming the verifier is the important half.  "debug verifier" appearing on a node whose
+	// enclave is ego-signed is the signature of that build mistake, and it is now impossible to
+	// miss -- assertVerifierMatchesEnclave refuses to start in that state, but this line is what
+	// explains an already-running one.
 	if EnclaveClientVerifyRemoteReport == nil {
 		success, uniqueID, signerID = c.DebugVerifyRemoteReport(sdkctx.Logger(), remoteReportBytes, certifyData)
 
 		if !success {
+			c.ContextError(sdkctx, "ClientVerifyRemoteReport: the DEBUG verifier rejected this remote report "+
+				"(if this node's enclave is ego-signed, qadenad was built without -tags realenclave and real quotes can never verify)")
 			return false
 		}
 	} else {
 		success, signerID, uniqueID = EnclaveClientVerifyRemoteReport(sdkctx, remoteReportBytes, certifyData)
 
 		if !success {
+			c.ContextError(sdkctx, "ClientVerifyRemoteReport: the REAL SGX verifier rejected this remote report "+
+				"(see the clientVerifyRemoteReportRealEnclave lines above for the reason: tcb status, hash mismatch, or an unverifiable quote)")
 			return false
 		}
 	}

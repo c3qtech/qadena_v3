@@ -164,6 +164,18 @@ type qadenaServer struct {
 	HomePath    string
 	RealEnclave bool
 
+	// paramsPersisted is true only once sealed params have actually been WRITTEN (or read back at
+	// startup) -- as opposed to merely populated in memory by preInitEnclave.
+	//
+	// InitEnclave and SyncEnclave both short-circuit on "am I already initialized?", and both used
+	// to answer that from the in-memory PioneerID.  preInitEnclave sets that field EARLY, while the
+	// params are only saved at the very end, after the registration tx is accepted.  So a sync that
+	// failed mid-way -- a rejected remote report, say -- left PioneerID set and nothing on disk, and
+	// every retry then returned Status:true having done nothing at all.  Observed exactly that: a
+	// second sync-enclave reported SUCCEEDED with an empty enclave_config/ and no registration on
+	// chain, which reads as "already done" when the truth is "never done".
+	paramsPersisted bool
+
 	mutex sync.RWMutex
 }
 
@@ -770,6 +782,7 @@ func (s *qadenaServer) saveEnclaveParamsIfChanged() bool {
 }
 
 func (s *qadenaServer) saveEnclaveParams() bool {
+	// Set on the way out, below, only if the write succeeds.
 	ep := storedEnclaveParams{
 		PrivateEnclaveParams: s.privateEnclaveParams,
 		SharedEnclaveParams:  s.sharedEnclaveParams,
@@ -823,6 +836,9 @@ func (s *qadenaServer) saveEnclaveParams() bool {
 	}
 
 	lastSavedEnclaveParams = plaintext
+	// The write succeeded, so the params now survive a restart.  This -- not the in-memory
+	// PioneerID -- is what "already initialized" must mean.
+	s.paramsPersisted = true
 
 	c.LoggerDebug(logger, "saved")
 
@@ -959,6 +975,8 @@ func (s *qadenaServer) loadEnclaveParams() bool {
 		c.LoggerInfo(logger, "Couldn't read file "+filename+" but this is ok if the enclave has not yet been initialized.")
 		return false
 	} else {
+		// Read back from disk: persisted by construction.
+		s.paramsPersisted = true
 		c.LoggerInfo(logger, "Read file "+filename)
 	}
 
@@ -1641,9 +1659,14 @@ func (s *qadenaServer) InitEnclave(ctx context.Context, in *types.MsgInitEnclave
 	kb := clientCtx.Keyring
 	_ = kb
 
-	if s.getPrivateEnclaveParamsPioneerID() != "" {
+	// Same reasoning as SyncEnclave: "initialized" means the params reached disk, not that
+	// preInitEnclave populated them in memory during an attempt that then failed.
+	if s.paramsPersisted && s.getPrivateEnclaveParamsPioneerID() != "" {
 		c.LoggerDebug(logger, "already initialized, no need to do this again!")
 		return &types.InitEnclaveReply{Status: true}, nil
+	}
+	if s.getPrivateEnclaveParamsPioneerID() != "" {
+		c.LoggerInfo(logger, "a previous init got as far as generating keys but never persisted them -- redoing it")
 	}
 
 	pwalletID, pwalletAddr, enclaveWalletID, err := s.preInitEnclave(ctx, true, in.PioneerID, in.ExternalAddress, in.PioneerArmorPrivK, in.PioneerArmorPassPhrase)
@@ -2939,9 +2962,16 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 		c.LoggerDebug(logger, "SyncEnclave "+c.PrettyPrint(in))
 	}
 
-	if s.getPrivateEnclaveParamsPioneerID() != "" {
+	// PERSISTED, not merely in memory.  preInitEnclave sets PioneerID early, so a sync that failed
+	// afterwards (a rejected remote report, a refused broadcast) left this set with nothing on
+	// disk -- and every retry then returned Status:true having done nothing, which is how a node
+	// ends up "synchronized" with an empty enclave_config/ and no registration on chain.
+	if s.paramsPersisted && s.getPrivateEnclaveParamsPioneerID() != "" {
 		c.LoggerDebug(logger, "already synchronized")
 		return &types.SyncEnclaveReply{Status: true}, nil
+	}
+	if s.getPrivateEnclaveParamsPioneerID() != "" {
+		c.LoggerInfo(logger, "a previous sync got as far as generating keys but never persisted them -- redoing it")
 	}
 
 	pwalletID, pwalletAddr, enclaveWalletID, err := s.preInitEnclave(ctx, false, in.PioneerID, in.ExternalAddress, in.PioneerArmorPrivK, in.PioneerArmorPassPhrase)

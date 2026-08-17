@@ -203,6 +203,50 @@ func userName() string {
 	return "<user>"
 }
 
+// assertVerifierMatchesEnclave refuses to run a node whose CHAIN BINARY and ENCLAVE BINARY
+// disagree about whether attestation is real.
+//
+// The chain verifies every enclave-signed message with ClientVerifyRemoteReport, which uses the
+// REAL SGX verifier only when cmd/qadenad was built with `-tags realenclave`; otherwise it falls
+// back to DebugVerifyRemoteReport, which accepts debug reports.  Nothing in the binary announces
+// which one it got.
+//
+// So the dangerous combination is silent and security-relevant: an ego-signed enclave next to a
+// chain binary built without the tag means REAL QUOTES ARE NEVER CHECKED -- the node accepts
+// debug reports, i.e. attestation is off, on a chain that believes it has attestation.  It cost an
+// hour here: `build.sh --skip-enclave` (without --build-sgx) rebuilt an SGX node's chain binary
+// without the tag, and every joiner was then refused with a bare "Invalid enclave" while the log
+// said nothing at all, because ClientVerifyRemoteReport's failure path returns false silently.
+//
+// Both directions are wrong, and both are checked:
+//
+//	real enclave + debug verifier   attestation is off.  REFUSE -- this is the security hole.
+//	debug enclave + real verifier   every enclave message will be rejected.  REFUSE -- the node
+//	                                would run and fail every write with "Invalid enclave".
+//
+// Checked here because this is the one place that knows both: the enclave binary is on disk and
+// the verifier is a package-level var set (or not) by the realenclave build tag.
+func assertVerifierMatchesEnclave(logger log.Logger, home string) {
+	realEnclave := EnclaveRealMode(home)
+	realVerifier := EnclaveClientVerifyRemoteReport != nil
+
+	switch {
+	case realEnclave && !realVerifier:
+		panic("this node's enclave is ego-signed (real SGX) but qadenad was built WITHOUT -tags realenclave, " +
+			"so it would verify remote reports with the DEBUG verifier -- meaning real attestation is never " +
+			"checked and forged debug reports would be accepted.  Rebuild the chain binary with " +
+			"'buildscripts/build.sh --build-sgx' (add --skip-enclave to leave the enclave, and therefore " +
+			"MRENCLAVE, untouched).")
+	case !realEnclave && realVerifier:
+		panic("qadenad was built WITH -tags realenclave but this node's enclave is a DEBUG build, so every " +
+			"message the enclave signs would be rejected as 'Invalid enclave'.  Rebuild the chain binary " +
+			"without --build-sgx, or install an ego-signed enclave.")
+	}
+	if realEnclave {
+		c.LoggerInfo(logger, "attestation: real SGX verifier, matching an ego-signed enclave")
+	}
+}
+
 // prepareEnclaveProcesses runs at the top of InitEnclave.  It returns how many dial attempts the
 // caller should make: 5 (the historical count) when nothing was spawned, 90 when a spawn is
 // warming up -- the same 90x1s the deleted run.sh poll allowed, which real SGX cold starts need.
@@ -211,6 +255,14 @@ func userName() string {
 // "Unable to connect to enclave": every one of them (missing binary, unreadable genesis, SGX
 // device permissions) has a specific remedy the operator should be told.
 func prepareEnclaveProcesses(logger log.Logger) int {
+	// BEFORE anything starts, and regardless of who owns the enclave: a verifier/enclave mismatch
+	// is fatal either way, and finding out at startup beats finding out from a joiner's "Invalid
+	// enclave" an hour later.  Needs supervisorHome, which ConfigureEnclaveSupervisor has set by
+	// now under every command that constructs the app.
+	if supervisorHome != "" {
+		assertVerifierMatchesEnclave(logger, supervisorHome)
+	}
+
 	if enclaveSpawnMode == SpawnModeNone {
 		return 5
 	}
