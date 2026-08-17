@@ -150,6 +150,17 @@ echo "preflight"
 echo "========================="
 qadenad_alias status > /dev/null 2>&1 || fail "chain is not reachable -- start it first"
 
+# A LOG PATH THIS USER CAN ACTUALLY WRITE, proven before anything depends on it.
+#
+# This suite used to redirect the build into a fixed /tmp/enclave_upgrade_build.log, and a
+# root-owned file of that name (from an earlier sudo run) made the redirect fail -- so the build
+# NEVER RAN, zsh returned 1, and `tail` of that path printed an eleven-day-old successful build
+# ending in "Install done."  Every artefact agreed with a story that was not happening, and the
+# blame landed in turn on the build, docker's cache, version.txt and install.sh.
+# See user_log_path in scripts/setup_env.sh.
+build_log=$(user_log_path enclave_upgrade_build) \
+    || fail "cannot create a writable build log (see above)"
+
 # WHICH ENCLAVE IS ACTUALLY RUNNING decides where the current identity is read from, and the two
 # sources disagree by design: on SGX the *.txt files are still embedded in the binary but they do not
 # describe it -- the measurement does.  Reading the text files on an SGX box would name an identity
@@ -264,8 +275,18 @@ if [ $sgx_mode -eq 1 ]; then
         || fail "could not commit the version bump; --build-sgx would discard it and rebuild the same measurement"
     echo "temporary commit made on top of $orig_head (reset on exit)"
 
-    "$qadenabuildscripts/build_enclave.sh" --build-sgx > /tmp/enclave_upgrade_build.log 2>&1 \
-        || { tail -20 /tmp/enclave_upgrade_build.log; fail "the --build-sgx enclave build failed"; }
+    # THE STATUS IS CAPTURED, not folded into a `||`.  The old form could not tell "the build
+    # failed" from "the redirect failed and the build never ran", and reported the first for the
+    # second -- see the build_log preflight above.  Naming the number costs one line and makes the
+    # difference visible in the log.
+    set +e
+    "$qadenabuildscripts/build_enclave.sh" --build-sgx > "$build_log" 2>&1
+    build_rc=$?
+    set -e
+    if [ $build_rc -ne 0 ]; then
+        tail -20 "$build_log"
+        fail "the --build-sgx enclave build exited $build_rc (log: $build_log)"
+    fi
 
     next_unique=$(cat "$enclave_src/reproducible_build_unique_id.txt")
     next_signer=$(cat "$enclave_src/reproducible_build_signer_id.txt")

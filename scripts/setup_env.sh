@@ -266,6 +266,37 @@ needs_root_if_real_enclave() {
 # required" is a diagnosable message; blocking forever is not.
 #
 # The bracket classes in the patterns are not decoration -- see the pkill warning in
+# A LOG PATH THIS USER CAN ACTUALLY WRITE, proven with a real write before anything relies on it.
+#
+# /tmp is sticky (1777): a file left there by an earlier run AS ROOT cannot be truncated by the
+# login user.  A failed redirect means THE COMMAND NEVER RUNS -- and because the stale file is still
+# readable, a later `tail` of that path prints the OLD run's output, which reads like a plausible
+# current result.  Every artefact then agrees with a story that is not happening.
+#
+# That has now cost real time twice: once in 1st_node_bringup.sh (its trap 1, two wrong conclusions)
+# and once in test_enclave_upgrade.sh, where a root-owned log from eleven days earlier made a build
+# that never started look like a build that succeeded and then failed.  Hence a shared helper: the
+# name carries the user (root's copy cannot collide), the file is removed first, and writability is
+# PROVEN rather than assumed.
+#
+#   log=$(user_log_path enclave_upgrade_build) || exit 1
+#
+# Prints the path on success.  On failure prints nothing and returns 1, having explained on stderr
+# what is wrong and the single command that fixes it.
+user_log_path() {
+    local base="$1"
+    local path="${TMPDIR:-/tmp}/${base}.$(id -un).log"
+    rm -f "$path" 2>/dev/null
+    if ! : > "$path" 2>/dev/null; then
+        print -u2 "cannot write $path (owner $(stat -c %U "$path" 2>/dev/null || echo unknown); /tmp is sticky)."
+        print -u2 "A redirect that fails means the command never runs, while a stale file of the same"
+        print -u2 "name makes it look like it did.  Remove it and re-run:"
+        print -u2 "    sudo rm -f $path"
+        return 1
+    fi
+    print -r -- "$path"
+}
+
 # nth_node_bringup.sh.  A plain `pgrep -f qadenad_enclave` matches the shell running this very
 # function when the suite was invoked over ssh.
 as_enclave_owner() {

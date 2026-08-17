@@ -100,8 +100,19 @@ trap restart_chain_if_needed EXIT INT TERM ZERR
 echo "========================="
 echo "1. the SGX build produces a SIGNED enclave"
 echo "========================="
-"$qadenabuildscripts/build_enclave.sh" --build-sgx > /tmp/sgx_build_1.log 2>&1 \
-    || { tail -20 /tmp/sgx_build_1.log >&2; fail "the first --build-sgx enclave build failed"; }
+# PER-USER, PROVEN-WRITABLE LOGS.  A fixed /tmp name left root-owned by an earlier sudo run makes
+# the redirect fail -- which means the build never runs, while a `tail` of the same path prints the
+# STALE run's output and reads like a current result.  This suite is the likeliest victim: it is the
+# one most often run under sudo on an SGX box.  See user_log_path in scripts/setup_env.sh.
+build1_log=$(user_log_path sgx_build_1) || fail "cannot create a writable build log (see above)"
+build2_log=$(user_log_path sgx_build_2) || fail "cannot create a writable build log (see above)"
+flag_log=$(user_log_path sgx_flag)      || fail "cannot create a writable log (see above)"
+
+set +e
+"$qadenabuildscripts/build_enclave.sh" --build-sgx > "$build1_log" 2>&1
+rc1=$?
+set -e
+[ $rc1 -eq 0 ] || { tail -20 "$build1_log" >&2; fail "the first --build-sgx enclave build exited $rc1 (log: $build1_log)"; }
 
 [ -f "$unique_file" ] || fail "the build produced no $unique_file"
 first_unique=$(cat "$unique_file")
@@ -136,8 +147,11 @@ echo "========================="
 # Same source, second build.  A differing measurement here means the binary embeds something
 # non-deterministic (a timestamp, a build path, a VCS stamp), and every guarantee that rests on
 # MRENCLAVE is void: nobody else can reproduce the measurement governance approved.
-"$qadenabuildscripts/build_enclave.sh" --build-sgx > /tmp/sgx_build_2.log 2>&1 \
-    || { tail -20 /tmp/sgx_build_2.log >&2; fail "the second --build-sgx enclave build failed"; }
+set +e
+"$qadenabuildscripts/build_enclave.sh" --build-sgx > "$build2_log" 2>&1
+rc2=$?
+set -e
+[ $rc2 -eq 0 ] || { tail -20 "$build2_log" >&2; fail "the second --build-sgx enclave build exited $rc2 (log: $build2_log)"; }
 
 second_unique=$(cat "$unique_file")
 second_signer=$(cat "$signer_file")
@@ -155,8 +169,8 @@ echo "========================="
 # --build-reproducible is kept as an alias, and the three docker Dockerfiles still pass it -- so if
 # it ever stopped being accepted, the SGX build would break inside docker where the error is slow
 # and awkward to find.  Checked at the parser, not with a third full build.
-"$qadenabuildscripts/build_enclave.sh" --build-reproducible --help > /tmp/sgx_flag.log 2>&1 || true
-grep -q "Unknown option" /tmp/sgx_flag.log \
+"$qadenabuildscripts/build_enclave.sh" --build-reproducible --help > "$flag_log" 2>&1 || true
+grep -q "Unknown option" "$flag_log" \
     && fail "--build-reproducible is no longer accepted; docker_build_*/Dockerfile still pass it"
 echo "--build-reproducible still accepted as an alias"
 
