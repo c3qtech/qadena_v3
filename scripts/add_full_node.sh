@@ -604,7 +604,7 @@ while [[ $REPLY != "y" && $REPLY != "n" ]]; do
 		qadenad_alias enclave sync-enclave $PIONEER $ADVERTISE_IP_ADDRESS "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657"
 		
 		if [[ $? != 0 ]] ; then
-			echo "Failed to syncrhonize my enclave with the Pioneer/Enclave on $GENESIS_PIONEER_FIRST_IP_ADDRESS"
+			echo "Failed to synchronize my enclave with the Pioneer/Enclave on $GENESIS_PIONEER_FIRST_IP_ADDRESS"
 			echo "Stopping the enclave"
 			$qadenascripts/stop_qadena.sh --enclave &> /dev/null
 			exit 1

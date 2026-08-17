@@ -583,27 +583,45 @@ func getEnclaveConnection(cmd *cobra.Command) (types.QadenaEnclaveClient, error)
 // because SGX enclave startup is slow enough that the gap is measured in tens of seconds rather
 // than milliseconds.  Both facts are invisible on a debug build, which is why this went unnoticed
 // until a real SGX joiner tried to promote.
+// IT NARRATES EVERY ATTEMPT, deliberately.  An earlier version was silent when the enclave
+// answered first time, which made "I waited and it was ready" indistinguishable in the log from
+// "this code never ran" -- and both were live hypotheses while an SGX joiner kept failing.  A wait
+// that leaves no trace is the same trap as a check that cannot fail: it looks like evidence and is
+// not.  These lines are cheap (a handful, once per promotion) and they are the only proof that the
+// readiness gate did its job.
 func awaitEnclaveServing(enclaveClient types.QadenaEnclaveClient, within time.Duration) error {
 	deadline := time.Now().Add(within)
+	started := time.Now()
 	var lastErr error
+
+	c.LoggerInfo(logger, "waiting for the enclave to answer an RPC before syncing (up to", within, ")")
+
 	for attempt := 1; time.Now().Before(deadline); attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_, err := enclaveClient.GetEnclaveStatus(ctx, &types.MsgGetEnclaveStatus{})
 		cancel()
-		if err == nil || status.Code(err) == codes.Unimplemented {
-			if attempt > 1 {
-				c.LoggerInfo(logger, "the enclave is serving (it needed", attempt, "attempts -- SGX enclave loading is slow)")
-			}
+
+		if err == nil {
+			c.LoggerInfo(logger, "the enclave answered on attempt", attempt, "after",
+				time.Since(started).Round(time.Millisecond), "-- proceeding")
 			return nil
 		}
+		if status.Code(err) == codes.Unimplemented {
+			c.LoggerInfo(logger, "the enclave answered on attempt", attempt,
+				"with Unimplemented (it predates GetEnclaveStatus), which still proves it is serving -- proceeding")
+			return nil
+		}
+
 		lastErr = err
 		if status.Code(err) != codes.Unavailable {
 			// A real, non-transport answer: waiting will not improve it.
+			c.LoggerError(logger, "the enclave answered with a non-transport error, so waiting will not help:", err.Error())
 			return err
 		}
-		if attempt == 1 || attempt%10 == 0 {
-			c.LoggerInfo(logger, "waiting for the enclave to start serving (attempt", attempt, ")")
-		}
+		// Unavailable is the shape of "not bound yet" -- on real SGX `[erthost] loading enclave`
+		// can take tens of seconds.  Say so every time, with the code, so a stuck wait is legible.
+		c.LoggerInfo(logger, "enclave not serving yet (attempt", attempt, ", ", status.Code(err).String(), ") --",
+			time.Since(started).Round(time.Second), "elapsed; retrying")
 		time.Sleep(2 * time.Second)
 	}
 	return fmt.Errorf("the enclave did not start serving within %s: %w", within, lastErr)
