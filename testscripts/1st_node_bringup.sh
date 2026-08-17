@@ -128,7 +128,17 @@ done
 [[ "$FROM"  == <-> ]] || fail "--from takes a phase number, got \"$FROM\""
 [[ "$UNTIL" == <-> ]] || fail "--until takes a phase number, got \"$UNTIL\""
 [[ "$FROM" -le "$UNTIL" ]] || fail "--from $FROM is after --until $UNTIL, so nothing would run"
-[[ -n "$ADVERTISE" ]] || ADVERTISE="$PRIMARY"
+# STRIP ANY user@ PREFIX.  --primary accepts user@host so a node can be driven as a specific
+# account, but what init.sh wants here is a bare IP: it goes into config.toml's p2p address, and
+# CometBFT parses that as <nodeid>@<host>:<port>.  Passing "user@host" produces two '@' and the node
+# refuses to start with
+#
+#     address (5b7c44dc...@alvillarica-no-sgx-groups@192.168.86.140:26656) does not contain ID
+#     run.sh: Process qadenad (real enclave) has exited with RC 1
+#
+# which reads as a p2p/identity problem rather than a mangled argument, and takes the signer and
+# delayed_init_enclave down with it as collateral.
+[[ -n "$ADVERTISE" ]] || ADVERTISE="${PRIMARY##*@}"
 
 # rsh -- run as root through a LOGIN zsh, so PATH and setup_env.sh's definitions are present.
 rsh() {
