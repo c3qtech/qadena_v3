@@ -10,12 +10,14 @@ package keeper_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	"cosmossdk.io/log"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
 	keepertest "github.com/c3qtech/qadena_v3/testutil/keeper"
 	"github.com/c3qtech/qadena_v3/x/qadena/keeper"
@@ -91,4 +93,52 @@ func TestChainUnhookedWriteIsDetectedThenRepaired(t *testing.T) {
 	if strings.Contains(buf2.String(), "ACCUMULATOR MISMATCH") {
 		t.Fatalf("the first compare must have repaired the value; log:\n%s", buf2.String())
 	}
+}
+
+// endBlockEnclave models the per-block ride-along: EndBlock succeeds and returns whatever
+// accumulators the test dictates.  Embedded nil interface panics on anything unmodelled.
+type endBlockEnclave struct {
+	types.QadenaEnclaveClient
+	entries []*types.StoreAccumulatorEntry
+}
+
+func (f *endBlockEnclave) EndBlock(_ context.Context, _ *types.MsgEndBlock, _ ...grpc.CallOption) (*types.EndBlockReply, error) {
+	return &types.EndBlockReply{PreparedHeight: 1, Version: 1, Accumulators: f.entries}, nil
+}
+
+// The every-block check, both directions: agreement stays quiet, divergence is named -- and an
+// old enclave that predates the field (empty list) is tolerated silently, which is what lets the
+// two binaries cross the upgrade window without the chain screaming at its own enclave.
+func TestPerBlockAccumulatorComparison(t *testing.T) {
+	k, ctx := keepertest.QadenaKeeper(t)
+	k.SetWalletNoEnclave(ctx, types.Wallet{WalletID: "pb-w"})
+	k.MaintainStoreAccumulatorsForTest(ctx)
+	chainAcc, ok := k.LoadStoreAccumulator(ctx, types.WalletKeyPrefix)
+	require.True(t, ok)
+
+	prev := keeper.EnclaveGRPCClient
+	t.Cleanup(func() { keeper.EnclaveGRPCClient = prev })
+
+	// Agreement: the enclave reports the same value the chain holds.
+	var quiet bytes.Buffer
+	keeper.EnclaveGRPCClient = &endBlockEnclave{entries: []*types.StoreAccumulatorEntry{
+		{Key: types.WalletKeyPrefix, Acc: chainAcc[:], Present: true},
+	}}
+	k.EnclaveInvokeEndBlock(ctx.WithLogger(log.NewLogger(&quiet)))
+	require.NotContains(t, quiet.String(), "PER-BLOCK ACC DIVERGENCE")
+
+	// Divergence: a different value must be named, with the store and both sides.
+	var loud bytes.Buffer
+	keeper.EnclaveGRPCClient = &endBlockEnclave{entries: []*types.StoreAccumulatorEntry{
+		{Key: types.WalletKeyPrefix, Acc: bytes.Repeat([]byte{0xd1}, 32), Present: true},
+	}}
+	k.EnclaveInvokeEndBlock(ctx.WithLogger(log.NewLogger(&loud)))
+	require.Contains(t, loud.String(), "PER-BLOCK ACC DIVERGENCE",
+		"chain and enclave committing different content for the same block must be named")
+
+	// Compatibility: an empty list (pre-field enclave) runs no check and raises nothing.
+	var compat bytes.Buffer
+	keeper.EnclaveGRPCClient = &endBlockEnclave{}
+	k.EnclaveInvokeEndBlock(ctx.WithLogger(log.NewLogger(&compat)))
+	require.NotContains(t, compat.String(), "PER-BLOCK")
 }

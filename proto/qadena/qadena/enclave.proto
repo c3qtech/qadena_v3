@@ -206,6 +206,12 @@ message MsgEndBlock {
 message EndBlockReply {
   int64 preparedHeight = 1;
   int64 version = 2;
+  // The enclave's per-store accumulators AS THIS BLOCK COMMITS THEM -- captured after the
+  // handler's maintainAccumulators pass, immediately before its commit, so they describe exactly
+  // the block-end state.  The chain compares them against its own rows at the same moment (its
+  // maintain pass runs just before this rpc), giving continuous per-block content-agreement
+  // checking for ~330 bytes in an rpc that already happens every block.  Backlog item 44.
+  repeated StoreAccumulatorEntry accumulators = 3;
 }
 
 message MsgGetEnclaveHeight {

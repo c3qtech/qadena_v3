@@ -281,3 +281,23 @@ func TestGetStoreAccumulatorsHistoricalIsReadOnlyAndHonestlyAbsent(t *testing.T)
 		"the height-5 and height-6 values must differ -- w2 was written between them; identical "+
 			"values would mean the historical read is not actually pinned to the height")
 }
+
+// The per-block ride-along (backlog 44): every EndBlock reply must carry all mirrored stores'
+// accumulators, present, equal to the block-end data -- captured after the maintain pass, so even
+// a fresh enclave's first block answers completely.
+func TestEndBlockReplyCarriesTheCommittedAccumulators(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	putWallet(s, "w1")
+	putWallet(s, "w2")
+
+	r, err := s.EndBlock(context.Background(), &types.MsgEndBlock{Height: 5})
+	require.NoError(t, err)
+	require.Len(t, r.Accumulators, len(storeHashKeys), "every mirrored store rides the reply")
+	for _, e := range r.Accumulators {
+		require.True(t, e.Present, "the maintain pass ran; absent is impossible: "+e.Key)
+		if e.Key == types.WalletKeyPrefix {
+			want := scanAcc(s, types.WalletKeyPrefix)
+			require.Equal(t, want[:], e.Acc, "the reply must carry exactly what this block committed")
+		}
+	}
+}

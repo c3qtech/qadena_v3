@@ -7720,6 +7720,12 @@ func (s *qadenaServer) EndBlock(ctx context.Context, tc *types.MsgEndBlock) (*ty
 	// incidental write is what gives the quiet stores coverage at all.
 	s.maintainAccumulators()
 
+	// Capture the accumulators THIS BLOCK COMMITS -- after the maintain pass, before the commit
+	// below, so the values are exactly the block-end state the chain's own maintain pass (which
+	// runs just before this rpc) describes on its side.  Riding the reply gives per-block
+	// content-agreement checking for ~330 bytes in an rpc that already happens.  Backlog item 44.
+	blockAccumulators := s.collectAccumulatorEntries()
+
 	// the stamp goes through the cache so it lands in the same version as the block's writes
 	s.setPreparedHeight(tc.Height)
 	s.commitCache()
@@ -7755,7 +7761,7 @@ func (s *qadenaServer) EndBlock(ctx context.Context, tc *types.MsgEndBlock) (*ty
 		}
 	}
 
-	return &types.EndBlockReply{PreparedHeight: tc.Height, Version: commitID.Version}, nil
+	return &types.EndBlockReply{PreparedHeight: tc.Height, Version: commitID.Version, Accumulators: blockAccumulators}, nil
 }
 
 func setupConfig() {

@@ -1075,8 +1075,12 @@ func (k Keeper) EnclaveInvokeEndBlock(sdkctx sdk.Context) {
 	//
 	// The height rides along so the enclave can stamp the version it commits and index
 	// height->version for rollback (see enclave_height.go in cmd/qadenad_enclave).
-	_, err := EnclaveGRPCClient.EndBlock(ctx, &types.MsgEndBlock{Height: sdkctx.BlockHeight()})
+	r, err := EnclaveGRPCClient.EndBlock(ctx, &types.MsgEndBlock{Height: sdkctx.BlockHeight()})
 	haltOnEnclaveFailure(sdkctx, "end block", err)
+
+	// The reply carries the accumulators the enclave just committed for this block; compare them
+	// against the chain's own, every block.  See comparePerBlockAccumulators.
+	k.comparePerBlockAccumulators(sdkctx, r.GetAccumulators())
 }
 
 // EnclaveGetHeight reads the enclave's height watermarks: prepared (last height whose writes its

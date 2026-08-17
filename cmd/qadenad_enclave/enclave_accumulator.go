@@ -307,3 +307,20 @@ func (s *qadenaServer) takeAccumulatorReseed(pfx string) bool {
 	}
 	return false
 }
+
+// collectAccumulatorEntries snapshots every mirrored store's maintained accumulator for the
+// EndBlock reply.  Called after maintainAccumulators and before the commit, so every store has a
+// value and the values are exactly what this block commits.  One Get per store; no scans.
+func (s *qadenaServer) collectAccumulatorEntries() []*types.StoreAccumulatorEntry {
+	out := make([]*types.StoreAccumulatorEntry, 0, len(storeHashKeys))
+	for _, pfx := range storeHashKeys {
+		acc, ok := s.loadAccumulator(pfx)
+		if !ok {
+			// Cannot happen after maintainAccumulators; reported rather than invented as zero.
+			out = append(out, &types.StoreAccumulatorEntry{Key: pfx, Rows: -1})
+			continue
+		}
+		out = append(out, &types.StoreAccumulatorEntry{Key: pfx, Acc: acc[:], Rows: -1, Present: true})
+	}
+	return out
+}

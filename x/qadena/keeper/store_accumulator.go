@@ -193,3 +193,50 @@ func (k Keeper) CompareStoreAccumulator(ctx sdk.Context, pfx string) {
 	// info it would be noise -- but without it, silence cannot be told apart from never having run.
 	c.ContextDebug(ctx, "ACCUMULATOR ok "+accumulatorLog(pfx, rows, acc))
 }
+
+// comparePerBlockAccumulators is the EVERY-BLOCK content-agreement check, fed by the accumulators
+// the enclave returns on its EndBlock reply (captured there after its maintain pass, before its
+// commit -- the same block-end clock this keeper's maintainStoreAccumulators, which runs just
+// before the rpc, gives the chain's rows).  Ten 33-byte comparisons per block; no scans anywhere.
+//
+// A DIVERGENCE LOGS AT ERROR RATHER THAN HALTING, deliberately, for now: the seam's side-by-side
+// period caught two subtle clock bugs in its first day, and per-block halting graduates only
+// through backlog item 46's evidence gate, exactly like every other promotion in this design.
+// (Halting here would be node-local and fork-safe -- halt-or-proceed, never divergent state -- so
+// the graduation is about confidence, not safety.)
+//
+// An EMPTY entries list is an old enclave that predates the field; the check simply does not run,
+// which keeps the chain compatible across the upgrade window.  dsvs's AuthorizedSignatory arrives
+// in the reply but lives in that module's store space, unreachable from this keeper -- it stays
+// covered by dsvs's own scan-moment compares.
+func (k Keeper) comparePerBlockAccumulators(sdkctx sdk.Context, entries []*types.StoreAccumulatorEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	agree := 0
+	for _, e := range entries {
+		if !mirroredStores[e.GetKey()] {
+			continue
+		}
+		if !e.GetPresent() {
+			c.ContextError(sdkctx, "Qadena: PER-BLOCK ACC missing on the enclave for key="+e.GetKey()+
+				" -- cannot happen after its maintain pass; investigate")
+			continue
+		}
+		chainAcc, ok := k.LoadStoreAccumulator(sdkctx, e.GetKey())
+		if !ok {
+			c.ContextError(sdkctx, "Qadena: PER-BLOCK ACC missing on the chain for key="+e.GetKey()+
+				" -- cannot happen after maintainStoreAccumulators; call order bug")
+			continue
+		}
+		if string(chainAcc[:]) != string(e.GetAcc()) {
+			c.ContextError(sdkctx, fmt.Sprintf(
+				"Qadena: PER-BLOCK ACC DIVERGENCE key=%s height=%d chain=%s enclave=%x -- "+
+					"chain and enclave committed different content for the same block",
+				e.GetKey(), sdkctx.BlockHeight(), c.AccumulatorHex(chainAcc), e.GetAcc()))
+			continue
+		}
+		agree++
+	}
+	c.ContextDebug(sdkctx, fmt.Sprintf("Qadena: per-block accumulators agree on %d store(s) at height %d", agree, sdkctx.BlockHeight()))
+}
