@@ -1131,3 +1131,21 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     attestation, identity, privilege, or anything conditioned on real hardware.  And when a fleet
     round exercises only one join path, say which one -- "joiner verified" without naming the path
     reads as both.
+
+75. **`--with-enclave-upgrade` reports "could not build the enclave" when the real cause is that
+    `go` is not on PATH, and leaves the chain stopped.**  The suite stops the node by design, builds
+    the new measurement, and restarts on it.  When the build fails the node stays down, and the
+    summary line names the measurement rather than the fault -- the actual error,
+    `build_enclave.sh:126: command not found: go`, is only in
+    `/tmp/enclave_upgrade_build.$USER.log`.
+
+    Hit this session by launching `regression.sh` over ssh WITHOUT a login shell: a non-interactive
+    ssh command does not source the profile that adds `/usr/local/go/bin`, so `go` is missing even
+    though it is installed and on PATH for any normal login.  `nth_node_bringup.sh`'s header already
+    documents this trap ("`bash -lc` is the fix for ... a non-login shell missing /usr/local/go/bin
+    during builds"); the regression has no such guard.
+
+    Two cheap fixes: preflight for `go` (and the other build tools) BEFORE the suite stops the node,
+    so an environment fault costs nothing and reports itself; and surface the last line of the build
+    log in the failure message.  Restarting the chain on failure would be better still -- an
+    environmental error should not leave a stopped node behind.
