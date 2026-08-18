@@ -272,12 +272,35 @@ install_pinned_plugin() {
         _have=$(go version -m "/usr/local/bin/$_bin" 2>/dev/null \
             | awk -v m="$_mod" '$1 == "mod" && $2 == m { print $3; exit }')
     fi
+    # INSTALL AS THE LOGIN USER, NOT AS ROOT.
+    #
+    # This script runs under sudo, so a bare `go install` writes to /root/go/bin -- and the login
+    # user's ~/go/bin keeps whatever ancient copy it had.  That matters because .profile puts
+    # $HOME/go/bin BEFORE /usr/local/bin, so the stale copy WINS at generation time while
+    # /usr/local/bin looks correct to anyone checking.  Measured 2026-08-18: /usr/local/bin had
+    # openapiv2 v2.27.1 and ~/go/bin had v2.19.1, and v2.19.1 is what ran.
+    #
+    # So install into the user's own GOPATH, then publish the same binary system-wide.
+    _user_home=$(getent passwd "$SUDO_USER" | cut -d: -f6)
     if [ "$_have" != "$_want" ]; then
         echo "Installing $_bin $_want (current: ${_have:-none})"
-        go install "$_pkg@$_want"
-        install -m 0755 "$HOME/go/bin/$_bin" "/usr/local/bin/$_bin"
+        sudo -u "$SUDO_USER" env PATH="/usr/local/go/bin:$PATH" HOME="$_user_home" \
+            go install "$_pkg@$_want"
+        install -m 0755 "$_user_home/go/bin/$_bin" "/usr/local/bin/$_bin"
     else
-        echo "$_bin $_have already installed"
+        # Even when /usr/local/bin is right, the user's copy may be stale and shadow it.
+        _user_have=""
+        if [ -f "$_user_home/go/bin/$_bin" ]; then
+            _user_have=$(go version -m "$_user_home/go/bin/$_bin" 2>/dev/null \
+                | awk -v m="$_mod" '$1 == "mod" && $2 == m { print $3; exit }')
+        fi
+        if [ -n "$_user_have" ] && [ "$_user_have" != "$_want" ]; then
+            echo "Replacing stale $_bin $_user_have in $SUDO_USER's GOPATH (it shadows /usr/local/bin)"
+            sudo -u "$SUDO_USER" env PATH="/usr/local/go/bin:$PATH" HOME="$_user_home" \
+                go install "$_pkg@$_want"
+        else
+            echo "$_bin $_have already installed"
+        fi
     fi
 }
 
