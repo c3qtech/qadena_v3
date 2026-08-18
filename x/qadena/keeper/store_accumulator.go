@@ -12,6 +12,9 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
+	"sync"
+	"time"
 
 	"cosmossdk.io/store/prefix"
 	"github.com/cosmos/cosmos-sdk/runtime"
@@ -140,6 +143,38 @@ func (k Keeper) comparePerBlockAccumulators(sdkctx sdk.Context, entries []*types
 			continue
 		}
 		if string(chainAcc[:]) != string(e.GetAcc()) {
+			// WHILE CATCHING UP, COUNT RATHER THAN SHOUT.
+			//
+			// A joining node diverges on exactly two stores, and the cause is a WRITE-AHEAD, not the
+			// sync-enclave handshake (which carries jar/regulator key material and the owners map,
+			// no mirrored tables at all).  preInitEnclave (cmd/qadenad_enclave/enclave.go:1112)
+			// writes the joiner's OWN rows into the enclave's mirrored store locally --
+			// setIntervalPublicKeyIdNoNotify once, setPublicKeyNoNotify twice -- and only then
+			// broadcasts MsgPioneerAddPublicKey / MsgPioneerUpdateIntervalPublicKeyID.  So the
+			// enclave holds them from the moment it initialises and the chain does not until that
+			// transaction is included; the two agree from that block onwards.
+			//
+			// PioneerJar is the control that proves it: the same registration block carries
+			// MsgPioneerUpdatePioneerJar, yet PioneerJar never diverges -- because its only local
+			// writer is the SetPioneerJar RPC from the chain, so there is no write-ahead and no gap.
+			//
+			// Measured on both join paths:
+			// 1,806 ERR lines over heights 1-903 on a block-sync join, 410 over 2001-2205 on a
+			// state-sync one, each ending exactly at the block carrying the joiner's own
+			// MsgPioneerAddPublicKey.  Every one of them expected, every one at ERROR.
+			//
+			// That is worse than untidy.  This check exists to catch the chain and the enclave
+			// committing different content, and an error that fires 1,800 times and always means
+			// "ignore me" trains every reader and every log grep to ignore the one time it does not.
+			// nth_node_bringup reported PASS through all of them.
+			//
+			// So: while replaying, accumulate per store and say it ONCE at the transition -- with the
+			// count, the stores, and whether it resolved.  Nothing is hidden, and the case that
+			// matters (still diverging once live) gets louder rather than quieter.
+			if !k.blockIsLive(sdkctx) {
+				k.noteCatchUpDivergence(e.GetKey())
+				continue
+			}
 			c.ContextError(sdkctx, fmt.Sprintf(
 				"Qadena: PER-BLOCK ACC DIVERGENCE key=%s height=%d chain=%s enclave=%x -- "+
 					"chain and enclave committed different content for the same block",
@@ -148,7 +183,63 @@ func (k Keeper) comparePerBlockAccumulators(sdkctx sdk.Context, entries []*types
 		}
 		agree++
 	}
+	k.reportCatchUpDivergence(sdkctx)
 	c.ContextDebug(sdkctx, fmt.Sprintf("Qadena: per-block accumulators agree on %d store(s) at height %d", agree, sdkctx.BlockHeight()))
+}
+
+// blockIsLive is the same predicate the keeper already sends the enclave on every UpdateHeight, and
+// the same one the enclave-init dispatch gates on.  One definition of "current", used everywhere.
+func (k Keeper) blockIsLive(sdkctx sdk.Context) bool {
+	return time.Since(sdkctx.BlockTime()) <= enclaveLiveBlockWindow
+}
+
+// catchUpDivergence records what diverged while replaying, so the whole window can be reported as a
+// single line instead of two per block.  Node-local bookkeeping: it touches no store, decides no
+// state transition, and is therefore not consensus input.
+var catchUpDivergence = struct {
+	mu     sync.Mutex
+	counts map[string]int
+	first  int64
+	last   int64
+}{counts: map[string]int{}}
+
+func (k Keeper) noteCatchUpDivergence(key string) {
+	catchUpDivergence.mu.Lock()
+	defer catchUpDivergence.mu.Unlock()
+	catchUpDivergence.counts[key]++
+}
+
+// reportCatchUpDivergence empties the tally once the node is live, saying in one line what the
+// per-block lines used to say a thousand times -- and, crucially, whether it RESOLVED.  A window
+// that ended is the benign seeded-ahead-of-replay case; one that has not is the real thing, and the
+// per-block errors above now carry it.
+func (k Keeper) reportCatchUpDivergence(sdkctx sdk.Context) {
+	if !k.blockIsLive(sdkctx) {
+		return
+	}
+	catchUpDivergence.mu.Lock()
+	defer catchUpDivergence.mu.Unlock()
+	if len(catchUpDivergence.counts) == 0 {
+		return
+	}
+	stores := make([]string, 0, len(catchUpDivergence.counts))
+	for key := range catchUpDivergence.counts {
+		stores = append(stores, key)
+	}
+	sort.Strings(stores)
+	parts := make([]string, 0, len(stores))
+	total := 0
+	for _, key := range stores {
+		parts = append(parts, fmt.Sprintf("%s=%d", key, catchUpDivergence.counts[key]))
+		total += catchUpDivergence.counts[key]
+	}
+	c.ContextInfo(sdkctx, fmt.Sprintf(
+		"Qadena: %d per-block accumulator divergence(s) while catching up, now resolved at height %d [%s] -- "+
+			"expected on a joiner: preInitEnclave writes this node's own public keys and interval-key "+
+			"row into the enclave before broadcasting them, so the chain lags until that registration "+
+			"transaction is included",
+		total, sdkctx.BlockHeight(), strings.Join(parts, " ")))
+	catchUpDivergence.counts = map[string]int{}
 }
 
 // accumulatorAuditInterval mirrors the enclave's: every Nth block each side re-derives its

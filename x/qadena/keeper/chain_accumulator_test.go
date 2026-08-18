@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"cosmossdk.io/log"
 	"github.com/stretchr/testify/require"
@@ -122,14 +123,47 @@ func TestPerBlockAccumulatorComparison(t *testing.T) {
 	k.EnclaveInvokeEndBlock(ctx.WithLogger(log.NewLogger(&quiet)))
 	require.NotContains(t, quiet.String(), "PER-BLOCK ACC DIVERGENCE")
 
-	// Divergence: a different value must be named, with the store and both sides.
+	// Divergence ON A LIVE BLOCK: named, with the store and both sides.
+	//
+	// The block time is now load-bearing and has to be set explicitly.  A joining node diverges on
+	// every block of its catch-up -- 1,806 ERROR lines on a block-sync join, 410 on a state-sync one,
+	// all of them expected -- so those are counted and reported once instead (see the catch-up case
+	// below).  A test context has a zero BlockTime, which reads as replaying, so a test that means
+	// "live" must say so.
 	var loud bytes.Buffer
+	liveCtx := ctx.WithBlockTime(time.Now()).WithLogger(log.NewLogger(&loud))
 	keeper.EnclaveGRPCClient = &endBlockEnclave{entries: []*types.StoreAccumulatorEntry{
 		{Key: types.WalletKeyPrefix, Acc: bytes.Repeat([]byte{0xd1}, 32), Present: true},
 	}}
-	k.EnclaveInvokeEndBlock(ctx.WithLogger(log.NewLogger(&loud)))
+	k.EnclaveInvokeEndBlock(liveCtx)
 	require.Contains(t, loud.String(), "PER-BLOCK ACC DIVERGENCE",
 		"chain and enclave committing different content for the same block must be named")
+
+	// Divergence WHILE CATCHING UP: counted, not shouted per block -- then reported once, with the
+	// count and the store, when the node goes live.
+	//
+	// This is the case that produced ~1,800 ERROR lines a joiner could do nothing about, on a check
+	// whose whole value is being believed when it fires.  Nothing is hidden: the tally names the
+	// store and says whether it resolved.
+	var replaying bytes.Buffer
+	staleCtx := ctx.WithBlockTime(time.Now().Add(-time.Hour)).WithLogger(log.NewLogger(&replaying))
+	keeper.EnclaveGRPCClient = &endBlockEnclave{entries: []*types.StoreAccumulatorEntry{
+		{Key: types.WalletKeyPrefix, Acc: bytes.Repeat([]byte{0xd2}, 32), Present: true},
+	}}
+	k.EnclaveInvokeEndBlock(staleCtx)
+	require.NotContains(t, replaying.String(), "PER-BLOCK ACC DIVERGENCE",
+		"a replaying node must not emit a per-block error for divergence it cannot act on")
+
+	// Going live: the window is reported once, naming the store and the count.
+	var resolved bytes.Buffer
+	keeper.EnclaveGRPCClient = &endBlockEnclave{entries: []*types.StoreAccumulatorEntry{
+		{Key: types.WalletKeyPrefix, Acc: chainAcc[:], Present: true},
+	}}
+	k.EnclaveInvokeEndBlock(ctx.WithBlockTime(time.Now()).WithLogger(log.NewLogger(&resolved)))
+	require.Contains(t, resolved.String(), "while catching up",
+		"the catch-up divergence window must be reported once on going live, not silently dropped")
+	require.Contains(t, resolved.String(), types.WalletKeyPrefix,
+		"the one-line report must name which store diverged")
 
 	// Compatibility: an empty list (pre-field enclave) runs no check and raises nothing.
 	var compat bytes.Buffer

@@ -840,3 +840,129 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     export persists on the node it restarts.  The NON-DEFAULT announcement now makes that leak
     loud, but the suite could also re-export the default on its final restart at the cost of the
     next cycle's fast halt.
+
+## Raised by the enclave trust split (2026-08-18, Mac + M1/M2 non-SGX + .120/.140 SGX)
+
+Context: an enclave upgrade made a chain permanently unjoinable -- genesis names the LAUNCH
+measurement `active`, the new enclave refused a foreign active identity, and the keeper panics on
+refusal, so every joiner died at `InitChain` with `code 1146`.  Reproduced on SGX (.140 -> .120) and
+non-SGX (M2 -> M1), fixed across 5f9b7dda..94650e9f by separating the mirrored EnclaveIdentity store
+(the CHAIN's opinion, accumulated) from the trusted set (who may receive secrets, sealed params).
+Verified: full regression 23/23 including `enclave-upgrade`, plus BOTH join paths onto an upgraded
+chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-sync (caught up
+2238, from snapshot 2001).
+
+56. **P0 SECURITY, INTRODUCED BY 2a9acceb AND LIVE IN PUSHED CODE: `isLive` is node-supplied, and
+    a false value skips the attestation age gate entirely.**  `UpdateEnclaveIdentity` reads
+    `if knownPos && isLive && !attestationWithinAgeLimit(...)`, and `isLive` arrives from the
+    keeper (`time.Since(header.Time)`), i.e. from the host.  The enclave cannot distinguish a
+    replayed block message from a direct RPC call by its sole client, and that client IS the
+    adversary in this threat model.  So a host can call the enclave's `UpdateEnclaveIdentity` over
+    the socket with a GENUINE historical promotion of a since-RETIRED build, declare `isLive=false`,
+    gain trust for it, run that build and pull the jar and regulator keys.  Before 2a9acceb a
+    non-live attestation was ignored outright, so this is a regression, not an inherited flaw.  The
+    justification given in the commit ("during replay the stream is consensus-ordered, so nothing
+    chooses what we see") asserts a property the transport does not have.
+    FIX: stop deriving age from `isLive`.  Keep a SEALED MONOTONIC HEIGHT HIGH-WATER-MARK and refuse
+    trust-GAIN when `in.Height < HWM - attestationMaxAgeBlocks`.  A genuine joiner replaying history
+    has a low HWM that climbs with the messages, so in-sequence grants still apply; an established
+    node at height 5000 fed a promotion from height 1000 refuses it however `isLive` is set.  Add
+    "replay may REVOKE, never GRANT" alongside (asymmetric in the safe direction, and the
+    sync-enclave bootstrap plus reconcile/quorum already make declining safe), a future bound
+    preserving the old `age < -1` symmetry, and seed a joiner's HWM from the seed's attested height
+    so a fresh join is not permissive until it climbs.
+
+57. **P1 pre-existing: `verifyRemoteReportMeasurement` reads `remoteReport.Data` AFTER a failed
+    verification.**  The RealEnclave branch returns early only for `Revoked`/`OutOfDate`; every
+    other error logs "neither revoked nor completely out-of-date" and falls through to
+    `bytes.Equal(remoteReport.Data[:len(hash)], hash[:])`.  Two consequences: ego returns a ZERO
+    report for any error that is not `OE_TCB_LEVEL_INVALID`, so `Data` is nil and the slice panics
+    (recovered by the gRPC interceptor -- fragile, not exploitable); and `OutOfDateConfigurationNeeded`
+    (4) != `OutOfDate` (1), so a genuinely out-of-date platform is ACCEPTED.  Last touched by
+    a9998a69, so it predates the trust work.  FIX: reject explicitly when
+    `err != nil && !errors.Is(err, attestation.ErrTCBLevelInvalid)`, before any `Data` read; then an
+    explicit TCB ALLOW-list (UpToDate, ConfigurationNeeded, SWHardeningNeeded,
+    ConfigurationAndSWHardeningNeeded); plus a `len(Data) < len(hash)` guard so the function is
+    panic-free regardless.  Found by static analysis in a parallel session; never executed.
+
+58. **DECISION, not a patch: rollback-freeze is the irreducible floor of the enclave-vs-host model,
+    and should be an explicit accepted residual or an explicit project.**  Sealing gives
+    confidentiality and tamper-detection, NOT freshness.  `enclave_config/enclave_params_<uid>.json`
+    is an ordinary host file (with a `_backup.json` beside it), so the host can restore an older
+    AUTHENTIC sealed state in which a since-retired build was genuinely trusted, spoof `isLive=true`,
+    and have the enclave serve it from its own frozen past.  Verified that nothing detects this: no
+    monotonic counter, no peer-anchored height, and `preparedHeight` is crash-consistency with its
+    own node.  Note the ordering honestly -- this PREDATES the trust split and the split RAISED the
+    bar: before it, trust was read off the mirrored row's Status, so minting trust in a build that
+    was NEVER legitimate took a single mirror push; after it, all four trust-gain routes (self,
+    bootstrap, attested, quorum) require the build to have been genuinely active at some real point.
+    The only real close is a VICTIM-NONCE-BOUND, FAIL-CLOSED peer freshness challenge: the releasing
+    enclave generates a nonce, the answering peer binds (nonce | its height) inside its remote
+    report, and release is refused without threshold fresh answers.  The naive version ("ask a
+    quorum their attested height") is replayable by the very host it defends against.  Building
+    block exists: `QueryEnclaveValidateEnclaveIdentity` is already an attested peer round-trip.
+
+59. **`build_enclave.sh` rewrites a LIVE node's `genesis.json`, and .120 is in that state right
+    now.**  It rewrites `.app_state.qadena.enclaveIdentityList[].uniqueID/signerID` in
+    `$QADENAHOME/config/genesis.json` on every build, so an upgrade on a running node leaves the
+    file disagreeing with the genesis its own CometBFT serves: .120's file records `b43e245d...`
+    while its RPC serves `bcbea7c9...`.  CometBFT validates genesis against what it stored, so
+    **.120 may fail to restart** -- the divergence is established, the restart is UNTESTED.  This
+    also cost a wrong diagnosis: the file was read as authoritative while the RPC held the truth.
+    FIX: refuse to rewrite when the home already has chain data, or write to a template rather than
+    the live config.
+
+60. **`package_release.sh` can never run after a build in the same bringup.**  The build regenerates
+    `.pb.go` (dropping `var X_serviceDesc = _X_serviceDesc` alias lines under a different
+    protoc-gen-gogo), the tree is dirty, and packaging refuses artifacts that "correspond to no
+    commit".  Phase 7 of `1st_node_bringup.sh` failed on EVERY run today; the workaround was
+    stashing the generated files around the package step.  FIX: treat regenerated protobuf output as
+    derived rather than authored for the dirty check, or regenerate deterministically.
+
+61. **`increment_id` collides when the enclave-upgrade suite runs twice against the same chain.**
+    The suite bumps `test_unique_id.txt`, registers the result, then REVERTS the file, so a second
+    run computes the same next id and tries to register a measurement the chain already has.  Every
+    run so far was preceded by a chain wipe, which is why it has not bitten -- but
+    `run_regression_continually.sh` on .120 is exactly the shape that would.
+
+62. **`nth_node_bringup.sh` reports PASS while 1,806 `ERR` lines scroll past.**  Its success criteria
+    never grep the joiner's log for errors, so both joins were reported green while the accumulator
+    divergence below was being written every block.  Same shape as the fork that was reported as
+    "16 of 16 SUITES PASSED".  FIX: fail, or at least report, on unexpected `ERR` in the joiner's
+    log during a bring-up.
+
+63. **The `preInitEnclave` write-ahead may be unnecessary on the JOINER path, and it is the sole
+    cause of every accumulator divergence measured.**  `preInitEnclave` writes the node's own rows
+    locally -- `setIntervalPublicKeyIdNoNotify` once, `setPublicKeyNoNotify` twice -- and only then
+    broadcasts them, so the enclave holds rows the chain lacks until its own registration is
+    included: 1,806 ERR lines over heights 1-903 on a block-sync join, 410 over 2001-2205 on a
+    state-sync one, each ending exactly at the block carrying its own `MsgPioneerAddPublicKey`.
+    `PioneerJar` is the control that proves the mechanism: same registration transaction, no
+    write-ahead, no divergence.  On the FIRST node the write-ahead is load-bearing -- `InitEnclave`
+    calls `GenerateSecretShare` eight lines later, which reads `getAllPioneers()` and
+    `getEnclavePubK()` for every pioneer INCLUDING self and bails out if the pubkey is missing.  On
+    a JOINER, `SyncEnclave` never calls `GenerateSecretShare`, and `updateSSIntervalKey` is
+    proposer-gated, so no reader was found.  "No reader found" is a search result, not a proof, and
+    the failure mode of getting it wrong is a silently missing secret share surfacing later as an
+    undecryptable VShare.  INVESTIGATE by instrumenting a joiner to log every
+    `getAllPioneers`/`getEnclavePubK` call between `SyncEnclave` and its registration block.
+
+64. **Do not cite the accumulator as a backstop against a doctored mirror -- it does not halt.**  The
+    per-block CHAIN-vs-ENCLAVE check (`comparePerBlockAccumulators`) logs at ERROR and continues,
+    deliberately, pending item 46's evidence gate.  The check that DOES panic
+    (`auditStoreAccumulators`) compares the chain's maintained value against a scan of the chain's
+    OWN rows -- self-consistency, blind to the enclave.  Confirmed at runtime: a joiner logged ~900
+    blocks of cross-party divergence and went on to become a healthy validator that passed peer
+    agreement.  A parallel session's security argument rested on the opposite assumption, so this is
+    worth stating where it cannot be missed.
+
+65. **Tests written but never run, and paths still untested.**  Written this session, not executed:
+    `testscripts/test_add_full_node_mismatch.sh` (a joiner whose enclave differs from the seed must
+    be refused BEFORE minting, funding or wiping anything, naming both builds) and
+    `testscripts/test_enclave_identity_catchup.sh` (a node down while identities change: abstain
+    rather than condemn, replay moves no trust, the gap is detected and QUEUED not trusted, and the
+    "queued" line precedes the "trusting" line -- ordering, because an end-state assertion would
+    pass just as happily if the node had believed the mirrored row).  Still untested entirely: the
+    attestation age limit (needs ~1110 blocks or a test-only knob), non-proposer local decide, and
+    the consensus-decoupling change in `PioneerUpdateEnclaveIdentity` under two-node peer agreement
+    -- that last one is the highest severity, since being wrong there is a fork.
