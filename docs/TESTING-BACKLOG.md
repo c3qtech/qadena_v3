@@ -1102,6 +1102,21 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     the ONE per-boot observation of a genuinely wrong state is the Error branch alone -- all the more
     reason the post-seed verification has to exist.
 
+    **Verified BEHAVIOURALLY on M1/M2 (2026-08-19), which is not the same as fixed.**  A debug
+    state-sync join reproduced the SGX conditions exactly (seed on unique048, genesis naming
+    unique047, 26 signatory rows on chain, snapshot at 2000) and the seeding works:
+      - first boot logged `SEEDING ... AuthorizedSignatory (enclave holds no rows)`, chain-acc
+        779484a1...;
+      - two later boots did NOT re-seed, so the rows persisted;
+      - at debug level the compare stated its own verdict -- `in-sync store:
+        key=AuthorizedSignatory/value/ acc=49b434da...` -- which is direct evidence rather than
+        inference from a missing error line;
+      - 894 blocks of live dsvs traffic after the join: 0 refusals, 0 consensus failures, 0
+        divergence, and peer agreement MATCHED at 2680 and again at 3335.
+    So the push lands.  What is still missing is what this item is about: the CODE cannot tell.  A
+    seed that silently failed would produce identical logs and identical silence, and the node would
+    fork hundreds of blocks later.  Verification belongs in the code, not in a session transcript.
+
 73. **The joiner's log is the evidence for a join test, and the NEXT join deletes it.**
     `add_full_node.sh` starts the node from scratch, which takes `~/qadena/logs` with it.  M2 ran a
     state-sync join and then a block-sync join; when the SGX run raised a question about what the
