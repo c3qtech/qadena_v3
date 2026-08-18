@@ -3533,9 +3533,18 @@ func (s *qadenaServer) SetEnclaveIdentity(ctx context.Context, in *types.Enclave
 
 	switch {
 	case isSelf(in.UniqueID, in.SignerID):
-		// Self-evident and unforgeable: we can check this measurement against our own report.  This
-		// is what lets a launch node trust the identity genesis records for it, with no peer to ask.
-		s.trustEnclaveIdentity(in, "mirror push naming our own measurement")
+		// NOT STORED, deliberately.  Self-trust is unconditional in trusts(), so recording it buys
+		// nothing -- while costing the meaning of bootstrapped(), which asks "has anyone granted me
+		// trust I could not derive alone".
+		//
+		// Storing it made that true for every enclave whose own measurement appears in genesis,
+		// which on a chain that has NOT upgraded includes every joiner.  Such a node would believe
+		// itself bootstrapped while holding only {self}, and voting on that set counts zero
+		// confirmations against real peers -- concluding `inactive` for a perfectly good measurement
+		// and broadcasting it if it happened to be proposing.  Exactly what the guard in
+		// validateEnclaveIdentities exists to prevent, re-entering behind it.
+		c.LoggerDebug(logger, "SetEnclaveIdentity: the chain named our own measurement "+in.UniqueID+
+			"; trust in ourselves is implicit and is not recorded in the trusted set")
 	case in.Status == types.InactiveStatus:
 		// A mirror push may REMOVE trust but never add it -- governance or a quorum deactivation
 		// flowing in.  The asymmetry is the point: a hostile node can only ever reduce what it is
