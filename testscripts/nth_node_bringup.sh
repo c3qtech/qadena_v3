@@ -304,7 +304,23 @@ info "genesis  records $gen_uid"
 [[ "$join_uid" == "$prim_uid" ]] || fail "joiner's enclave measurement differs from the primary's.
 Install the joiner from a package BUILT ON THE PRIMARY (buildscripts/package_release.sh), rather
 than building locally: EnclaveIdentity is keyed by measurement, so anything else is refused."
-[[ "$gen_uid" == "$prim_uid" ]] || fail "genesis records a different measurement than the running enclave"
+# GENESIS NAMING A DIFFERENT MEASUREMENT IS NORMAL AFTER AN UPGRADE, and refusing it here was
+# wrong -- it blocked exactly the case the trust split exists to support.
+#
+# Genesis is immutable: it names the measurement the chain LAUNCHED with, forever.  Once a chain
+# upgrades its enclave, every node runs something else, and a joiner replaying genesis meets an
+# identity that is not its own.  That used to be fatal (`code 1146` at InitChain, the bug fixed in
+# 5f9b7dda), so this preflight refused the combination rather than let a joiner discover it after
+# wiping and funding itself.  Now the enclave stores that row without trusting it, and both join
+# paths are verified against an upgraded chain.
+#
+# What still matters is the check ABOVE: the joiner must run the SEED's measurement, because a
+# joiner bootstraps its trusted set from a seed running its own build.  That is the real
+# precondition; this one was a symptom of a bug that no longer exists.
+if [[ "$gen_uid" != "$prim_uid" ]]; then
+    info "genesis records $gen_uid while the chain runs $prim_uid -- an upgraded chain, which is fine"
+    info "  (the joiner stores the genesis identity without trusting it; see docs/ENCLAVE-THREAT-MODEL.md)"
+fi
 info "measurements agree -- attestation can succeed"
 
 # THE JOINER MUST NOT BE CARRYING A FOREIGN GENESIS.  A machine that was a node on a PREVIOUS chain
