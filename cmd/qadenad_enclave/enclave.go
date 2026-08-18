@@ -38,6 +38,7 @@ import (
 	"net"
 
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	"github.com/edgelesssys/ego/attestation"
 	"github.com/edgelesssys/ego/attestation/tcbstatus"
 	"github.com/edgelesssys/ego/ecrypto"
 	"github.com/edgelesssys/ego/enclave"
@@ -958,17 +959,48 @@ func (s *qadenaServer) verifyRemoteReportMeasurement(remoteReportBytes []byte, c
 
 	if s.RealEnclave {
 		remoteReport, err := enclave.VerifyRemoteReport(remoteReportBytes)
-		if err != nil {
-			c.LoggerDebug(logger, "remote report tcbstatus "+tcbstatus.Explain(remoteReport.TCBStatus))
-			if remoteReport.TCBStatus == tcbstatus.Revoked || remoteReport.TCBStatus == tcbstatus.OutOfDate {
-				c.LoggerError(logger, "error verifying remote report "+err.Error())
-				return false, "", ""
-			} else {
-				c.LoggerError(logger, "neither revoked nor completely out-of-date")
-			}
+
+		// A FAILED VERIFICATION MUST NOT REACH THE REPORT'S CONTENTS.
+		//
+		// This used to return early only for Revoked/OutOfDate and otherwise log "neither revoked
+		// nor completely out-of-date" and CARRY ON -- reading remoteReport.Data from a report that
+		// did not verify.  Two consequences, both real:
+		//
+		//   ego returns a ZERO Report for any error that is not OE_TCB_LEVEL_INVALID
+		//   (vendor/github.com/edgelesssys/ego/enclave/ert.go:96-101), so Data is nil, TCBStatus is
+		//   UpToDate(0) -- it looks healthy -- and Data[:32] panics.  The gRPC interceptor recovers
+		//   it, so a forged report was rejected BY ACCIDENT rather than by the check.
+		//
+		//   tcbstatus.OutOfDateConfigurationNeeded is 4 and OutOfDate is 1, so an AUTHENTIC report
+		//   from a genuinely out-of-date platform fell through the != comparison and was ACCEPTED.
+		//
+		// So: reject on any error that is not the TCB-level signal, then judge the TCB status
+		// against an explicit ALLOW-list.  A list that must be extended when a new status appears is
+		// the right failure mode; a deny-list silently admits whatever it has not heard of.
+		if err != nil && !errors.Is(err, attestation.ErrTCBLevelInvalid) {
+			c.LoggerError(logger, "remote report did not verify: "+err.Error())
+			return false, "", ""
+		}
+		c.LoggerDebug(logger, "remote report tcbstatus "+tcbstatus.Explain(remoteReport.TCBStatus))
+		switch remoteReport.TCBStatus {
+		case tcbstatus.UpToDate, tcbstatus.ConfigurationNeeded,
+			tcbstatus.SWHardeningNeeded, tcbstatus.ConfigurationAndSWHardeningNeeded:
+			// acceptable: the platform needs configuration or software hardening, but its TCB is
+			// not out of date and not revoked.
+		default:
+			c.LoggerError(logger, "refusing remote report with TCB status "+
+				tcbstatus.Explain(remoteReport.TCBStatus))
+			return false, "", ""
 		}
 
 		hash := sha256.Sum256([]byte(certifyData))
+		// Length-checked, so this function is panic-free whatever the SDK returns.  The recovery
+		// interceptor turning a panic into a per-request error is not a substitute for not panicking:
+		// it made a rejection look like a crash for as long as this went unnoticed.
+		if len(remoteReport.Data) < len(hash) {
+			c.LoggerError(logger, "remote report data is too short to carry the certify hash")
+			return false, "", ""
+		}
 		if !bytes.Equal(remoteReport.Data[:len(hash)], hash[:]) {
 			c.LoggerDebug(logger, "mismatch hash")
 			c.LoggerDebug(logger, "remoteReportData hash "+hex.EncodeToString(remoteReport.Data[:len(hash)]))
@@ -1040,6 +1072,15 @@ func (s *qadenaServer) loadEnclaveParams() bool {
 
 	s.setPrivateEnclaveParamsSealedTableSharedSecret(
 		ep.PrivateEnclaveParams.SealedTableSharedSecret)
+
+	// THE WATERMARK, restored here or it is worthless: this function rebuilds the params FIELD BY
+	// FIELD, so a field written to disk with no line here is silently dropped on load -- and the
+	// next save then persists the emptied struct, destroying the copy on disk too.  That is exactly
+	// how the trusted set went missing (dcb0d160); do not let a second field learn it the same way.
+	s.advanceTrustHeightHighWaterMark(ep.PrivateEnclaveParams.TrustHeightHighWaterMark, 1)
+	c.LoggerInfo(logger, "loaded trust height watermark: "+
+		strconv.FormatInt(ep.PrivateEnclaveParams.TrustHeightHighWaterMark, 10)+
+		" (0 means this enclave has no height history yet, so old attestations cannot be judged)")
 
 	s.setPrivateEnclaveParamsPioneerExternalIPAddress(
 		ep.PrivateEnclaveParams.PioneerExternalIPAddress)
@@ -2023,6 +2064,13 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 	// trust decision below consults these two: an attestation's age is measured against the height,
 	// and historical blocks must not restate current trust.  Logged on transition only -- per-block
 	// would drown the log, and the transition is the interesting event.
+	// RAISE THE WATERMARK FIRST, before anything judges an attestation's age against it.  Flushed
+	// every keyUpdateFrequency blocks rather than per block: saveEnclaveParams rewrites the sealed
+	// file, and a rewrite per block is both wasteful and a wider window for a torn write.
+	if s.advanceTrustHeightHighWaterMark(in.Height, keyUpdateFrequency) {
+		s.saveEnclaveParamsIfChanged()
+	}
+
 	if setChainPosition(in.Height, in.IsLive) {
 		if in.IsLive {
 			c.LoggerInfo(logger, "chain is LIVE at height "+strconv.FormatInt(in.Height, 10)+" -- trust changes now apply")
@@ -3494,35 +3542,41 @@ func (s *qadenaServer) UpdateEnclaveIdentity(ctx context.Context, in *types.Pion
 	s.setEnclaveIdentity(in.EnclaveIdentity)
 
 	subject := in.EnclaveIdentity.UniqueID + " -> " + in.EnclaveIdentity.Status
-	_, isLive, knownPos := currentChainPosition()
+	hwm := s.getPrivateEnclaveParamsTrustHeightHighWaterMark()
 	c.LoggerInfo(logger, "UpdateEnclaveIdentity: attested claim "+subject+" made at height "+
-		strconv.FormatInt(in.Height, 10)+" (chain is "+map[bool]string{true: "live", false: "replaying"}[isLive || !knownPos]+")")
+		strconv.FormatInt(in.Height, 10)+" (our height watermark is "+strconv.FormatInt(hwm, 10)+")")
 
-	// TRY THE EVIDENCE FIRST; SWEEP ONLY IF IT DOES NOT HOLD.
+	// AGE IS JUDGED AGAINST OUR OWN WATERMARK, NOT AGAINST ANYTHING THE HOST SAYS.
 	//
-	// The age limit applies to LIVE messages only.  A peer sending us something now chooses what to
-	// send, so an unbounded lifetime would let it re-submit a years-old promotion as though it were
-	// current.  Replayed blocks are the opposite case: the stream is consensus-ordered and
-	// immutable, the network already agreed those transitions AND their order, and nothing gets to
-	// choose what we see.  Refusing history on age there throws away good evidence and forces the
-	// reconcile to rebuild what we could simply have read.
+	// This used to be `knownPos && isLive && ...`, and isLive comes from the keeper -- from the host.
+	// The enclave cannot tell a replayed block message from a direct RPC call by its sole client, so
+	// declaring isLive=false skipped the age check entirely and a host could replay a GENUINE
+	// historical promotion of a since-retired build to gain trust for it, then run that build and
+	// ask for the jar and regulator keys.  My own regression (2a9acceb), justified by a property the
+	// transport does not have.
 	//
-	// BOTH DIRECTIONS ARE APPLIED, and that is what makes replaying safe: promotions and
-	// deactivations both arrive attested, so processing the stream in order converges on exactly the
-	// chain's final view.  Accepting historical grants while ignoring historical revocations would
-	// ratchet trust upwards and leave us trusting a measurement the network retired years ago.
-	if knownPos && isLive && !attestationWithinAgeLimit(in.Height, "identity claim "+subject) {
+	// The watermark is the enclave's own memory: monotonic, sealed, and never lowered by anything a
+	// host can say.  A node genuinely replaying history has a LOW watermark that climbs with the
+	// messages, so in-sequence promotions still apply and the benefit that motivated 2a9acceb
+	// survives; a current node fed an out-of-era promotion refuses it whatever the host claims.
+	//
+	// REVOKE, NEVER GRANT, when the evidence is out of era.  Deactivations apply regardless of age:
+	// accepting historical grants while ignoring historical revocations would ratchet trust upward
+	// and leave us trusting a measurement the network retired.  Declining a stale GRANT is safe
+	// because nothing depends on it -- the sync-enclave bootstrap supplies the current set, and
+	// reconcileTrustOnGoingLive plus the quorum settle whatever is missing.
+	revoking := in.EnclaveIdentity.Status == types.InactiveStatus
+	if !revoking && !trustGainWithinWatermark(in.Height, hwm, "identity claim "+subject) {
 		// Say what this MEANS, not just what was decided.  These paths run once in months, so the
-		// log is the only account anyone will have -- and "ignored" leaves the reader to work out
-		// whether trust moved.  It did not, in either direction.
+		// log is the only account anyone will have.
 		_, alreadyTrusted := s.trustedEnclaveIdentity(in.EnclaveIdentity.UniqueID)
 		verdict := "we do NOT trust it"
 		if alreadyTrusted {
 			verdict = "we still trust it, from earlier evidence"
 		}
-		c.LoggerInfo(logger, "UpdateEnclaveIdentity: no trust change for "+in.EnclaveIdentity.UniqueID+
-			" -- a live message carrying an attestation this old is a replay, so it neither grants nor revokes; "+verdict+
-			". The chain row was recorded regardless.")
+		c.LoggerInfo(logger, "UpdateEnclaveIdentity: no trust GAIN for "+in.EnclaveIdentity.UniqueID+
+			" -- the attestation is out of era for this node, so it grants nothing; "+verdict+
+			".  The chain row was recorded regardless.")
 		return &types.UpdateEnclaveIdentityReply{Status: true}, nil
 	}
 
@@ -3539,11 +3593,12 @@ func (s *qadenaServer) UpdateEnclaveIdentity(ctx context.Context, in *types.Pion
 		// outcome depend on whether a quote still verified -- two nodes checking the same historical
 		// report on different days can legitimately disagree, and a replaying node would diverge on
 		// the app hash and halt.  Declining to trust is this enclave's own business.
-		if knownPos && !isLive {
+		if hwm > 0 && in.Height < hwm-attestationMaxAgeBlocks/2 {
 			// Expected on real SGX: DCAP collateral has validity windows and TCB levels are revised,
-			// so a quote from another era may simply no longer check out.  Nothing is lost -- the
-			// reconcile on going live diffs what the chain believes against what we hold and queues
-			// the difference for a quorum that answers about NOW.
+			// so a quote from another era may simply no longer check out.  Judged against our own
+			// watermark rather than a host-supplied liveness flag, for the same reason the gain test
+			// is.  Nothing is lost -- the reconcile on going live diffs what the chain believes
+			// against what we hold and queues the difference for a quorum that answers about NOW.
 			c.LoggerInfo(logger, "could not verify the historical attestation for "+subject+
 				" (its collateral has likely moved on) -- leaving it; the reconcile on going live will settle it")
 		} else {

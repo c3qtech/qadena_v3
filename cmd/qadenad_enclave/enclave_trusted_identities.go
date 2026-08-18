@@ -115,38 +115,58 @@ var attestationMaxAgeBlocks = 2 * keyUpdateFrequency
 // again on this node.
 const validatePeerTimeout = 10 * time.Second
 
-// attestationWithinAgeLimit bounds how old a report may be to be acted on -- and applies ONLY to
-// LIVE messages.  The caller decides; see UpdateEnclaveIdentity for why.
+// How far AHEAD of our watermark an attestation may be and still grant trust.  Not zero: the
+// watermark is raised from UpdateHeight, and a message generated during the same block can arrive
+// with a height a step ahead of what we have recorded.
+const attestationFutureMarginBlocks = 2
+
+// trustGainWithinWatermark decides whether an attestation is recent enough, RELATIVE TO THIS
+// ENCLAVE'S OWN HEIGHT WATERMARK, to grant trust.
 //
-// THE LIMIT EXISTS TO STOP A REPLAY ATTACK, not to express distaste for old quotes.  A peer sending
-// us something now chooses what to send, so without a bound it could re-submit a years-old signed
-// promotion and have it treated as current.  During chain REPLAY none of that applies: the message
-// stream is consensus-ordered and immutable, the network already agreed those transitions and their
-// order, and nobody gets to choose what we see.  Refusing history on age there discards good
-// evidence and forces a sweep that need not happen.
+// The watermark replaces the old `isLive` test, which asked the host a question the host had every
+// reason to lie about: setting isLive=false skipped the age check, so a genuine historical promotion
+// of a since-retired build could be replayed over the socket to gain trust for it.  The watermark is
+// the enclave's own sealed, monotonic memory of how far the chain has gone, so no answer from the
+// host moves it.
 //
-// Reports from the future are refused too: that is either a broken peer or an attempt to buy
-// unlimited lifetime for one quote.
-func attestationWithinAgeLimit(reportHeight int64, what string) bool {
-	height, _, known := currentChainPosition()
-	if !known {
-		// Before the first UpdateHeight -- sync-enclave runs here, and it authenticates the seed by
-		// measurement rather than by age.  Nothing to compare against, so do not pretend.
-		c.LoggerDebug(logger, "no chain position yet; not judging the age of "+what)
+// It separates the two cases the old test conflated:
+//
+//	replaying honestly   the watermark is LOW and climbs with the messages, so in-sequence
+//	                     promotions have height close to it and still apply.
+//	fed out of era       the watermark is already high, so a promotion from far behind is refused,
+//	                     whatever the host claims about liveness.
+//
+// The height is bound inside the report's certifyData, so it cannot be restated to beat this.
+//
+// SCOPE THE CLAIM: this removes the isLive lever for INJECTION into a node's current state.  It does
+// NOT address rollback -- the watermark lives inside the sealed params, so a host that restores an
+// older authentic copy restores an older watermark with it.  See docs/ENCLAVE-THREAT-MODEL.md.
+func trustGainWithinWatermark(reportHeight int64, hwm int64, what string) bool {
+	if hwm == 0 {
+		// No height history yet: this enclave has never seen a block, so it has nothing to judge
+		// against.  Happens during init and sync-enclave, before the node starts -- and those paths
+		// authenticate by MEASUREMENT rather than by age, which is the stronger check anyway.
+		c.LoggerDebug(logger, "no height watermark yet; not judging the age of "+what)
 		return true
 	}
-	age := height - reportHeight
+	age := hwm - reportHeight
 	if age > attestationMaxAgeBlocks {
-		c.LoggerInfo(logger, "ignoring "+what+" attested at height "+strconv.FormatInt(reportHeight, 10)+
-			": "+strconv.FormatInt(age, 10)+" blocks old, limit is "+strconv.FormatInt(attestationMaxAgeBlocks, 10))
+		c.LoggerInfo(logger, "refusing trust gain from "+what+" attested at height "+
+			strconv.FormatInt(reportHeight, 10)+": "+strconv.FormatInt(age, 10)+
+			" blocks behind our watermark "+strconv.FormatInt(hwm, 10)+
+			", limit is "+strconv.FormatInt(attestationMaxAgeBlocks, 10))
 		return false
 	}
-	if age < -1 {
-		c.LoggerError(logger, "refusing "+what+" attested at height "+strconv.FormatInt(reportHeight, 10)+
-			", which is ahead of our height "+strconv.FormatInt(height, 10))
+	if age < -attestationFutureMarginBlocks {
+		// Ahead of us by more than the slack a node legitimately has while catching up within a
+		// block or two.  Either a broken peer or an attempt to buy a quote unlimited lifetime.
+		c.LoggerError(logger, "refusing trust gain from "+what+" attested at height "+
+			strconv.FormatInt(reportHeight, 10)+", which is ahead of our watermark "+
+			strconv.FormatInt(hwm, 10))
 		return false
 	}
-	c.LoggerDebug(logger, "accepting "+what+" attested at height "+strconv.FormatInt(reportHeight, 10)+", "+strconv.FormatInt(age, 10)+" blocks old")
+	c.LoggerDebug(logger, "accepting "+what+" attested at height "+strconv.FormatInt(reportHeight, 10)+
+		", "+strconv.FormatInt(age, 10)+" blocks behind the watermark")
 	return true
 }
 

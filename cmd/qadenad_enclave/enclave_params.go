@@ -20,6 +20,31 @@ type PrivateEnclaveParams struct {
 	PioneerExternalIPAddress string
 
 	SealedTableSharedSecret []byte
+
+	// THE HIGHEST CHAIN HEIGHT THIS ENCLAVE HAS EVER SEEN, and the reason trust-gain no longer
+	// depends on anything the host says.
+	//
+	// The age of an attestation used to be judged against `isLive`, which the keeper computes from
+	// the block header and hands over on every UpdateHeight -- i.e. the host supplies it.  The
+	// enclave cannot tell a replayed block message from a direct RPC call by its sole client, and
+	// that client is the adversary, so declaring isLive=false skipped the age check entirely: a host
+	// could replay a GENUINE historical promotion of a since-retired build and gain trust for it.
+	//
+	// A watermark answers the same question without asking the host anything.  A node genuinely
+	// replaying history has a LOW watermark that climbs with the messages, so in-sequence promotions
+	// still apply; an established node at height 5000 fed a promotion from height 1000 refuses it
+	// however isLive is set.  The height is bound inside the report's certifyData, so it cannot be
+	// restated to beat the test.
+	//
+	// Private, not shared: it describes THIS node's progress, and must not travel to a joiner
+	// through sync-enclave.  (Deliberately seeding a joiner from its seed's attested height is a
+	// separate, wanted change -- it needs a proto field, so it is not in this commit.)
+	//
+	// Persisted COARSELY.  saveEnclaveParams warns that every rewrite is a window in which a crash
+	// leaves the params torn, so this is not written per block.  Under-stating is the safe
+	// direction: it only ever makes the age test more permissive by at most the flush interval,
+	// never less.
+	TrustHeightHighWaterMark int64
 }
 
 // make getters for PrivateEnclaveParams that are thread ssafe
@@ -126,6 +151,26 @@ func (s *qadenaServer) setPrivateEnclaveParamsPioneerExternalIPAddress(pioneerEx
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.privateEnclaveParams.PioneerExternalIPAddress = pioneerExternalIPAddress
+}
+
+func (s *qadenaServer) getPrivateEnclaveParamsTrustHeightHighWaterMark() int64 {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.privateEnclaveParams.TrustHeightHighWaterMark
+}
+
+// advanceTrustHeightHighWaterMark raises the mark and reports whether it moved far enough to be
+// worth persisting.  MONOTONIC BY CONSTRUCTION: it never lowers, so a host replaying old heights at
+// the enclave cannot walk it backwards.
+func (s *qadenaServer) advanceTrustHeightHighWaterMark(height int64, flushEvery int64) (flush bool) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if height <= s.privateEnclaveParams.TrustHeightHighWaterMark {
+		return false
+	}
+	previous := s.privateEnclaveParams.TrustHeightHighWaterMark
+	s.privateEnclaveParams.TrustHeightHighWaterMark = height
+	return previous == 0 || height-previous >= flushEvery
 }
 
 // make getters for SharedEnclaveParams that are thread ssafe
