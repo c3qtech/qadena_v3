@@ -131,6 +131,34 @@ if [[ "$DOCKER_BUILD" = "" ]]; then
     qadenaconfig="$QADENAHOME/config"
     genesisfile="$qadenaconfig/genesis.json"
 
+    # NEVER REWRITE THE GENESIS OF A CHAIN THAT HAS ALREADY RUN.
+    #
+    # Genesis is immutable history: every node agreed it, and CometBFT loads it once at InitChain and
+    # then serves that copy over /genesis forever.  Editing the FILE afterwards does not change the
+    # chain -- it just makes the file disagree with the node standing next to it.
+    #
+    # .120 is in exactly that state today: its genesis.json records b43e245d... while its own RPC
+    # serves bcbea7c9..., because an enclave upgrade ran this rewrite against a live node.  Two
+    # costs, both paid: the file was read as authoritative during a joiner investigation and sent it
+    # down the wrong path for a while; and CometBFT validates genesis against what it stored, so
+    # whether .120 can still RESTART is unknown and untested.
+    #
+    # The rewrite is correct and necessary for a chain being INITIALISED (init.sh runs this before
+    # any node exists).  The test is therefore "has this home already run a chain", not "is a node
+    # running now" -- a stopped node whose data survives is exactly the case that must be refused.
+    if [[ -d "$QADENAHOME/data/application.db" && "$FORCE_GENESIS_REWRITE" != "1" ]] ; then
+        echo ""
+        echo "NOT rewriting $genesisfile: this home has chain data, so the chain has already run."
+        echo "    Genesis is fixed at InitChain; rewriting the file now would only make it disagree"
+        echo "    with the genesis this node serves, and CometBFT may refuse to restart on it."
+        echo "    The enclave binary was still built and installed -- only the genesis edit is skipped."
+        echo "    To re-initialise a chain from scratch, use init.sh (which wipes the home first),"
+        echo "    or pass FORCE_GENESIS_REWRITE=1 if you really mean to edit a live node's genesis."
+        echo ""
+        $qadenabuildscripts/install.sh --enclave
+        exit 0
+    fi
+
     # modify genesis.json
     # CHECKED, because the obvious form DESTROYS GENESIS on any failure.
     #

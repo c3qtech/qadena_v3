@@ -966,3 +966,21 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     attestation age limit (needs ~1110 blocks or a test-only knob), non-proposer local decide, and
     the consensus-decoupling change in `PioneerUpdateEnclaveIdentity` under two-node peer agreement
     -- that last one is the highest severity, since being wrong there is a fork.
+
+66. **Node logs rotate by DATE with no size cap and no retention, and a debug node writes ~100 MB an
+    hour.**  `restart_qadena.sh:54` pipes the node through
+    `rotatelogs -l -D -L $QADENAHOME/logs/qadena.log $QADENAHOME/logs/qadena-%Y-%m-%d.log 86400` --
+    one file per day, nothing pruned, no ceiling.  Measured 2026-08-18: M1 reached **573 MB in about
+    six hours** at `log_level=debug` (M2, quieter, 11 MB).  A long-lived node fills its disk, and a
+    multi-gigabyte log is slow enough to grep that people stop looking -- which is the same failure
+    as item 62, arrived at from the other direction: the evidence exists and nobody reads it.  Wants
+    rotation by SIZE with a retention count (`rotatelogs -n`), or logrotate with compression, plus a
+    decision about whether debug is the right default level for a node expected to stay up.
+    Note the two files are HARDLINKS (`qadena.log` and today's dated file share an inode), so any
+    pruning must account for that rather than assume two copies.
+
+    NOT a bring-up concern, and deliberately not solved there: `1st_node_bringup` already starts
+    clean (`init.sh` does `rm -rf $QADENAHOME`, logs included), and `nth_node_bringup` must NOT
+    delete the joiner's log -- `add_full_node.sh` leaves `logs/` in place, and the previous attempt's
+    log is usually the reason someone is re-joining.  Item 62 reads it from a byte offset taken
+    before the node starts, which gives this run's boundary without destroying the last one's record.

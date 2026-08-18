@@ -652,6 +652,14 @@ phase "5. start the joiner and catch up"
 #
 # nohup does not save us: it redirects only when stdout is a TERMINAL, and over ssh without -t it is
 # a pipe, so restart_qadena.sh's `nohup ... &` still inherits this channel.
+# WHERE THIS RUN'S LOG BEGINS.  add_full_node.sh removes config, data, keyring-test and the three
+# enclave directories -- but NOT logs/ -- so a re-joined node still carries the log of every previous
+# attempt, including the failed ones.  Grepping the whole file would report those as this run's
+# errors.  (1st_node_bringup has no such problem: init.sh does `rm -rf $QADENAHOME`, logs included.)
+# Anchor to a byte offset taken before the node starts, and read only forward from here.
+JOINER_LOG_OFFSET=$(ssh -n "$JOINER" "wc -c < $JOINER_HOME/qadena/logs/qadena.log 2>/dev/null || echo 0" | tr -d '\r ')
+: ${JOINER_LOG_OFFSET:=0}
+
 ssh -n "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./start_qadena.sh' > /dev/null 2>&1 < /dev/null" \
     || fail "start_qadena.sh returned non-zero on $JOINER"
 info "start_qadena.sh returned (it backgrounds run.sh and exits; the node comes up behind it)"
@@ -732,6 +740,35 @@ if [[ "$cu" != "false" ]]; then
     fail "joiner did not catch up within two hours"
 fi
 info "caught up at $(height "$JOINER")"
+
+# DID THE JOINER COMPLAIN?  Nothing here used to look, so both joins were reported PASS while 1,806
+# and 410 ERROR lines were being written -- the same shape as the two-validator fork that was
+# reported as "16 of 16 SUITES PASSED".  A bring-up that cannot see the node's own errors is not
+# checking the thing it exists to check.
+#
+# The allow-list is deliberately SHORT and each entry is justified.  Anything unexplained fails the
+# run: an error nobody has classified is exactly the one worth stopping for.
+info "checking the joiner's log for errors raised during this run"
+joiner_errors=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qadena/logs/qadena.log 2>/dev/null" \
+    | sed 's/\x1b\[[0-9;]*m//g' \
+    | grep -a " ERR " \
+    | grep -avE "Failed to write response|error while stopping connection|use of closed network connection|Stopped accept routine|transport is closed" \
+    | grep -avE "Stopping peer for error|Could not ping the enclave|dial unix /tmp/qadena_.*sock" \
+    | grep -avE "PER-BLOCK ACC DIVERGENCE")
+#   the p2p/websocket/rpc-server lines above are shutdown noise from stop_qadena.sh; the enclave
+#   ping failures are the socket disappearing during that stop; PER-BLOCK ACC DIVERGENCE is the
+#   known, bounded catch-up window (a joiner's enclave holds its own keys before the chain records
+#   them -- see docs/TESTING-BACKLOG.md item 63), and is aggregated rather than per-block from
+#   37209f56 onwards.
+if [[ -n "$joiner_errors" ]]; then
+    info "UNEXPECTED errors in the joiner's log:"
+    print -r -- "$joiner_errors" | head -20 | sed 's/^/      /'
+    n=$(print -r -- "$joiner_errors" | wc -l | tr -d ' ')
+    fail "the joiner logged $n unexplained error line(s) during this run -- \
+a green bring-up over a complaining node is how a fork gets reported as a pass. \
+If these are benign, add them to the allow-list in this script WITH the reason."
+fi
+info "no unexplained errors in the joiner's log"
 
 # EARLIEST HEIGHT IS THE PROOF OF WHICH PATH RAN.  A state-synced node starts its store at the
 # snapshot; a block-synced one has everything from 1.  Asserting it means --state-sync cannot
