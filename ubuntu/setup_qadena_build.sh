@@ -232,67 +232,66 @@ EOF
     apt install -y build-essential libssl-dev
 fi
 
-# check if /usr/local/bin/protoc-gen-grpc-gateway exists
-if [ ! -f /usr/local/bin/protoc-gen-grpc-gateway ]; then
-    echo "Need to install protoc-gen-grpc-gateway version 1.16.0"
-    go install github.com/grpc-ecosystem/grpc-gateway/protoc-gen-grpc-gateway@v1.16.0
-    # Put it somewhere global
-    install -m 0755 "$HOME/go/bin/protoc-gen-grpc-gateway" /usr/local/bin/protoc-gen-grpc-gateway
-fi
+# THE PROTOC PLUGINS, ALL PINNED FROM go.mod AND CHECKED BY VERSION.
+#
+# Two defects lived here, one per plugin, and both are the same shape as bugs found elsewhere in
+# this project -- a check that cannot fail:
+#
+#   `[ ! -f /usr/local/bin/X ]`   existence is not a version.  A machine provisioned two years ago
+#                                 is never updated, because the file is there.
+#   a hardcoded version           protoc-gen-openapiv2 was pinned to v2.28.0 while go.mod declares
+#                                 grpc-gateway/v2 v2.27.1.  Nothing kept the two in step, so the
+#                                 script installed something the project does not use.
+#   `@latest` (gocosmos)          baked in whatever was newest on provisioning day: measured
+#                                 2026-08-18 as v1.4.12 on M1 and v1.7.0 on the Mac.
+#
+# go.mod is the single source of truth -- it already lists all three under its tools block -- and
+# `go version -m` reports the module a Go binary was built from, which is the field that varies.
+#
+# NOTE ON WHAT THESE DO AND DO NOT FIX: ignite does NOT generate with these binaries.  Hiding
+# protoc-gen-gocosmos entirely and running `ignite generate proto-go` still succeeds, because ignite
+# carries its own and caches them under ~/.ignite.  Pinning here is right for anyone invoking buf
+# directly and for reproducibility, but a codegen mismatch is almost always the ignite CACHE -- see
+# the ignite block below.
 
-# check if /usr/local/bin/protoc-gen-openapiv2 exists
-if [ ! -f /usr/local/bin/protoc-gen-openapiv2 ]; then
-    echo "Need to install protoc-gen-openapiv2 version 2.28.0"
-    go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@v2.28.0
-    # Put it somewhere global
-    install -m 0755 "$HOME/go/bin/protoc-gen-openapiv2" /usr/local/bin/protoc-gen-openapiv2
-fi
+gomod_version() {
+    awk -v m="$1" '$1 == m { print $2; exit }' go.mod
+}
 
-# protoc-gen-gocosmos: PINNED TO THE VERSION IN go.mod, AND CHECKED BY VERSION, NOT EXISTENCE.
-#
-# This was `@latest` behind an `[ ! -f ]` test, and both halves were wrong:
-#
-#   @latest      baked in whatever was newest the day a machine was provisioned.  Measured
-#                2026-08-18: the Mac had gogoproto v1.7.0, M1 had v1.4.12, and go.mod asks for
-#                v1.7.2 -- three answers, none of them the project's.
-#   [ ! -f ]     existence is not a version.  A machine provisioned two years ago is never
-#                updated, because the file is there.
-#
-# The consequence is not cosmetic.  v1.4.12 emits an extra `var X_serviceDesc = _X_serviceDesc`
-# alias per service file, so `ignite generate proto-go` rewrites nine .pb.go files, the tree goes
-# dirty, and package_release.sh correctly refuses artifacts that "correspond to no commit" --
-# which blocked phase 7 of 1st_node_bringup.sh on every run.  It is invisible until packaging.
-#
-# NOTE: THIS PLUGIN IS NOT WHAT IGNITE GENERATES WITH.  buf.gen.gogo.yaml names `gocosmos`, but
-# hiding the binary entirely and running `ignite generate proto-go` still succeeds -- ignite supplies
-# its own, cached under ~/.ignite.  Pinning it is still right for anyone invoking buf directly, and
-# `@latest` behind an `[ ! -f ]` test was wrong regardless, but do not expect this to fix a codegen
-# mismatch: see the cache note in the ignite block below, which is what actually decides the output.
-#
-# The version comes from go.mod so the two cannot drift apart again, and the check mirrors how
-# ignite itself is handled twenty lines below: compare, then reinstall if it differs.
-GOCOSMOS_VERSION=$(awk '$1 == "github.com/cosmos/gogoproto" { print $2; exit }' go.mod 2>/dev/null)
-if [ -z "$GOCOSMOS_VERSION" ]; then
-    echo "WARNING: could not read github.com/cosmos/gogoproto from go.mod; skipping the protoc-gen-gocosmos pin."
-    echo "         Generated .pb.go files may not match the committed ones."
-else
-    INSTALLED_GOCOSMOS=""
-    if [ -f /usr/local/bin/protoc-gen-gocosmos ]; then
-        # `go version -m` reports the module that built a binary -- the only reliable way to ask a
-        # plugin what it is.  Comparing file existence, or the binary's own hash across platforms,
-        # answers a different question.
-        INSTALLED_GOCOSMOS=$(go version -m /usr/local/bin/protoc-gen-gocosmos 2>/dev/null \
-            | awk '$1 == "mod" && $2 == "github.com/cosmos/gogoproto" { print $3; exit }')
+# install_pinned_plugin <binary> <go-install-path> <go.mod-module>
+install_pinned_plugin() {
+    _bin="$1"; _pkg="$2"; _mod="$3"
+    _want=$(gomod_version "$_mod")
+    if [ -z "$_want" ]; then
+        echo "WARNING: $_mod is not in go.mod; skipping the $_bin pin."
+        echo "         Generated files may not match the committed ones."
+        return
     fi
-    if [ "$INSTALLED_GOCOSMOS" != "$GOCOSMOS_VERSION" ]; then
-        echo "Installing protoc-gen-gocosmos $GOCOSMOS_VERSION (current: ${INSTALLED_GOCOSMOS:-none})"
-        go install "github.com/cosmos/gogoproto/protoc-gen-gocosmos@$GOCOSMOS_VERSION"
-        # Put it somewhere global
-        install -m 0755 "$HOME/go/bin/protoc-gen-gocosmos" /usr/local/bin/protoc-gen-gocosmos
+    _have=""
+    if [ -f "/usr/local/bin/$_bin" ]; then
+        _have=$(go version -m "/usr/local/bin/$_bin" 2>/dev/null \
+            | awk -v m="$_mod" '$1 == "mod" && $2 == m { print $3; exit }')
+    fi
+    if [ "$_have" != "$_want" ]; then
+        echo "Installing $_bin $_want (current: ${_have:-none})"
+        go install "$_pkg@$_want"
+        install -m 0755 "$HOME/go/bin/$_bin" "/usr/local/bin/$_bin"
     else
-        echo "protoc-gen-gocosmos $INSTALLED_GOCOSMOS already installed"
+        echo "$_bin $_have already installed"
     fi
-fi
+}
+
+install_pinned_plugin protoc-gen-grpc-gateway \
+    github.com/grpc-ecosystem/grpc-gateway/protoc-gen-grpc-gateway \
+    github.com/grpc-ecosystem/grpc-gateway
+
+install_pinned_plugin protoc-gen-openapiv2 \
+    github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2 \
+    github.com/grpc-ecosystem/grpc-gateway/v2
+
+install_pinned_plugin protoc-gen-gocosmos \
+    github.com/cosmos/gogoproto/protoc-gen-gocosmos \
+    github.com/cosmos/gogoproto
 
 
 # ignite

@@ -37,41 +37,43 @@ cd "$SCRIPT_DIR/.." || exit 1
 verbose=0
 [[ $1 == "--verbose" ]] && verbose=1
 
-want=$(awk '$1 == "github.com/cosmos/gogoproto" { print $2; exit }' go.mod)
-if [[ -z $want ]]; then
-    print -u2 "check_codegen_plugins.sh: could not read github.com/cosmos/gogoproto from go.mod"
-    exit 1
-fi
+# Every plugin buf.gen.gogo.yaml names, checked the same way: the version go.mod declares, compared
+# against the module the installed binary was built from.
+check_plugin() {  # <binary> <go.mod module>
+    # NOT `local path` -- in zsh `path` is the array tied to $PATH, so declaring it local empties
+    # PATH inside this function and even `awk` stops resolving.
+    local bin="$1" mod="$2" want have bin_path
+    want=$(awk -v m="$mod" '$1 == m { print $2; exit }' go.mod)
+    if [[ -z $want ]]; then
+        print -u2 "check_codegen_plugins.sh: $mod is not in go.mod"
+        return 1
+    fi
+    bin_path=$(command -v "$bin")
+    if [[ -z $bin_path ]]; then
+        print -u2 "$bin is not on PATH."
+        print -u2 "    go install ${mod}/...@$want   (or re-run ubuntu/setup_qadena_build.sh)"
+        return 1
+    fi
+    have=$(go version -m "$bin_path" 2>/dev/null | awk -v m="$mod" '$1 == "mod" && $2 == m { print $3; exit }')
+    if [[ $have != $want ]]; then
+        print -u2 ""
+        print -u2 "$bin is the WRONG VERSION for this project."
+        print -u2 "    installed: ${have:-unknown}   ($bin_path)"
+        print -u2 "    go.mod:    $want"
+        print -u2 ""
+        print -u2 "    Re-run ubuntu/setup_qadena_build.sh, which pins all three from go.mod."
+        print -u2 ""
+        return 1
+    fi
+    (( verbose )) && print "$bin $have matches go.mod"
+    return 0
+}
 
-plugin=$(command -v protoc-gen-gocosmos)
-if [[ -z $plugin ]]; then
-    print -u2 "protoc-gen-gocosmos is not on PATH, so ignite would generate with a different plugin."
-    print -u2 "    go install github.com/cosmos/gogoproto/protoc-gen-gocosmos@$want"
-    exit 1
-fi
+check_plugin protoc-gen-gocosmos      github.com/cosmos/gogoproto            || exit 1
+check_plugin protoc-gen-grpc-gateway  github.com/grpc-ecosystem/grpc-gateway || exit 1
+check_plugin protoc-gen-openapiv2     github.com/grpc-ecosystem/grpc-gateway/v2 || exit 1
 
-have=$(go version -m "$plugin" 2>/dev/null \
-    | awk '$1 == "mod" && $2 == "github.com/cosmos/gogoproto" { print $3; exit }')
 
-if [[ $have != $want ]]; then
-    print -u2 ""
-    print -u2 "protoc-gen-gocosmos is the WRONG VERSION for this project."
-    print -u2 "    installed: ${have:-unknown}   ($plugin)"
-    print -u2 "    go.mod:    $want"
-    print -u2 ""
-    print -u2 "    Generating with it rewrites the .pb.go files in a shape this project did not commit."
-    print -u2 "    You will not see that here -- it surfaces later as \"the working tree is dirty\" when"
-    print -u2 "    packaging, long after the build that caused it."
-    print -u2 ""
-    print -u2 "    Fix:"
-    print -u2 "        go install github.com/cosmos/gogoproto/protoc-gen-gocosmos@$want"
-    print -u2 "        sudo install -m 0755 \"\$HOME/go/bin/protoc-gen-gocosmos\" /usr/local/bin/protoc-gen-gocosmos"
-    print -u2 "    or re-run ubuntu/setup_qadena_build.sh, which now pins it from go.mod."
-    print -u2 ""
-    exit 1
-fi
-
-(( verbose )) && print "protoc-gen-gocosmos $have matches go.mod"
 
 # IGNITE, checked the same way and for the same reason.  Pinned in ubuntu/setup_qadena_build.sh
 # rather than go.mod, because ignite is a tool this project runs, not a module it links.
