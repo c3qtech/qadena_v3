@@ -123,6 +123,11 @@ cd $qadenabuild
 echo "Copying config/config.yml -> config.yml"
 cp $qadenabuild/config/config.yml $qadenabuild/config.yml
 
+# `ignite chain init` REGENERATES THE PROTOS as a side effect, using the machine's local plugins.
+# A mismatched one rewrites nine .pb.go files and the failure surfaces minutes later at packaging,
+# naming neither the plugin nor the version.  Checked here, where it is still cheap to fix.
+"$qadenabuildscripts/check_codegen_plugins.sh" || exit 1
+
 echo "Initializing chain"
 if ignite chain init --home $QADENAHOME ; then
     echo "Built chain, copying"

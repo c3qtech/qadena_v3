@@ -244,12 +244,47 @@ if [ ! -f /usr/local/bin/protoc-gen-openapiv2 ]; then
     install -m 0755 "$HOME/go/bin/protoc-gen-openapiv2" /usr/local/bin/protoc-gen-openapiv2
 fi
 
-# check if /usr/local/bin/protoc-gen-gocosmos exists
-if [ ! -f /usr/local/bin/protoc-gen-gocosmos ]; then
-    echo "Need to install protoc-gen-gocosmos"
-    go install github.com/cosmos/gogoproto/protoc-gen-gocosmos@latest
-    # Put it somewhere global
-    install -m 0755 "$HOME/go/bin/protoc-gen-gocosmos" /usr/local/bin/protoc-gen-gocosmos
+# protoc-gen-gocosmos: PINNED TO THE VERSION IN go.mod, AND CHECKED BY VERSION, NOT EXISTENCE.
+#
+# This was `@latest` behind an `[ ! -f ]` test, and both halves were wrong:
+#
+#   @latest      baked in whatever was newest the day a machine was provisioned.  Measured
+#                2026-08-18: the Mac had gogoproto v1.7.0, M1 had v1.4.12, and go.mod asks for
+#                v1.7.2 -- three answers, none of them the project's.
+#   [ ! -f ]     existence is not a version.  A machine provisioned two years ago is never
+#                updated, because the file is there.
+#
+# The consequence is not cosmetic.  v1.4.12 emits an extra `var X_serviceDesc = _X_serviceDesc`
+# alias per service file, so `ignite generate proto-go` rewrites nine .pb.go files, the tree goes
+# dirty, and package_release.sh correctly refuses artifacts that "correspond to no commit" --
+# which blocked phase 7 of 1st_node_bringup.sh on every run.  It is invisible until packaging,
+# and the obvious diagnosis (pin ignite) is wrong: buf.gen.gogo.yaml names `gocosmos` as a LOCAL
+# plugin, so ignite runs whatever binary is on the machine.  Both machines reported the same
+# ignite version while producing different output.
+#
+# The version comes from go.mod so the two cannot drift apart again, and the check mirrors how
+# ignite itself is handled twenty lines below: compare, then reinstall if it differs.
+GOCOSMOS_VERSION=$(awk '$1 == "github.com/cosmos/gogoproto" { print $2; exit }' go.mod 2>/dev/null)
+if [ -z "$GOCOSMOS_VERSION" ]; then
+    echo "WARNING: could not read github.com/cosmos/gogoproto from go.mod; skipping the protoc-gen-gocosmos pin."
+    echo "         Generated .pb.go files may not match the committed ones."
+else
+    INSTALLED_GOCOSMOS=""
+    if [ -f /usr/local/bin/protoc-gen-gocosmos ]; then
+        # `go version -m` reports the module that built a binary -- the only reliable way to ask a
+        # plugin what it is.  Comparing file existence, or the binary's own hash across platforms,
+        # answers a different question.
+        INSTALLED_GOCOSMOS=$(go version -m /usr/local/bin/protoc-gen-gocosmos 2>/dev/null \
+            | awk '$1 == "mod" && $2 == "github.com/cosmos/gogoproto" { print $3; exit }')
+    fi
+    if [ "$INSTALLED_GOCOSMOS" != "$GOCOSMOS_VERSION" ]; then
+        echo "Installing protoc-gen-gocosmos $GOCOSMOS_VERSION (current: ${INSTALLED_GOCOSMOS:-none})"
+        go install "github.com/cosmos/gogoproto/protoc-gen-gocosmos@$GOCOSMOS_VERSION"
+        # Put it somewhere global
+        install -m 0755 "$HOME/go/bin/protoc-gen-gocosmos" /usr/local/bin/protoc-gen-gocosmos
+    else
+        echo "protoc-gen-gocosmos $INSTALLED_GOCOSMOS already installed"
+    fi
 fi
 
 
