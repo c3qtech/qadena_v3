@@ -47,6 +47,8 @@ import (
 	"strconv"
 	"sync"
 
+	"cosmossdk.io/store/prefix"
+
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 	"github.com/c3qtech/qadena_v3/x/qadena/types"
 )
@@ -247,6 +249,80 @@ func (s *qadenaServer) activeTrustedEnclaveIdentities() []*types.EnclaveIdentity
 		}
 	}
 	return out
+}
+
+// reconcileTrustOnGoingLive closes the gap that deferring trust changes during replay leaves behind.
+//
+// While catching up we act on no attestation and honour no deactivation, because replayed history is
+// not evidence about now.  That is safe only if nothing is silently DROPPED -- and something can be:
+// a promotion that lands while this node is still more than a couple of minutes behind the head is
+// replayed, ignored, and never repeated.  The node finishes catch-up missing trust the rest of the
+// network has.
+//
+// It is detectable because the enclave holds both opinions.  The mirrored store is the chain's view,
+// replayed to the head; the trusted set is ours, frozen during replay.  Once live, the difference
+// between them is exactly what was deferred:
+//
+//	chain says inactive, we trust it     -> drop it.  A downgrade is always safe to honour, and this
+//	                                        is the historical deactivation we skipped.
+//	chain says active, we do not trust it -> QUEUE IT FOR VALIDATION.  Not trust it.
+//
+// The second line is the point.  The mirrored store is untrusted input, so it cannot be the
+// authority -- but it is a perfectly good POINTER to what needs verifying.  The identity goes onto
+// the unvalidated queue and is resolved the ordinary way: ask peers we already trust, and let their
+// attested answers decide.  Genesis may tell us an identity exists; it may not tell us to trust it,
+// and the same rule applies to every row the node hands us.
+func (s *qadenaServer) reconcileTrustOnGoingLive() {
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.EnclaveIdentityKeyPrefix))
+	itr := store.Iterator(nil, nil)
+	defer itr.Close()
+
+	dropped, queued, agreed := 0, 0, 0
+	pending := s.getUnvalidatedEnclaveIdentities()
+	alreadyQueued := func(uid string) bool {
+		for _, id := range pending.Identity {
+			if id != nil && id.UniqueID == uid {
+				return true
+			}
+		}
+		return false
+	}
+
+	for ; itr.Valid(); itr.Next() {
+		var id types.EnclaveIdentity
+		s.Cdc.MustUnmarshal(itr.Value(), &id)
+
+		if isSelf(id.UniqueID, id.SignerID) {
+			continue
+		}
+		_, trusted := s.trustedEnclaveIdentity(id.UniqueID)
+
+		switch {
+		case id.Status == types.InactiveStatus && trusted:
+			s.untrustEnclaveIdentity(id.UniqueID, "reconcile on going live: the chain deactivated it while we were replaying")
+			dropped++
+		case id.Status == types.ActiveStatus && !trusted:
+			if alreadyQueued(id.UniqueID) {
+				continue
+			}
+			cp := id
+			pending.Identity = append(pending.Identity, &cp)
+			queued++
+			c.LoggerInfo(logger, "reconcile on going live: the chain considers "+id.UniqueID+
+				" active and we do not trust it -- queued for peer validation, NOT trusted on the chain's word alone")
+		default:
+			agreed++
+		}
+	}
+
+	if queued > 0 {
+		s.setUnvalidatedEnclaveIdentities(pending)
+		// Same short delay a freshly arrived identity gets: a few blocks, so the node is settled
+		// before it starts asking peers.
+		unvalidatedEnclaveIdentitiesCheckCounter = 2
+	}
+	c.LoggerInfo(logger, "reconcile on going live: "+strconv.Itoa(agreed)+" identities agreed, "+
+		strconv.Itoa(dropped)+" dropped, "+strconv.Itoa(queued)+" queued for validation")
 }
 
 // verifySeedIsOurBuild authenticates the OTHER end of the sync-enclave handshake.

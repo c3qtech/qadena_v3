@@ -1044,6 +1044,14 @@ func (s *qadenaServer) loadEnclaveParams() bool {
 	s.setSharedEnclaveParamsSSIntervalPubKCache(
 		ep.SharedEnclaveParams.SSIntervalPubKCache)
 
+	// THE TRUSTED SET, which is the whole reason a node keeps its trust across a restart or a wiped
+	// data/ -- without this line it is written to disk and dropped on the way back, and the next
+	// save then erases the copy on disk as well.
+	s.setSharedEnclaveParamsActiveEnclaveIdentities(
+		ep.SharedEnclaveParams.ActiveEnclaveIdentities)
+	c.LoggerInfo(logger, "loaded trusted set: "+strconv.Itoa(len(ep.SharedEnclaveParams.ActiveEnclaveIdentities))+
+		" enclave identities (0 means this node can only trust itself until a sync-enclave bootstrap)")
+
 	// populate our keyring
 
 	kb := clientCtx.Keyring
@@ -1995,6 +2003,10 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 	if setChainPosition(in.Height, in.IsLive) {
 		if in.IsLive {
 			c.LoggerInfo(logger, "chain is LIVE at height "+strconv.FormatInt(in.Height, 10)+" -- trust changes now apply")
+			// Catching up is over, so settle what catching up deferred: honour deactivations we
+			// skipped, and queue for validation anything the chain considers active that we do not
+			// trust.  Runs on the transition only, not per block.
+			go s.reconcileTrustOnGoingLive()
 		} else {
 			c.LoggerInfo(logger, "chain is REPLAYING at height "+strconv.FormatInt(in.Height, 10)+" -- trust changes are deferred until caught up")
 		}
@@ -2028,13 +2040,18 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 	unvalidatedEnclaveIdentitiesCheckCounter--
 	c.LoggerDebug(logger, "unvalidatedEnclaveIdentitiesCheckCounter "+c.PrettyPrint(unvalidatedEnclaveIdentitiesCheckCounter))
 	if unvalidatedEnclaveIdentitiesCheckCounter == 0 {
-		if in.IsProposer {
-			go func() {
-				c.LoggerDebug(logger, "checking for unvalidated enclave identities")
-				// check for unvalidated identities
-				s.validateEnclaveIdentities()
-			}()
-		}
+		// EVERY NODE DECIDES; ONLY THE PROPOSER BROADCASTS.
+		//
+		// These were one action, gated together on IsProposer, which left a plain full node unable
+		// to resolve anything it had queued -- it never proposes, so it never asked peers, so trust
+		// it missed while replaying stayed missed.  They are separate concerns: deciding updates
+		// only our own trusted set and is every node's business, while broadcasting the verdict must
+		// stay single-writer or every node floods the same transaction.
+		broadcast := in.IsProposer
+		go func() {
+			c.LoggerDebug(logger, "checking for unvalidated enclave identities (broadcast="+strconv.FormatBool(broadcast)+")")
+			s.validateEnclaveIdentities(broadcast)
+		}()
 		// set it to max to a large number to prevent it from firing again
 		unvalidatedEnclaveIdentitiesCheckCounter = keyUpdateFrequency
 	}
@@ -3447,6 +3464,18 @@ func (s *qadenaServer) UpdateEnclaveIdentity(ctx context.Context, in *types.Pion
 	// Age before signature: verifying a stale quote is the expensive way to learn it is stale, and
 	// during replay we would be checking a months-old report against today's collateral.
 	if !attestationIsCurrent(in.Height, "identity claim "+subject) {
+		// Say what this MEANS, not just what was decided.  These paths run once in months, so the
+		// log is the only account anyone will have -- and "ignored" leaves the reader to work out
+		// whether trust moved.  It did not, in either direction: an old promotion grants nothing,
+		// and an old deactivation revokes nothing, because neither is evidence about now.
+		_, alreadyTrusted := s.trustedEnclaveIdentity(in.EnclaveIdentity.UniqueID)
+		verdict := "we do NOT trust it"
+		if alreadyTrusted {
+			verdict = "we still trust it, from earlier evidence"
+		}
+		c.LoggerInfo(logger, "UpdateEnclaveIdentity: no trust change for "+in.EnclaveIdentity.UniqueID+
+			" -- the attestation is not current, so it neither grants nor revokes; "+verdict+
+			". The chain row was recorded regardless.")
 		return &types.UpdateEnclaveIdentityReply{Status: true}, nil
 	}
 
@@ -5602,25 +5631,32 @@ func (s *qadenaServer) setPioneerJarNoNotify(in types.PioneerJar) {
 	store.Set(types.PioneerJarKey(in.PioneerID), b)
 }
 
-func (s *qadenaServer) validateEnclaveIdentities() {
-	// AN UNBOOTSTRAPPED ENCLAVE MUST NOT VOTE.  The verdict below is "how many pioneers I TRUST
-	// confirmed this", and a fresh enclave trusts only itself -- so it would count zero, conclude
-	// `inactive` for a perfectly good identity, and broadcast that verdict to the entire network.
-	// One node that joined without a sync-enclave bootstrap, proposing at the wrong moment, could
-	// deactivate the measurement everyone else is running.
-	//
-	// Latent before the trusted set existed too: an enclave whose peers were all unreachable would
-	// reach the same conclusion for the same reason.
-	if !s.bootstrapped() {
-		c.LoggerInfo(logger, "skipping enclave identity validation: this enclave has no trusted set yet, so every peer would count as unconfirmed")
-		return
-	}
-
+// broadcast false means "decide, do not tell anyone": update our own trusted set from what peers
+// attest, and leave the on-chain record to whichever node is proposing.  See the call site.
+func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 	// get the unvalidated identities
 	unvalidated := s.getUnvalidatedEnclaveIdentities()
 	c.LoggerDebug(logger, "unvalidateEnclaveIdentities "+c.PrettyPrint(unvalidated))
 	// validate the identities
 	pioneers := s.getAllPioneers()
+
+	// AN ENCLAVE THAT CANNOT EVALUATE PEERS MUST NOT VOTE ON THEM.  The verdict below counts how
+	// many pioneers WE TRUST confirmed the identity, so an enclave with no trust beyond itself
+	// counts zero against a network of peers, concludes `inactive` for a perfectly good measurement,
+	// and -- if it happens to be proposing -- broadcasts that to everyone.
+	//
+	// The test is "are there peers I cannot evaluate", NOT "is my trusted set empty".  Those differ
+	// exactly where it matters: the FIRST node of a chain has no peers and never will have a
+	// bootstrap, and it is the node that must promote the next enclave during an upgrade.  Gating on
+	// the set alone deadlocked precisely that case -- the upgrade suite sat for 180s watching
+	// unique048 stay `unvalidated`, because the only node able to promote it had ruled itself out.
+	// With no other pioneers the existing branch below marks the identity valid on its own
+	// authority, which is right: there is nobody else to ask.
+	if len(pioneers) > 0 && !s.bootstrapped() {
+		c.LoggerInfo(logger, "skipping enclave identity validation: "+strconv.Itoa(len(pioneers))+
+			" peer pioneer(s) exist but this enclave has no trusted set, so every one of them would count as unconfirmed")
+		return
+	}
 	c.LoggerDebug(logger, "getAllPioneers "+c.PrettyPrint(pioneers))
 	// randomize the array
 	pioneers = randomizePioneerIDs(pioneers, s.getPrivateEnclaveParamsPioneerID())
@@ -5743,6 +5779,13 @@ func (s *qadenaServer) validateEnclaveIdentities() {
 			report,
 			attestHeight,
 		)
+
+		if !broadcast {
+			// Decided, not announced.  Our trusted set is already updated above; the on-chain record
+			// is the proposer's job, and every node reaches this verdict independently anyway.
+			c.LoggerInfo(logger, "not the proposer: keeping the verdict for "+identity.UniqueID+" local, not broadcasting it")
+			continue
+		}
 
 		msgs := make([]sdk.Msg, 0)
 		msgs = append(msgs, msg)

@@ -190,6 +190,17 @@ func (s *qadenaServer) getSharedEnclaveParamsSSIntervalPubKCache() *types.Encryp
 	return s.sharedEnclaveParams.SSIntervalPubKCache
 }
 
+// MUST be called from loadEnclaveParams.  The shared params are restored FIELD BY FIELD there, so a
+// field with no setter of its own is written to disk and silently dropped on the way back -- and
+// because the next save then persists the emptied struct, the value on disk is destroyed too.  The
+// trusted set went missing exactly that way: populated at genesis, gone after the first restart, and
+// the params file rewritten without it, so nothing was left to show it had ever been there.
+func (s *qadenaServer) setSharedEnclaveParamsActiveEnclaveIdentities(ids []*types.EnclaveIdentity) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.sharedEnclaveParams.ActiveEnclaveIdentities = ids
+}
+
 func (s *qadenaServer) setSharedEnclaveParamsRegulatorInfo(regulatorID string, regulatorPubK string, regulatorPrivK string, regulatorArmorPrivK string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
