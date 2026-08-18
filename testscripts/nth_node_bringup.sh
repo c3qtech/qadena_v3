@@ -246,8 +246,22 @@ sudo_for() {
 }
 SUDO_P=$(sudo_for "$PRIMARY")
 SUDO_J=$(sudo_for "$JOINER")
-[[ -n "$SUDO_P" ]] || info "primary has no SGX device: running unprivileged"
-[[ -n "$SUDO_J" ]] || info "joiner has no SGX device: running unprivileged"
+
+# REPORT THE STATE, DO NOT INFER IT FROM $SUDO -- the same correction 1st_node_bringup.sh already
+# carries.  sudo_for is empty in TWO different situations: the devices are present and this user can
+# open them (the normal, provisioned case), or there is no SGX at all.  Saying "has no SGX device"
+# for both is right half the time and confidently wrong the other half: it printed exactly that for
+# .120 and .140 in the middle of a real-SGX state-sync join.  A test log that misdescribes the
+# hardware it is running on is worse than silence, because it gets quoted later as evidence.
+sgx_desc() {
+    case "$(sgx_state "$1")" in
+        0) print "SGX present, devices usable -- no sudo needed" ;;
+        1) print "SGX present, but this user cannot open the devices -- commands will use sudo" ;;
+        *) print "no SGX device -- this node runs a DEBUG enclave" ;;
+    esac
+}
+info "primary $PRIMARY: $(sgx_desc "$PRIMARY")"
+info "joiner  $JOINER: $(sgx_desc "$JOINER")"
 
 # ---------------------------------------------------------------------------- 1. preflight
 if run_phase 1; then
@@ -773,7 +787,9 @@ joiner_errors=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qad
     | grep -avE "PER-BLOCK ACC DIVERGENCE" \
     | grep -avE "codespace qadena code|refusing |ephemeral wallet is empty|Ephemeral.s destination wallet" \
     | grep -avE "credential hash (already )?(exists|belongs)|update rate limited|ScanTransaction failed" \
-    | grep -avE "enclaveSynchronizeStores OUT-OF-SYNC|couldn't find an active enclave identity")
+    | grep -avE "enclaveSynchronizeStores OUT-OF-SYNC|couldn't find an active enclave identity" \
+    | grep -avE "SignerListener: Error accepting connection" \
+    | grep -avE "failed to fetch block .*is not available, lowest height is")
 #   THE ALLOW-LIST, and why each entry is not evidence of trouble:
 #
 #   p2p/websocket/rpc-server lines   shutdown noise from stop_qadena.sh; the enclave ping failures
@@ -791,6 +807,16 @@ joiner_errors=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qad
 #   couldn't find an active enclave  a replayed promotion attested by the PREVIOUS measurement,
 #   identity                         which a joiner has no reason to trust; the row is recorded and
 #                                    reconcileTrustOnGoingLive settles it.
+#
+#   SignerListener accept       CometBFT's privval listener, not ours.  The signer CONNECTS first
+#   timeout                     ("SignerListener: Connected"), the listener then loops back to
+#                               accept a second connection that never comes, and times out once.
+#                               Verified on the SGX state-sync join: exactly one occurrence, after
+#                               a successful connect.  A signer that never connected would fail the
+#                               run at block production, not here.
+#   evm indexer "height 1 is    the EVM indexer walking from block 1 on a STATE-SYNCED node whose
+#   not available, lowest       history starts at the snapshot.  Structural to state-sync and
+#   height is N"                cosmetic: the blocks below the snapshot do not exist by design.
 #
 #   What is deliberately NOT allowed: panics, halts, consensus failures, and divergence while LIVE.
 #   Those are node-local and mean something.
@@ -879,10 +905,23 @@ print "======================================================================"
 if [[ $rc -eq 0 ]]; then
     print "TWO-NODE BRING-UP COMPLETE"
     print ""
-    print "Note what is still NOT covered: this proves a BLOCK-SYNC joiner agrees.  The state-sync"
-    print "path -- and the private-state transfer it depends on -- is a separate exercise, and its"
-    print "test needs a NEGATIVE CONTROL (repeat with the import disabled and confirm the peers DO"
-    print "diverge), or it cannot distinguish 'fixed' from 'the scenario never happened'."
+    # SAY WHICH PATH ACTUALLY RAN.  This used to print the block-sync caveat unconditionally, so a
+    # --state-sync run ended by announcing that state-sync was not covered -- in the same output
+    # that had just state-synced a node.  The script knows the mode; the note must use it.
+    if [[ $STATE_SYNC -eq 1 ]]; then
+        print "This proves a STATE-SYNC joiner agrees: it restored a snapshot, imported the"
+        print "enclave-private tables from the seed, and reached the same app hash."
+        print ""
+        print "Note what is still NOT covered: this run has no NEGATIVE CONTROL.  It shows the peers"
+        print "AGREE with the private-state import working; it does not show the test would CATCH a"
+        print "broken import.  Repeat with the import disabled and confirm the peers DO diverge, or"
+        print "a pass cannot distinguish 'fixed' from 'the scenario never happened'."
+    else
+        print "Note what is still NOT covered: this proves a BLOCK-SYNC joiner agrees.  The state-sync"
+        print "path -- and the private-state transfer it depends on -- is a separate exercise, and its"
+        print "test needs a NEGATIVE CONTROL (repeat with the import disabled and confirm the peers DO"
+        print "diverge), or it cannot distinguish 'fixed' from 'the scenario never happened'."
+    fi
 else
     print "PEER AGREEMENT FAILED -- the two nodes do not agree.  That is a fork; investigate before"
     print "running anything else."

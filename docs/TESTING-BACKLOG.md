@@ -1023,3 +1023,111 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     binaries still must correspond to a commit.  What remains is the decision: pick the intended
     config, regenerate once deliberately, and commit that.  Until then the committed file stands
     because it is what the API console serves today and nothing is visibly wrong with it.
+
+69. **The state-sync join has no NEGATIVE CONTROL, so its pass proves less than it looks.**
+    `nth_node_bringup.sh --state-sync` is now green on real SGX (.140 state-synced onto upgraded
+    .120: snapshot restored at 2000, 61 private rows imported from the seed, app hashes MATCH at
+    3523).  That shows the peers AGREE while the private-state import works.  It does NOT show the
+    test would CATCH a broken import -- if the enclave-private tables were never transferred, or
+    were transferred empty, nothing in the run asserts that the app hashes would then DIVERGE.
+    A test that cannot fail is not evidence.
+
+    Add a control: repeat with the import suppressed (a flag on the joiner, or a seed that refuses
+    to serve `SeedStorePage`) and assert the peers **do** diverge.  Until that exists, cite the
+    state-sync result as "the path completes and agrees", never as "the private-state transfer is
+    verified".  The script's own closing note has said this since it was written; it was printing
+    it against the wrong branch (it announced the block-sync caveat after a state-sync run), which
+    is now fixed -- so the caveat is finally visible to whoever runs it.
+
+70. **Three messages in this session described hardware or state they had not measured.**  All the
+    same shape: report a PROXY instead of the observation, and be confidently wrong in one branch.
+    - `add_full_node.sh` compared the enclave id EMBEDDED in the binary (`unique047` on every SGX
+      build) instead of the MRENCLAVE `ego uniqueid` computes, and refused a perfectly matched pair.
+    - `nth_node_bringup.sh` inferred SGX presence from whether `sudo_for` returned a string -- empty
+      means BOTH "devices usable" and "no SGX at all" -- and printed "primary has no SGX device"
+      during a real-SGX run.  `1st_node_bringup.sh` had already fixed this exact line and left a
+      comment saying so; the fix did not propagate.
+    - the same script's completion banner announced "this proves a BLOCK-SYNC joiner agrees" at the
+      end of a `--state-sync` run.
+    All three are fixed.  The pattern is worth a standing rule: **a script may only state what it
+    probed**, and where two conditions produce the same proxy value, it must probe again rather than
+    pick the friendlier branch.  Grep for other messages inferred from `$SUDO`, `$BUILD_SGX` or a
+    flag rather than from the machine.
+
+71. **`install_release.sh` told every operator to run it with `sudo`, and four places repeated it.**
+    Nothing in the install needs root: it writes only into the invoking user's `~/qadena`, and the
+    one root-sensitive step (`start_qadena.sh`) gates itself.  Following that advice leaves the whole
+    node home root-owned, after which the operator's own `qadenad q ...` cannot read its 0600
+    `config/client.toml` -- which is exactly how a healthy SGX joiner was stopped: the pre-check's
+    remote query failed on a LOCAL permission fault, and, because the query ran under `2>/dev/null`,
+    the refusal blamed the seed for being too old.
+    `setup_env.sh`'s `needs_root_if_real_enclave` has argued the opposite case in detail for a long
+    time ("ROOT IS NOT A QADENA REQUIREMENT") and `init.sh` refuses to run as root outright, carrying
+    a `sudo rm -rf` workaround that exists only because homes end up root-owned.  The install docs
+    were never reconciled with any of it.  Fixed in `install_release.sh` (header + a note, no
+    automatic `chown`: recursively re-owning a live home would hand `priv_validator_key.json`,
+    `data/` and `keyring-*` to the login account on the very machines where the node is meant to run
+    as root), `package_release.sh` (x2), `1st_node_bringup.sh` phase 7, and `HOWTO-SGX-BRINGUP.md`.
+    Remaining: nothing enforces it -- a future doc can reintroduce `sudo ./install.sh` and no test
+    would notice.
+
+72. **dsvs seeds AuthorizedSignatory into the enclave and never checks that it landed -- on the one
+    path that has already caused a fork.**  `EnclaveSynchronizeStores`
+    (`x/dsvs/keeper/enclave_gprc_client.go`) compares the enclave's accumulator against the chain's,
+    pushes every row with `SetAuthorizedSignatory` when they differ, sets `checkSync = true` to mark
+    that a re-check is owed -- and then discards it: `_ = checkSync`.  The re-compare the flag was
+    written for does not exist.  A push that returns no error but seeds nothing is indistinguishable
+    from a correct seed, in the code AND in the logs.
+
+    That matters more here than elsewhere for two reasons.  First, the comment directly above the
+    push records that this exact path already forked a chain: on a state-synced joiner every row was
+    refused (`code 1141: Unauthorized`) because the live-path freshness rule was applied to rows that
+    are old by construction, "the node then ran with no authorized signatories at all and forked 252
+    blocks later".  The refusal was fixed (SET, not VALIDATE); the absence of verification was not.
+    Second, the compare is not a per-block safety net -- `EnclaveBeginBlock` guards it with a
+    package-level `synchronizedWithEnclave` bool, so it runs ONCE PER PROCESS.  There is exactly one
+    observation per boot, and nothing looks again.
+
+    (I asserted the opposite while reviewing the SGX state-sync join -- "it appears once and never
+    recurs, and the compare runs every block, so a persistent divergence could not hide".  The
+    second clause is false, which makes the first clause meaningless as evidence.  It never recurs
+    because it never runs again.)
+
+    Do the re-check: after seeding, call `GetStoreAccumulators` again and compare.  Log at Error and
+    fail closed if it still differs -- a joiner that silently lacks authorized signatories is a node
+    that will fork at the first dsvs transaction, hundreds of blocks after the cause.
+
+    Note for whoever picks this up: the SEEDING/OUT-OF-SYNC distinction added this session makes the
+    empty-enclave case log at Info.  That is right (an empty store is not a divergence) but it means
+    the ONE per-boot observation of a genuinely wrong state is the Error branch alone -- all the more
+    reason the post-seed verification has to exist.
+
+73. **The joiner's log is the evidence for a join test, and the NEXT join deletes it.**
+    `add_full_node.sh` starts the node from scratch, which takes `~/qadena/logs` with it.  M2 ran a
+    state-sync join and then a block-sync join; when the SGX run raised a question about what the
+    state-sync join had logged, the answer was unrecoverable -- the only retained log was the later
+    block-sync run.  Two joins in sequence means the first one's evidence is gone by the time anyone
+    asks about it, which is exactly when it is wanted.
+    Cheap fix: `nth_node_bringup.sh` copies the joiner's log window off the joiner when the run
+    finishes (it already computes the byte offset for the error check), or `add_full_node.sh` moves
+    `logs/` aside instead of removing it.
+
+74. **Coverage note: what M1/M2 CANNOT establish, learned by finding four things only on SGX.**
+    Debug builds prove logic, and they did -- but three of the four issues the SGX round surfaced
+    were invisible there by construction, and the fourth was missed by test ordering:
+    - **measurement identity**: with no `ego` on the box, every probe falls back to the id EMBEDDED
+      in the binary (`unique048`), which on a debug build genuinely IS the chain's identity.  Code
+      that confuses embedded-id with MRENCLAVE is CORRECT on debug and wrong only on SGX.
+    - **privilege**: no SGX devices means `sudo_for` is always empty, so no scripted path there ever
+      installs or runs as root; ownership faults cannot appear.
+    - **messages conditioned on SGX state**: "primary has no SGX device" is TRUE on M1/M2.  A
+      message is only wrong on the machines it is wrong about.
+    - **dsvs seeding (item 72)**: the conditions DID exist on M1/M2 -- M1's chain held 15
+      authorized-signatory rows at height 2001, the snapshot M2 state-synced from -- but that join
+      predates item 62's joiner-log check, and the most recent M2 round was block-sync only, where
+      the joiner replays from height 1 with both sides empty and the seeding path never runs.  The
+      SGX run was the FIRST state-sync join ever executed with the check active.
+    Implication for how to read a green M1/M2 run: it is evidence about logic, not about
+    attestation, identity, privilege, or anything conditioned on real hardware.  And when a fleet
+    round exercises only one join path, say which one -- "joiner verified" without naming the path
+    reads as both.
