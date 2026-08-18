@@ -265,7 +265,18 @@ else
 	# wiping the node this check exists to protect.  A check that is advisory exactly when it cannot
 	# see is not a check.  Being unable to ask is itself a reason to stop, because proceeding risks
 	# precisely that damage; --skip-enclave-check is the way to say "I know, this seed is older".
-	local_measurement=$($qadenabin/qadenad_enclave --unique-id 2>/dev/null)
+	# ASK EGO FIRST ON A REAL ENCLAVE.  `--unique-id` prints the id EMBEDDED in the binary, which on
+	# an SGX build is still the debug placeholder (unique047) and has nothing to do with the
+	# measurement the chain knows.  The real one is the MRENCLAVE ego computes from the signed
+	# binary.  Getting this wrong made the check below refuse a perfectly matched pair -- .140 and
+	# .120 both running d966acde... -- because the local side reported unique047.
+	#
+	# Same trap as 1st_node_bringup phase 5, which was already fixed to ask ego first; this copy was
+	# written afterwards and repeated it.
+	local_measurement=$(ego uniqueid "$qadenabin/qadenad_enclave" 2>/dev/null | head -1)
+	if [[ ! $local_measurement =~ ^[0-9a-f]{64}$ ]] ; then
+		local_measurement=$($qadenabin/qadenad_enclave --unique-id 2>/dev/null | tail -1)
+	fi
 	seed_measurement=$(qadenad_alias q qadena enclave-measurement --node "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657" -o json 2>/dev/null | jq -r '.uniqueID // empty' 2>/dev/null)
 	if [[ $SKIP_ENCLAVE_CHECK -eq 1 ]] ; then
 		echo "add_full_node.sh: --skip-enclave-check given; not comparing enclave builds with the seed"
