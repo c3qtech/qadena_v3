@@ -522,11 +522,31 @@ if run_phase 8 && [[ -n "$JOINER" ]]; then
         # line, so a ^whole-line$ match can only ever find a stray bare "unique".
         jbin=$(rsh_user "$JOINER" "strings $JHOME/qadena/bin/qadenad_enclave 2>/dev/null | grep -m1 -ohE 'unique[0-9]+'" | tr -d '\r')
     fi
+    # COMPARE AGAINST THE SEED'S CURRENT ENCLAVE, NOT GENESIS.  Genesis names the measurement the
+    # chain LAUNCHED with, forever; after an enclave upgrade every node runs something else.  This
+    # check used to assert joiner == genesis, which is the one value that CANNOT join an upgraded
+    # chain: nth_node_bringup phase 1 requires the joiner to run the SEED's measurement, because a
+    # joiner bootstraps its trusted set from a seed running its own build.  So on an upgraded chain
+    # this phase reported "verified" for a node phase 1 then refused -- which is exactly what
+    # happened here (genesis unique047, primary unique048, joiner installed at unique047).
+    #
+    # Genesis is still printed, as context for the upgrade, but it is not the assertion.
+    pbin=$(rsh_user "$PRIMARY" "$BUILD_PATH ego uniqueid $NODE_HOME/bin/qadenad_enclave 2>/dev/null | head -1" | tr -d '\r')
+    if [[ ! "$pbin" =~ ^[0-9a-f]{64}$ ]]; then
+        pbin=$(rsh_user "$PRIMARY" "strings $NODE_HOME/bin/qadenad_enclave 2>/dev/null | grep -m1 -ohE 'unique[0-9]+'" | tr -d '\r')
+    fi
     info "primary genesis records : ${gen:-<none>}"
+    info "primary enclave measures: ${pbin:-<unreadable>}"
     info "joiner binary measures  : ${jbin:-<unreadable>}"
-    [[ -n "$gen" && -n "$jbin" ]] || fail "could not read one of them; refusing to call this verified"
-    [[ "$gen" == "$jbin" ]] || fail "joiner measurement != genesis -- nth_node_bringup.sh phase 1 would refuse it"
-    info "joiner measurement matches the chain's genesis"
+    [[ -n "$pbin" && -n "$jbin" ]] || fail "could not read one of them; refusing to call this verified"
+    [[ "$pbin" == "$jbin" ]] || fail "joiner measurement != the primary's enclave ($pbin) --
+nth_node_bringup.sh phase 1 would refuse it.  If install.sh reported the new enclave as STAGED
+rather than installed, the joiner is still running its previous build."
+    if [[ -n "$gen" && "$gen" != "$pbin" ]]; then
+        info "joiner matches the primary's enclave (genesis names $gen -- normal after an upgrade)"
+    else
+        info "joiner measurement matches the primary's enclave"
+    fi
 
     info ""
     info "READY FOR nth_node_bringup.sh.  Next:"

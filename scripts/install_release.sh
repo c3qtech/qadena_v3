@@ -337,7 +337,26 @@ identity_status() {
 }
 
 can_activate=1
-if [[ "$mode" == "upgrade" && -n "$new_unique" && "$cur_unique" != "$new_unique" ]]; then
+
+# A NODE THAT HAS NEVER JOINED A CHAIN HAS NO CHAIN TO ASK.  The staging dance below exists to
+# protect a LIVE upgrade: the old enclave hands its sealed keys to the new one only once the chain
+# has made the new identity ACTIVE, so switching early loses the handover.  None of that applies to
+# a node holding no chain data -- there is no sealed state to hand over and no chain to query, so
+# identity_status comes back unreachable, can_activate goes to 0, and the new enclave is staged
+# beside the old one FOREVER.  The node then keeps running the measurement it already had.
+#
+# That is not hypothetical: a joiner installed before an enclave upgrade, then re-installed from the
+# upgraded package, reported "installed" while still measuring the OLD id -- and the join was then
+# refused for running the wrong build, several steps later and with no hint of why.
+node_has_chain_data=0
+[[ -e "$QADENAHOME/data/application.db" ]] && node_has_chain_data=1
+
+if [[ "$mode" == "upgrade" && $node_has_chain_data -eq 0 && -n "$new_unique" && "$cur_unique" != "$new_unique" ]]; then
+    echo ""
+    echo "=== 3. the chain accepts $new_unique ==="
+    echo "  SKIPPED: this node holds no chain data, so there is no handover to protect and no chain"
+    echo "  to ask.  Installing $new_unique as this node's enclave outright."
+elif [[ "$mode" == "upgrade" && -n "$new_unique" && "$cur_unique" != "$new_unique" ]]; then
     echo ""
     echo "=== 3. the chain accepts $new_unique ==="
     if [[ $force -eq 1 ]]; then
