@@ -58,6 +58,10 @@ PIONEER=""
 STOP_FOR_FUNDING=""
 TEST_NET=""
 GENESIS_PIONEER_FIRST_IP_ADDRESS=""
+# Escape hatch for the enclave-build pre-check below: for a seed too old to answer
+# `q qadena enclave-measurement`.  Not for making an inconvenient refusal go away -- a genuine
+# mismatch cannot join, whatever this flag says.
+SKIP_ENCLAVE_CHECK=0
 GENESIS_PIONEER_SECOND_IP_ADDRESS=""
 
 while [[ $# -gt 0 ]]; do
@@ -80,6 +84,11 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ;;
+	--skip-enclave-check)
+		SKIP_ENCLAVE_CHECK=1
+		shift
+		;;
+
 	--genesis-pioneer-first-ip-address)
       if [[ -n "$2" && "$2" != --* ]]; then
         GENESIS_PIONEER_FIRST_IP_ADDRESS="$2"
@@ -117,6 +126,11 @@ while [[ $# -gt 0 ]]; do
 	  echo "                       Use this when funding is not something you can do within minutes"
 	  echo "                       -- which on the testnet it is not, since the instructions above"
 	  echo "                       are to EMAIL for coins while the wait below lasts six minutes."
+	  echo "  --skip-enclave-check Do not compare enclave builds with the seed before wiping this"
+	  echo "                       node.  For a seed too old to answer 'q qadena enclave-measurement'."
+	  echo "                       A genuine mismatch still cannot join: the joiner bootstraps its"
+	  echo "                       trusted set from the seed and can only accept that from a seed"
+	  echo "                       running its own measurement."
 	  echo "  --test-net           Print the ACTUAL command that funds this node, to run on a"
 	  echo "                       validator, instead of the email-us instructions.  On a test"
 	  echo "                       network whoever is standing this node up also holds the"
@@ -241,14 +255,36 @@ else
 	# out at the handshake means discovering it after this script has wiped the node's state and
 	# spent a funding transfer, from an error that names neither build.
 	#
-	# Advisory rather than fatal on a failed QUERY: an older seed has no enclave-measurement command,
-	# and refusing to join a chain that predates this check would be worse than proceeding.  A
-	# genuine MISMATCH is fatal.
+	# FAILS CLOSED.  This was advisory when the query failed -- on the reasoning that an older seed
+	# has no enclave-measurement command and refusing would be worse than proceeding.  The effect was
+	# that a BROKEN query silently disabled the protection: the first real mismatch printed "could
+	# not ask ... which enclave it runs" and carried straight on to
+	#
+	#     Removing configuration directories from: /home/alvillarica/qadena
+	#
+	# wiping the node this check exists to protect.  A check that is advisory exactly when it cannot
+	# see is not a check.  Being unable to ask is itself a reason to stop, because proceeding risks
+	# precisely that damage; --skip-enclave-check is the way to say "I know, this seed is older".
 	local_measurement=$($qadenabin/qadenad_enclave --unique-id 2>/dev/null)
 	seed_measurement=$(qadenad_alias q qadena enclave-measurement --node "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657" -o json 2>/dev/null | jq -r '.uniqueID // empty' 2>/dev/null)
-	if [[ -z $seed_measurement ]] ; then
-		echo "add_full_node.sh: could not ask $GENESIS_PIONEER_FIRST_IP_ADDRESS which enclave it runs"
-		echo "                  (an older seed predates 'q qadena enclave-measurement') -- continuing."
+	if [[ $SKIP_ENCLAVE_CHECK -eq 1 ]] ; then
+		echo "add_full_node.sh: --skip-enclave-check given; not comparing enclave builds with the seed"
+	elif [[ -z $local_measurement ]] ; then
+		echo "add_full_node.sh: could not read THIS node's enclave measurement from $qadenabin/qadenad_enclave"
+		echo "    Without it there is nothing to compare, and this script is about to wipe this node's"
+		echo "    configuration and spend a funding transfer.  Refusing."
+		echo "    Re-run with --skip-enclave-check to proceed anyway."
+		exit 1
+	elif [[ -z $seed_measurement ]] ; then
+		echo "add_full_node.sh: could not ask $GENESIS_PIONEER_FIRST_IP_ADDRESS which enclave it runs."
+		echo "    Either the seed predates 'q qadena enclave-measurement', or the query failed."
+		echo "    Refusing rather than guessing: a joiner can only bootstrap trust from a seed running"
+		echo "    its own measurement ($local_measurement), and the next thing this script does is wipe"
+		echo "    this node and spend a funding transfer."
+		echo "    Check by hand:"
+		echo "        qadenad q qadena enclave-measurement --node tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657"
+		echo "    or re-run with --skip-enclave-check if you know the seed is older than this check."
+		exit 1
 	elif [[ "$seed_measurement" != "$local_measurement" ]] ; then
 		echo "add_full_node.sh: ENCLAVE MISMATCH -- this join cannot succeed."
 		echo "    the seed at $GENESIS_PIONEER_FIRST_IP_ADDRESS runs:  $seed_measurement"

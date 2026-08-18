@@ -24,6 +24,7 @@ func GetQueryCmd() *cobra.Command {
 		RunE:                       client.ValidateCmd,
 	}
 
+	cmd.AddCommand(CmdEnclaveMeasurement())
 	cmd.AddCommand(CmdListCredential())
 	cmd.AddCommand(CmdShowCredential())
 	cmd.AddCommand(CmdListWallet())

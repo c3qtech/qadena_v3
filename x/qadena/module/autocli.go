@@ -14,14 +14,6 @@ func (am AppModule) AutoCLIOptions() *autocliv1.ModuleOptions {
 			EnhanceCustomCommand: false, // only required if you want to use the custom command
 			RpcCommandOptions: []*autocliv1.RpcCommandOptions{
 				{
-					// Takes no arguments and reaches the node's own enclave.  add_full_node.sh runs
-					// it against the SEED to compare builds before it mints or funds anything: a
-					// joiner can only bootstrap trust from a seed running its own measurement.
-					RpcMethod: "EnclaveMeasurement",
-					Use:       "enclave-measurement",
-					Short:     "Show which enclave build this node runs, and whether it can bootstrap a joiner",
-				},
-				{
 					RpcMethod: "CredentialAll",
 					Use:       "list-credential",
 					Short:     "List all Credential",
