@@ -448,9 +448,17 @@ if run_phase 7; then
     [[ -n "$tgz" ]] || fail "package_release.sh produced no tarball in $PKG_OUT"
     info ""
     info "package: $PRIMARY:$tgz"
+    # PREFER PHASE 8 over doing this by hand.  It stops the joiner first (install.sh replaces
+    # binaries a running enclave holds open), decides sudo per host via sudo_for, and verifies the
+    # result against the primary's genesis.  The by-hand form below is the fallback, and it does
+    # NOT say sudo: installing writes only into the operator's own ~/qadena, and a sudo install
+    # leaves that tree root-owned, after which their own CLI cannot read config/client.toml.  This
+    # line used to print `sudo ./install.sh`, it was followed, and that is exactly what happened.
     info "to install on a joiner:"
+    info "    $0 --primary $PRIMARY --joiner <joiner> --only 8"
+    info "or by hand, as the user who will own the node (no sudo):"
     info "    scp $PRIMARY:$tgz /tmp/ && scp /tmp/$(basename $tgz) <joiner>:/tmp/"
-    info "    ssh <joiner> 'cd /tmp && tar xzf $(basename $tgz) && sudo ./${$(basename $tgz)%.tar.gz}/install.sh'"
+    info "    ssh <joiner> 'cd /tmp && tar xzf $(basename $tgz) && ./${$(basename $tgz)%.tar.gz}/install.sh'"
     info "then:"
     info "    ./testscripts/nth_node_bringup.sh --primary $PRIMARY --joiner <joiner> \\"
     info "        --pioneer <a-name-the-chain-has-never-seen> --state-sync --from 1 --until 5"

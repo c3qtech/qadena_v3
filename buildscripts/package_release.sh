@@ -340,7 +340,12 @@ cat > "$stage/README.txt" <<EOF
 Qadena node package
 
   tar xzf <this archive>
-  sudo ./<extracted directory>/install.sh
+  ./<extracted directory>/install.sh
+
+Run it as the user who will own the node, NOT with sudo: it writes only into that user's ~/qadena
+and nothing in it needs root.  A sudo install leaves the whole tree root-owned, and that user's own
+`qadenad q ...` then cannot read its 0600 config/client.toml.  Opening the SGX devices is a group
+membership question (setup_qadena_build.sh arranges it), not a reason to install as root.
 
 install.sh works out whether this machine needs a first install or an upgrade.  For an upgrade it
 stages the new enclave beside the running one and switches only once the chain has made the new
@@ -414,4 +419,5 @@ if grep -q '^qadenad_enclave.unique_id:' "$stage/manifest.txt"; then
 fi
 echo "On each target node -- no checkout, no toolchain, just the download:"
 echo "  tar xzf $(basename "$archive")"
-echo "  sudo ./$pkgname/install.sh"
+echo "  ./$pkgname/install.sh"
+echo "  (as the user who will own the node -- not sudo; it writes only into their ~/qadena)"

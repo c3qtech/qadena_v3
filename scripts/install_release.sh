@@ -5,7 +5,16 @@
 # ON A TARGET MACHINE, which has nothing but the download:
 #
 #   tar xzf qadena-full-1.1.8-abc1234.tar.gz
-#   sudo ./qadena-full-1.1.8-abc1234/install.sh
+#   ./qadena-full-1.1.8-abc1234/install.sh
+#
+# RUN IT AS THE USER WHO WILL OWN THE NODE -- not with sudo.  Installing writes only into that
+# user's ~/qadena; nothing here needs root.  This used to say `sudo ./install.sh`, and following
+# that advice on a provisioned machine leaves the whole node home owned by root, which breaks every
+# command the operator later types: `qadenad q ...` cannot read its own 0600 config/client.toml, and
+# `rm -rf ~/qadena` fails entry by entry.  See setup_env.sh's needs_root_if_real_enclave -- ROOT IS
+# NOT A QADENA REQUIREMENT; opening the SGX devices is a group membership question, which
+# setup_qadena_build.sh already arranges.  Use sudo only if this user cannot open /dev/sgx_* and you
+# cannot fix that first; the install still works, and it hands the home back at the end.
 #
 # There is no git checkout, no build tree and no toolchain on that machine, and this script needs
 # none: it is shipped inside the package as install.sh and sources nothing.  ego is required for an
@@ -654,6 +663,28 @@ if [[ -n "$new_unique" ]]; then
             echo "    $0 --wait-active --restart"
         fi
     fi
+fi
+
+# ---------------------------------------------------------------------------------------------
+# 6b. say so if this ran under sudo
+# ---------------------------------------------------------------------------------------------
+# Only reached via the workaround (see the header); root is not required to install.  Everything
+# just written is root-owned, so the operator's own `qadenad q ...` cannot read its 0600
+# config/client.toml and fails before it opens a socket -- that is not hypothetical, it stopped
+# add_full_node.sh's enclave pre-check on a freshly installed node and the refusal blamed the seed.
+#
+# SAY IT, DO NOT FIX IT.  `chown -R` here would be wrong on the case this path exists for: a machine
+# whose operator cannot open /dev/sgx_* runs the node as root, and its home holds priv_validator_key
+# .json (0600), data/ and keyring-* (0700) and the enclave's sealed params.  Recursively handing
+# those to the login account on an UPGRADE is a privilege change no one asked for.  Whether the node
+# is meant to run as root is a question this script cannot answer, so it names the fix and leaves it.
+if [[ -n "$SUDO_USER" ]] && [[ -d "$QADENAHOME" ]]; then
+    echo ""
+    echo "  NOTE: sudo was not required to install -- it writes only into $QADENAHOME."
+    echo "        Everything installed is now owned by root, so $SUDO_USER's CLI will fail with"
+    echo "        \"couldn't get client config\" until that is corrected.  If this node is NOT"
+    echo "        meant to run as root:"
+    echo "            sudo chown -R $SUDO_USER $QADENAHOME"
 fi
 
 # ---------------------------------------------------------------------------------------------

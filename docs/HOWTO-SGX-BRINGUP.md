@@ -43,7 +43,16 @@ the error names the measurement, not the cause.
 ## Install on the joiner
 
     tar xzf qadena-full-<version>-<commit>.tar.gz
-    sudo ./qadena-full-<version>-<commit>/install.sh
+    ./qadena-full-<version>-<commit>/install.sh
+
+Run the install as the user who will own the node, **not** with `sudo`. It writes only into that
+user's `~/qadena`; nothing in it needs root. A sudo install leaves the tree root-owned, and the
+operator's own CLI then fails on its unreadable `config/client.toml`. Opening `/dev/sgx_*` is a
+group membership question, which `setup_qadena_build.sh` already arranges.
+
+Or let the bringup do it, which also stops the node first and verifies the measurement:
+
+    ./testscripts/1st_node_bringup.sh --primary <primary> --joiner <joiner> --only 8
 
 ## Bring it up
 
