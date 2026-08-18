@@ -984,3 +984,27 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     delete the joiner's log -- `add_full_node.sh` leaves `logs/` in place, and the previous attempt's
     log is usually the reason someone is re-joining.  Item 62 reads it from a byte offset taken
     before the node starts, which gives this run's boundary without destroying the last one's record.
+
+67. **Codegen skew was ignite's CACHE, not the plugin and not the binary version -- three diagnoses,
+    two of them committed before the third was found.**  Recorded so nobody repeats the sequence.
+    `ignite generate proto-go` and `ignite chain init` regenerate with tooling ignite keeps under
+    `~/.ignite` (93 MB on M1), and swapping the ignite BINARY does not touch it.  Established by
+    experiment, in this order:
+
+      1. *the PATH plugin* (b6af80cb) -- DISPROVED: hiding protoc-gen-gocosmos entirely and running
+         `ignite generate proto-go` still succeeds, so ignite supplies its own.
+      2. *the ignite module version* (a0368d23) -- INSUFFICIENT: M1 aligned to the Mac's v29.7.0 and
+         still rewrote nine .pb.go files.
+      3. *the cache* -- CONFIRMED: clearing `~/.ignite/cache` made M1 regenerate byte-identical to
+         the committed tree, with no other change.
+
+    Both earlier commits kept their pins, which fix real defects (`@latest` behind an `[ ! -f ]`
+    existence test; a version comparison against a display string that reads `v29.10.1-dev` on
+    machines running v29.7.0 and v29.8.0) -- but their stated reasoning was wrong and is corrected
+    in place.  setup_qadena_build.sh now clears the cache whenever it installs a different ignite.
+
+    A cache-staleness preflight was written and REJECTED: "cache older than the binary" fires on a
+    machine that generates correctly (the Mac), and a check that cries wolf on a healthy machine
+    trains people to ignore the checks that matter.  Invalidating at install time is the fix;
+    detecting staleness after the fact would need to verify by OUTCOME (regenerate into a temp tree
+    and diff), which is worth doing if this recurs.

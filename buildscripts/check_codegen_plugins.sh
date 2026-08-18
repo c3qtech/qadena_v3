@@ -2,12 +2,18 @@
 #
 # Is this machine's protobuf generator the one this project pins?
 #
-# ANY ignite invocation that regenerates protos -- `ignite generate proto-go`, and `ignite chain
-# init`, which does it as a side effect -- depends on TWO things this repo did not control: the
-# LOCAL plugins named in proto/buf.gen.gogo.yaml (`gocosmos`, `grpc-gateway`), and IGNITE ITSELF,
-# which embeds its own generator.  Both must be pinned; aligning only the plugin is not enough, and
-# that was proved the hard way -- with both machines on gogoproto v1.7.2 the output STILL differed,
-# because ignite was v29.7.0 on one and v29.8.0 on the other.
+# WHAT ACTUALLY DECIDES THE OUTPUT, established by experiment after two wrong answers:
+#
+#   NOT the PATH plugin.  buf.gen.gogo.yaml names `gocosmos`, but hiding that binary entirely and
+#   running `ignite generate proto-go` still SUCCEEDS -- ignite supplies its own.
+#   NOT the ignite binary version alone.  Aligning M1 to the Mac's module v29.7.0 left it still
+#   rewriting nine .pb.go files.
+#   THE CACHE.  ignite keeps its generation tooling under ~/.ignite (93 MB on M1), and swapping the
+#   binary does not touch it.  Clearing it made M1 regenerate byte-identical to the committed tree.
+#
+# So the version checks below are hygiene -- they catch a machine nobody provisioned, and `@latest`
+# behind an existence test was a real defect -- but the STALENESS check at the end is the one that
+# catches the failure that actually happened.
 #
 # WHAT IT COSTS, and why it is worth a preflight rather than a comment: gogoproto v1.4.12 emits an
 # extra `var X_serviceDesc = _X_serviceDesc` alias per service file that v1.7.x does not.  A machine
@@ -94,6 +100,18 @@ if [[ -n $want_ignite ]]; then
         exit 1
     fi
     (( verbose )) && print "ignite $have_ignite matches the pin"
+
+    # NO STALENESS CHECK HERE, and that is a deliberate negative result.
+    #
+    # The obvious one -- refuse when ~/.ignite/cache is older than the ignite binary -- was written
+    # and REJECTED: it fires on a machine that generates perfectly (this Mac has a cache older than
+    # its binary and reproduces the committed tree exactly).  mtime is not evidence about what the
+    # cache CONTAINS, and a check that cries wolf on a healthy machine is worse than none: it trains
+    # people to skip the one that matters.
+    #
+    # The cache is invalidated where it can be done correctly instead -- ubuntu/setup_qadena_build.sh
+    # clears it whenever it installs a different ignite.  If you upgrade ignite by hand, clear it by
+    # hand:  rm -rf ~/.ignite/cache ~/.ignite/ignite_cache.db
 fi
 
 exit 0
