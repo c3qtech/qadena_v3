@@ -344,7 +344,7 @@ Qadena node package
 
 Run it as the user who will own the node, NOT with sudo: it writes only into that user's ~/qadena
 and nothing in it needs root.  A sudo install leaves the whole tree root-owned, and that user's own
-`qadenad q ...` then cannot read its 0600 config/client.toml.  Opening the SGX devices is a group
+'qadenad q ...' then cannot read its 0600 config/client.toml.  Opening the SGX devices is a group
 membership question (setup_qadena_build.sh arranges it), not a reason to install as root.
 
 install.sh works out whether this machine needs a first install or an upgrade.  For an upgrade it
