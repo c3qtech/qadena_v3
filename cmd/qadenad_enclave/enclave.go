@@ -898,56 +898,23 @@ func (s *qadenaServer) verifyRemoteReport(remoteReportBytes []byte, certifyData 
 }
 
 // returns true if valid
+// remoteReportMeasurement verifies a report cryptographically and returns WHOSE it is, consulting no
+// trust list at all.
+//
+// For the bootstrap paths, which have no trust list to consult yet and must instead compare the
+// measurement against something they already know: the sync-enclave seed (must be our own build) and
+// the upgrade handover (must be the measurement the operator named).  Everything else should keep
+// using verifyRemoteReport, which answers the different and usually correct question -- "is this
+// measurement one I trust".
+func (s *qadenaServer) remoteReportMeasurement(remoteReportBytes []byte, certifyData string) (ok bool, uid string, sid string) {
+	return s.verifyRemoteReportMeasurement(remoteReportBytes, certifyData)
+}
+
 func (s *qadenaServer) verifyRemoteReportInternal(remoteReportBytes []byte, certifyData string, checkEnclaveUniqueIDOnly bool) bool {
-	var localUniqueID string
-	var signerID string
-	var success bool
-
-	// gunzip report
-	var buf bytes.Buffer
-	reader, err := gzip.NewReader(bytes.NewReader(remoteReportBytes))
-	if err != nil {
-		c.LoggerError(logger, "error gunzipping remote report "+err.Error())
+	ok, localUniqueID, signerID := s.verifyRemoteReportMeasurement(remoteReportBytes, certifyData)
+	if !ok {
 		return false
 	}
-	_, err = buf.ReadFrom(reader)
-	if err != nil {
-		c.LoggerError(logger, "error gunzipping remote report "+err.Error())
-		return false
-	}
-	remoteReportBytes = buf.Bytes()
-
-	if s.RealEnclave {
-		remoteReport, err := enclave.VerifyRemoteReport(remoteReportBytes)
-		if err != nil {
-			c.LoggerDebug(logger, "remote report tcbstatus "+tcbstatus.Explain(remoteReport.TCBStatus))
-			if remoteReport.TCBStatus == tcbstatus.Revoked || remoteReport.TCBStatus == tcbstatus.OutOfDate {
-				c.LoggerError(logger, "error verifying remote report "+err.Error())
-				return false
-			} else {
-				c.LoggerError(logger, "neither revoked nor completely out-of-date")
-			}
-		}
-
-		hash := sha256.Sum256([]byte(certifyData))
-		if !bytes.Equal(remoteReport.Data[:len(hash)], hash[:]) {
-			c.LoggerDebug(logger, "mismatch hash")
-			c.LoggerDebug(logger, "remoteReportData hash "+hex.EncodeToString(remoteReport.Data[:len(hash)]))
-			c.LoggerDebug(logger, "certifyData hash "+hex.EncodeToString(hash[:]))
-			return false
-		}
-		c.LoggerDebug(logger, "hash match")
-
-		localUniqueID = hex.EncodeToString(remoteReport.UniqueID)
-		signerID = hex.EncodeToString(remoteReport.SignerID)
-	} else {
-		success, localUniqueID, signerID = c.DebugVerifyRemoteReport(logger, remoteReportBytes, certifyData)
-		if !success {
-			c.LoggerError(logger, "couldn't verify remote report")
-			return false
-		}
-	}
-	c.LoggerDebug(logger, "Succeeded verifying remote report, uniqueID: "+localUniqueID)
 
 	if checkEnclaveUniqueIDOnly {
 		if localUniqueID == uniqueID {
@@ -965,6 +932,62 @@ func (s *qadenaServer) verifyRemoteReportInternal(remoteReportBytes []byte, cert
 	}
 	c.LoggerDebug(logger, "Succeeded finding an active enclave identity for uniqueID: "+localUniqueID)
 	return true
+}
+
+// verifyRemoteReportMeasurement does the cryptographic half only: unpack, verify, and report which
+// measurement signed it.  Split out of verifyRemoteReportInternal so the bootstrap paths can reach
+// the measurement without the trust-list check that necessarily fails for them.
+func (s *qadenaServer) verifyRemoteReportMeasurement(remoteReportBytes []byte, certifyData string) (bool, string, string) {
+	var localUniqueID string
+	var signerID string
+	var success bool
+
+	// gunzip report
+	var buf bytes.Buffer
+	reader, err := gzip.NewReader(bytes.NewReader(remoteReportBytes))
+	if err != nil {
+		c.LoggerError(logger, "error gunzipping remote report "+err.Error())
+		return false, "", ""
+	}
+	_, err = buf.ReadFrom(reader)
+	if err != nil {
+		c.LoggerError(logger, "error gunzipping remote report "+err.Error())
+		return false, "", ""
+	}
+	remoteReportBytes = buf.Bytes()
+
+	if s.RealEnclave {
+		remoteReport, err := enclave.VerifyRemoteReport(remoteReportBytes)
+		if err != nil {
+			c.LoggerDebug(logger, "remote report tcbstatus "+tcbstatus.Explain(remoteReport.TCBStatus))
+			if remoteReport.TCBStatus == tcbstatus.Revoked || remoteReport.TCBStatus == tcbstatus.OutOfDate {
+				c.LoggerError(logger, "error verifying remote report "+err.Error())
+				return false, "", ""
+			} else {
+				c.LoggerError(logger, "neither revoked nor completely out-of-date")
+			}
+		}
+
+		hash := sha256.Sum256([]byte(certifyData))
+		if !bytes.Equal(remoteReport.Data[:len(hash)], hash[:]) {
+			c.LoggerDebug(logger, "mismatch hash")
+			c.LoggerDebug(logger, "remoteReportData hash "+hex.EncodeToString(remoteReport.Data[:len(hash)]))
+			c.LoggerDebug(logger, "certifyData hash "+hex.EncodeToString(hash[:]))
+			return false, "", ""
+		}
+		c.LoggerDebug(logger, "hash match")
+
+		localUniqueID = hex.EncodeToString(remoteReport.UniqueID)
+		signerID = hex.EncodeToString(remoteReport.SignerID)
+	} else {
+		success, localUniqueID, signerID = c.DebugVerifyRemoteReport(logger, remoteReportBytes, certifyData)
+		if !success {
+			c.LoggerError(logger, "couldn't verify remote report")
+			return false, "", ""
+		}
+	}
+	c.LoggerDebug(logger, "Succeeded verifying remote report, uniqueID: "+localUniqueID)
+	return true, localUniqueID, signerID
 }
 
 func (s *qadenaServer) loadEnclaveParams() bool {
@@ -5667,16 +5690,6 @@ func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 	c.LoggerDebug(logger, "randomizePioneerIDs "+c.PrettyPrint(pioneers))
 	threshold := getThreshold(len(pioneers))
 
-	// PLACED AFTER randomizePioneerIDs, because THAT is what removes us from the list.
-	// getAllPioneers returns every pioneer including this one, so guarding on its result counted a
-	// single-node chain as having one peer -- and skipped, deadlocking the very upgrade the guard
-	// was written to leave alone.  The list that matters is the one the quorum below actually
-	// polls, which is this one.
-	if len(pioneers) > 0 && !s.bootstrapped() {
-		c.LoggerInfo(logger, "skipping enclave identity validation: "+strconv.Itoa(len(pioneers))+
-			" peer pioneer(s) exist but this enclave has no trusted set, so every one of them would count as unconfirmed")
-		return
-	}
 	// deep copy unvalidated into tmp
 	newUnvalidated := types.EnclaveEnclaveIdentityArray{Identity: make([]*types.EnclaveIdentity, 0)}
 	for _, identity := range unvalidated.Identity {
@@ -5685,6 +5698,8 @@ func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 	}
 	for _, identity := range unvalidated.Identity {
 		activeCount := 0
+		// answers we could VERIFY -- see the abstention below; unverifiable is not a vote
+		answered := 0
 		for _, pioneer := range pioneers {
 			pioneerIP, found := s.getPioneerIPAddress(pioneer)
 			if !found {
@@ -5733,9 +5748,13 @@ func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 				strings.Join([]string{
 					res.Status,
 				}, "|")) {
-				c.LoggerError(logger, "remote report unverified")
+				// UNVERIFIABLE IS NOT A "NO".  Counting it as one is how an enclave that cannot
+				// evaluate its peers ends up voting `inactive` on a perfectly good measurement.
+				c.LoggerError(logger, "could not verify "+pioneer+"'s answer about "+identity.UniqueID+
+					" -- its enclave is not one we trust; not counting this as a vote either way")
 				continue
 			}
+			answered++
 
 			if res.Status == types.ActiveStatus {
 				activeCount++
@@ -5744,6 +5763,24 @@ func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 					break
 				}
 			}
+		}
+
+		// ABSTAIN RATHER THAN CONDEMN.  A verdict needs enough answers we could actually verify; if
+		// fewer than the threshold came back verifiable, we have learned nothing about this identity
+		// and must not say otherwise.  Leaving it queued means we try again later, when peers are
+		// reachable or our trusted set has grown.
+		//
+		// This replaces a blunter guard that skipped validation whenever the trusted set was empty.
+		// That was wrong in both directions: it stopped the FIRST node of a multi-node chain from
+		// ever promoting anything (its set is empty by construction, and one live peer was enough to
+		// trip it), while doing nothing about the real hazard, which is not an empty set but an
+		// unverifiable answer being counted as a rejection.  Deciding here, where the answers
+		// actually arrive, distinguishes "my peers say no" from "I cannot tell what my peers say".
+		if len(pioneers) > 0 && answered < threshold {
+			c.LoggerInfo(logger, "abstaining on "+identity.UniqueID+": only "+strconv.Itoa(answered)+
+				" of "+strconv.Itoa(len(pioneers))+" pioneers gave an answer this enclave could verify (threshold "+
+				strconv.Itoa(threshold)+") -- leaving it unvalidated to retry rather than calling it inactive")
+			continue
 		}
 
 		if len(pioneers) == 0 || activeCount >= threshold {
@@ -8550,15 +8587,33 @@ func main() {
 			os.Exit(10)
 		}
 
-		if !cs.verifyRemoteReport(
+		// THE UPGRADE HANDOVER IS ITS OWN BOOTSTRAP, and it needs an anchor this enclave can check.
+		//
+		// We are a brand-new measurement: no sealed params, no trusted set, nothing but ourselves.
+		// So the ordinary check -- "is the reporting measurement active in my trusted set" -- can
+		// only ever fail here, and it did:
+		//
+		//     [enclave-new-unique048 - E]: But couldn't find an active enclave identity for uniqueID: unique047
+		//     [enclave-new-unique048 - E]: remote report unverified
+		//
+		// It used to pass because trust was read from the MIRRORED STORE, which already held the old
+		// measurement as active -- the store was doing bootstrap duty for this path, invisibly.
+		//
+		// The anchor that remains is the operator's own instruction: this process was started as
+		// --upgrade-from-enclave-unique-id=<old>, naming exactly which measurement it expects state
+		// from.  Checking the hardware report against THAT is a real check -- the report cannot lie
+		// about its measurement -- and it is trust the operator has already extended by choosing
+		// which binaries to run and pointing them at each other.
+		//
+		// Note the direction.  Secrets LEAVING the old enclave are gated by the old enclave, which
+		// requires our measurement to be active on chain -- that check is untouched and is the one
+		// that protects the keys.  This one protects US from adopting state from an impostor, whose
+		// cost is a broken node rather than disclosure.
+		if !cs.verifyUpgradeSourceIsExpected(
 			res.GetRemoteReport(),
-			strings.Join([]string{
-				string(res.GetEncEnclavePrivateStateEnclavePubK()),
-			}, "|")) {
-			c.LoggerError(logger, "remote report unverified")
+			string(res.GetEncEnclavePrivateStateEnclavePubK()),
+			*upgradeFromEnclave) {
 			os.Exit(10)
-		} else {
-			c.LoggerDebug(logger, "remote report verified")
 		}
 
 		epStr := string(c.BDecrypt(tmpPrivK, res.GetEncEnclavePrivateStateEnclavePubK()))

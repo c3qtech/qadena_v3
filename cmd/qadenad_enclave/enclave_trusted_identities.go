@@ -349,6 +349,42 @@ func (s *qadenaServer) verifySeedIsOurBuild(report []byte, certifiedCiphertext [
 	return true
 }
 
+// verifyUpgradeSourceIsExpected authenticates the OLD enclave during an upgrade handover.
+//
+// A freshly built measurement has no trusted set -- acquiring one is part of what it is here to do
+// -- so it cannot ask "is this measurement trusted".  What it can ask is whether the report really
+// comes from the measurement the OPERATOR named when starting it:
+//
+//	qadenad_enclave --upgrade-from-enclave-unique-id=<old>
+//
+// The measurement in a remote report is produced by the hardware and cannot be restated, so this
+// compares an operator instruction against an unforgeable fact.  It is the same kind of anchor as
+// verifySeedIsOurBuild, differing only in where the expected measurement comes from: there it is
+// necessarily our own, here it is deliberately a different one.
+func (s *qadenaServer) verifyUpgradeSourceIsExpected(report []byte, certifiedData string, expectedUniqueID string) bool {
+	if expectedUniqueID == "" {
+		c.LoggerError(logger, "upgrade handover with no --upgrade-from-enclave-unique-id: refusing to adopt state from an unnamed enclave")
+		return false
+	}
+	if len(report) == 0 {
+		c.LoggerError(logger, "upgrade handover: the old enclave sent no remote report")
+		return false
+	}
+	ok, reportUniqueID, reportSignerID := s.remoteReportMeasurement(report, certifiedData)
+	if !ok {
+		c.LoggerError(logger, "upgrade handover: the old enclave's report does not verify, or does not cover the state it sent")
+		return false
+	}
+	if reportUniqueID != expectedUniqueID {
+		c.LoggerError(logger, "upgrade handover: expected state from "+expectedUniqueID+
+			" but the report says "+reportUniqueID+" -- refusing")
+		return false
+	}
+	c.LoggerInfo(logger, "upgrade handover: the old enclave attested as "+reportUniqueID+
+		" (signer "+reportSignerID+"), which is the measurement this run was told to upgrade from")
+	return true
+}
+
 // bootstrapped reports whether this enclave holds any trust beyond itself.
 //
 // Two callers, both guarding against an enclave acting on an empty set:
