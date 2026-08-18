@@ -277,7 +277,17 @@ else
 	if [[ ! $local_measurement =~ ^[0-9a-f]{64}$ ]] ; then
 		local_measurement=$($qadenabin/qadenad_enclave --unique-id 2>/dev/null | tail -1)
 	fi
-	seed_measurement=$(qadenad_alias q qadena enclave-measurement --node "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657" -o json 2>/dev/null | jq -r '.uniqueID // empty' 2>/dev/null)
+	# ASK THE SEED WITHOUT READING ANYTHING LOCAL.  This is a purely remote question, and it is asked
+	# BEFORE this node is set up -- so the local home may be absent, half-written, or (after a
+	# `sudo install.sh`) owned by root and unreadable to the operator running this script.  Any of
+	# those makes the client bail with "couldn't get client config" before it opens a socket, and the
+	# refusal below then blames the seed for a fault on this side.  A throwaway home has no config to
+	# fail on; --node supplies the only thing the query actually needs.
+	seed_probe_home=$(mktemp -d)
+	seed_probe_err=$("$qadenabin/qadenad" --home "$seed_probe_home" q qadena enclave-measurement \
+		--node "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657" -o json 2>&1 >"$seed_probe_home/out.json")
+	seed_measurement=$(jq -r '.uniqueID // empty' < "$seed_probe_home/out.json" 2>/dev/null)
+	rm -rf "$seed_probe_home"
 	if [[ $SKIP_ENCLAVE_CHECK -eq 1 ]] ; then
 		echo "add_full_node.sh: --skip-enclave-check given; not comparing enclave builds with the seed"
 	elif [[ -z $local_measurement ]] ; then
@@ -289,6 +299,11 @@ else
 	elif [[ -z $seed_measurement ]] ; then
 		echo "add_full_node.sh: could not ask $GENESIS_PIONEER_FIRST_IP_ADDRESS which enclave it runs."
 		echo "    Either the seed predates 'q qadena enclave-measurement', or the query failed."
+		if [[ -n $seed_probe_err ]] ; then
+			# Say WHY.  Swallowing this is how a local permission fault got reported as an old seed.
+			echo "    The query said:"
+			echo "$seed_probe_err" | head -3 | sed 's/^/        /'
+		fi
 		echo "    Refusing rather than guessing: a joiner can only bootstrap trust from a seed running"
 		echo "    its own measurement ($local_measurement), and the next thing this script does is wipe"
 		echo "    this node and spend a funding transfer."
