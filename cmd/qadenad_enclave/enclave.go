@@ -5661,16 +5661,22 @@ func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 	// unique048 stay `unvalidated`, because the only node able to promote it had ruled itself out.
 	// With no other pioneers the existing branch below marks the identity valid on its own
 	// authority, which is right: there is nobody else to ask.
-	if len(pioneers) > 0 && !s.bootstrapped() {
-		c.LoggerInfo(logger, "skipping enclave identity validation: "+strconv.Itoa(len(pioneers))+
-			" peer pioneer(s) exist but this enclave has no trusted set, so every one of them would count as unconfirmed")
-		return
-	}
 	c.LoggerDebug(logger, "getAllPioneers "+c.PrettyPrint(pioneers))
 	// randomize the array
 	pioneers = randomizePioneerIDs(pioneers, s.getPrivateEnclaveParamsPioneerID())
 	c.LoggerDebug(logger, "randomizePioneerIDs "+c.PrettyPrint(pioneers))
 	threshold := getThreshold(len(pioneers))
+
+	// PLACED AFTER randomizePioneerIDs, because THAT is what removes us from the list.
+	// getAllPioneers returns every pioneer including this one, so guarding on its result counted a
+	// single-node chain as having one peer -- and skipped, deadlocking the very upgrade the guard
+	// was written to leave alone.  The list that matters is the one the quorum below actually
+	// polls, which is this one.
+	if len(pioneers) > 0 && !s.bootstrapped() {
+		c.LoggerInfo(logger, "skipping enclave identity validation: "+strconv.Itoa(len(pioneers))+
+			" peer pioneer(s) exist but this enclave has no trusted set, so every one of them would count as unconfirmed")
+		return
+	}
 	// deep copy unvalidated into tmp
 	newUnvalidated := types.EnclaveEnclaveIdentityArray{Identity: make([]*types.EnclaveIdentity, 0)}
 	for _, identity := range unvalidated.Identity {
