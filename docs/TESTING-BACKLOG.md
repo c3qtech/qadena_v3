@@ -1008,3 +1008,18 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     trains people to ignore the checks that matter.  Invalidating at install time is the fix;
     detecting staleness after the fact would need to verify by OUTCOME (regenerate into a temp tree
     and diff), which is worth doing if this recurs.
+
+68. **Nothing records which openapi generation path is canonical, and the three that exist disagree
+    on CONTENT.**  `docs/static/openapi.yml` is generated, but by whom is unclear: `buf.gen.sta.yaml`
+    uses `openapi_naming_strategy=simple` and `buf.gen.swagger.yaml` uses `fqn`, and
+    `ignite generate openapi` and the generation inside `ignite chain init` do not produce the same
+    file.  Measured 2026-08-18 with every plugin pinned and identical: committed 208 KB, an aligned
+    Mac regenerated 894 KB (it pulls in the cosmos/evm surface), and M1 produced a third result
+    **missing the `qadena.dsvs.Msg` endpoints** -- so adopting whichever machine ran last would
+    silently drop documented endpoints.
+
+    It dirtied the tree on every bring-up and blocked `package_release.sh` for artifacts it is not
+    part of (`docs/` is in no packaged component), so it is now excluded from that dirty check --
+    binaries still must correspond to a commit.  What remains is the decision: pick the intended
+    config, regenerate once deliberately, and commit that.  Until then the committed file stands
+    because it is what the API console serves today and nothing is visibly wrong with it.

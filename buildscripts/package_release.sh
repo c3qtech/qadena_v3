@@ -92,8 +92,25 @@ done
 # A dirty tree means the artifacts correspond to no commit, so nobody can reproduce the measurements
 # -- which is the entire basis for trusting a binary you did not build yourself.  Untracked files
 # count: an untracked .go file in a package IS compiled in.
-[[ -z "$(cd "$qadenabuild" && git status --porcelain)" ]] \
-    || fail "the working tree is dirty; these artifacts would correspond to no commit and could not be reproduced"
+#
+# ONE EXCEPTION, narrow and justified: docs/static/openapi.yml.
+#
+# It is generated API documentation, it is NOT in any packaged component
+# (chain,enclave,signer,libs,scripts,config,prereqs), and its content depends on WHICH generation
+# path ran rather than on the source: proto/buf.gen.sta.yaml uses openapi_naming_strategy=simple
+# while buf.gen.swagger.yaml uses fqn, and `ignite generate openapi` and the generation inside
+# `ignite chain init` do not agree.  Measured 2026-08-18: the committed file is 208 KB, an aligned
+# Mac regenerated 894 KB, and M1 produced a third result missing the qadena.dsvs.Msg endpoints --
+# same source, same pinned plugin versions.
+#
+# So it dirtied the tree on every bring-up and blocked packaging for artifacts it has no part in.
+# Excluding it here does not weaken the guarantee that BINARIES correspond to a commit; deciding
+# which generation path is canonical is a separate question (backlog 68) and should not be settled
+# by whichever machine happened to run last.
+tree_state=$(cd "$qadenabuild" && git status --porcelain -- . ':(exclude)docs/static/openapi.yml')
+[[ -z "$tree_state" ]] \
+    || fail "the working tree is dirty; these artifacts would correspond to no commit and could not be reproduced
+$tree_state"
 commit=$(cd "$qadenabuild" && git rev-parse --short HEAD)
 
 # HEAD IS NOT NECESSARILY THE COMMIT THESE BINARIES WERE BUILT FROM.  Packaging usually happens some
