@@ -39,8 +39,33 @@ func (k Keeper) EnclaveSynchronizeStores(sdkctx sdk.Context) error {
 		chainAcc := k.EnsureStoreAccumulator(sdkctx, e.GetKey())
 		{
 			if string(chainAcc[:]) != string(e.GetAcc()) {
-				c.ContextError(sdkctx, "DSVS: EnclaveSynchronizeStores OUT-OF-SYNC store:  key="+e.GetKey()+
-					" enclave-acc="+fmt.Sprintf("%x", e.GetAcc())+" chain-acc="+c.AccumulatorHex(chainAcc))
+				// AN EMPTY ENCLAVE IS NOT A DIVERGENCE.  An all-zero accumulator means the enclave
+				// holds no rows for this store at all -- a fresh or state-synced joiner before dsvs
+				// seeds it -- so there is nothing to disagree with, and the push below is the
+				// intended next step rather than a repair.  Reporting that at Error made a healthy
+				// SGX state-sync join look like it had a store mismatch, once, at startup; a REAL
+				// divergence (enclave holds rows, and they differ) still reports at Error.
+				//
+				// AND THAT ERROR IS THE ONLY ONE ANYONE GETS.  EnclaveBeginBlock guards this whole
+				// function with the package-level `synchronizedWithEnclave`, so it runs ONCE PER
+				// PROCESS, not per block -- there is a single observation per boot and nothing looks
+				// again.  Do not read a line that "never recurred" as a line that was resolved.
+				// Backlog 72: the seeding below sets checkSync and then discards it (`_ = checkSync`),
+				// so nothing verifies that the push landed either.
+				enclaveEmpty := true
+				for _, b := range e.GetAcc() {
+					if b != 0 {
+						enclaveEmpty = false
+						break
+					}
+				}
+				if enclaveEmpty {
+					c.ContextInfo(sdkctx, "DSVS: EnclaveSynchronizeStores SEEDING store:  key="+e.GetKey()+
+						" (enclave holds no rows) chain-acc="+c.AccumulatorHex(chainAcc))
+				} else {
+					c.ContextError(sdkctx, "DSVS: EnclaveSynchronizeStores OUT-OF-SYNC store:  key="+e.GetKey()+
+						" enclave-acc="+fmt.Sprintf("%x", e.GetAcc())+" chain-acc="+c.AccumulatorHex(chainAcc))
+				}
 
 				authorizedSignatories := k.GetAllAuthorizedSignatory(sdkctx)
 				for _, authorizedSignatory := range authorizedSignatories {

@@ -929,7 +929,13 @@ func (k Keeper) reconcileEnclaveHeight(sdkCtx sdk.Context) {
 		// mirrors are seeded; if the fetch fails or is impossible, that is where the node halts.
 		needsPrivateStateSync = true
 		privateStateSyncHeight = chainHeight
-		c.ContextError(sdkCtx, fmt.Sprintf("Qadena: enclave holds no private state but the chain has committed height %d -- will fetch it from a peer before executing block %d", chainHeight, chainHeight+1))
+		// INFO, NOT ERROR: this is the ordinary opening state of a state-synced joiner, and every
+		// other verdict in this switch reports at Info.  Nothing has gone wrong yet -- the fetch is
+		// planned right here and the import that follows is the normal path.  The FAILURE of that
+		// fetch has its own line below ("no peer is reachable to supply it") and halts the node, so
+		// nothing is hidden by not shouting here.  Logging it at Error made a healthy SGX state-sync
+		// join trip the joiner-log check in nth_node_bringup.sh.
+		c.ContextInfo(sdkCtx, fmt.Sprintf("Qadena: enclave holds no private state but the chain has committed height %d -- will fetch it from a peer before executing block %d", chainHeight, chainHeight+1))
 
 	case verdictHealthy:
 		// case A -- healthy
