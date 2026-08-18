@@ -13,7 +13,11 @@ GO_VERSION=$(awk -F: '/^[[:space:]]*\/\/[[:space:]]*VERSION[[:space:]]*:/ { gsub
 if [ -z "$GO_VERSION" ]; then
     GO_VERSION=$(awk '$1 == "go" { print $2; exit }' go.mod)
 fi
-IGNITE_VERSION=29.8.0
+# The version whose GENERATED OUTPUT the committed .pb.go files match.  Measured 2026-08-18: the
+# Mac ran module v29.7.0 and regenerated clean, M1 ran v29.8.0 and rewrote nine .pb.go files
+# (v29.8.0 drops a `var X_serviceDesc = _X_serviceDesc` alias per service file).  Changing this
+# means regenerating and committing the result, deliberately -- not discovering it mid-build.
+IGNITE_VERSION=29.7.0
 
 EGO_GO_VERSION=go1.25.6
 
@@ -257,10 +261,13 @@ fi
 # The consequence is not cosmetic.  v1.4.12 emits an extra `var X_serviceDesc = _X_serviceDesc`
 # alias per service file, so `ignite generate proto-go` rewrites nine .pb.go files, the tree goes
 # dirty, and package_release.sh correctly refuses artifacts that "correspond to no commit" --
-# which blocked phase 7 of 1st_node_bringup.sh on every run.  It is invisible until packaging,
-# and the obvious diagnosis (pin ignite) is wrong: buf.gen.gogo.yaml names `gocosmos` as a LOCAL
-# plugin, so ignite runs whatever binary is on the machine.  Both machines reported the same
-# ignite version while producing different output.
+# which blocked phase 7 of 1st_node_bringup.sh on every run.  It is invisible until packaging.
+#
+# PIN THE PLUGIN AND IGNITE BOTH.  buf.gen.gogo.yaml names `gocosmos` as a LOCAL plugin, so a stale
+# one on PATH does produce wrong output -- but aligning the plugin was NOT sufficient: with both
+# machines on gogoproto v1.7.2 the output still differed, because ignite embeds its own generator
+# and the two ignite MODULE versions differed (v29.7.0 vs v29.8.0) behind an identical displayed
+# version.  Whichever one is stale, the symptom is the same and lands two steps away.
 #
 # The version comes from go.mod so the two cannot drift apart again, and the check mirrors how
 # ignite itself is handled twenty lines below: compare, then reinstall if it differs.
@@ -291,16 +298,25 @@ fi
 # ignite
 # wget https://github.com/ignite/cli/releases/download/v28.8.2/ignite_28.8.2_linux_arm64.tar.gz
 
-# check installed version by parsing "Ignite CLI version:" line
+# THE MODULE VERSION, NOT THE DISPLAYED ONE.
+#
+# `ignite version` prints a string baked into the source at build time.  Every machine here printed
+# `v29.10.1-dev` while running DIFFERENT code: module v29.7.0 on the Mac, v29.8.0 on M1.  So the old
+# comparison against "v${IGNITE_VERSION}" could neither recognise a correct install nor detect a
+# wrong one -- it just always disagreed, and the difference it could not see is precisely the one
+# that rewrites .pb.go and blocks packaging.
+#
+# `go version -m` reports the module a Go binary was built from, which is the field that varies.
+# It works for a release tarball and a source build alike.
 INSTALLED_IGNITE=""
 echo "Checking if ignite is installed"
 if command -v ignite > /dev/null 2>&1; then
-    echo "Ignite is installed, getting version"
-    INSTALLED_IGNITE=$(sudo -u "$SUDO_USER" env PATH="/usr/local/bin:/usr/local/go/bin:$PATH" ignite version 2>&1 | grep "Ignite CLI version:" | awk '{print $NF}')
-    echo "Installed Ignite CLI version: $INSTALLED_IGNITE"
+    INSTALLED_IGNITE=$(go version -m "$(command -v ignite)" 2>/dev/null \
+        | awk '$1 == "mod" && $2 == "github.com/ignite/cli/v29" { print $3; exit }')
+    echo "Installed ignite module: ${INSTALLED_IGNITE:-unknown} (displays: $(sudo -u "$SUDO_USER" env PATH="/usr/local/bin:/usr/local/go/bin:$PATH" ignite version 2>&1 | awk '/Ignite CLI version:/ {print $NF}'))"
 fi
 
-if [ "$INSTALLED_IGNITE" != "v${IGNITE_VERSION}" ] && [ "$INSTALLED_IGNITE" != "v${IGNITE_VERSION}-dev" ]; then
+if [ "$INSTALLED_IGNITE" != "v${IGNITE_VERSION}" ]; then
     # detect OS
     case "$(uname -s)" in
         Darwin) IGNITE_OS="darwin" ;;
