@@ -3593,7 +3593,20 @@ func (s *qadenaServer) UpdateEnclaveIdentity(ctx context.Context, in *types.Pion
 		// outcome depend on whether a quote still verified -- two nodes checking the same historical
 		// report on different days can legitimately disagree, and a replaying node would diverge on
 		// the app hash and halt.  Declining to trust is this enclave's own business.
-		if hwm > 0 && in.Height < hwm-attestationMaxAgeBlocks/2 {
+		// EXPECTED DURING A JOINER'S REPLAY, so do not shout about it.
+		//
+		// A joiner replays the promotion that upgraded the chain, and that promotion's report was
+		// made by the PREVIOUS measurement -- which the joiner has no reason to trust: its bootstrap
+		// gave it the seed's current build.  Verification therefore fails, the row is recorded, and
+		// reconcileTrustOnGoingLive settles whatever is missing.  Entirely routine.
+		//
+		// The first attempt at this test (`in.Height < hwm - limit/2`) never fired, because a
+		// replaying node's watermark climbs WITH the messages, so a replayed promotion always looks
+		// current relative to it.  Catch-up is the question being asked, and `isLive` answers it --
+		// host-supplied, and fine here precisely because this decides a LOG LEVEL and nothing else.
+		// Trust still turns on the watermark, which the host cannot move.
+		_, live, knownPos := currentChainPosition()
+		if (knownPos && !live) || (hwm > 0 && in.Height < hwm-attestationMaxAgeBlocks/2) {
 			// Expected on real SGX: DCAP collateral has validity windows and TCB levels are revised,
 			// so a quote from another era may simply no longer check out.  Judged against our own
 			// watermark rather than a host-supplied liveness flag, for the same reason the gain test

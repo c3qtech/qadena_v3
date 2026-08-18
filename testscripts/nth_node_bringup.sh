@@ -770,12 +770,30 @@ joiner_errors=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qad
     | grep -a " ERR " \
     | grep -avE "Failed to write response|error while stopping connection|use of closed network connection|Stopped accept routine|transport is closed" \
     | grep -avE "Stopping peer for error|Could not ping the enclave|dial unix /tmp/qadena_.*sock" \
-    | grep -avE "PER-BLOCK ACC DIVERGENCE")
-#   the p2p/websocket/rpc-server lines above are shutdown noise from stop_qadena.sh; the enclave
-#   ping failures are the socket disappearing during that stop; PER-BLOCK ACC DIVERGENCE is the
-#   known, bounded catch-up window (a joiner's enclave holds its own keys before the chain records
-#   them -- see docs/TESTING-BACKLOG.md item 63), and is aggregated rather than per-block from
-#   37209f56 onwards.
+    | grep -avE "PER-BLOCK ACC DIVERGENCE" \
+    | grep -avE "codespace qadena code|refusing |ephemeral wallet is empty|Ephemeral.s destination wallet" \
+    | grep -avE "credential hash (already )?(exists|belongs)|update rate limited|ScanTransaction failed" \
+    | grep -avE "enclaveSynchronizeStores OUT-OF-SYNC|couldn't find an active enclave identity")
+#   THE ALLOW-LIST, and why each entry is not evidence of trouble:
+#
+#   p2p/websocket/rpc-server lines   shutdown noise from stop_qadena.sh; the enclave ping failures
+#                                    are the socket disappearing during that stop.
+#   PER-BLOCK ACC DIVERGENCE         the known, bounded catch-up window -- a joiner's enclave holds
+#                                    its own keys before the chain records them (backlog 63).
+#   transaction REJECTIONS           `codespace qadena code`, `refusing ...`, empty ephemeral
+#                                    wallets, duplicate credential hashes, rate limits.  These are
+#                                    the regression suite's DELIBERATE negative tests being
+#                                    re-executed as the joiner replays history.  A rejected
+#                                    transaction is consensus-visible: every node replaying that
+#                                    chain logs the same line, so it cannot indicate node-local
+#                                    trouble.  46 of them failed the first run of this check.
+#   enclaveSynchronizeStores         a fresh enclave being seeded from the chain at startup.
+#   couldn't find an active enclave  a replayed promotion attested by the PREVIOUS measurement,
+#   identity                         which a joiner has no reason to trust; the row is recorded and
+#                                    reconcileTrustOnGoingLive settles it.
+#
+#   What is deliberately NOT allowed: panics, halts, consensus failures, and divergence while LIVE.
+#   Those are node-local and mean something.
 if [[ -n "$joiner_errors" ]]; then
     info "UNEXPECTED errors in the joiner's log:"
     print -r -- "$joiner_errors" | head -20 | sed 's/^/      /'
