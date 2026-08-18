@@ -32,12 +32,26 @@ package main
 //   bootstrap   sync-enclave from a seed running OUR measurement.  Exists so the three above have
 //               something to stand on: a fresh enclave's set is {self}, and every quorum query is
 //               itself gated on trust, so without this the chain of trust has no root.
+//   handover    an upgrade carries the whole sealed params, trusted set included, from the previous
+//               measurement -- authenticated against the one the operator named in
+//               --upgrade-from-enclave-unique-id.  See verifyUpgradeSourceIsExpected.
+//
+// Those last two are the same problem in different clothes, and BOTH were once served invisibly by
+// the mirrored store: a new enclave read trust from chain rows and never noticed it was
+// bootstrapping.  Each now names an anchor it can actually check -- our own measurement for a
+// joiner, the operator's stated measurement for an upgrade.
 //
 // HOW TRUST IS LOST:
 //
 //   a mirror push with Status inactive -- governance or a quorum deactivation flowing in.  Note the
 //   asymmetry: a mirror push may REMOVE trust but never add it.  That is what keeps a hostile node
 //   unable to do anything except reduce what it is trusted with.
+//
+// REPLAY APPLIES BOTH DIRECTIONS, IN ORDER.  Historical transitions are not ignored: the stream is
+// consensus-ordered and immutable, so processing it converges on the chain's final view.  Applying
+// grants but not revocations would ratchet trust upwards; the age limit therefore guards LIVE
+// messages only, where a peer chooses what to send.  Whatever fails to verify along the way -- old
+// DCAP collateral will -- is caught by reconcileTrustOnGoingLive and settled by a quorum.
 //
 // MRSIGNER is deliberately absent from all of this.  It cannot anchor anything here: the signing
 // key ships in the repo, so anyone can produce a leaky enclave whose attestation is genuine and
@@ -46,6 +60,7 @@ package main
 import (
 	"strconv"
 	"sync"
+	"time"
 
 	"cosmossdk.io/store/prefix"
 
@@ -94,21 +109,31 @@ func currentChainPosition() (height int64, isLive bool, known bool) {
 // be broadcast, included and reach every node without ever approaching the bound.
 var attestationMaxAgeBlocks = 2 * keyUpdateFrequency
 
-// attestationIsCurrent decides whether a report generated at reportHeight is recent enough to act
-// on, and says why when it is not.  Reports from the future are refused too: that is either a
-// broken peer or an attempt to buy unlimited lifetime for one quote.
-func attestationIsCurrent(reportHeight int64, what string) bool {
-	height, isLive, known := currentChainPosition()
+// How long to wait for one pioneer's answer when validating an identity.  Generous next to a
+// healthy round trip and short next to the retry, which is 5 blocks away: the cost of giving up on
+// a slow peer is one retry, while the cost of waiting forever is that no identity is ever validated
+// again on this node.
+const validatePeerTimeout = 10 * time.Second
+
+// attestationWithinAgeLimit bounds how old a report may be to be acted on -- and applies ONLY to
+// LIVE messages.  The caller decides; see UpdateEnclaveIdentity for why.
+//
+// THE LIMIT EXISTS TO STOP A REPLAY ATTACK, not to express distaste for old quotes.  A peer sending
+// us something now chooses what to send, so without a bound it could re-submit a years-old signed
+// promotion and have it treated as current.  During chain REPLAY none of that applies: the message
+// stream is consensus-ordered and immutable, the network already agreed those transitions and their
+// order, and nobody gets to choose what we see.  Refusing history on age there discards good
+// evidence and forces a sweep that need not happen.
+//
+// Reports from the future are refused too: that is either a broken peer or an attempt to buy
+// unlimited lifetime for one quote.
+func attestationWithinAgeLimit(reportHeight int64, what string) bool {
+	height, _, known := currentChainPosition()
 	if !known {
-		// Before the first UpdateHeight -- sync-enclave runs here, and it verifies the seed by
+		// Before the first UpdateHeight -- sync-enclave runs here, and it authenticates the seed by
 		// measurement rather than by age.  Nothing to compare against, so do not pretend.
 		c.LoggerDebug(logger, "no chain position yet; not judging the age of "+what)
 		return true
-	}
-	if !isLive {
-		c.LoggerInfo(logger, "ignoring "+what+" at height "+strconv.FormatInt(reportHeight, 10)+
-			": the chain is replaying history (at "+strconv.FormatInt(height, 10)+"), and a historical attestation is not evidence about now")
-		return false
 	}
 	age := height - reportHeight
 	if age > attestationMaxAgeBlocks {
@@ -323,6 +348,27 @@ func (s *qadenaServer) reconcileTrustOnGoingLive() {
 	}
 	c.LoggerInfo(logger, "reconcile on going live: "+strconv.Itoa(agreed)+" identities agreed, "+
 		strconv.Itoa(dropped)+" dropped, "+strconv.Itoa(queued)+" queued for validation")
+}
+
+// refuseIfCatchingUp guards the handlers that hand secrets to a peer.
+//
+// While a node replays, its trusted set is mid-reconstruction: historical transitions are being
+// applied in order, some attestations may not verify until the reconcile settles them, and the set
+// genuinely does not yet describe the present.  Answering a secret-releasing request from that state
+// means answering on a view we know to be provisional -- in either direction, refusing a legitimate
+// peer or serving one the chain has since retired.
+//
+// A node that is not caught up has no business being a source of secrets at all.  It is not the
+// authority on anything yet, and the caller can simply ask a node that is.
+func (s *qadenaServer) refuseIfCatchingUp(what string) error {
+	_, isLive, known := currentChainPosition()
+	if !known || isLive {
+		return nil
+	}
+	height, _, _ := currentChainPosition()
+	c.LoggerInfo(logger, "refusing "+what+" at height "+strconv.FormatInt(height, 10)+
+		": this node is still catching up, so its trusted set does not yet describe the present -- ask a node that is caught up")
+	return types.ErrGenericEnclave
 }
 
 // verifySeedIsOurBuild authenticates the OTHER end of the sync-enclave handshake.

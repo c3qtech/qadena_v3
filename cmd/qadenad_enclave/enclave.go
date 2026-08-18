@@ -2377,6 +2377,9 @@ func (s *qadenaServer) AddAsValidator(ctx context.Context, in *types.MsgAddAsVal
 // these enclave-to-enclave queries come in through the blockchain's query interface
 
 func (s *qadenaServer) QueryEnclaveSyncEnclave(goCtx context.Context, in *types.QueryEnclaveSyncEnclaveRequest) (*types.QueryEnclaveSyncEnclaveResponse, error) {
+	if err := s.refuseIfCatchingUp("sync-enclave (the jar and regulator keys)"); err != nil {
+		return nil, err
+	}
 	if s.RealEnclave {
 		c.LoggerDebug(logger, "QueryEnclaveSyncEnclave")
 	} else {
@@ -2576,6 +2579,9 @@ func (s *qadenaServer) QueryEnclaveValidateEnclaveIdentity(goCtx context.Context
 }
 
 func (s *qadenaServer) QueryEnclaveSecretShare(goCtx context.Context, in *types.QueryEnclaveSecretShareRequest) (*types.QueryEnclaveSecretShareResponse, error) {
+	if err := s.refuseIfCatchingUp("a secret share"); err != nil {
+		return nil, err
+	}
 	if s.RealEnclave {
 		c.LoggerDebug(logger, "QueryEnclaveSecretShare")
 	} else {
@@ -2614,6 +2620,9 @@ func (s *qadenaServer) QueryEnclaveSecretShare(goCtx context.Context, in *types.
 }
 
 func (s *qadenaServer) QueryEnclaveRecoverKeyShare(goCtx context.Context, in *types.QueryEnclaveRecoverKeyShareRequest) (*types.QueryEnclaveRecoverKeyShareResponse, error) {
+	if err := s.refuseIfCatchingUp("a recover-key share"); err != nil {
+		return nil, err
+	}
 	if s.RealEnclave {
 		c.LoggerDebug(logger, "QueryEnclaveRecoverKeyShare")
 	} else {
@@ -2723,6 +2732,9 @@ func (s *qadenaServer) QueryEnclaveRecoverKeyShare(goCtx context.Context, in *ty
 }
 
 func (s *qadenaServer) QueryGetRecoverKey(goCtx context.Context, in *types.QueryGetRecoverKeyRequest) (*types.QueryGetRecoverKeyResponse, error) {
+	if err := s.refuseIfCatchingUp("a recover key"); err != nil {
+		return nil, err
+	}
 	if s.RealEnclave {
 		c.LoggerDebug(logger, "QueryGetRecoverKey")
 	} else {
@@ -3482,22 +3494,34 @@ func (s *qadenaServer) UpdateEnclaveIdentity(ctx context.Context, in *types.Pion
 	s.setEnclaveIdentity(in.EnclaveIdentity)
 
 	subject := in.EnclaveIdentity.UniqueID + " -> " + in.EnclaveIdentity.Status
-	c.LoggerInfo(logger, "UpdateEnclaveIdentity: attested claim "+subject+" made at height "+strconv.FormatInt(in.Height, 10))
+	_, isLive, knownPos := currentChainPosition()
+	c.LoggerInfo(logger, "UpdateEnclaveIdentity: attested claim "+subject+" made at height "+
+		strconv.FormatInt(in.Height, 10)+" (chain is "+map[bool]string{true: "live", false: "replaying"}[isLive || !knownPos]+")")
 
-	// Age before signature: verifying a stale quote is the expensive way to learn it is stale, and
-	// during replay we would be checking a months-old report against today's collateral.
-	if !attestationIsCurrent(in.Height, "identity claim "+subject) {
+	// TRY THE EVIDENCE FIRST; SWEEP ONLY IF IT DOES NOT HOLD.
+	//
+	// The age limit applies to LIVE messages only.  A peer sending us something now chooses what to
+	// send, so an unbounded lifetime would let it re-submit a years-old promotion as though it were
+	// current.  Replayed blocks are the opposite case: the stream is consensus-ordered and
+	// immutable, the network already agreed those transitions AND their order, and nothing gets to
+	// choose what we see.  Refusing history on age there throws away good evidence and forces the
+	// reconcile to rebuild what we could simply have read.
+	//
+	// BOTH DIRECTIONS ARE APPLIED, and that is what makes replaying safe: promotions and
+	// deactivations both arrive attested, so processing the stream in order converges on exactly the
+	// chain's final view.  Accepting historical grants while ignoring historical revocations would
+	// ratchet trust upwards and leave us trusting a measurement the network retired years ago.
+	if knownPos && isLive && !attestationWithinAgeLimit(in.Height, "identity claim "+subject) {
 		// Say what this MEANS, not just what was decided.  These paths run once in months, so the
 		// log is the only account anyone will have -- and "ignored" leaves the reader to work out
-		// whether trust moved.  It did not, in either direction: an old promotion grants nothing,
-		// and an old deactivation revokes nothing, because neither is evidence about now.
+		// whether trust moved.  It did not, in either direction.
 		_, alreadyTrusted := s.trustedEnclaveIdentity(in.EnclaveIdentity.UniqueID)
 		verdict := "we do NOT trust it"
 		if alreadyTrusted {
 			verdict = "we still trust it, from earlier evidence"
 		}
 		c.LoggerInfo(logger, "UpdateEnclaveIdentity: no trust change for "+in.EnclaveIdentity.UniqueID+
-			" -- the attestation is not current, so it neither grants nor revokes; "+verdict+
+			" -- a live message carrying an attestation this old is a replay, so it neither grants nor revokes; "+verdict+
 			". The chain row was recorded regardless.")
 		return &types.UpdateEnclaveIdentityReply{Status: true}, nil
 	}
@@ -3515,7 +3539,16 @@ func (s *qadenaServer) UpdateEnclaveIdentity(ctx context.Context, in *types.Pion
 		// outcome depend on whether a quote still verified -- two nodes checking the same historical
 		// report on different days can legitimately disagree, and a replaying node would diverge on
 		// the app hash and halt.  Declining to trust is this enclave's own business.
-		c.LoggerError(logger, "remote report unverified for "+subject+" -- recording the row, but NOT trusting the identity")
+		if knownPos && !isLive {
+			// Expected on real SGX: DCAP collateral has validity windows and TCB levels are revised,
+			// so a quote from another era may simply no longer check out.  Nothing is lost -- the
+			// reconcile on going live diffs what the chain believes against what we hold and queues
+			// the difference for a quorum that answers about NOW.
+			c.LoggerInfo(logger, "could not verify the historical attestation for "+subject+
+				" (its collateral has likely moved on) -- leaving it; the reconcile on going live will settle it")
+		} else {
+			c.LoggerError(logger, "remote report unverified for "+subject+" -- recording the row, but NOT trusting the identity")
+		}
 		return &types.UpdateEnclaveIdentityReply{Status: true}, nil
 	}
 
@@ -3573,17 +3606,19 @@ func (s *qadenaServer) SetEnclaveIdentity(ctx context.Context, in *types.Enclave
 		// flowing in.  The asymmetry is the point: a hostile node can only ever reduce what it is
 		// trusted with.
 		//
-		// LIVE BLOCKS ONLY, because replay would apply the deactivation out of its era.  An identity
-		// whose history reads active -> inactive -> active would lose trust at the middle step, and
-		// the final `active` cannot restore it: mirror pushes do not add.  The node would end up
-		// distrusting a measurement the chain currently considers active.  The trusted set describes
-		// NOW -- it arrived from the sync-enclave bootstrap or was carried through an upgrade -- so
-		// only current transitions may alter it.
-		if _, isLive, known := currentChainPosition(); known && !isLive {
-			c.LoggerInfo(logger, "replaying: NOT dropping trust in "+in.UniqueID+" on a historical deactivation")
-		} else {
-			s.untrustEnclaveIdentity(in.UniqueID, "chain reports it inactive")
-		}
+		// APPLIED DURING REPLAY TOO, in order with everything else.
+		//
+		// This was once deferred while catching up, on the reasoning that a historical deactivation
+		// should not disturb a trusted set describing NOW.  That was wrong in company: replayed
+		// PROMOTIONS are applied (they are attested and the stream is consensus-ordered), so
+		// skipping only the revocations would ratchet trust upwards and leave us trusting something
+		// the network retired.  Applying the whole history in order converges on the chain's final
+		// view, which is the only view worth having.
+		//
+		// The `active -> inactive -> active` case that motivated the deferral resolves by itself:
+		// the final promotion is attested, so it restores trust as it replays.  If its attestation
+		// no longer verifies, the reconcile on going live sees the disagreement and asks a quorum.
+		s.untrustEnclaveIdentity(in.UniqueID, "chain reports it inactive")
 	default:
 		// Stored, not trusted.  A foreign identity becomes trusted only through an attested route:
 		// UpdateEnclaveIdentity with a report from an enclave we already trust, our own quorum
@@ -5735,7 +5770,16 @@ func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 
 			c.LoggerDebug(logger, "params "+c.PrettyPrint(params))
 
-			res, err := queryClient.EnclaveValidateEnclaveIdentity(context.Background(), params)
+			// A DEADLINE, because this poll is the one place the enclave depends on peers being
+			// reachable.  context.Background() has none, so a pioneer whose node accepts the
+			// connection and then never answers -- wedged, paused, half-partitioned -- stalls the
+			// whole pass, and with it every other identity waiting in the queue.  Unreachable peers
+			// are already handled correctly (they do not count as a vote, and too few verified
+			// answers means abstain rather than condemn); an UNRESPONSIVE one has to be turned into
+			// an unreachable one for that handling to apply at all.
+			peerCtx, peerCancel := context.WithTimeout(context.Background(), validatePeerTimeout)
+			res, err := queryClient.EnclaveValidateEnclaveIdentity(peerCtx, params)
+			peerCancel()
 			if err != nil {
 				c.LoggerError(logger, "err "+err.Error())
 				continue
