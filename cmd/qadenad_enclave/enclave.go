@@ -208,14 +208,32 @@ type CredentialKey struct {
 
 var testSeal bool = false
 
+// THESE ARE EMBEDDED VERBATIM, INCLUDING ANY TRAILING NEWLINE.  Everything downstream treats the
+// value as an identity: it names the sealed-state file, it is what the chain registers, and it is
+// compared byte-for-byte against the chain's EnclaveIdentity.  A single trailing "\n" therefore
+// creates a DIFFERENT enclave -- one that cannot find its own sealed state, silently starts with
+// empty private tables, and then executes blocks against a chain that expects the real one.
+//
+// That is not hypothetical: writing the id with `echo` instead of `printf` produced a sealed file
+// literally named "enclave_params_unique048\n.json" beside the real one, the enclave came up with
+// no private state, and the two-node chain forked as soon as an accumulator it owned changed.
+// Nothing reported the mismatch, because from the enclave's point of view it was simply a new
+// identity starting for the first time.
+//
+// So trim on the way in, once, where every reader gets it.  The files themselves should still be
+// written with printf; this makes the failure impossible rather than merely unlikely.
+//
 //go:embed test_unique_id.txt
-var uniqueID string
+var uniqueIDRaw string
+var uniqueID = strings.TrimSpace(uniqueIDRaw)
 
 //go:embed test_signer_id.txt
-var signerID string
+var signerIDRaw string
+var signerID = strings.TrimSpace(signerIDRaw)
 
 //go:embed version.txt
-var version string
+var versionRaw string
+var version = strings.TrimSpace(versionRaw)
 
 // The enclave's own configuration, embedded so the heap size the GC is told about is the same
 // number ego signed the enclave with.  Holding that constant in two places is how they drift, and

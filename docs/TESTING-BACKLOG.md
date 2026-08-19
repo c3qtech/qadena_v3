@@ -1192,3 +1192,39 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     failed cycles, on the exit-code bug fixed in e487b05c, so cases 8-14 never ran.  Fixing the
     assertion did not create this failure -- it revealed it.  A test that fails for a bogus reason
     does not merely waste time; it stops before the assertions that would have caught something real.
+
+77. **A trailing newline in test_unique_id.txt silently creates a DIFFERENT enclave, and forks the
+    chain.**  The three identity files are `//go:embed`-ed verbatim, so `echo "unique048" > ...`
+    (which appends "\n") produces an enclave whose id is `unique048\n`.  That id names the sealed
+    state file, so the enclave does not find its own state, starts with EMPTY private tables, and
+    then executes real blocks against a chain that expects the populated ones.  Observed directly:
+
+        -rw-r--r-- 2154 09:18  enclave_params_unique048.json     <- the real sealed state
+        -rw-r--r--  333 09:42  enclave_params_unique048\n.json   <- a fresh, empty one
+
+    The node logged `Enclave starting 1.1.5 signer051 unique048` (the newline is invisible), no
+    watermark line, and `reconciled at height 11848` -- i.e. it adopted the chain's height while
+    holding none of its state.  It ran ~15 blocks that way.  The app hashes still agreed, because
+    the accumulators it owned had not yet changed; the fork surfaced one block later and the chain
+    halted with M1 at 66.4% -- just under the 2/3 it needed to proceed alone.
+
+    Fixed at the source: the embedded values are now `strings.TrimSpace`d, so the failure is
+    impossible rather than merely unlikely.  Still worth doing: refuse to start when the sealed
+    state for this id is absent BUT another `enclave_params_*` file exists whose name differs only
+    by whitespace -- that is never a legitimate new identity, and starting empty is the worst
+    possible response to it.
+
+78. **A rebuild after an enclave upgrade silently reverts the node to the PRE-UPGRADE identity.**
+    `build_enclave.sh` takes the measurement AND the version from tracked files
+    (`cmd/qadenad_enclave/test_unique_id.txt`, `version.txt`), and `test_enclave_upgrade.sh` bumps
+    them, builds, and then RESTORES them (`restore_version_files`).  So after an upgrade the repo no
+    longer describes what the node is running, and any later `build_enclave.sh` on that machine
+    produces the old identity again -- here it rebuilt `unique047` on a chain running `unique048`,
+    and on the retry it produced `1.1.4/unique048` against a chain expecting `1.1.5/unique048`,
+    which failed provisioning with `1108: Invalid destination EWalletID`.
+
+    Nothing warns.  The build should compare what it is about to produce against what the node's
+    home currently holds (`enclave_config/enclave_params_*.json`, or the installed binary's own
+    answer) and refuse -- or at least say loudly -- when a rebuild would move the node's identity
+    backwards while chain data exists.  This is the same shape as item 59 (rewriting a live node's
+    genesis): a build step that is safe on a fresh machine and destructive on a running one.
