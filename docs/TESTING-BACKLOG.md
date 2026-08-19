@@ -1286,3 +1286,29 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
 
     Today's evidence for the gate: one occurrence, 16 blocks of bad execution, a halted two-node
     chain, and a recovery that needed `qadenad rollback --height`.
+
+81. **update_credentials.sh case 3 passes without proving what its own comment claims.**  The case is
+    the right idea -- the identity provider mints a credential for a DIFFERENT person (Ferdinand /
+    Romualdez / Marcos, 1957-Sep-13) and al, who is Rodolfo Alberto / Asuncion / Villarica,
+    1970-Feb-02, tries to update onto it.  First, middle, last and birthdate all move at once, which
+    `update_credential_max_changed_identity_fields = 1` must refuse.  It IS refused: the run reports
+    "rejected as expected", and independently the credential's own counter stays at
+    `Update Generation: 1` across runs, so nothing was substituted.
+
+    But the assertion is weaker than the case reads:
+
+    - **The "rollback proof" is not a test.**  The case prints al's credential under the heading
+      "must be byte-identical to case 1", and nothing compares them.  No variable holds case 1's
+      dump, no diff runs, and no assertion can fail.  The strongest claim in the case is a comment
+      over an echo.
+    - **The rejection code is not pinned.**  Any failure passes: wrong blinding factor, insufficient
+      fees, rate limit, a typo in the credential id.  `test_credential_uniqueness.sh` pins its codes
+      for exactly this reason ("both cases would still pass while testing nothing about
+      uniqueness"); this suite does not.  Today the case passes on `rejected-before-broadcast` --
+      a refusal at simulation, which proves the chain said no but not WHICH rule said it.
+    - The policy's own error exists and is specific: **1154 ErrCredentialUpdateRejected**
+      ("Credential update rejected by change policy").  Case 3 should require it.
+
+    Two changes make it a real regression guard: capture case 1's credential dump into a variable
+    and diff it after case 3, and assert code 1154.  The same applies to case 4 (birthdate
+    substitution), which passes on the same unpinned signal.
