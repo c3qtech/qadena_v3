@@ -432,6 +432,55 @@ confirm_tx() {
     return 0
 }
 
+# tx_reject_code <cmd...> -- run a transaction that is EXPECTED TO FAIL and print the qadena code
+# that actually rejected it, or 0 if the chain accepted it.
+#
+# WHY THE EXIT CODE OF `tx` CANNOT ANSWER THIS.  A message-level rejection surfaces in one of two
+# places, and which one depends on load, not on policy:
+#
+#   CheckTx      the node refuses the transaction outright.  The CLI prints the code and exits
+#                non-zero, and the transaction never enters a block.
+#   execution    the transaction is INCLUDED IN A BLOCK and fails there.  Broadcast succeeded, so
+#                the CLI exits ZERO and prints code: 0 -- the failure is only in the delivered
+#                transaction's own result.
+#
+# Suites that asserted `if "$@"; then fail "it succeeded"` therefore reported a correctly-refused
+# transaction as ACCEPTED whenever the chain was busy enough to admit it to a block first.  Measured
+# on M1: the no-eKYC transfer was rejected with code 1158 in EVERY case, but the regression called it
+# "allowed to transfer" in 10 of 27 cycles -- purely a function of where the rejection landed.  The
+# same shape failed `credentials` 19 times and `uniqueness` 4 times.
+#
+# So ask the chain, in both places, in order.
+tx_reject_code() {
+    local out hash checktx delivered log
+    out=$("$@" 2>&1) || true
+
+    # CheckTx first: a hash is returned even for transactions refused here, so the code has to be
+    # read before any wait -- waiting on one that never entered a block cannot terminate.
+    checktx=$(print -r -- "$out" | strings | grep -oE '^code: [0-9]+' | head -1 | awk '{print $2}')
+    if [[ -n "$checktx" && "$checktx" != "0" ]]; then
+        print -r -- "$out" | strings | grep -oE 'codespace qadena code [0-9]+' | tail -1 | awk '{print $4}'
+        return 0
+    fi
+
+    hash=$(print -r -- "$out" | strings | grep -oE 'txhash: [A-Fa-f0-9]+' | head -1 | awk '{print $2}')
+    if [[ -z "$hash" ]]; then
+        # Never broadcast at all -- a failed --gas auto simulation, most often.  That IS a rejection,
+        # and the reason is in the text.
+        print -r -- "$out" | strings | grep -oE 'codespace qadena code [0-9]+' | tail -1 | awk '{print $4}'
+        return 0
+    fi
+
+    qadenad_alias query wait-tx "$hash" --timeout 60s > /dev/null 2>&1
+    delivered=$(qadenad_alias query tx "$hash" --output json 2>/dev/null | jq -r '.code // 0' 2>/dev/null)
+    if [[ "$delivered" == "0" ]]; then
+        print "0"                       # the chain really did accept it
+        return 0
+    fi
+    log=$(qadenad_alias query tx "$hash" --output json 2>/dev/null | jq -r '.raw_log // empty' 2>/dev/null)
+    print -r -- "$log" | grep -oE 'codespace qadena code [0-9]+' | tail -1 | awk '{print $4}'
+}
+
 # wait_for_tx <broadcast-json> [label] -- check the broadcast BEFORE waiting for the transaction.
 #
 # THIS EXISTS BECAUSE THE OBVIOUS FORM HANGS FOREVER.  Every call site used to be

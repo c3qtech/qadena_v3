@@ -114,11 +114,19 @@ expect_ok() {
 
 # expect_reject runs a command that MUST fail.  A success here means the chain accepted something
 # the policy is supposed to refuse, which is the failure mode this script exists to catch.
+#
+# ASK THE CHAIN, NOT THE EXIT CODE.  This used to be `if "$@"; then fail`, which is only right when
+# the rejection happens at CheckTx.  When the chain is busy the transaction is admitted to a BLOCK
+# and refused during execution -- broadcast succeeded, so `tx` exits ZERO and this reported a
+# correctly-refused transaction as accepted.  It failed this suite 19 times in 27 continuous cycles
+# while the chain rejected every single one.  tx_reject_code reads the delivered result.
 expect_reject() {
-	if "$@"; then
-		fail "expected rejection but it succeeded: $*"
+	local code
+	code=$(tx_reject_code "$@")
+	if [ -z "$code" ] || [ "$code" = "0" ]; then
+		fail "expected rejection but the chain ACCEPTED it: $*"
 	fi
-	echo "rejected as expected"
+	echo "rejected as expected (qadena code $code)"
 }
 
 u_al="al$suffix"

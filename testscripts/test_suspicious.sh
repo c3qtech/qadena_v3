@@ -455,14 +455,20 @@ echo "created $noekyc_wallet with an eph wallet and no credential"
 # for more and the transfer fails on funds BEFORE the scan runs -- which is why the code is asserted
 # below rather than the mere fact of failure.
 noekyc_amount="100"
-noekyc_out=$(qadenad_alias tx qadena transfer-funds ann-eph1 0qdn "${noekyc_amount}qdn" \
-    --transfer-note "no ekyc" --from "$noekyc_wallet" --yes 2>&1) && noekyc_rc=0 || noekyc_rc=$?
-if [ "$noekyc_rc" -eq 0 ]; then
+# THE CHAIN'S VERDICT, NOT THE CLI'S EXIT CODE.  This used to fail the suite whenever `tx` returned
+# zero -- which it does whenever the transaction is ADMITTED TO A BLOCK and refused during execution
+# instead of at CheckTx.  Where the rejection lands is a function of how busy the chain is, so on an
+# idle chain this passed and under continuous regression it reported "a wallet with no credential was
+# allowed to transfer" -- 10 times in 27 cycles, while the chain refused the transfer with 1158 every
+# single time (verified on M1: block 10937, code 1, "Sender has no eKYC data").  Nothing was ever
+# allowed; the assertion was reading the wrong thing.
+noekyc_code=$(tx_reject_code qadenad_alias tx qadena transfer-funds ann-eph1 0qdn "${noekyc_amount}qdn" \
+    --transfer-note "no ekyc" --from "$noekyc_wallet" --yes)
+if [ -z "$noekyc_code" ] || [ "$noekyc_code" = "0" ]; then
     fail "a wallet with no credential was allowed to transfer"
 fi
-if ! echo "$noekyc_out" | grep -q "code 1158"; then
-    echo "$noekyc_out" | grep -oE "codespace qadena code [0-9]+: [A-Za-z ;]+" | tail -1
-    fail "expected qadena code 1158 (no eKYC), got the above -- the transfer must be refused for the RIGHT reason"
+if [ "$noekyc_code" != "1158" ]; then
+    fail "expected qadena code 1158 (no eKYC), got $noekyc_code -- the transfer must be refused for the RIGHT reason"
 fi
 echo "rejected as expected (qadena code 1158)"
 

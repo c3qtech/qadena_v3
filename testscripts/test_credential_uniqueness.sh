@@ -108,16 +108,21 @@ $(echo "$out" | tail -5 | sed 's/^/         /')"
 #
 #   1115  ErrCredentialExists            -- the identity hash is already registered
 #   1154  ErrCredentialUpdateRejected    -- refused by the change policy
+#
+# READ THE DELIVERED RESULT, NOT THE CLI'S EXIT CODE.  A rejection surfaces at CheckTx OR during
+# execution, and which one depends on how busy the chain is: under load the transaction is included
+# in a block first, broadcast therefore "succeeds", `tx` exits zero, and the code this greps for is
+# nowhere in the CLI output.  That reported refused transactions as accepted (4 failures in 27
+# continuous cycles here, 19 in the credentials suite).  tx_reject_code checks both places.
 expect_reject_code() {
     local want="$1"; shift
-    local out rc
-    out=$("$@" 2>&1) && rc=0 || rc=$?
-    if [ "$rc" -eq 0 ]; then
-        fail "expected rejection but it succeeded: $*"
+    local code
+    code=$(tx_reject_code "$@")
+    if [ -z "$code" ] || [ "$code" = "0" ]; then
+        fail "expected rejection but the chain ACCEPTED it: $*"
     fi
-    if ! echo "$out" | grep -q "codespace qadena code $want"; then
-        echo "$out" | grep -oE "codespace qadena code [0-9]+: [A-Za-z ]+" | tail -1
-        fail "expected qadena code $want, got the above (or no qadena error at all): $*"
+    if [ "$code" != "$want" ]; then
+        fail "expected qadena code $want, but it was rejected with $code: $*"
     fi
     echo "rejected as expected (qadena code $want)"
 }
