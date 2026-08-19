@@ -1164,3 +1164,31 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     so an environment fault costs nothing and reports itself; and surface the last line of the build
     log in the failure message.  Restarting the chain on failure would be better still -- an
     environmental error should not leave a stopped node behind.
+
+76. **The credential-update cool-down is not reliably enforced -- and the broken test assertion was
+    hiding it.**  `update_credential_min_blocks_between_updates = 10000` on the chain, yet al's
+    SECOND hash-changing update was committed three blocks after the first:
+
+        h=11713  code=0  MsgUpdateCredential     (case 1, correction -- expected)
+        h=11716  code=0  MsgUpdateCredential     (case 9, rate limit -- MUST have been refused)
+
+    `code=0` is the delivered result, so the enclave accepted it and the state changed; this is not
+    a reporting artefact.  `checkUpdateLimits` (cmd/qadenad_enclave/enclave_update_credential.go:541)
+    reads correctly, `BlockHeight` is populated by the keeper (`sdkctx.BlockHeight()`), and the
+    history is keyed by `msg.CredentialID`, which line 139 pins to the wallet's own credential -- so
+    the key is stable across both updates and the lookup SHOULD have found LastUpdateHeight=11713.
+    Prime suspect is the `!found` path at line 198-201 ("seeded identity history for ..."), which
+    starts a fresh record with LastUpdateHeight=0 and therefore disables the cool-down entirely.
+    That line is Debug, so confirming it needs a run at debug level.
+
+    NOT ALWAYS: two historical cycles reached case 14 with no credentials failure, so the limit did
+    fire in those runs.  Intermittent enforcement of a rate limit is worse than none, because a
+    passing test proves nothing.  Note the enclave is not consulted during CheckTx
+    (`EnclaveClientUpdateCredential` returns early on `IsCheckTx`), so an update rejection can only
+    ever surface in execution or in `--gas auto` SIMULATION -- which is the likely source of the
+    variance, and is worth confirming.
+
+    WHY THIS WAS INVISIBLE: the suite aborted at case 7 (anti-squat) in 10 of the 12 most recent
+    failed cycles, on the exit-code bug fixed in e487b05c, so cases 8-14 never ran.  Fixing the
+    assertion did not create this failure -- it revealed it.  A test that fails for a bogus reason
+    does not merely waste time; it stops before the assertions that would have caught something real.
