@@ -1228,3 +1228,29 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     answer) and refuse -- or at least say loudly -- when a rebuild would move the node's identity
     backwards while chain data exists.  This is the same shape as item 59 (rewriting a live node's
     genesis): a build step that is safe on a fresh machine and destructive on a running one.
+
+79. **The enclave's private tables are NOT keyed by enclave identity, so a "different" enclave
+    silently inherits and writes another one's store.**  Sealed params are per-identity
+    (`enclave_config/enclave_params_<uid>.json`), but the tables are a fixed path:
+
+        db,        _ = tmdb.NewGoLevelDBWithOpts("enclave", *homePath+"/enclave_data",    &opts)
+        secretsDB, _ = tmdb.NewGoLevelDBWithOpts("secrets", *homePath+"/enclave_secrets", &sopts)
+
+    So an enclave that cannot find its sealed state -- new identity, corrupted file, or item 77's
+    trailing newline -- starts with NO KEYS AND NO TRUST but with the PREVIOUS enclave's tables
+    open for writing.  It then executes blocks, cannot decrypt what it reads, and writes what it can.
+    That is how a two-node chain forked here: 16 blocks executed that way left `enclave_data` on the
+    proposer permanently inconsistent with its peer, and no restart could undo it, because the
+    divergence was in the tables rather than in the params or the binary.
+
+    The pairing should be explicit: either put the tables under the identity too
+    (`enclave_data_<uid>/`), or refuse to open an existing store when no sealed state matches this
+    identity.  A fresh identity meeting a populated store is either a mistake or an attack; it is
+    never routine.  Note this ALSO means a genuine enclave upgrade shares tables across
+    measurements, which is presumably intended -- so the guard has to be "no params but a populated
+    store", not "identity changed".
+
+    Related: item 77 (the newline that created the identity), 78 (the rebuild that produced the
+    wrong one), and the accepted rollback-freeze residual in ENCLAVE-THREAT-MODEL.md, which assumes
+    an enclave's own sealed state is the thing an attacker would swap -- this is the same class,
+    reached by accident.
