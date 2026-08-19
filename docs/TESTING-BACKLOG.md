@@ -1254,3 +1254,34 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     wrong one), and the accepted rollback-freeze residual in ENCLAVE-THREAT-MODEL.md, which assumes
     an enclave's own sealed state is the thing an attacker would swap -- this is the same class,
     reached by accident.
+
+80. **A node should HALT rather than execute blocks with an enclave that cannot use its own state.**
+    The whole cost of items 77-79 was that a keyless enclave kept going: it executed sixteen blocks,
+    wrote into the previous enclave's tables, and left a store that no restart, binary revert or
+    params swap could reconcile.  Had the node simply stopped, the fix would have been "correct the
+    id and restart" -- seconds, not a chain rollback.
+
+    THE EXISTING CHECKS DID NOT SEE IT, and it is worth being exact about why:
+
+    - `verdictHaltNoHistory` halts a fresh enclave facing a chain with history -- but this enclave
+      did not look fresh.  Its TABLES were there (enclave_data is not keyed by identity, item 79);
+      only its KEYS were missing.  It reported `reconciled at height 11848` and carried on.
+    - the per-block accumulator compare logged NOTHING (0 divergences all day).  It hashes the ROWS,
+      and the rows were the same rows -- the enclave simply could not decrypt them.  So "the
+      accumulators agree" is not evidence that the enclave can use what it holds.
+
+    The missing signal is decryptability, not presence.  A cheap detector: on startup, decrypt one
+    known row (any store the enclave must be able to read -- an IntervalPublicKeyID entry, say) and
+    refuse to serve if it fails.  A blind enclave fails that on the first attempt, before it can
+    execute anything.  The narrower version of the same idea is item 79's guard: no sealed params
+    for this identity BUT a populated store is never legitimate.
+
+    Prefer HALT to degraded operation here.  Halting is node-local and fork-safe -- the chain pauses
+    if the node holds enough stake, which is loud, recoverable and exactly what happened anyway,
+    except that the pause came 16 blocks too late and after the damage.  Note the same argument the
+    per-block compare's comment makes for staying at Error ("halting graduates through item 46's
+    evidence gate") does NOT apply to this check: a node that cannot decrypt its own state has no
+    correct work to do, so there is no false-positive cost to weigh.
+
+    Today's evidence for the gate: one occurrence, 16 blocks of bad execution, a halted two-node
+    chain, and a recovery that needed `qadenad rollback --height`.
