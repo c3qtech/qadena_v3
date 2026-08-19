@@ -1312,3 +1312,26 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     Two changes make it a real regression guard: capture case 1's credential dump into a variable
     and diff it after case 3, and assert code 1154.  The same applies to case 4 (birthdate
     substitution), which passes on the same unpinned signal.
+
+82. **A release package is architecture-locked, and nothing in it says so.**  `package_release.sh`
+    ships BOTH `libwasmvm.aarch64.so` and `libwasmvm.x86_64.so`, which makes a package look portable,
+    but there is exactly one `qadenad` and one `qadenad_enclave` and they are the BUILDER's
+    architecture.  Measured on the ARM primary:
+
+        includes: qadenad qadenad_enclave signer_enclave libwasmvm.aarch64.so libwasmvm.x86_64.so ...
+        qadenad -> ARM aarch64,  qadenad_enclave -> ARM aarch64
+
+    The manifest records version, commit and measurements -- not arch.  `install.sh` does not check
+    it either, so installing an ARM package on an x86 node (or the reverse) succeeds and fails later
+    as a loader or exec error, at a point that looks nothing like its cause.  This matters as soon
+    as a fleet is mixed: the ARM boxes are where the debug sequence gets rehearsed and the SGX boxes
+    are x86, so the two groups can never share a package.
+
+    Cheap and worth doing: record `uname -m` in the manifest at package time, and have install.sh
+    refuse a package whose arch does not match the host, naming both.  The check belongs in the
+    package, not in whatever script happens to be driving -- a preflight refusal instead of a late
+    loader error.
+
+    Found while advising a parallel session that was about to distribute an ARM-built package to an
+    SGX pair; they now probe `uname -m` before building, but the guard should not depend on the
+    caller.
