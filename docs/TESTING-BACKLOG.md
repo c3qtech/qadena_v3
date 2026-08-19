@@ -1287,6 +1287,17 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     Today's evidence for the gate: one occurrence, 16 blocks of bad execution, a halted two-node
     chain, and a recovery that needed `qadenad rollback --height`.
 
+    **THE DETECTOR NEEDS A NEGATIVE CONTROL, or it joins the class of checks it exists to replace.**
+    Both checks that failed here were checks that could not fail: `verdictHaltNoHistory` saw tables
+    and concluded "not fresh", and the accumulator compare hashed rows that were byte-identical and
+    reported zero divergences all day.  A decryptability check added without a test that
+    DELIBERATELY BLINDS AN ENCLAVE AND ASSERTS THE NODE HALTS is the same kind of artifact: green
+    from the day it ships, with nothing establishing it would go red.  The test is cheap now that
+    item 77 is understood -- write an id file with a trailing newline, or point the enclave at a
+    populated store with no matching sealed params, and require a halt rather than a height.  This
+    is item 69's complaint about the state-sync join, in a place where the cost of being wrong has
+    already been measured at 16 blocks and a rollback.
+
 81. **update_credentials.sh case 3 passes without proving what its own comment claims.**  The case is
     the right idea -- the identity provider mints a credential for a DIFFERENT person (Ferdinand /
     Romualdez / Marcos, 1957-Sep-13) and al, who is Rodolfo Alberto / Asuncion / Villarica,
@@ -1335,3 +1346,265 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     Found while advising a parallel session that was about to distribute an ARM-built package to an
     SGX pair; they now probe `uname -m` before building, but the guard should not depend on the
     caller.
+
+83. **`1st_node_bringup.sh --ref <branch>` builds a STALE LOCAL branch, and reports it as success.**
+    Phase 3 resolves the ref by preferring an exact local match and only falling back to
+    `origin/<ref>`:
+
+        if git rev-parse --verify --quiet "$REF^{commit}";       then resolved="$REF"
+        elif git rev-parse --verify --quiet "origin/$REF^{commit}"; then resolved="origin/$REF"
+
+    That is right for a TAG or a SHA and backwards for a BRANCH.  `main` always resolves locally, so
+    the fetch immediately above it is discarded and `reset --hard main` is a no-op against whatever
+    the target last had.  Measured 2026-08-19 on two freshly cloned ARM boxes: `--ref main` fetched,
+    then reported
+
+        building commit 907103f5
+
+    while `origin/main` was two commits ahead at `9befbcfe`.  Nothing warned, because "the ref I
+    asked for" and "the commit it built" are each self-consistent -- the run simply tested older code
+    than the operator asked for, and every later artifact (package, measurement, manifest) correctly
+    describes the wrong commit.
+
+    It survived review because it needs a STALE LOCAL COPY of the branch to bite: on a machine that
+    has never checked that branch out, only the `origin/` fallback exists and the behaviour is
+    correct.  A cloned box is exactly the case that has one.
+
+    Fix: when the ref names a remote-tracking branch, prefer `origin/<ref>`; keep the local-exact
+    path for tags and SHAs, which have no remote-tracking form and must not be rewritten.  Note that
+    a plain `git pull` is NOT the fix and should not be adopted: the no-`--ref` mode deliberately
+    leaves the checkout alone so a local, unpushed, or bisected commit can be tested, and
+    `--ref` already implies `reset --hard` + `clean -fd`, which is why phase 3 refuses a dirty tree.
+    The property that protects both modes is the one already present -- REPORT the commit actually
+    built -- so that should also be recorded into the run directory rather than only printed.
+
+    Fix this WITH item 85: both are about what `1st_node_bringup.sh` phase 3 does and what phase 1
+    should have done first.  Resolving the ref correctly and hoisting the cheap checks touch the same
+    two phases, and doing them separately means reading the same ordering twice.
+
+84. **A fleet bringup should be able to BLOCK-SYNC the joiner instead of waiting for state-sync to
+    become eligible.**  State-sync cannot start until the primary is past the snapshot interval AND
+    has actually written a snapshot -- 2000 blocks at this chain's 1.5s `timeout_commit`, so roughly
+    50 minutes of waiting during which nothing is being tested.  `full_fleet_bringup.sh` spends that
+    time in its snapshot-wait stage, and it is by far the longest stage in the sequence on ARM, where
+    the build itself is about three minutes.
+
+    Block-sync has no such precondition: `nth_node_bringup.sh` already block-syncs whenever
+    `--state-sync` is absent, so the joiner can be brought up as soon as the continuous regression is
+    running and the chain is producing blocks.  The option is therefore nearly free to add -- skip
+    the snapshot wait, and drop `--state-sync` from the join -- and it turns a ~50-minute idle wait
+    into a join that can start immediately.
+
+    KEEP STATE-SYNC THE DEFAULT, because the two are not interchangeable as tests:
+
+    - State-sync is the path that seeds a joiner's ENCLAVE STORE from a snapshot rather than by
+      replaying history, which is the mechanism items 69 and 72 are about.  A block-synced joiner
+      never exercises it, so a fleet brought up this way proves nothing about snapshot import.
+    - Block-sync replays every block from genesis, so it gets slower as the chain grows.  It is
+      fastest early and eventually becomes the slower option -- the opposite of the intuition that
+      makes it attractive.
+
+    So: `--block-sync` for the case where the point is to HAVE a second node quickly (peer agreement,
+    two-validator consensus, anything needing traffic from two sources), and the default state-sync
+    path when the point is to TEST how a node joins.  Whichever runs should be recorded in the run
+    directory, since "the joiner caught up" means something different in each case.
+
+85. **The cheapest preconditions are checked LAST, after the destructive ones have run.**  A
+    toolchain fault that is knowable before anything is touched currently costs the node, the
+    checkout and the chain data first.  Measured 2026-08-19 bringing up two fresh ARM clones:
+
+        INIT CHAIN FROM SCRATCH AND ERASE ALL DATA
+        Removing /home/alvillarica/qadena          <- chain data destroyed
+        Copying config/config.yml -> config.yml
+        protoc-gen-openapiv2 is the WRONG VERSION  <- then it fails
+
+    `check_codegen_plugins.sh` is called from `init.sh:129`, which is AFTER `rm -rf $QADENAHOME` in
+    the same script.  The plugin versions do not depend on anything the removal does, so the order is
+    pure accident.  `1st_node_bringup.sh` compounds it: init.sh runs in its PHASE 4, so phase 2 has
+    already stopped the node and phase 3 has already `reset --hard`ed the checkout.  Its own phase 1
+    preflight checks `go` and `git` exist but never checks that they are the RIGHT VERSIONS, which is
+    the failure that actually happens on a machine provisioned before the current pins.
+
+    The dirty-tree guard has the same shape: it is in phase 3, so a run on a checkout with
+    uncommitted work stops the node in phase 2 before discovering in phase 3 that it will not
+    proceed.  Both were hit on consecutive runs on the same pair of boxes.
+
+    Fixes, cheapest first:
+
+    - `init.sh`: call `check_codegen_plugins.sh` BEFORE `rm -rf $QADENAHOME`, not after.  One line
+      moved, and it stops the script destroying a chain it was never going to rebuild.
+    - `1st_node_bringup.sh` phase 1: run `check_codegen_plugins.sh` and the dirty-tree check there,
+      alongside the existing `go`/`git`/`ego`/`docker` probes.  Phase 1 is the designated home for
+      "can this machine do the job at all", and it currently answers a weaker question than its name
+      claims.  It also benefits everyone running the script directly, which is the common case.
+    - `full_fleet_bringup.sh`: run the per-node preflight (`--only 1`) for every host BEFORE its own
+      stage A, which archives each joiner's `~/qadena`.  Today it does that destructive move first
+      and discovers an unbuildable primary afterwards -- on the first of these runs it archived a
+      1.2G tree for a run that then failed at stage B.
+
+    The split worth keeping: NODE-level checks (toolchain currency, tree cleanliness, disk) belong in
+    `1st_node_bringup` phase 1 where any caller gets them; FLEET-level checks that a single-node
+    script cannot know about -- architecture agreement across primary and joiners, reachability of
+    every host, SGX consistency -- stay in `full_fleet_bringup`.  The rule in both: NOTHING
+    destructive until every cheap check has passed on every host.
+
+    Fix this WITH item 83, which is the other half of the same phase 3: 83 is the ref it resolves
+    wrongly, this is the checks that should have run before it resolved anything.  Both edit the same
+    two phases, and the dirty-tree guard moving out of phase 3 is a precondition for 83's fix being
+    legible -- otherwise phase 3 keeps two unrelated responsibilities.
+
+    Same family as items 81, 82 and 83, and worth reading together: each is a check or a report that
+    cannot fail -- an assertion with nothing to compare, a package that does not declare what it is,
+    a ref that resolves to the wrong commit self-consistently, and here a preflight whose name
+    promises more than it verifies.  The recurring lesson is that a green signal is only worth what
+    the thing producing it could have said instead.
+
+86. **`nth_node_bringup.sh` passes `user@host` straight into `--advertise-ip-address`, and the node
+    refuses to start.**  `1st_node_bringup.sh` ALREADY FIXED THIS FOR ITSELF and documents it at the
+    top of the file; `nth_node_bringup.sh` has the same defect, untouched, at lines 543 and 626:
+
+        --advertise-ip-address $JOINER \
+        --genesis-pioneer-first-ip-address $PRIMARY$SECOND_IP_ARG \
+
+    `$JOINER` and `$PRIMARY` are ssh targets and legitimately accept `user@host`.  These two flags
+    are not ssh targets -- they become CometBFT addresses.  Measured 2026-08-19 joining an ARM node
+    driven as `alvillarica@192.168.86.136`:
+
+        external_address = 'alvillarica@192.168.86.136:26656'      <- written into config.toml
+        ERR failed init node error="address (85cd3d22...@alvillarica@192.168.86.136:26656)
+            does not contain ID"
+
+    Two `@` in one address, so CometBFT cannot split `<nodeid>@<host>:<port>` and the node exits 1 at
+    startup, taking the enclave and signer down with it.  The failure appears at PHASE 5 (start),
+    several minutes after phase 4 has already minted the pioneer key, funded it, fetched genesis and
+    run sync-enclave -- all of which SUCCEEDED, so the run looks like a start problem rather than an
+    argument that was wrong from the first phase.  Recovery is to edit `external_address` by hand and
+    re-run `--only 5`; nothing else has to be redone.
+
+    Fix: strip the prefix once, exactly as `1st_node_bringup.sh` does --
+
+        ADVERTISE_J="${JOINER##*@}" ; ADVERTISE_P="${PRIMARY##*@}"
+
+    -- and use those for the two address flags while `$JOINER`/`$PRIMARY` stay whole for ssh.  Note
+    the third site: `SECOND_IP_ARG` defaults to `${SEED2:-$PRIMARY}`, so the state-sync trust seed
+    carries the same prefix whenever `--seed2` is omitted.
+
+    **IT CONTAMINATES THREE CONFIG FIELDS, NOT ONE, AND THEY FAIL ONE AT A TIME.**  Fixing
+    `external_address` alone gets the node one step further and it dies again on the next field.
+    Measured, in the order they surfaced:
+
+        external_address = 'alvillarica@192.168.86.136:26656'
+        persistent_peers = '<nodeid>@alvillarica@192.168.86.52:26656,<nodeid>@alvillarica@...'
+        rpc_servers      = 'alvillarica@192.168.86.52:26657,alvillarica@192.168.86.52:26657'
+
+    Each produces a DIFFERENT error at a different startup stage -- `failed init node`, then `could
+    not add peers from persistent_peers field`, and `rpc_servers` would have followed -- so an
+    operator fixing them reactively pays three restart cycles to learn one fact.  Anyone repairing a
+    node by hand should `grep -c '<user>@' config.toml` and expect ZERO before restarting, rather
+    than fixing the field the current error names.
+
+    (The doubled entries are not a second bug: `SECOND_IP_ARG` defaults to the primary, so a
+    two-node chain legitimately lists it twice -- self-corroborating, as `--seed2`'s help says.)
+
+87. **A build DIRTIES ITS OWN CHECKOUT via a tracked generated file, so the next run refuses to
+    start.**  `config/config.yml` points ignite at a generated OpenAPI spec:
+
+        client:
+          openapi:
+            path: docs/static/openapi.yml
+
+    `ignite chain init` regenerates that file, and it is TRACKED, so every successful bringup leaves
+
+        M docs/static/openapi.yml
+
+    behind.  The next run with `--ref` then hits the dirty-tree guard and stops, because
+    `git clean -fd`/`reset --hard` would discard it.  The guard is right -- it cannot tell generated
+    output from a person's uncommitted work -- so the result is a machine that can be brought up
+    exactly once and then blocks itself.  Measured 2026-08-19 on M1 and .52, both of which had built
+    successfully and were refused on the next run for nothing but this file.
+
+    It is invisible until the guard runs early: previously the check lived in phase 3, AFTER the node
+    had been stopped, so the usual experience was a run that killed the chain and then refused.
+
+    The file is a single line of ~213KB of JSON, so it also diffs as "1 insertion, 1 deletion" and
+    tells a reader nothing.
+
+    Options, best first:
+
+    - Do not track it.  It is build output; `.gitignore` it and drop it from the index.  Anything
+      that needs to serve the spec generates it, which `ignite chain init` already does on every run.
+    - If it must stay tracked (a published artifact), regenerate it deliberately -- a make target or
+      a commit hook -- rather than as a side effect of every chain init, and have the bringup restore
+      it (`git checkout -- docs/static/openapi.yml`) before the dirty check.
+    - Do NOT "fix" this by passing `--force` from the fleet script.  That disables the guard for
+      genuine uncommitted work too, which is exactly the loss the guard exists to prevent -- and on
+      2026-08-19 that guard is what saved two Go test files (`dumpcommit/`) on three separate boxes.
+
+    Related: item 85 (the guard moving earlier is what made this visible at all).
+
+    Worth noting WHY it survived: driving with a bare IP works, and that is what every previous run
+    did.  The `user@` form is documented and supported for driving a node as a specific account, and
+    it is the form a fleet script naturally passes through -- so the option that exists for the
+    harder case is the one that is broken.  A run that never needs it never sees this.
+
+88. **FIXED 2026-08-19.  test_bank_restriction.sh waits 120s for a proposal that can legitimately
+    take 300s, so it fails spuriously.**  `submit_whitelist_proposal()` now sizes its wait from
+    `query gov params`.`voting_period` plus 90s of margin, and says why when it does run out.
+    One trap found while fixing it, worth keeping in mind for any other duration read from the
+    chain: **the query answers in GO DURATION FORMAT, not seconds.**  `config.yml` says `"300s"`
+    but the chain renders it `5m0s`, so the obvious `${vp%s}` yields `5m0` -- not a number, so a
+    naive parse silently takes its fallback every single time and only looks correct while the
+    fallback happens to match. The fix parses h/m/s properly (verified against `5m0s`, `300s`,
+    `1h0m0s`, `2m30s`, `504h0m0s`).  `submit_whitelist_proposal()` submits with `expedited: true` and then polls
+    `60` times at `2s` -- 120 seconds.  That covers the 30s `expedited_voting_period` comfortably and
+    is LESS THAN HALF the 300s regular `voting_period`.
+
+    An expedited proposal whose threshold is not met inside its window is CONVERTED to a regular one
+    by the SDK -- normal behaviour, not an anomaly -- and it then needs the full 300s.  When that
+    happens the poll gives up, returns `PROPOSAL_STATUS_VOTING_PERIOD`, and case 7 fails.
+
+    Measured 2026-08-19 on .120, where the same suite passed 22 of 23 and this was the only failure.
+    The voting windows show it exactly -- same helper, same JSON, one proposal converted:
+
+        prop 4: expedited=true    30s window   passed
+        prop 5: expedited=true    30s window   passed
+        prop 6: expedited=null   300s window   FAILED THE TEST
+        prop 7: expedited=true    30s window   passed
+
+    THE CHAIN WAS RIGHT AND THE TEST WAS WRONG.  Proposal 6 finished as
+    `PROPOSAL_STATUS_FAILED` -- precisely what case 7 asserts -- roughly three minutes after the
+    poll had already given up.  Nothing about the whitelist logic misbehaved; the suite simply
+    stopped watching too early, and reported a chain defect that did not exist.
+
+    Fix: size the wait for the REGULAR voting period plus margin (300s here, so ~180 polls at 2s),
+    because conversion is expected behaviour rather than a fault.  Better still, assert on the
+    proposal's own `voting_end_time` instead of a fixed poll count, so the wait follows the chain's
+    configured periods rather than a constant that silently rots when `voting_period` changes.
+
+    Note the shape: items 81-85 are checks that CANNOT FAIL; this is the mirror image, a check that
+    fails when nothing is wrong.  Both make a green suite mean less than it appears -- one by never
+    objecting, the other by objecting to noise -- and a flaky red is the more expensive of the two
+    here, because it stops a fleet bringup that had nothing wrong with it.
+
+89. **FIXED 2026-08-19.  A fleet bringup cannot RESUME, so a late flake costs the whole build.**
+    `full_fleet_bringup.sh` now takes `--from <stage>` (A0 A B C D E F G H), validated against the
+    stage list and recorded in the run directory.  `--from D` or later prints a NOTE that it is
+    stepping over the regression, because skipping the red-run guard should never be quiet.
+    `PRIM_UID` is resolved lazily from the primary's binary when stage D is skipped, so a resume
+    still verifies each joiner against what the primary is ACTUALLY running rather than against an
+    unset variable.  Verified by resuming at F on a live node: A0-E were skipped entirely and
+    nothing on the host was touched.  `full_fleet_bringup.sh`
+    correctly refuses to package, install or join off a failed regression (that guard is right and
+    should stay), but it has no `--from`, so recovering means re-running from stage A -- including a
+    ~24-minute reproducible SGX build that had already succeeded and whose artifacts were still
+    installed and healthy.
+
+    On 2026-08-19 the SGX pair hit item 88 at stage C with a live, correct chain on .120 and a
+    perfectly good enclave already built.  Continuing by hand (`--only 7`, `--only 8`, loop, join)
+    took about three minutes; a clean re-run would have cost half an hour to rebuild something that
+    was never broken.
+
+    The sub-scripts are already phase-addressable, so this is sequencing, not new machinery: give
+    the fleet script the same `--from <stage>` its own children have, and make the run directory
+    record which stage it reached so a resume knows where to start.  Keep the red-run guard --
+    resuming past a real failure must stay a deliberate act, not the default.

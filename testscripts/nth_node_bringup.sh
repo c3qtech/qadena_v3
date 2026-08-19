@@ -227,11 +227,33 @@ sgx_state() { ssh -o ConnectTimeout=10 "$1" "$SGX_PROBE" >/dev/null 2>&1; print 
 #
 # The socket being root-owned -- the reason this script gave for requiring sudo everywhere -- is a
 # CONSEQUENCE of having started the enclave as root, not a cause.
+# STRIP ANY user@ PREFIX BEFORE AN ADDRESS GOES INTO A CONFIG FILE.
+#
+# --primary and --joiner are SSH TARGETS and legitimately accept user@host, so a node can be driven
+# as a specific account.  add_full_node.sh's --advertise-ip-address and
+# --genesis-pioneer-{first,second}-ip-address are NOT ssh targets: they become CometBFT addresses,
+# which are parsed as <nodeid>@<host>:<port>.  Passing user@host puts TWO '@' in one address and the
+# node exits 1 at startup with
+#
+#     address (85cd3d22...@alvillarica@192.168.86.136:26656) does not contain ID
+#
+# 1st_node_bringup.sh has stripped this for its own advertise address for some time; this script
+# did not, and it contaminates THREE fields -- external_address, persistent_peers and the state-sync
+# rpc_servers -- which fail ONE AT A TIME, each with a different error at a different startup stage.
+# The failure lands in phase 5, minutes after phase 4 has already minted the key, funded it, fetched
+# genesis and run sync-enclave, so it reads as a start problem rather than a bad argument.
+# See TESTING-BACKLOG.md item 86.
+#
+# $PRIMARY and $JOINER stay WHOLE below -- ssh needs the account.  Only these derived forms go into
+# add_full_node.sh.
+ADVERTISE_J="${JOINER##*@}"
+ADVERTISE_P="${PRIMARY##*@}"
+
 # SECOND_IP_ARG -- the extra seed that turns statesync on.  Computed here rather than inside phase
 # 4, because phase 3 now drives add_full_node.sh too and the two must agree: a key minted for a
 # block-sync join and then resumed as a state-sync one would rewrite config.toml mid-flight.
 if (( STATE_SYNC )); then
-    SECOND_IP_ARG=" --genesis-pioneer-second-ip-address ${SEED2:-$PRIMARY}"
+    SECOND_IP_ARG=" --genesis-pioneer-second-ip-address ${${SEED2:-$PRIMARY}##*@}"
 else
     SECOND_IP_ARG=""
 fi
@@ -540,8 +562,8 @@ if [[ ! "$addr" =~ ^qadena1 ]]; then
 #!/bin/zsh
 exec script -qec "$JOINER_HOME/qadena/scripts/add_full_node.sh \
   --pioneer $PIONEER_NAME \
-  --advertise-ip-address $JOINER \
-  --genesis-pioneer-first-ip-address $PRIMARY$SECOND_IP_ARG \
+  --advertise-ip-address $ADVERTISE_J \
+  --genesis-pioneer-first-ip-address $ADVERTISE_P$SECOND_IP_ARG \
   --stop-for-funding" /dev/null
 PREP
     scp -q /tmp/tnb_feed.sh /tmp/tnb_prep.sh "$JOINER":/tmp/ 2>/dev/null \
@@ -623,8 +645,8 @@ cat > /tmp/tnb_join.sh <<FEED
 #!/bin/zsh
 exec script -qec "$JOINER_HOME/qadena/scripts/add_full_node.sh \
   --pioneer $PIONEER_NAME \
-  --advertise-ip-address $JOINER \
-  --genesis-pioneer-first-ip-address $PRIMARY$SECOND_IP_ARG" /dev/null
+  --advertise-ip-address $ADVERTISE_J \
+  --genesis-pioneer-first-ip-address $ADVERTISE_P$SECOND_IP_ARG" /dev/null
 FEED
 scp -q /tmp/tnb_feed.sh /tmp/tnb_join.sh "$JOINER":/tmp/ || fail "cannot copy join drivers"
 ssh "$JOINER" 'chmod +x /tmp/tnb_feed.sh /tmp/tnb_join.sh'

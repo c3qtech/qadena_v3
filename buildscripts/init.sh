@@ -29,6 +29,7 @@ nodeparamsfile="$qadenaconfig/node_params.json"
 
 ADVERTISE_IP_ADDRESS=""
 build_sgx_flag=""
+no_sgx_flag=""
 skip_build=0
 
 while [[ $# -gt 0 ]]; do
@@ -46,12 +47,23 @@ while [[ $# -gt 0 ]]; do
       build_sgx_flag="--build-sgx"
       shift
       ;;
+    # FORWARDED, because build.sh's default is "ego installed means SGX" and there was previously no
+    # way to opt out from here.  init.sh rejected --no-sgx outright, so on an Intel box with ego the
+    # only ways to get a debug build were to call build.sh directly (losing the genesis init and the
+    # install) or to uninstall ego -- which setup_qadena_build.sh silently puts back, on x86,
+    # unconditionally.  See TESTING-BACKLOG.md item 90.
+    --no-sgx)
+      no_sgx_flag="--no-sgx"
+      shift
+      ;;
     --skip-build)
       skip_build=1
       shift
       ;;
     --help)
-      echo "Usage: init.sh [--advertise-ip-address <ip>] [--build-sgx] [--skip-build]"
+      echo "Usage: init.sh [--advertise-ip-address <ip>] [--build-sgx | --no-sgx] [--skip-build]"
+      echo "  --no-sgx  force a DEBUG enclave even where ego is installed.  Without it, build.sh"
+      echo "            builds SGX artifacts on any machine that has ego."
       exit 0
       ;;      
     *)
@@ -95,6 +107,17 @@ echo "-------------------------------------------"
 
 PIONEER1=pioneer1
 
+# CHECKED BEFORE ANYTHING IS DESTROYED.  `ignite chain init` below REGENERATES THE PROTOS as a side
+# effect, using the machine's local plugins; a mismatched one rewrites nine .pb.go files and the
+# failure surfaces minutes later at packaging, naming neither the plugin nor the version.
+#
+# This used to sit AFTER the `rm -rf $QADENAHOME` below, which was pure accident -- the plugin
+# versions do not depend on anything the removal does.  The cost was real: on a machine provisioned
+# before the current pins, init.sh deleted the entire node home -- chain data, keyring, enclave
+# state -- and THEN reported that it could not build.  None of that is recoverable, and the check
+# takes under a second, so it goes first.  See TESTING-BACKLOG.md item 85.
+"$qadenabuildscripts/check_codegen_plugins.sh" || exit 1
+
 echo "Running Ignite chain init..."
 echo "Removing $QADENAHOME"
 
@@ -122,11 +145,6 @@ cd $qadenabuild
 # remembered to delete the generated one first.
 echo "Copying config/config.yml -> config.yml"
 cp $qadenabuild/config/config.yml $qadenabuild/config.yml
-
-# `ignite chain init` REGENERATES THE PROTOS as a side effect, using the machine's local plugins.
-# A mismatched one rewrites nine .pb.go files and the failure surfaces minutes later at packaging,
-# naming neither the plugin nor the version.  Checked here, where it is still cheap to fix.
-"$qadenabuildscripts/check_codegen_plugins.sh" || exit 1
 
 echo "Initializing chain"
 if ignite chain init --home $QADENAHOME ; then
@@ -286,7 +304,7 @@ echo "Calling build.sh"
 # $QADENAHOME with no enclave binary at all and genesis still carrying the unsubstituted
 # test-unique-id placeholder.  The first thing to actually complain was the node failing to start two
 # minutes later, naming neither the build nor the reason.
-$qadenabuildscripts/build.sh --title "FINAL BUILD" $build_sgx_flag
+$qadenabuildscripts/build.sh --title "FINAL BUILD" $build_sgx_flag $no_sgx_flag
 if [ $? -ne 0 ] ; then
     echo "************************"
     echo "   INIT FAILED: the build did not succeed, so nothing was installed"

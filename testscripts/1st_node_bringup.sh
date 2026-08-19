@@ -61,8 +61,19 @@ PRIMARY=""
 JOINER=""
 REPO=""
 REPO_DEFAULT="qv3"
+REPO_EXPLICIT=0
+CLONED=0
+# auto | always | never.  See the provisioning block in phase 1 for why "auto" is not "always".
+PROVISION="auto"
+# Where a MISSING default checkout is cloned from.  Taken from the checkout this script is running
+# out of, so a fleet is always seeded from the same place it is driven from rather than from a URL
+# baked in here that can drift.  --clone-url overrides it; the fallback only matters if this script
+# is somehow run from outside a git checkout.
+CLONE_URL=$(git -C "${0:A:h}/.." remote get-url origin 2>/dev/null)
+[[ -n "$CLONE_URL" ]] || CLONE_URL="https://github.com/c3qtech/qadena_v3.git"
 REF=""
 BUILD_SGX=0
+NO_SGX=0
 ADVERTISE=""
 PKG_OUT="/tmp/pkg"
 FORCE=0
@@ -78,9 +89,15 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --primary)   PRIMARY="$2"; shift 2 ;;
         --joiner)    JOINER="$2"; shift 2 ;;
-        --repo)      REPO="$2"; shift 2 ;;
+        --repo)      REPO="$2"; REPO_EXPLICIT=1; shift 2 ;;
+        --provision)    PROVISION="always"; shift ;;
+        --no-provision) PROVISION="never"; shift ;;
         --ref)       REF="$2"; shift 2 ;;
         --build-sgx) BUILD_SGX=1; shift ;;
+        # NOT the same as omitting --build-sgx.  build.sh defaults to "ego installed means SGX", so
+        # on any machine with ego, omitting the flag STILL produces an SGX build -- this is the only
+        # way to ask for a debug one.  See TESTING-BACKLOG.md item 90.
+        --no-sgx)    NO_SGX=1; shift ;;
         --advertise-ip-address) ADVERTISE="$2"; shift 2 ;;
         --package-out) PKG_OUT="$2"; shift 2 ;;
         --force)     FORCE=1; shift ;;
@@ -89,19 +106,40 @@ while [[ $# -gt 0 ]]; do
         --only)      ONLY="$2"; shift 2 ;;
         --help)
             print "Usage: 1st_node_bringup.sh --primary <ip> [--joiner <ip>] [--repo <path>] [--ref <git-ref>]"
-            print "                          [--build-sgx] [--advertise-ip-address <ip>]"
+            print "                          [--build-sgx | --no-sgx] [--advertise-ip-address <ip>]"
             print "                          [--package-out <dir>] [--force]"
             print "                          [--from N] [--until N] [--only N]"
             print ""
             print "  --repo        checkout on the TARGET, relative to its home unless absolute."
-            print "                Default \$HOME/$REPO_DEFAULT.  A host may have more than one"
+            print "                Default \$HOME/$REPO_DEFAULT, which is CLONED if absent; an"
+            print "                explicit --repo is never cloned (a missing one is a typo)."
+            print "                A host may have more than one"
             print "                checkout at different commits, so this is explicit on purpose."
             print "  --ref         git ref to build.  Default: leave the checkout where it is, and"
             print "                just report the commit.  Passing a ref does fetch + reset --hard"
             print "                + clean -fd, which DESTROYS uncommitted work on the target."
+            print "  --provision   run ubuntu/setup_qadena_build.sh on the target before building."
+            print "                By DEFAULT this happens automatically when the machine shows it"
+            print "                is needed -- the checkout was just cloned, or the codegen plugins"
+            print "                do not match go.mod -- and not otherwise, because provisioning"
+            print "                runs apt and can replace the Go toolchain.  Pass this after"
+            print "                changing a pin in go.mod."
+            print "  --no-provision  never provision; fail instead.  For a machine whose toolchain"
+            print "                is pinned by hand."
             print "  --build-sgx   reproducible docker build, ~24 min, real SGX measurements."
-            print "                Without it you get a DEBUG enclave with go:embed'ed placeholder"
-            print "                ids -- fine for logic, useless for attestation."
+            print "                It also makes phase 1 REQUIRE ego, docker and both SGX devices,"
+            print "                so an unbuildable target is refused before the build starts."
+            print "                NOTE it is not what decides the build kind: build.sh defaults to"
+            print "                SGX on any machine that has ego, so omitting this on an SGX box"
+            print "                still produces an SGX build.  (It used to say 'without it you get"
+            print "                a DEBUG enclave', which is false on every machine with ego --"
+            print "                i.e. on every SGX box.)"
+            print "  --no-sgx      force a DEBUG enclave even where ego is installed.  This is the"
+            print "                ONLY way to opt out: it is forwarded to init.sh and on to"
+            print "                build.sh, which is where the decision is actually made."
+            print "                Uninstalling ego is not a substitute -- ubuntu/"
+            print "                setup_qadena_build.sh reinstalls it on x86 unconditionally, so"
+            print "                any provisioning silently restores the SGX default."
             print "  --advertise-ip-address   defaults to --primary."
             print "  --force       proceed even if the target's checkout is dirty (its changes will"
             print "                be destroyed by the build's git clean -fd)."
@@ -234,8 +272,25 @@ fi
 # ---------------------------------------------------------------------------------------------
 run_phase 1 && phase "1. preflight"
 if run_phase 1; then
-    rsh_user "$PRIMARY" "test -d $REPO/.git" \
-        || fail "$REPO is not a git checkout on $PRIMARY (pass --repo)"
+    # A MISSING DEFAULT CHECKOUT IS CLONED, NOT AN ERROR.  Bringing up a fresh machine should not
+    # require a manual clone first -- there is exactly one repo this script can mean, and it is the
+    # one this script is running out of.
+    #
+    # Only the DEFAULT path is cloned.  An explicit --repo names a specific tree the caller believes
+    # exists, so a missing one is far more likely a typo than a request to create it, and silently
+    # cloning into a mistyped path leaves a surprise directory that the next run then builds from.
+    if ! rsh_user "$PRIMARY" "test -d $REPO/.git"; then
+        if (( REPO_EXPLICIT )); then
+            fail "$REPO is not a git checkout on $PRIMARY. It was named explicitly with --repo, so it is not cloned automatically -- check the path, or drop --repo to use \$HOME/$REPO_DEFAULT."
+        fi
+        rsh_user "$PRIMARY" "test -e $REPO" \
+            && fail "$REPO exists on $PRIMARY but is not a git checkout. Move it aside; this script will not clone over it."
+        info "no checkout at $REPO -- cloning $CLONE_URL"
+        rsh_user "$PRIMARY" "git clone --quiet $CLONE_URL $REPO" \
+            || fail "could not clone $CLONE_URL to $REPO on $PRIMARY. If it is a private repo, the target needs its own credentials -- this script does not forward any."
+        info "cloned: $(rsh_user "$PRIMARY" "git -C $REPO rev-parse --short HEAD" | tr -d '\r') on $(rsh_user "$PRIMARY" "git -C $REPO rev-parse --abbrev-ref HEAD" | tr -d '\r')"
+        CLONED=1
+    fi
 
     # Name every checkout we can see. A second one at a different commit is not an error, but it
     # IS the thing that makes "which code is this node running?" ambiguous (trap 2).
@@ -261,6 +316,99 @@ if run_phase 1; then
     fi
     avail=$(rsh_user "$PRIMARY" "df --output=avail -BG $HOME_DIR | tail -1 | tr -dc '0-9'" | tr -d '\r')
     [[ -n "$avail" && "$avail" -ge 20 ]] || info "WARNING: only ${avail:-?}G free on $PRIMARY; a build plus a chain wants more"
+
+    # THE RIGHT VERSIONS, not merely the right binaries.  `command -v go` above answers a weaker
+    # question than this phase's name promises: the failure that actually happens on a machine
+    # provisioned before the current pins is a codegen plugin at the WRONG VERSION, and until now
+    # that surfaced from inside init.sh in PHASE 4 -- after phase 2 stopped the node and phase 3
+    # reset the checkout.  init.sh now checks before it deletes anything, but by then this script has
+    # already taken the node down for a run that cannot succeed.  Cheap, so it goes here too.
+    # PROVISIONING IS RUN FOR YOU, BUT ONLY WHEN IT IS NEEDED.
+    #
+    # ubuntu/setup_qadena_build.sh is what pins go, ignite and the three codegen plugins, and until
+    # now nothing ever ran it -- every reference to it in this repo is a message telling a human to.
+    # That is a gap on a freshly cloned machine, which is unprovisioned by definition and where the
+    # first failure is a plugin version several phases later.
+    #
+    # "auto" runs it when the machine gives EVIDENCE it needs it: we just cloned, or the plugin
+    # check fails.  It deliberately does NOT run on every bringup, because the script is not
+    # read-only -- it runs apt update, can replace /usr/local/go and reinstalls ignite.  Doing that
+    # before every run means a build can change the machine's toolchain as a side effect, and then a
+    # behaviour change has two possible causes instead of one.  Provisioning is a repair, not a step.
+    #
+    # --provision forces it (use after changing a pin in go.mod); --no-provision refuses it, for a
+    # machine whose toolchain is deliberately pinned by hand.
+    # UBUNTU/DEBIAN ONLY, AND THE CHECK IS NOT A FORMALITY.  setup_qadena_build.sh is `#!/bin/sh`
+    # with NO `set -e`, so on a platform without apt it does not stop at the first failure -- it
+    # continues into the Go step, which is
+    #
+    #     rm -rf /usr/local/go && tar -C /usr/local -xzf go${VER}.darwin-arm64.tar.gz
+    #
+    # On a Mac (uname -m = arm64) that branch is REACHED: it would delete the machine's Go
+    # installation, unpack a replacement, and only then fail on every apt-based step -- leaving the
+    # toolchain worse than it found it.  So this refuses by platform rather than letting the script
+    # discover its own unsuitability partway through.
+    primary_os=$(rsh_user "$PRIMARY" 'uname -s' | tr -d '\r')
+    provision_supported=0
+    rsh_user "$PRIMARY" '[ "$(uname -s)" = "Linux" ] && command -v apt-get >/dev/null 2>&1' \
+        && provision_supported=1
+
+    provision_primary() {   # <reason>
+        if (( ! provision_supported )); then
+            fail "cannot provision $PRIMARY automatically: ubuntu/setup_qadena_build.sh needs apt (this host reports ${primary_os:-unknown}). Install the toolchain there by hand -- go, ignite and the codegen plugins pinned from go.mod -- or run this against an Ubuntu host."
+        fi
+        info "provisioning $PRIMARY: $1"
+        info "running 'sudo sh ./ubuntu/setup_qadena_build.sh' -- installs the toolchain, several minutes"
+        # Root, and from the repo root: the script refuses a non-root caller and needs go.mod in cwd.
+        # Output goes to a file on the target -- it is long, and only interesting when it fails.
+        if ! ssh -o ConnectTimeout=10 -o BatchMode=yes "$PRIMARY" \
+                "cd $REPO && sudo sh ./ubuntu/setup_qadena_build.sh > \$HOME/provision.$$.log 2>&1"; then
+            rsh_user "$PRIMARY" "tail -25 \$HOME/provision.$$.log" | while read -r l; do info "$l"; done
+            fail "provisioning failed on $PRIMARY (full log: $PRIMARY:~/provision.$$.log). If sudo needs a password there, run it by hand: cd $REPO && sudo sh ./ubuntu/setup_qadena_build.sh"
+        fi
+        info "provisioning done"
+    }
+
+    # --provision is an explicit instruction, so an unsupported platform is an ERROR (provision_primary
+    # refuses).  The automatic paths only SKIP: on a Mac the toolchain is usually already there by
+    # other means, and the plugin check below is what decides whether anything is actually wrong.
+    if [[ "$PROVISION" == "always" ]]; then
+        provision_primary "--provision was given"
+    elif (( CLONED )) && [[ "$PROVISION" != "never" ]]; then
+        if (( provision_supported )); then
+            provision_primary "the checkout was just cloned, so this machine has never been provisioned"
+        else
+            info "cloned, but $PRIMARY is ${primary_os:-unknown} and setup_qadena_build.sh needs apt --"
+            info "not provisioning automatically; the toolchain check below decides if that matters"
+        fi
+    fi
+
+    if ! rsh_user "$PRIMARY" "$BUILD_PATH cd $REPO && ./buildscripts/check_codegen_plugins.sh"; then
+        if [[ "$PROVISION" == "never" ]]; then
+            fail "$PRIMARY's codegen plugins do not match its go.mod (see above), and --no-provision was given. Fix by hand, or drop --no-provision."
+        fi
+        (( provision_supported )) \
+            || fail "$PRIMARY's codegen plugins do not match its go.mod (see above), and it cannot be provisioned automatically -- ubuntu/setup_qadena_build.sh needs apt, and this host reports ${primary_os:-unknown}. Install the pinned versions by hand; the message above names each one."
+        # The plugins are stale rather than absent: provision, then REQUIRE the check to pass.  A
+        # second failure is a real mismatch (go.mod moved, or the pin in setup_qadena_build.sh did),
+        # not a machine that was merely behind -- so it stops here rather than building anyway.
+        provision_primary "the codegen plugins do not match go.mod"
+        rsh_user "$PRIMARY" "$BUILD_PATH cd $REPO && ./buildscripts/check_codegen_plugins.sh" \
+            || fail "$PRIMARY's codegen plugins STILL do not match go.mod after provisioning. That is a real disagreement between go.mod and ubuntu/setup_qadena_build.sh's pins, not a stale machine -- resolve it before building."
+    fi
+
+    # THE DIRTY-TREE GUARD BELONGS HERE, NOT IN PHASE 3.  It is a property of the checkout, knowable
+    # now, and phase 3 is two phases past the point where the node has already been stopped.  Only
+    # meaningful with --ref, which is what runs `git clean -fd`; without one the tree is left alone.
+    # Phase 3 still repeats it, because --from 3 must not skip the guard.
+    if [[ -n "$REF" ]] && (( ! FORCE )); then
+        dirty=$(rsh_user "$PRIMARY" "git -C $REPO status --porcelain | head -20" | tr -d '\r')
+        if [[ -n "$dirty" ]]; then
+            print "$dirty" | while read -r l; do info "dirty: $l"; done
+            fail "$REPO has uncommitted work, which the build's 'git clean -fd' will DESTROY. Commit it, move it aside, or pass --force."
+        fi
+    fi
+
     info "preflight ok"
 fi
 
@@ -333,14 +481,35 @@ if run_phase 3; then
         # Plain, not `local`: this block runs at TOP LEVEL (phase 3 is an `if run_phase 3` block,
         # not a function), and zsh refuses `local` outside a function at RUNTIME -- which zsh -n
         # does not catch.
+        # A BRANCH RESOLVES TO ITS REMOTE, NOT TO THE LOCAL COPY.  Preferring the local match first
+        # -- which this did -- is right for a TAG or a SHA and backwards for a BRANCH: `main` always
+        # exists locally, so the fetch immediately above was discarded and `reset --hard main` was a
+        # no-op against whatever the target happened to have.  Measured on two freshly cloned boxes:
+        # `--ref main` fetched, then reported "building commit 907103f5" while origin/main was two
+        # commits ahead at 9befbcfe.  Nothing warned, because "the ref I asked for" and "the commit
+        # it built" were each self-consistent -- the run simply tested older code than was asked for,
+        # and the package, measurement and manifest all correctly described the wrong commit.
+        #
+        # So: if origin/<ref> exists, it wins.  Tags and SHAs have no remote-tracking form, so they
+        # fall through to the exact match and are never rewritten.  See TESTING-BACKLOG.md item 83.
         resolved=""
-        if rsh_user "$PRIMARY" "git -C $REPO rev-parse --verify --quiet '$REF^{commit}'" > /dev/null 2>&1; then
-            resolved="$REF"
-        elif rsh_user "$PRIMARY" "git -C $REPO rev-parse --verify --quiet 'origin/$REF^{commit}'" > /dev/null 2>&1; then
+        if rsh_user "$PRIMARY" "git -C $REPO rev-parse --verify --quiet 'origin/$REF^{commit}'" > /dev/null 2>&1; then
             resolved="origin/$REF"
-            info "ref           $REF is not local on the target; using $resolved"
+            # Say so when the local branch was BEHIND, because that is the case that used to build
+            # the wrong thing silently.
+            local_sha=$(rsh_user "$PRIMARY" "git -C $REPO rev-parse --short '$REF^{commit}' 2>/dev/null" | tr -d '\r')
+            remote_sha=$(rsh_user "$PRIMARY" "git -C $REPO rev-parse --short 'origin/$REF^{commit}'" | tr -d '\r')
+            if [[ -n "$local_sha" && "$local_sha" != "$remote_sha" ]]; then
+                info "ref           $REF is a branch: local $local_sha is not origin/$REF ($remote_sha); using origin/$REF"
+            else
+                info "ref           $REF resolved to origin/$REF ($remote_sha)"
+            fi
+        elif rsh_user "$PRIMARY" "git -C $REPO rev-parse --verify --quiet '$REF^{commit}'" > /dev/null 2>&1; then
+            # No remote-tracking form: a tag, a sha, or a purely local branch.
+            resolved="$REF"
+            info "ref           $REF has no origin/ counterpart (tag, sha, or local-only); using it as given"
         else
-            fail "neither '$REF' nor 'origin/$REF' exists on $PRIMARY after a fetch -- is it pushed?"
+            fail "neither 'origin/$REF' nor '$REF' exists on $PRIMARY after a fetch -- is it pushed?"
         fi
 
         rsh_user "$PRIMARY" "git -C $REPO reset --quiet --hard $resolved" || fail "git reset --hard $resolved failed on $PRIMARY"
@@ -362,6 +531,9 @@ if run_phase 4; then
 
     sgx_flag=""
     (( BUILD_SGX )) && sgx_flag=" --build-sgx"
+    # Forwarded so the opt-out survives the whole chain; without it init.sh -> build.sh sees a
+    # machine with ego and builds SGX regardless of what was asked for here.
+    (( NO_SGX )) && sgx_flag=" --no-sgx"
 
     # trap 4: init.sh refuses to run as root.  trap 1: a fresh, user-owned log.
     # The redirect matters for a second reason -- without it the ssh channel stays open for as long

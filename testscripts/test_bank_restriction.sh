@@ -266,8 +266,44 @@ submit_whitelist_proposal() {
     # Wait for the voting period to close.  Not query_service_provider_proposal.sh --wait: that
     # treats anything other than PASSED as a failure, and a FAILED execution is exactly what two of
     # these cases are asserting.
-    local i=0 prop_status=""
-    while [ $i -lt 60 ]; do
+    # THE DEADLINE COMES FROM THE CHAIN, NOT FROM A CONSTANT.
+    #
+    # This used to poll 60 times at 2s -- a flat 120 seconds.  That comfortably covers the 30s
+    # expedited_voting_period and is LESS THAN HALF the 300s regular voting_period, which made the
+    # suite fail against a chain doing exactly the right thing:
+    #
+    # an expedited proposal whose threshold is not met inside its window is CONVERTED to a regular
+    # one by the SDK -- ordinary behaviour, not a fault -- and it then needs the full voting period.
+    # Observed 2026-08-19: three proposals in this same run kept expedited status and resolved in
+    # 30s, one converted, and the poll gave up on it at 120s. It reached PROPOSAL_STATUS_FAILED --
+    # precisely what the caller asserts -- about three minutes after the suite had already declared
+    # a chain defect that did not exist.
+    #
+    # So the wait is sized from `voting_period` as the chain is actually configured. It follows a
+    # config change instead of rotting against it, and the early `break` means a proposal that stays
+    # expedited still returns in ~30s -- this costs nothing in the common case.
+    local prop_status="" vp vp_secs max_wait i=0
+    vp=$(qadenad_alias query gov params --output json 2>/dev/null \
+        | jq -r '.params.voting_period // .voting_period // ""')
+    # THE CHAIN ANSWERS IN GO DURATION FORMAT, NOT PLAIN SECONDS.  config.yml says `voting_period:
+    # "300s"`, but `query gov params` renders it as "5m0s" -- so the obvious `${vp%s}` yields "5m0",
+    # which is not a number.  Stripping the suffix and testing for digits therefore ALWAYS took the
+    # fallback path: right answer here by luck, and silently wrong the moment the configured period
+    # stops being five minutes.  Parse h/m/s properly instead.
+    vp_secs=$(printf '%s' "$vp" | awk '{
+        h=0; m=0; s=0
+        if (match($0, /[0-9]+h/))                 { h = substr($0, RSTART, RLENGTH-1) + 0 }
+        if (match($0, /[0-9]+m/))                 { m = substr($0, RSTART, RLENGTH-1) + 0 }
+        if (match($0, /[0-9]+(\.[0-9]+)?s/))      { s = substr($0, RSTART, RLENGTH-1) + 0 }
+        print int(h*3600 + m*60 + s)
+    }')
+    # A zero or unparseable answer falls back rather than collapsing the arithmetic and
+    # reintroducing the original bug.
+    case "$vp_secs" in (''|*[!0-9]*|0) vp_secs=300 ;; esac
+    # +90s of margin: the tally runs in the block AFTER voting closes, and a busy chain can take a
+    # few blocks to get there.
+    max_wait=$(( vp_secs + 90 ))
+    while [ $i -lt $(( max_wait / 2 )) ]; do
         prop_status=$(qadenad_alias query gov proposal "$proposal_id" --output json 2>/dev/null | jq -r '.proposal.status // .status // ""')
         case "$prop_status" in
             PROPOSAL_STATUS_PASSED|PROPOSAL_STATUS_FAILED|PROPOSAL_STATUS_REJECTED) break ;;
@@ -275,6 +311,11 @@ submit_whitelist_proposal() {
         sleep 2
         i=$((i + 1))
     done
+    # Say WHY a wait ran out, so the next reader does not have to rediscover the conversion rule.
+    case "$prop_status" in
+        PROPOSAL_STATUS_PASSED|PROPOSAL_STATUS_FAILED|PROPOSAL_STATUS_REJECTED) ;;
+        *) echo "  (proposal $proposal_id still '$prop_status' after ${max_wait}s -- voting_period is ${vp:-unknown})" >&2 ;;
+    esac
     echo "$prop_status"
 }
 
