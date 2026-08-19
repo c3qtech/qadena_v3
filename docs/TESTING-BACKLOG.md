@@ -1165,33 +1165,34 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     log in the failure message.  Restarting the chain on failure would be better still -- an
     environmental error should not leave a stopped node behind.
 
-76. **The credential-update cool-down is not reliably enforced -- and the broken test assertion was
-    hiding it.**  `update_credential_min_blocks_between_updates = 10000` on the chain, yet al's
-    SECOND hash-changing update was committed three blocks after the first:
+76. **RETRACTED -- the credential-update cool-down was never shown to be broken.**  This item
+    originally claimed that a second hash-changing update was committed three blocks after the first
+    against `update_credential_min_blocks_between_updates = 10000`, citing two transactions at
+    h=11713 and h=11716 both carrying `code=0`.
 
-        h=11713  code=0  MsgUpdateCredential     (case 1, correction -- expected)
-        h=11716  code=0  MsgUpdateCredential     (case 9, rate limit -- MUST have been refused)
+    That conclusion was wrong, and the way it was wrong is worth keeping.  The claim rested on
+    transaction CODES alone.  The credential's own counter says otherwise:
 
-    `code=0` is the delivered result, so the enclave accepted it and the state changed; this is not
-    a reporting artefact.  `checkUpdateLimits` (cmd/qadenad_enclave/enclave_update_credential.go:541)
-    reads correctly, `BlockHeight` is populated by the keeper (`sdkctx.BlockHeight()`), and the
-    history is keyed by `msg.CredentialID`, which line 139 pins to the wallet's own credential -- so
-    the key is stable across both updates and the lookup SHOULD have found LastUpdateHeight=11713.
-    Prime suspect is the `!found` path at line 198-201 ("seeded identity history for ..."), which
-    starts a fresh record with LastUpdateHeight=0 and therefore disables the cool-down entirely.
-    That line is Debug, so confirming it needs a run at debug level.
+        Update Generation:  1     (al102847, and again al111633 on a later run)
 
-    NOT ALWAYS: two historical cycles reached case 14 with no credentials failure, so the limit did
-    fire in those runs.  Intermittent enforcement of a rate limit is worse than none, because a
-    passing test proves nothing.  Note the enclave is not consulted during CheckTx
-    (`EnclaveClientUpdateCredential` returns early on `IsCheckTx`), so an update rejection can only
-    ever surface in execution or in `--gas auto` SIMULATION -- which is the likely source of the
-    variance, and is worth confirming.
+    One update ever applied -- case 1's correction.  The policy held; nothing was substituted.  A
+    code is not evidence that state changed, and for a store the enclave owns, the state is the only
+    thing that can settle it.
 
-    WHY THIS WAS INVISIBLE: the suite aborted at case 7 (anti-squat) in 10 of the 12 most recent
-    failed cycles, on the exit-code bug fixed in e487b05c, so cases 8-14 never ran.  Fixing the
-    assertion did not create this failure -- it revealed it.  A test that fails for a bogus reason
-    does not merely waste time; it stops before the assertions that would have caught something real.
+    Two mistakes fed it.  First, the failing case was misidentified: the command that failed uses
+    `${suffix}03` = `$reject_a`, which is CASE 3 ("rejected substitution: first + last + birthdate
+    all change at once"), not case 9's rate limit.  The suite aborts at case 3, so the cool-down
+    case never runs at all and remains UNTESTED to this day.  Second, `tx_reject_code` returned
+    EMPTY when a transaction was refused before broadcast -- which callers reported as "the chain
+    ACCEPTED it" -- and it took the FIRST txhash in the output, which belonged to the preceding
+    create-credential and resolved to an unrelated transaction.  Both are fixed.
+
+    What remains genuinely open, and should be re-run once the helper is trusted:
+      - does case 3's refusal report a usable qadena code, or only a simulation failure?
+      - does case 9 (the cool-down) pass when the suite is allowed to reach it?
+      - is `expect_reject` strong enough?  A transaction that lands with code 0 and changes nothing
+        would still pass a code-based check; asserting Update Generation is what actually proves a
+        refusal.
 
 77. **A trailing newline in test_unique_id.txt silently creates a DIFFERENT enclave, and forks the
     chain.**  The three identity files are `//go:embed`-ed verbatim, so `echo "unique048" > ...`

@@ -463,18 +463,33 @@ tx_reject_code() {
         return 0
     fi
 
-    hash=$(print -r -- "$out" | strings | grep -oE 'txhash: [A-Fa-f0-9]+' | head -1 | awk '{print $2}')
-    if [[ -z "$hash" ]]; then
-        # Never broadcast at all -- a failed --gas auto simulation, most often.  That IS a rejection,
-        # and the reason is in the text.
-        print -r -- "$out" | strings | grep -oE 'codespace qadena code [0-9]+' | tail -1 | awk '{print $4}'
+    hash=$(print -r -- "$out" | strings | grep -oE 'txhash: [A-Fa-f0-9]+' | tail -1 | awk '{print $2}')
+
+    # NOT BROADCAST AT ALL is a REJECTION, not an acceptance -- a failed `--gas auto` simulation is
+    # the usual cause, and simulation runs the message, so it is the chain refusing it.  Report the
+    # qadena code when the text carries one, and the sentinel "rejected-before-broadcast" when it
+    # does not, because returning EMPTY here made callers say "the chain ACCEPTED it" about a
+    # transaction that never existed.  That is how case 3 of update_credentials.sh was reported as a
+    # policy failure while the credential's own Update Generation showed the update never applied.
+    #
+    # `tail -1`, not `head -1`, on the hash: these commands print more than one response, and taking
+    # the first picked up the PREVIOUS transaction's hash -- which then resolved to a completely
+    # unrelated tx and made the verdict nonsense.
+    if [[ -z "$hash" ]] || ! print -r -- "$out" | strings | grep -qE 'txhash: [A-Fa-f0-9]{64}'; then
+        local code
+        code=$(print -r -- "$out" | strings | grep -oE 'codespace qadena code [0-9]+' | tail -1 | awk '{print $4}')
+        print -r -- "${code:-rejected-before-broadcast}"
         return 0
     fi
 
     qadenad_alias query wait-tx "$hash" --timeout 60s > /dev/null 2>&1
     delivered=$(qadenad_alias query tx "$hash" --output json 2>/dev/null | jq -r '.code // 0' 2>/dev/null)
     if [[ "$delivered" == "0" ]]; then
-        print "0"                       # the chain really did accept it
+        # ACCEPTED means the transaction landed AND executed cleanly.  Callers asserting a rejection
+        # should also check that the state did not move: a code of 0 on a transaction that changed
+        # nothing is a different bug from a policy that failed to refuse, and only the state can
+        # tell them apart (Update Generation, in the credential case).
+        print "0"
         return 0
     fi
     log=$(qadenad_alias query tx "$hash" --output json 2>/dev/null | jq -r '.raw_log // empty' 2>/dev/null)
