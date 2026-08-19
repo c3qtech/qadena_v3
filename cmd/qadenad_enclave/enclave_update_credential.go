@@ -198,7 +198,33 @@ func (s *qadenaServer) UpdateCredential(ctx context.Context, in *types.EnclaveUp
 	history, found := s.getCredentialIdentityHistory(msg.CredentialID)
 	if !found {
 		history = types.EncryptableCredentialIdentityHistory{Hashes: []string{oldCredentialHash}}
-		c.LoggerDebug(logger, "seeded identity history for "+msg.CredentialID)
+		// A SEEDED HISTORY CARRIES NO LastUpdateHeight, SO THE COOL-DOWN BELOW CANNOT APPLY TO
+		// THIS UPDATE.  That is intended for a credential that predates the alias index -- it has
+		// no history through no fault of its own, and refusing it would be worse.  It is NOT
+		// intended for a credential that has already been updated: UpdateGeneration counts those,
+		// so a generation above zero with no history means the record was LOST, and this path then
+		// silently disables the rate limit for the very credential it is meant to protect.
+		//
+		// Say so loudly.  Backlog 76: a second hash-changing update landed three blocks after the
+		// first (h=11713, h=11716) against a 10000-block cool-down, and nothing in the log named a
+		// cause, because the only marker was this line at Debug.
+		if oldCredential.UpdateGeneration > 0 {
+			c.LoggerError(logger, "identity history MISSING for "+msg.CredentialID+
+				" at update generation "+strconv.FormatUint(uint64(oldCredential.UpdateGeneration), 10)+
+				" -- seeding a fresh record, which SKIPS the update cool-down for this update")
+		} else {
+			c.LoggerDebug(logger, "seeded identity history for "+msg.CredentialID)
+		}
+	} else if history.LastUpdateHeight == 0 {
+		// Found, but with no height recorded: same effect, different cause.  Worth naming
+		// separately, because it points at the WRITE side rather than the lookup.
+		c.LoggerError(logger, "identity history for "+msg.CredentialID+
+			" has no LastUpdateHeight at update generation "+strconv.FormatUint(uint64(oldCredential.UpdateGeneration), 10)+
+			" -- the update cool-down cannot apply")
+	} else {
+		c.LoggerInfo(logger, "update cool-down check: "+msg.CredentialID+
+			" last updated at height "+strconv.FormatInt(history.LastUpdateHeight, 10)+
+			", now "+strconv.FormatInt(in.BlockHeight, 10))
 	}
 
 	if err := checkUpdateLimits(history, verdict, c.UpdateLimitsFromParams(in.Params), in.BlockHeight); err != nil {
