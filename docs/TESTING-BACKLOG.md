@@ -1284,8 +1284,31 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     evidence gate") does NOT apply to this check: a node that cannot decrypt its own state has no
     correct work to do, so there is no false-positive cost to weigh.
 
-    Today's evidence for the gate: one occurrence, 16 blocks of bad execution, a halted two-node
-    chain, and a recovery that needed `qadenad rollback --height`.
+    Today's evidence for the gate: TWO occurrences, and the second is worse than the first.
+
+    The first cost 16 blocks of bad execution, a halted two-node chain, and a recovery that needed
+    `qadenad rollback --height`.
+
+    The second (2026-08-20, ARM fleet, height 30755) cost a FORK. Three joiner enclaves held a
+    Shamir SHARE where a private key belonged -- `SetPublicKey` cached `myShare` into the private
+    key cache unconditionally, which is correct below four owners (nothing is split) and fatal at
+    or above it. A share is one byte longer than the secret, so `getSSPrivK` returned 65 bytes,
+    `MultBytes` fed that to `ScalarMult`, which panics above 32, and the recovered panic came back
+    as a zero-value reply the keeper read as a VERDICT. All three convicted a well-formed credential
+    with 1153. They held 71.5% of stake, committed the block, and EJECTED THE ONE NODE THAT HELD THE
+    REAL KEY. That node was correct; it hit CONSENSUS FAILURE and never moved again, while the other
+    three ran on for 650+ blocks with nothing reporting a problem.
+
+    THIS IS THE DIAGNOSIS IN THIS ITEM, DEMONSTRATED. The enclave state store reported 193 rows on
+    every node and full agreement -- every presence check and every row-count check passed. Only the
+    VALUE LENGTHS differed: `{64:193}` on the healthy node against `{0:61, 64:127, 130:5}` on each
+    joiner. Presence was never the missing signal; usability was.
+
+    It also supplies the blinding mechanism this item's negative control needs, which was not
+    available when it was written: make a node an owner of a genuinely split SS key (four or more
+    addressable pioneers) and let it receive the broadcast. One forced rotation reproduces it on
+    demand -- verified 2026-08-21, both non-minting pioneers cached 130 hex chars where the minter
+    cached 64.
 
     **THE DETECTOR NEEDS A NEGATIVE CONTROL, or it joins the class of checks it exists to replace.**
     Both checks that failed here were checks that could not fail: `verdictHaltNoHistory` saw tables
@@ -1608,3 +1631,66 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     the fleet script the same `--from <stage>` its own children have, and make the run directory
     record which stage it reached so a resume knows where to start.  Keep the red-run guard --
     resuming past a real failure must stay a deliberate act, not the default.
+
+90. **A NODE-LOCAL ENCLAVE FAILURE BECOMES A CONSENSUS-VISIBLE TRANSACTION RESULT, WHICH IS A
+    FORK.** `EnclaveValidatePersonalInfo` runs inside a message handler -- in DeliverTx -- and
+    returns whatever THIS NODE'S enclave answers over a local gRPC socket. Whether the call
+    succeeded, failed in transport, timed out, or crashed becomes the transaction's result, and a
+    result that differs per node is a different app hash.
+
+    Measured, height 30755, 2026-08-20: three joiner enclaves panicked and the recovered panic was
+    read as "invalid credential" (1153) while the fourth node validated the same credential
+    successfully. The three held 71.5% of stake, committed the block, and ejected the one node that
+    was CORRECT. Fixing the panic and the malformed reply (both done) makes the failure honest; it
+    does NOT stop the fork. The tx still fails on the failing nodes and succeeds on the healthy one.
+
+    THE RULE IS DETERMINISTIC VS NODE-LOCAL, not panic vs recover. A failure that is a pure function
+    of the transaction is safe to become a tx result -- every validator computes it identically. A
+    failure that depends on node-local state (enclave keys, OOM, a socket) must HALT, because
+    recovering it manufactures a per-node answer. This is item 80's argument, one layer down: item
+    80 halts when an enclave cannot use its own state at startup; this halts when an enclave call
+    fails DURING BLOCK EXECUTION.
+
+    A PLAIN `panic()` IN THE HANDLER DOES NOT WORK, and this is the part that makes it non-trivial.
+    baseapp's `newDefaultRecoveryMiddleware` wraps EVERY panic raised inside `runTx` into `ErrPanic`
+    and returns it as an ordinary tx result -- so panicking forks exactly as before. `haltOnEnclaveFailure`
+    works only because EndBlock is outside `runTx`; all 12 of its uses are EndBlock or height
+    reconciliation. 47 call sites in `enclave_grpc_client.go` do `return err` on an enclave error
+    inside a message handler and are outside its reach.
+
+    Two viable constructions:
+      - TYPED PANIC + `AddRunTxRecoveryHandler`. The client panics with a typed `enclaveUnavailable{}`;
+        a registered handler re-panics for that type only, escaping runTx's recovery and halting,
+        while every other panic keeps today's treatment. PREFERRED: it cannot be forgotten at a call
+        site the way an explicit call can.
+      - POISON FLAG + halt in EndBlock. Record the failure in PROCESS MEMORY (not the KVStore --
+        that would make it part of the app hash, which is the divergence being avoided), scoped to
+        the block height, gated on `ExecMode() == ExecModeFinalize`, and call `haltOnEnclaveFailure`
+        at the top of `EnclaveInvokeEndBlock`. More predictable; halts at a defined point.
+
+    THE COST IS REAL AND SHOULD BE STATED BEFORE ANYONE IMPLEMENTS THIS. With it in place on
+    2026-08-20, M2/M3/M4 would ALL have halted at 30755 and the chain would have STOPPED rather than
+    forking. That is the correct outcome -- a halted chain with an obvious cause beats 650 blocks
+    built on a wrong verdict -- but it converts this class of defect from a silent fork into a fleet
+    outage. Deferred deliberately on 2026-08-21 so the cause fix could be validated first.
+
+    WORTH WEIGHING FIRST, because it may remove the class instead of converting it: guard
+    `ValidatePersonalInfo` with `IsCheckTx` the way `EnclaveValidateTransferPrime` already does, so
+    a bad credential is refused at admission and never becomes a consensus question at all.
+
+91. **The enclave panics on inputs it could reject, and the one safe fix changes a signature.**
+    `ECPoint.Mult` reduces its scalar mod N before calling `ScalarMult`; `ECPoint.MultBytes` does
+    not, so any caller handing it more than 32 bytes panics in vendored C-backed secp256k1
+    (`scalar_mult_cgo.go`). That is how a corrupt cache entry became a crash at height 30755.
+
+    DO NOT "FIX" IT BY REDUCING MOD N TO MATCH `Mult`. That silences the panic and silently computes
+    a WRONG CURVE POINT instead, which is worse: a loud crash beats a quiet wrong answer, and every
+    caller here is decrypting or verifying something. The safe fix is to REJECT an oversized scalar,
+    which `MultBytes` cannot do -- it returns `*ECPoint` with no error, so this means changing the
+    signature and its 11 callers in `x/qadena/common/vshare.go`.
+
+    NOTE THIS IS HYGIENE, NOT A CONSENSUS FIX. Turning a panic into a returned error leaves the
+    error node-local, so the results still diverge and item 90 still applies. It is worth doing
+    anyway because under SGX a crashed enclave loses its working state and needs restart and
+    re-attestation. It also cannot be made complete: OOM is not defensible by any input check, and
+    item 80's incident was an enclave OOM death.
