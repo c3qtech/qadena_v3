@@ -11,7 +11,7 @@
 # usable as a gate in other scripts, not just for reading.
 #
 #   qadena_status.sh            full check
-#   qadena_status.sh --quick    skip the block-production sample (no 3s wait)
+#   qadena_status.sh --quick    skip the block-production sample (no 6s wait)
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
@@ -24,7 +24,7 @@ while [[ $# -gt 0 ]]; do
         --quick) quick=1; shift ;;
         --help)
             echo "Usage: qadena_status.sh [--quick]"
-            echo "  --quick   skip the block-production sample"
+            echo "  --quick   skip the block-production sample (up to 6s)"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -317,12 +317,40 @@ except Exception:
     # Height moving is the difference between "running" and "working".  A node can hold an RPC port
     # open while consensus is stalled, and every check above would still pass.
     if [ $quick -eq 0 ]; then
-        sleep 3
-        height2=$(curl -s -m 3 "$rpc/status" 2>/dev/null | jq -r '.result.sync_info.latest_block_height')
-        if [ -n "$height2" ] && [ "$height2" != "null" ] && [ "$height2" -gt "$height" ] 2>/dev/null; then
-            ok "producing blocks ($height -> $height2 in 3s)"
+        # POLL, DO NOT SLEEP-THEN-LOOK.  The question is "has the height moved",
+        # and once it has there is nothing left to wait for -- so the window is a
+        # CEILING, not a cost.  A healthy chain answers on the first or second
+        # sample; only a stalled one pays the full six seconds, which is exactly
+        # the case worth waiting longer on (block times drift under load, and a
+        # three-second window called a busy-but-healthy node dead).
+        #
+        # The spinner is drawn only when stdout is a terminal.  This script exits
+        # non-zero for a reason and gets run from other scripts and over ssh; a
+        # carriage-return animation in a captured log is noise at best, and at
+        # worst it hides the line it overwrites.
+        sample_secs=6
+        spin='|/-\'
+        height2=""
+        elapsed=0
+        while [ $elapsed -lt $sample_secs ]; do
+            if [ -t 1 ]; then
+                printf "\r       watching for a new block %s (%ds/%ds)" \
+                    "${spin[$(( elapsed % 4 + 1 ))]}" "$elapsed" "$sample_secs"
+            fi
+            sleep 1
+            elapsed=$((elapsed + 1))
+            sample=$(curl -s -m 3 "$rpc/status" 2>/dev/null | jq -r '.result.sync_info.latest_block_height')
+            if [ -n "$sample" ] && [ "$sample" != "null" ] && [ "$sample" -gt "$height" ] 2>/dev/null; then
+                height2=$sample
+                break
+            fi
+        done
+        [ -t 1 ] && printf "\r\033[K"
+
+        if [ -n "$height2" ]; then
+            ok "producing blocks ($height -> $height2 in ${elapsed}s)"
         else
-            bad "NOT producing blocks (still at $height after 3s)"
+            bad "NOT producing blocks (still at $height after ${sample_secs}s)"
         fi
     else
         info "block production not sampled (--quick)"
