@@ -559,6 +559,18 @@ func (s *qadenaServer) addSSShare(pioneerIDs []string, pubKID string, privK stri
 	shares = make([]string, 0)
 	shareCount := len(pioneerIDs)
 	threshold := getThreshold(shareCount)
+
+	// THE OWNER COUNT IS A SECURITY PARAMETER, and it moves silently: a pioneer joins the set
+	// on its FIRST PROPOSED BLOCK after bonding (updateIsValidator publishes its address, and
+	// getAllPioneers counts only pioneers that have one).  At four owners the threshold crosses
+	// from 1 to 2 and the key becomes genuinely Shamir-split, which changes what a "share" IS
+	// for every receiver.  Record the crossing here rather than leaving it to be reconstructed
+	// from a state dump after something breaks.
+	c.LoggerInfo(logger, "addSSShare pubKID="+pubKID+
+		" owners="+strconv.Itoa(shareCount)+
+		" threshold="+strconv.Itoa(threshold)+
+		" split="+strconv.FormatBool(threshold > 1))
+
 	if threshold == 1 {
 		for i := 0; i < shareCount; i++ {
 			shares = append(shares, privK)
@@ -624,8 +636,28 @@ func reorderPioneerIDs(pioneerIDs []string, myPioneerID string) []string {
 	return append([]string{myPioneerID}, pioneerIDs...)
 }
 
+// isPrivKHex reports whether s is the hex encoding of a 32-byte scalar.
+//
+// A Shamir SHARE is one byte longer than the secret it splits, so a share sitting where a key
+// belongs fails this -- which is precisely the corruption behind the fork at height 30755.
+func isPrivKHex(s string) bool {
+	b, err := hex.DecodeString(s)
+	return err == nil && len(b) == 32
+}
+
 func (s *qadenaServer) getSSPrivK(pubKID string) string {
 	privK, found := s.getPrivKCache(pubKID)
+
+	// A cached value that is not a 32-byte key can only do harm: it reaches ScalarMult as an
+	// oversized scalar and panics.  Discard it and rebuild from shares instead, so a node that
+	// was poisoned before this check existed repairs itself on first use.
+	if found && privK != "" && !isPrivKHex(privK) {
+		c.LoggerError(logger, "cached privk for "+pubKID+" is not a 32-byte key ("+
+			strconv.Itoa(len(privK))+" chars) -- discarding it and reconstructing from shares")
+		privK = ""
+		found = false
+	}
+
 	if !found || privK == "" {
 		// check if this can be reconstructed via Shamir Secret Sharing
 		owners, found := s.getOwners(pubKID)
@@ -4987,15 +5019,27 @@ func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*
 	if len(owners) > 0 {
 		s.setOwnersAndShare(in.PubKID, owners, myShare)
 
-		oldPrivK, found := s.getPrivKCache(in.PubKID)
-		if found {
-			if oldPrivK != myShare {
-				c.LoggerError(logger, "inconsistency")
-				c.LoggerError(logger, "oldPrivK "+oldPrivK)
-				c.LoggerError(logger, "myShare "+myShare)
+		// myShare is the PRIVATE KEY only when the secret was never split.  addSSShare hands
+		// every owner the whole key at threshold 1 -- hashicorp's shamir.Split refuses a
+		// threshold below 2, so below four owners there is no splitting at all -- and real
+		// 65-byte Shamir shares at or above it.
+		//
+		// Caching a share here as though it were a key is what forked the chain at height
+		// 30755: getSSPrivK handed the 65-byte value back unvalidated, MultBytes passed it to
+		// ScalarMult, which panics above 32 bytes, and the recovered panic was returned as a
+		// verdict that convicted a well-formed credential.
+		//
+		// At threshold >= 2 the cache is deliberately LEFT ALONE.  getSSPrivK reconstructs
+		// from the owners' shares on first use and caches the real key then.
+		if getThreshold(len(owners)) == 1 {
+			oldPrivK, found := s.getPrivKCache(in.PubKID)
+			if !found {
+				s.setPrivKCache(in.PubKID, myShare)
+			} else if oldPrivK != myShare {
+				// Only meaningful for an UNSPLIT key, where every owner holds the same value.
+				// The key material itself is deliberately NOT logged.
+				c.LoggerError(logger, "inconsistency: cached privk differs from the distributed key for "+in.PubKID)
 			}
-		} else {
-			s.setPrivKCache(in.PubKID, myShare)
 		}
 
 		oldPubK, found := s.getPubKCache(in.PubKID)
