@@ -407,7 +407,46 @@ else
 	dasel put -v "$new_priv_validator_laddr_url" '.priv_validator_laddr' -f $QADENAHOME/config/config.toml
 	dasel put -v "false" '.p2p.addr_book_strict' -f $QADENAHOME/config/config.toml
 
-	new_log_level="info"
+	# CONSENSUS TIMEOUTS AND LOG LEVEL COME FROM config.yml -- THE SAME FILE THE GENESIS NODE USES.
+	#
+	# `qadenad init` writes a STOCK config.toml, and cosmos-sdk's server/util.go then forces any
+	# UNCHANGED timeout_commit to 5s, while ignite renders config.yml's 1.5s on the genesis node.
+	# So every joiner silently ran 3.3x slower than the primary.  Block time is set by whoever
+	# PROPOSES, so the chain's cadence went bimodal -- measured on the ARM fleet at 1.81s on the
+	# primary's turn and 5.31s on everyone else's, averaging 4.28 s/block against a possible 1.8.
+	#
+	# None of it is consensus-critical, which is exactly why it survived: the chain works, just
+	# slowly, and nothing asserts a block rate.  READ the values rather than hardcoding them, so a
+	# joiner cannot drift from the genesis node again the next time config.yml changes.
+	yml_cfg() {
+		dasel -f "$QADENAHOME/config/config.yml" -r yaml ".validators.[0].config.$1" 2>/dev/null \
+			| tr -d '"' | tr -d "'"
+	}
+
+	for k in timeout_commit timeout_propose create_empty_blocks create_empty_blocks_interval ; do
+		v=$(yml_cfg "consensus.$k")
+		if [[ -n "$v" ]] ; then
+			echo "  consensus.$k = $v (from config.yml)"
+			dasel put -v "$v" ".consensus.$k" -f $QADENAHOME/config/config.toml
+		else
+			echo "  consensus.$k not set in config.yml -- leaving the stock value"
+		fi
+	done
+
+	# LOG LEVEL: match the genesis node on a DEBUG enclave, stay quiet on SGX.
+	#
+	# A debug enclave exists to be observable, and the joiners being pinned at info is what made the
+	# height 30755 investigation read the ABSENCE of [enclave - D] lines as "the handler was never
+	# entered" -- a false lead, because only ERROR lines were being relayed.  On SGX the extra
+	# volume buys nothing: the enclave redacts its own payloads there anyway.
+	if sgx_present 2> /dev/null ; then
+		new_log_level="info"
+		echo "  log_level = $new_log_level (SGX)"
+	else
+		new_log_level=$(yml_cfg log_level)
+		[[ -n "$new_log_level" ]] || new_log_level="debug"
+		echo "  log_level = $new_log_level (debug enclave -- matching the genesis node)"
+	fi
 	dasel put -v "$new_log_level" '.log_level' -f $QADENAHOME/config/config.toml
 
 	echo "Getting genesis block from $GENESIS_PIONEER_FIRST_IP_ADDRESS"

@@ -407,9 +407,24 @@ func newExportPrivateKeyCmd() *cobra.Command {
 				c.LoggerError(logger, "could not export private key", err)
 				return err
 			}
-			if debug && verbose {
-				c.LoggerDebug(logger, "ExportPrivateKey returns", r2)
-			}
+			// PRINT IT.  This was gated behind `if debug && verbose`, and verbose is a hardcoded
+			// false at the top of this file, so the command called the RPC and DISCARDED the reply
+			// every single time.  A debug tool that cannot show you anything is worse than no tool:
+			// it reads as "the enclave returned nothing", which is what it did during the height
+			// 30755 investigation before export-private-state was used instead.
+			//
+			// Safe to print: the enclave-side handler refuses under RealEnclave (enclave.go,
+			// ExportPrivateKey), so this can only ever reach a DEBUG enclave.  If that gate is ever
+			// removed, this print becomes a key disclosure on production hardware.
+			//
+			// NOTE this reads the KEYRING by name, not the SS private-key cache -- so it is NOT the
+			// tool for inspecting interval keys.  Use `export-private-state --section
+			// EnclavePrivKCacheMap` for that; it is what found the height 30755 corruption.
+			//
+			// Tab-separated so two nodes can be diffed, and the length is printed because that is
+			// the tell: a 32-byte key is 64 hex chars, a Shamir SHARE cached in its place is 130.
+			privK := r2.GetPrivK()
+			fmt.Printf("%s\t%s\tlen=%d\n", args[0], privK, len(privK))
 
 			return nil
 		},

@@ -562,7 +562,7 @@ func (s *qadenaServer) addSSShare(pioneerIDs []string, pubKID string, privK stri
 
 	// THE OWNER COUNT IS A SECURITY PARAMETER, and it moves silently: a pioneer joins the set
 	// on its FIRST PROPOSED BLOCK after bonding (updateIsValidator publishes its address, and
-	// getAllPioneers counts only pioneers that have one).  At four owners the threshold crosses
+	// getAddressablePioneers counts only pioneers that have one).  At four owners the threshold crosses
 	// from 1 to 2 and the key becomes genuinely Shamir-split, which changes what a "share" IS
 	// for every receiver.  Record the crossing here rather than leaving it to be reconstructed
 	// from a state dump after something breaks.
@@ -1624,7 +1624,7 @@ func (s *qadenaServer) GenerateSecretShare(nodeID string, nodeType string) (msgP
 	var walletID, intervalPubK, intervalPrivK string
 	walletID, _, intervalPubK, intervalPrivK, err = c.GetAddressByNameNoArmor(clientCtx, mnemonic)
 
-	pioneers := s.getAllPioneers()
+	pioneers := s.getAddressablePioneers()
 
 	// generate broadcast SS message
 	privKeys := make([]*types.SecretSharePrivK, 0)
@@ -5203,7 +5203,23 @@ func (s *qadenaServer) setIntervalPublicKeyIdNoNotify(in types.IntervalPublicKey
 	storeByPubKID.Set(types.IntervalPublicKeyIDByPubKIDKey(in.PubKID), b)
 }
 
-func (s *qadenaServer) getAllPioneers() (pioneers []string) {
+// getAddressablePioneers returns the pioneers that have published an external address.
+//
+// MEMBERSHIP IS VALIDATOR-GATED AND LANDS LATE.  A pioneer publishes its address only via
+// updateIsValidator(), which fires on its FIRST PROPOSED BLOCK after bonding -- not when it joins,
+// and not when it bonds.  So this set trails the validator set by up to a proposer rotation.
+//
+// The address is not decoration: getSSPrivK dials these nodes to collect their shares.
+//
+// THE SIZE OF THIS SET IS A SECURITY PARAMETER.  It feeds getThreshold, and at four the threshold
+// crosses from 1 to 2 -- below that addSSShare hands every owner the WHOLE key, at or above it the
+// key is genuinely Shamir-split.  Crossing four therefore changes what a "share" IS for every
+// receiver, which is how the fork at height 30755 happened.
+//
+// Named for what it tests, not for validator status: a validator that is not a pioneer never
+// appears here, a bonded validator that has not yet proposed does not either, and reachability is
+// a real requirement rather than a proxy.
+func (s *qadenaServer) getAddressablePioneers() (pioneers []string) {
 	pioneers = make([]string, 0)
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.IntervalPublicKeyIDKeyPrefix))
 	itr := store.Iterator(nil, nil)
@@ -5835,7 +5851,7 @@ func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 	unvalidated := s.getUnvalidatedEnclaveIdentities()
 	c.LoggerDebug(logger, "unvalidateEnclaveIdentities "+c.PrettyPrint(unvalidated))
 	// validate the identities
-	pioneers := s.getAllPioneers()
+	pioneers := s.getAddressablePioneers()
 
 	// AN ENCLAVE THAT CANNOT EVALUATE PEERS MUST NOT VOTE ON THEM.  The verdict below counts how
 	// many pioneers WE TRUST confirmed the identity, so an enclave with no trust beyond itself
@@ -5849,7 +5865,7 @@ func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 	// unique048 stay `unvalidated`, because the only node able to promote it had ruled itself out.
 	// With no other pioneers the existing branch below marks the identity valid on its own
 	// authority, which is right: there is nobody else to ask.
-	c.LoggerDebug(logger, "getAllPioneers "+c.PrettyPrint(pioneers))
+	c.LoggerDebug(logger, "getAddressablePioneers "+c.PrettyPrint(pioneers))
 	// randomize the array
 	pioneers = randomizePioneerIDs(pioneers, s.getPrivateEnclaveParamsPioneerID())
 	c.LoggerDebug(logger, "randomizePioneerIDs "+c.PrettyPrint(pioneers))
@@ -8247,8 +8263,17 @@ func panicRecoveryInterceptor(
 ) (resp interface{}, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.LoggerError(logger, "Recovered from panic in gRPC call", r)
-			err = status.Errorf(status.Code(err), "internal server error")
+			// status.Code(nil) is codes.OK, and status.Errorf with codes.OK returns NIL.  So this
+			// used to swallow the panic completely: the caller received a ZERO-VALUE reply and no
+			// error, and read it as a verdict.  That is how a crash convicted a well-formed
+			// credential and forked the chain at height 30755.
+			//
+			// The message names the method and carries a stack, because the old line said only
+			// that something, somewhere, had panicked -- which cost hours.
+			c.LoggerError(logger, "recovered from panic in "+info.FullMethod+": "+fmt.Sprint(r)+
+				"\n"+string(debug.Stack()))
+			resp = nil
+			err = status.Errorf(codes.Internal, "panic in %s: %v", info.FullMethod, r)
 		}
 	}()
 	return handler(ctx, req)

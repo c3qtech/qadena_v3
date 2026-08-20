@@ -1394,6 +1394,23 @@ func (k Keeper) EnclaveValidatePersonalInfo(sdkctx sdk.Context, msg *types.MsgCr
 		return err
 	}
 
+	// A REPLY THE ENCLAVE CANNOT PRODUCE IS NOT A VERDICT.
+	//
+	// Every genuine rejection carries a NON-ZERO reason: the enclave's reject branch is guarded by
+	// `if reason != PersonalInfoOK`, so {Status:false, Reason:PersonalInfoOK} is unreachable from
+	// the handler.  It arrived anyway at height 30755, because a recovered panic returned the
+	// zero value with a nil error, and this function read it as "the credential is bad" and
+	// convicted it with 1153 -- while a healthy peer accepted the same credential.  The reason
+	// code is empty in that state, so the error even came out with a blank message.
+	//
+	// Report it as an enclave fault instead.  This is a NODE-LOCAL failure and still becomes a
+	// transaction result, which remains a fork risk in its own right; see the halt-vs-verdict work
+	// in the plan.  Naming it correctly is the prerequisite for that.
+	if r == nil || (!r.Status && c.PersonalInfoReason(r.Reason) == c.PersonalInfoOK) {
+		c.ContextError(sdkctx, "malformed ValidatePersonalInfo reply from the enclave -- refusing to treat it as a verdict")
+		return errorsmod.Wrap(types.ErrGenericEnclave, "malformed ValidatePersonalInfo reply")
+	}
+
 	if !r.Status {
 		reason := c.PersonalInfoReason(r.Reason)
 		c.ContextError(sdkctx, "personal info rejected: "+reason.Message())
