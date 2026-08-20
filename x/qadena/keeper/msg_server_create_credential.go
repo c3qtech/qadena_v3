@@ -116,13 +116,22 @@ func (k msgServer) CreateCredential(goCtx context.Context, msg *types.MsgCreateC
 		}
 
 		if msg.IdentityOwnerWalletID != "" {
-			// make sure this is a valid identity owner wallet
-			identityOwnerAddress, err := sdk.AccAddressFromBech32(msg.IdentityOwnerWalletID)
-			if err != nil {
-				return nil, types.ErrInvalidIdentityOwnerWalletID
-			}
-			account := k.accountKeeper.GetAccount(ctx, identityOwnerAddress)
-			if account == nil {
+			// Only check that the address is well formed -- deliberately NOT that it
+			// already exists on chain.
+			//
+			// The identity owner is a brand-new end user: a client-generated keypair that
+			// has never signed or received anything, so the chain has no record of it yet.
+			// An existence check (accountKeeper.GetAccount, and k.GetWallet before that)
+			// rejected exactly the case this field exists for.  Nothing downstream needs
+			// the account to pre-exist -- the incentive payment further down goes through
+			// bank SendCoins, which creates the recipient account itself.
+			//
+			// The bech32 parse stays because this value is persisted onto the credential
+			// and re-read to be paid again on every later reuse, so it has to be a usable
+			// address.  Note that this no longer catches a mistyped-but-valid address:
+			// such an address will be created and will collect the identity owner's share
+			// of every credential fee.
+			if _, err := sdk.AccAddressFromBech32(msg.IdentityOwnerWalletID); err != nil {
 				return nil, types.ErrInvalidIdentityOwnerWalletID
 			}
 			identityOwnerWalletID = msg.IdentityOwnerWalletID
