@@ -31,6 +31,24 @@ SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh" > /dev/null 2>&1
 source "$SCRIPT_DIR/gov_lib.sh"
 
+# The proposal template lives in the build tree.  Search the same places enclave_identities.sh
+# does, because $qadenabuild is unset when this is run from the deployed $QADENAHOME/scripts.
+find_template() {
+    local d
+    for d in "$qadenatestdata" "$qadenabuild/test_data" "$QADENAHOME/test_data" \
+             "$QADENA_BUILD_DIR/test_data" ~/qv3/test_data ~/qadena_v3/test_data; do
+        [ -n "$d" ] || continue
+        if [ -r "$d/update_enclave_identity.json" ]; then
+            printf "%s" "$d/update_enclave_identity.json"
+            return 0
+        fi
+    done
+    echo "  cannot find update_enclave_identity.json -- looked in \$qadenatestdata," >&2
+    echo "  \$qadenabuild/test_data, \$QADENAHOME/test_data, \$QADENA_BUILD_DIR/test_data," >&2
+    echo "  ~/qv3/test_data, ~/qadena_v3/test_data" >&2
+    return 1
+}
+
 dry_run=0; force=0
 while [[ "$1" == --* ]]; do
     case "$1" in
@@ -79,13 +97,20 @@ fi
 
 if [ $dry_run -eq 1 ]; then
     echo
+    # CHECK THE TEMPLATE IN THE DRY RUN TOO.  It lives in the build tree, and $qadenabuild is only
+    # set when setup_env.sh is sourced from INSIDE a checkout -- which it is not when this runs from
+    # $QADENAHOME/scripts, the normal place.  A dry run that skipped this reported success and the
+    # real run then died after the quorum check, which is the least useful moment to find out.
+    if tmpl=$(find_template); then
+        echo "  proposal template: $tmpl"
+    else
+        exit 1
+    fi
     echo "  --dry-run: nothing submitted."
     exit 0
 fi
 
-tmpl="$qadenatestdata/update_enclave_identity.json"
-[ -r "$tmpl" ] || tmpl="$qadenabuild/test_data/update_enclave_identity.json"
-[ -r "$tmpl" ] || { echo "  cannot find update_enclave_identity.json template"; exit 1 }
+tmpl=$(find_template) || exit 1
 
 gen=$(mktemp)
 jq --arg u "$uniqueid" --arg s "$signerid" --arg st "unvalidated" \
