@@ -45,6 +45,15 @@
 # get script dir
 SCRIPT_DIR="${0:A:h}"
 
+# CAPTURED BEFORE THE SOURCE, AND UNDER A NAME setup_env.sh DOES NOT USE.
+#
+# setup_env.sh also assigns SCRIPT_DIR="${0:A:h}", and zsh's FUNCTION_ARGZERO (on by default) makes
+# $0 inside a sourced file the SOURCED file's path -- so the moment the next line runs, SCRIPT_DIR
+# stops pointing at testscripts/ and points at scripts/ instead.  Anything below that reads
+# "$TESTSCRIPTS_DIR/regression.sh" therefore finds nothing, silently: the --dry-run table came out empty
+# and read as "no suites would run", which is the most misleading thing that output could say.
+TESTSCRIPTS_DIR="${0:A:h}"
+
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 # NO `set -e`.  A failing run is the thing this script exists to record, not a reason to stop.
@@ -71,16 +80,45 @@ floor_qdn=50000000
 # now it could not: it invoked regression.sh with no arguments at all.
 regression_args=()
 auto_skip=1
+dry_run=0
+manual_skip=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --max-runs) max_runs="$2"; shift 2 ;;
         --floor)    floor_qdn="$2"; shift 2 ;;
         --pause)    pause="$2"; shift 2 ;;
-        --skip)     regression_args+=(--skip "$2"); shift 2 ;;
+        --skip)     manual_skip="$2"; regression_args+=(--skip "$2"); shift 2 ;;
         --no-auto-skip) auto_skip=0; shift ;;
+        --dry-run)  dry_run=1; shift ;;
         --help)
             sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+
+            # ASK regression.sh WHAT IS SKIPPABLE; do not keep a second list here.
+            #
+            # It derives the names from its own run_test calls precisely so they cannot drift, and
+            # its comment makes the reason plain: --skip silently ignores a name it does not match,
+            # so a help text naming a suite that --skip does not recognise is worse than no help at
+            # all -- the suite runs anyway and the operator believes it was skipped.  A copy of the
+            # list living here would be exactly that hazard, one file further from the truth.
+            if [[ -x "$TESTSCRIPTS_DIR/regression.sh" ]]; then
+                "$TESTSCRIPTS_DIR/regression.sh" --help 2>/dev/null \
+                    | sed -n '/^Skippable suites/,$p'
+            else
+                echo "Skippable suites: could not read $SCRIPT_DIR/regression.sh"
+            fi
+
+            echo ""
+            echo "AUTO-SKIP.  By default this loop inspects the chain and drops what this node"
+            echo "cannot run safely, so you rarely need --skip by hand:"
+            echo ""
+            echo "  >1/3 of bonded stake   enclave-rollback, enclave-crash and enclave-upgrade stop"
+            echo "                         the node, and above a third that halts the whole chain."
+            echo "  any peers              enclave-rollback takes its networked branch, which"
+            echo "                         asserts against an unset \$bal_after (backlog 101)."
+            echo ""
+            echo "It fails closed: if the stake share cannot be read it assumes this node matters."
+            echo "--no-auto-skip turns it off; --skip is still honoured and adds to the auto list."
             exit 0
             ;;
         *) echo "Unknown option: $1"; echo "try: $0 --help"; exit 1 ;;
@@ -114,27 +152,36 @@ topology_skips() {
     n_peers=$(curl -s --max-time 5 localhost:26657/net_info 2>/dev/null | jq -r '.result.n_peers // 0' 2>/dev/null)
     [ -n "$n_peers" ] || n_peers=0
 
-    # Stake as TEXT through bc: these are ~1e25 and shell arithmetic is 64-bit, which silently
-    # truncates and would answer this question wrongly rather than loudly.
-    total=$(qadenad_alias query staking validators --output json 2>/dev/null \
-            | jq -r '.validators[] | select(.status=="BOND_STATUS_BONDED") | .tokens' 2>/dev/null \
-            | paste -sd+ - | bc 2>/dev/null)
-    mine=$(qadenad_alias query staking validators --output json 2>/dev/null \
-           | jq -r --arg m "$(curl -s --max-time 5 localhost:26657/status 2>/dev/null | jq -r '.result.node_info.moniker // empty')" \
-                '.validators[] | select(.status=="BOND_STATUS_BONDED") | select(.description.moniker==$m) | .tokens' 2>/dev/null \
-           | paste -sd+ - | bc 2>/dev/null)
+    # ASK COMETBFT WHAT THIS NODE IS, rather than matching monikers against the staking list.
+    #
+    # /status reports validator_info.voting_power for THIS node: 0 means it is a full node, and a
+    # full node cannot halt anything by stopping itself.  An earlier version looked this node up in
+    # the bonded set by moniker, which was wrong twice over -- config.toml's moniker need not equal
+    # the validator's description.moniker, and a FULL NODE is absent from that list entirely, so
+    # "not found" fell into the unknown branch and skipped every disruptive test on a node where
+    # all of them are safe.  "I am not a validator" and "I could not tell" are different answers
+    # and only the second one should fail closed.
+    mine=$(curl -s --max-time 5 localhost:26657/status 2>/dev/null \
+           | jq -r '.result.validator_info.voting_power // empty' 2>/dev/null)
+    total=$(curl -s --max-time 5 localhost:26657/validators 2>/dev/null \
+            | jq -r '[.result.validators[]?.voting_power | tonumber] | add // empty' 2>/dev/null)
 
-    if [ -n "$total" ] && [ "$total" != "0" ] && [ -n "$mine" ] && [ "$mine" != "0" ]; then
+    if [ -z "$mine" ]; then
+        echo "  could not read this node's voting power; assuming it matters and skipping the disruptive tests" >&2
+        out+=(enclave-rollback enclave-crash enclave-upgrade)
+    elif [ "$mine" = "0" ]; then
+        echo "  this node is a FULL NODE (voting power 0) -- stopping it cannot halt the chain" >&2
+    elif [ -z "$total" ] || [ "$total" = "0" ]; then
+        echo "  this node is a validator but the total voting power could not be read; assuming it matters" >&2
+        out+=(enclave-rollback enclave-crash enclave-upgrade)
+    else
         pct=$(echo "scale=4; $mine * 100 / $total" | bc 2>/dev/null)
         if [ "$(echo "$pct > 33.4" | bc 2>/dev/null)" = "1" ]; then
-            echo "  this node holds ${pct}% of bonded stake -- stopping it HALTS the chain" >&2
+            echo "  this node holds ${pct}% of voting power -- stopping it HALTS the chain" >&2
             out+=(enclave-rollback enclave-crash enclave-upgrade)
         else
-            echo "  this node holds ${pct}% of bonded stake -- below 1/3, a self-stop costs only this node" >&2
+            echo "  this node holds ${pct}% of voting power -- below 1/3, a self-stop costs only this node" >&2
         fi
-    else
-        echo "  could not read this node's stake share; assuming it matters and skipping the disruptive tests" >&2
-        out+=(enclave-rollback enclave-crash enclave-upgrade)
     fi
 
     if [ "$n_peers" -gt 0 ]; then
@@ -155,6 +202,59 @@ if [ $auto_skip -eq 1 ]; then
     else
         echo "auto-skip: nothing to skip -- this node can run the full suite"
     fi
+fi
+
+# --dry-run: SAY WHAT WOULD RUN, THEN STOP.
+#
+# The auto-skip decision depends on the chain as it is right now -- stake share and peer count --
+# so it cannot be worked out by reading the script, and until now the only way to see it was to
+# start a loop that takes half an hour a lap.  This prints the same verdict the real run would use,
+# per suite, and exits without touching anything.
+#
+# The suite names come from regression.sh's own run_test calls, the same source its --help uses, so
+# a suite added or renamed there appears here without anyone updating a list.
+if [ $dry_run -eq 1 ]; then
+    effective="$auto"
+    [ -n "$manual_skip" ] && effective="${effective:+$effective,}$manual_skip"
+
+    echo ""
+    echo "DRY RUN -- nothing will be started."
+    echo ""
+    if [ -n "$manual_skip" ]; then echo "  --skip (yours)   : $manual_skip"; fi
+    if [ $auto_skip -eq 1 ]; then echo "  auto-skip        : ${auto:-<none>}"; else echo "  auto-skip        : disabled (--no-auto-skip)"; fi
+    echo ""
+    # READ regression.sh's run_test CALLS, not its help prose.  Its --help text wraps the names and
+    # then explains them in sentences, so word-splitting that output harvests "and", "only", "under"
+    # as if they were suites.  The run_test calls are the same source its help derives from, so this
+    # cannot drift from what actually runs -- it just skips the paragraph in between.
+    # while-read, NOT `for x in $(...)`: this is zsh, where an unquoted command substitution is NOT
+    # word-split (no SH_WORD_SPLIT), so the for-loop form silently iterates zero or one times and
+    # printed an empty table -- a dry run that lists nothing looks like "nothing would run", which
+    # is the most misleading output this command could produce.
+    printf "  %-22s %s\n" "SUITE" "WOULD"
+    grep -oE '^[[:space:]]*run_test "[a-z0-9-]+"' "$TESTSCRIPTS_DIR/regression.sh" 2>/dev/null \
+        | sed -E 's/.*run_test "([a-z0-9-]+)".*/\1/' | sort -u | while read -r label; do
+        case "$label" in
+            # Gated behind flags this loop never passes, so they do not run whatever --skip says.
+            # Reporting them as "run" would be a lie in the one output whose job is to be believed.
+            genesis-init|genesis-check|chain-start)
+                printf "  %-22s -    (only with --from-genesis)\n" "$label" ;;
+            sgx-build)
+                printf "  %-22s -    (only with --with-sgx)\n" "$label" ;;
+            enclave-upgrade)
+                printf "  %-22s -    (only with --with-enclave-upgrade)\n" "$label" ;;
+            *)
+                if print -r -- ",$effective," | grep -q ",$label,"; then
+                    printf "  %-22s SKIP\n" "$label"
+                else
+                    printf "  %-22s run\n" "$label"
+                fi ;;
+        esac
+    done
+    echo ""
+    echo "  'recovery' is also a valid --skip name but is not a suite: it drops the key-recovery"
+    echo "  cases from inside credentials, which still runs."
+    exit 0
 fi
 
 archive="$qadenabuild/logs/regression-history"
