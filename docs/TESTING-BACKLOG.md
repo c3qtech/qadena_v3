@@ -1816,3 +1816,31 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     (`msg_server_update_enclave_identity.go` allows a NEW identity only as `unvalidated` and an
     EXISTING one only to `inactive`), so a wrapper should refuse an impossible transition up front
     instead of letting it pass, spend a voting period, and fail at execution.
+
+95. **Enclave identity registration passes on the same bar as a text proposal.**
+    Since the promotion fix (item 92), a passed governance proposal is what makes a measurement
+    `active` -- and an active measurement is one every node will hand its sealed jar and regulator
+    private keys to, as soon as someone runs code with that MRENCLAVE. Governance is now the trust
+    anchor for the enclave, so `MsgUpdateEnclaveIdentity` decides KEY CUSTODY, not spending.
+
+    It carries no more weight than a proposal to change a text field. gov v1 has exactly two tiers,
+    regular and expedited, and no per-message-type thresholds, so chain-wide params cannot express
+    "this one needs more". Raising `quorum` for everything to protect this one message is the wrong
+    instrument -- it was raised 0.334 -> 0.40 on 2026-08-21 for ordinary prudence, not as a fix here.
+
+    The bar belongs in the handler (`msg_server_update_enclave_identity.go`), which already refuses
+    illegal transitions and is the natural place for a stricter rule. Options, in rough order of
+    cost:
+      - require a supermajority of the CURRENT enclave operators, not of stake. The set of nodes
+        running an active measurement is knowable on chain, and it is the set with something to lose.
+      - require the proposal to carry a remote report from the candidate build, verified in the
+        ENCLAVE (never in the handler -- see the DCAP-replay hazard recorded at
+        `msg_server_pioneer_update_enclave_identity.go:31`, where verification in a consensus path
+        halts a replaying node).
+      - a longer mandatory voting period for this message type specifically, so a registration
+        cannot be pushed through in a quiet window.
+
+    NOTE THE ORDERING CONSTRAINT any fix must respect: the measurement has to reach `active` BEFORE
+    the binary goes live, because the outgoing enclave refuses to hand its keys to an inactive
+    identity. A stricter bar therefore lengthens every legitimate upgrade too, which is the real
+    cost to weigh.

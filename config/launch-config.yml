@@ -208,9 +208,34 @@ genesis:
             amount: "50000000000000000000000"
         expedited_voting_period: "86400s"
         expedited_threshold: "0.667"
-        quorum: "0.334"
+        # TALLY PARAMS, AND WHY THESE NUMBERS.
+        #
+        # Read what quorum actually permits, not how many validators it implies: at minimum turnout
+        # a proposal passes with just over half of it, so quorum 0.334 lets ~17% of bonded stake
+        # decide.  0.40 raises that to ~20% and is Cosmos Hub's value -- well exercised, and short of
+        # the level where legitimate proposals start expiring for delegator apathy, which is the
+        # common failure mode on live chains.  Do not read this as "N of M validators": once real
+        # delegators exist, turnout is a fraction of STAKE and most of it is not the validators'.
+        #
+        # THIS NOW DECIDES MORE THAN MONEY.  Since 2026-08-21, a passed proposal is what makes an
+        # enclave measurement `active`, and an active measurement is one every node will hand its
+        # sealed jar and regulator keys to once someone runs code with that MRENCLAVE
+        # (vouchesForIdentity, backlog 92).  Governance is the trust anchor for the enclave now, so
+        # these numbers gate key custody, not just spending.
+        quorum: "0.40"
         threshold: "0.5"
+        # VETO STAYS AT THE STANDARD 0.334, deliberately.  It is the ANTI-SPAM mechanism, not the
+        # way to block a proposal you disagree with -- a simple majority of No already fails one at
+        # `threshold`, with no deposit burned.  Lowering veto so a single operator could block an
+        # enclave registration would also make it cheap to burn a colleague's deposit on a
+        # legitimate one, and registering a measurement is a ROUTINE operation, not a rare event.
         veto_threshold: "0.334"
+        #
+        # WHAT THESE PARAMS CANNOT EXPRESS, and do not pretend to: a higher bar for
+        # MsgUpdateEnclaveIdentity than for a text proposal.  gov v1 has exactly two tiers, regular
+        # and expedited, with no per-message-type thresholds.  If enclave registration should need
+        # more than an ordinary proposal, that belongs in the msg handler -- see backlog 95 -- not in
+        # a chain-wide param distorted to approximate it.
         # burn the deposit of a vetoed proposal -- makes spamming governance expensive
         burn_vote_veto: true
         # a proposal must arrive with 25% of the deposit, so the mempool is not free to fill
