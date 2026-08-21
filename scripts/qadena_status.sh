@@ -364,7 +364,7 @@ except Exception:
         done < <(echo "$peers")
 
         info ""
-        info "  node       address        height      lag   power        share  if stopped  state"
+        info "  node       ip                address        height      lag   power        share  if stopped  state"
         unsafe=0
         printf "$rows" | while IFS=$'\t' read -r pid pip h cu pw ad; do
             [ -z "$pid" ] && continue
@@ -383,7 +383,11 @@ except Exception:
             # address is what /validators, the block headers and a CONSENSUS FAILURE report use.
             # Having only one of them means translating by hand at exactly the wrong moment.
             addr="${ad:0:12}"; [ -z "$addr" ] && addr="-"
-            line="$mark $(printf %-9s "$pid") $(printf %-13s "$addr") $(printf %-10s "$h") $(printf %5s "$lag")  $(printf %-12s "$pw") $(printf %5s "$share")%  $(printf %6s "$rest")%   $state"
+            # The IP is the third name this node answers to, and it is the one you need to reach
+            # it -- to ssh in, to curl its RPC, or to see which box a BEHIND row actually is.
+            # It comes from the chain's own IntervalPublicKeyID row, so it is also exactly the
+            # address the enclave would dial for a secret share.
+            line="$mark $(printf %-9s "$pid") $(printf %-17s "$pip") $(printf %-13s "$addr") $(printf %-10s "$h") $(printf %5s "$lag")  $(printf %-12s "$pw") $(printf %5s "$share")%  $(printf %6s "$rest")%   $state"
             if [ "$(echo "$rest" | awk '{print ($1 > 66.67) ? 1 : 0}')" = "1" ] && [ "$state" = "ok" ]; then
                 info "$line"
             else
