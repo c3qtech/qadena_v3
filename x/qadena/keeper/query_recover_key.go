@@ -14,8 +14,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	evmsecp256k1 "github.com/cosmos/evm/crypto/ethsecp256k1"
 )
 
 func (k Keeper) RecoverKeyAll(ctx context.Context, req *types.QueryAllRecoverKeyRequest) (*types.QueryAllRecoverKeyResponse, error) {
@@ -51,7 +51,11 @@ func (k Keeper) RecoverKey(ctx context.Context, req *types.QueryGetRecoverKeyReq
 	if len(pubBytes) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "empty wallet pubkey")
 	}
-	pk := secp256k1.PubKey{Key: pubBytes}
+	// This chain uses eth_secp256k1 keys (see crypto/keyring/options.go), so the
+	// signature is keccak256-based and carries a trailing recovery byte. Verifying
+	// with the plain cosmos secp256k1 type instead would hash with SHA-256 and
+	// reject anything but 64 bytes, which no client on this chain ever produces.
+	pk := evmsecp256k1.PubKey{Key: pubBytes}
 
 	tsBytes := []byte(strconv.FormatInt(req.Timestamp, 10))
 	if !pk.VerifySignature(tsBytes, req.TimestampSignature) {
