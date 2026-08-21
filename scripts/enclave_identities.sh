@@ -35,8 +35,12 @@
 # A node whose own measurement is not active is not obviously broken: it produces blocks and looks
 # healthy, while being unable to obtain a secret share or hand its sealed keys to a successor.
 #
-#   enclave_identities.sh            this node
-#   enclave_identities.sh --quiet    registry table only
+#   enclave_identities.sh                  this node, plus what to deploy next
+#   enclave_identities.sh --quiet          registry table only
+#   enclave_identities.sh --build-dir DIR  point at a source checkout explicitly
+#
+# Runs from the DEPLOYED copy ($QADENAHOME/scripts) or from a source checkout; it finds the checkout
+# itself so the deploy advice works either way.
 #
 # Exits non-zero if this node's measurement is not active on chain, or a staged binary is
 # mislabelled, so it is usable as a gate before attempting an upgrade.
@@ -45,10 +49,12 @@ SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh" > /dev/null 2>&1
 
 quiet=0
+explicit_build_dir=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --quiet) quiet=1; shift ;;
-        -h|--help) sed -n '3,40p' "$0"; exit 0 ;;
+        --build-dir) explicit_build_dir="$2"; shift 2 ;;
+        -h|--help) sed -n '3,44p' "$0"; exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -59,15 +65,62 @@ bad()  { printf "  \033[31m%-6s\033[0m %s\n" "BAD" "$1"; problems=$((problems + 
 warn() { printf "  \033[33m%-6s\033[0m %s\n" "WARN" "$1" }
 info() { printf "         %s\n" "$1" }
 
-# The measurement this enclave reports for ITSELF, taken from its own startup line rather than
-# inferred from a filename -- a filename is exactly the thing that has been wrong before.
+# The measurement that is ACTUALLY RUNNING, which is not necessarily the one in bin/.
+#
+# Taken from the enclave's own startup line, because that is the only record of what the running
+# process reported about itself.  Deriving it from bin/qadenad_enclave instead would be wrong
+# exactly when it matters: after a binary is swapped in, the file says the NEW measurement while the
+# old process is still serving.
+#
+# ALL LOG FILES ARE SCANNED, newest first.  The first version of this looked only at the newest
+# qadena-*.log and reported "could not determine the running measurement" on a perfectly healthy
+# node -- rotatelogs rotates daily, so an enclave up for 17 hours has its startup line in
+# YESTERDAY's file.  The symptom looked like a dead enclave on a fleet whose enclave was fine.
 running_measurement() {
-    local log
-    log=$(ls -t "$QADENAHOME"/logs/qadena-*.log 2>/dev/null | head -1)
-    [ -n "$log" ] || return 1
-    grep -a "Enclave starting" "$log" 2>/dev/null | tail -1 \
-        | sed -e 's/\x1b\[[0-9;]*m//g' -e 's/.*Enclave starting //' | awk '{print $3}'
+    local l out pid exe
+    for l in "$QADENAHOME"/logs/qadena-*.log(Nom); do
+        out=$(grep -a "Enclave starting" "$l" 2>/dev/null | tail -1 \
+              | sed -e 's/\x1b\[[0-9;]*m//g' -e 's/.*Enclave starting //' | awk '{print $3}')
+        if [ -n "$out" ]; then printf "%s" "$out"; return 0; fi
+    done
+    # Fallback for a node whose logs have been rotated away entirely: ask the running process which
+    # binary it came from.  Only valid because install.sh now refuses to replace a running binary --
+    # otherwise this path would report the file's NEW identity for the OLD process.
+    pid=$(pgrep -x qadenad_enclave 2>/dev/null | head -1)
+    if [ -n "$pid" ]; then
+        exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null)
+        if [ -n "$exe" ] && [ -x "$exe" ]; then
+            out=$("$exe" -unique-id 2>/dev/null)
+            if [ -n "$out" ]; then printf "%s" "$out"; return 0; fi
+        fi
+    fi
+    return 1
 }
+
+# What the SOURCE TREE would build, read without building anything.  On a debug build the
+# measurement is just the //go:embed-ed label in test_unique_id.txt, so it is known before the
+# compiler runs -- which is what makes it possible to register the identity BEFORE building, and
+# that ordering is the whole point (see the suggested flow at the end).
+#
+# FINDING THE CHECKOUT IS ITS OWN PROBLEM.  setup_env.sh only sets $qadenabuild when the script it
+# is sourced from lives INSIDE a checkout (it tests for ../cmd and ../x).  This script is normally
+# run from the DEPLOYED copy at $QADENAHOME/scripts, where that test fails and $qadenabuild is unset
+# -- so keying off it alone made the advice appear only when run from the source tree, which is the
+# one place an operator does not need it.  Search the usual places, and let --build-dir override.
+build_tree=""
+find_build_tree() {
+    local d
+    for d in "$explicit_build_dir" "$QADENA_BUILD_DIR" "$qadenabuild" ~/qv3 ~/qadena_v3 ~/qadena-build; do
+        [ -n "$d" ] || continue
+        if [ -r "$d/cmd/qadenad_enclave/test_unique_id.txt" ]; then
+            build_tree="${d:A}"
+            return 0
+        fi
+    done
+    return 1
+}
+source_measurement() { [ -n "$build_tree" ] && cat "$build_tree/cmd/qadenad_enclave/test_unique_id.txt" 2>/dev/null }
+source_version()     { [ -n "$build_tree" ] && cat "$build_tree/cmd/qadenad_enclave/version.txt" 2>/dev/null }
 
 echo "=========================================="
 echo "enclave identities registered on chain"
@@ -203,6 +256,72 @@ echo "=========================================="
 for f in "$QADENAHOME"/enclave_config/enclave_params_*.json(N); do
     info "${f##*/}"
 done
+
+echo
+echo "=========================================="
+echo "source tree, and what to do next"
+echo "=========================================="
+# THE ORDER MATTERS AND IS NOT THE OBVIOUS ONE.  The instinct after `git pull` is to build.  Do not:
+# build.sh installs the new binary as the LIVE one and (since install.sh was fixed) stops the node
+# to do it, so if the new measurement is not yet ACTIVE on chain the old enclave refuses to hand its
+# sealed keys over, the upgrade fails, and the node stays DOWN.
+#
+# Registering first is possible because on a debug build the measurement is the //go:embed-ed label
+# in test_unique_id.txt -- readable straight from the source tree, before anything is compiled.
+find_build_tree
+src=$(source_measurement)
+srcver=$(source_version)
+
+if [ -z "$src" ]; then
+    info "no source checkout found -- looked in \$QADENA_BUILD_DIR, \$qadenabuild, ~/qv3,"
+    info "~/qadena_v3, ~/qadena-build.  Point at one with:  --build-dir <path>"
+    info "(this section only advises on deploys; everything above is already accurate)"
+elif [ "$src" = "$running" ]; then
+    ok "source tree ($build_tree) is $src (version $srcver) -- already what this node runs, nothing to deploy"
+else
+    info "checkout                : $build_tree"
+    info "source tree would build : $src (version $srcver)"
+    info "this node is running    : ${running:-unknown} (version $live_ver)"
+    src_status=$(echo "$rows" | awk -F'\t' -v u="$src" '$1==u {print $3}')
+    echo
+    case "$src_status" in
+        active)
+            ok "$src is ACTIVE on chain -- safe to deploy"
+            info "  1.  ./buildscripts/build.sh --hold      # stage $src; node keeps running"
+            info "  2.  scripts/activate_enclave.sh $src    # stop, swap, start -- performs the handover"
+            info "  (or plain ./buildscripts/build.sh, which stops the node and swaps in one step --"
+            info "   safe here only because $src is already active)"
+            if [ -n "$newest_ver" ] && [ "$srcver" = "$newest_ver" ]; then
+                warn "but version $srcver equals the newest measurement holding sealed params ($newest_id)."
+                info "  An upgrade needs a STRICT increase, so the handover will NOT run.  Bump"
+                info "  cmd/qadenad_enclave/version.txt before building."
+            fi ;;
+        unvalidated)
+            warn "$src is registered but still UNVALIDATED -- wait for the peer quorum to promote it"
+            info "  re-run this script; do NOT build until it reads active" ;;
+        inactive)
+            bad "$src is INACTIVE on chain -- it was condemned or retired, and that is PERMANENT"
+            info "  governance cannot move an existing row back to unvalidated.  Pick a NEW"
+            info "  measurement: edit cmd/qadenad_enclave/test_unique_id.txt and version.txt." ;;
+        "")
+            warn "$src is NOT REGISTERED on chain yet."
+            info "  1.  ./buildscripts/build.sh --hold      # stage it; live binary untouched, node keeps running"
+            info "  2.  scripts/gov_register_enclave_identity.sh $src <signerID>"
+            info "  3.  re-run this script until $src reads active"
+            info "  4.  scripts/activate_enclave.sh $src    # stop, swap, start -- performs the handover"
+            echo
+            info "  --hold matters because the ORDER is forced: the old enclave will not hand its"
+            info "  sealed keys to a measurement the chain has not made active, so swapping the live"
+            info "  binary in first leaves the node DOWN.  On a debug build you could register before"
+            info "  building (the measurement is just the label in test_unique_id.txt), but on SGX"
+            info "  MRENCLAVE is a hash of the built image and is not knowable until step 1 is done."
+            info "  Read it there with:  ego uniqueid \$qadenabin/qadenad_enclave.<id>"
+            echo
+            info "  If you already swapped a binary in and the node will not start, nothing is lost --"
+            info "  the old binary and its enclave_params are untouched.  Recover with:"
+            info "      scripts/activate_enclave.sh ${running:-<old-measurement>}" ;;
+    esac
+fi
 
 echo
 [ $problems -eq 0 ] && echo "no problems found" || echo "$problems problem(s) found"

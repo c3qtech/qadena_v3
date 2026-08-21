@@ -13,6 +13,7 @@ install_chain=0
 install_scripts=0
 install_provider_scripts=0
 install_testscripts=0
+hold=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --enclave)
@@ -39,6 +40,20 @@ while [[ $# -gt 0 ]]; do
             install_testscripts=1
             shift
             ;;
+        --hold)
+            # HOLD THE NEW BINARY BACK.  Install qadenad_enclave.<uniqueID> but leave the LIVE
+            # binary alone, so the node keeps running what it is running and nothing has to stop.
+            #
+            # This is the only correct order on real SGX, where MRENCLAVE is a hash of the built
+            # image and therefore CANNOT be known before the build: build --hold, read the
+            # measurement off the artifact (ego uniqueid), register it by governance, wait for it to
+            # go active, and only then swap it in with scripts/activate_enclave.sh.
+            #
+            # Swapping first is what leaves a node down: the old enclave refuses to hand its sealed
+            # keys to a measurement the chain has not made active.
+            hold=1
+            shift
+            ;;
         --all)
             install_enclave=1
             install_signer_enclave=1
@@ -49,7 +64,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --help)
-            echo "Usage: install.sh [--enclave] [--signer-enclave] [--chain] [--scripts] [--provider-scripts] [--testscripts] [--all]"
+            echo "Usage: install.sh [--enclave] [--signer-enclave] [--chain] [--scripts] [--provider-scripts] [--testscripts] [--all] [--hold]"
+            echo "  --hold  install qadenad_enclave.<uniqueID> only; do not replace the live binary"
+            echo "          (and do not stop the node).  Required on SGX, where the measurement is"
+            echo "          only knowable after the build.  Activate later with activate_enclave.sh."
             exit 0
             ;;
         *)
@@ -109,7 +127,7 @@ install_binary() {
 
 if [[ $install_enclave -eq 1 ]]; then
     echo "Installing enclave"
-    ensure_stopped_for_binaries
+    [[ $hold -eq 0 ]] && ensure_stopped_for_binaries
     enclave_path="$qadenabuild/cmd/qadenad_enclave"
     # check if reproducible_build_unique_id.txt exists and $enclave_path/qadenad_enclave
     if [[ -f "$enclave_path/reproducible_build_unique_id.txt" ]]; then
@@ -118,12 +136,17 @@ if [[ $install_enclave -eq 1 ]]; then
         unique_id=$(cat "$enclave_path/test_unique_id.txt")
     fi
     install_binary "$enclave_path/qadenad_enclave" "$qadenabin/qadenad_enclave.$unique_id"
-    install_binary "$enclave_path/qadenad_enclave" "$qadenabin/qadenad_enclave"
+    if [[ $hold -eq 1 ]]; then
+        echo "  held back: staged as qadenad_enclave.$unique_id; the live binary is unchanged"
+        echo "  register it, wait for active, then: scripts/activate_enclave.sh $unique_id"
+    else
+        install_binary "$enclave_path/qadenad_enclave" "$qadenabin/qadenad_enclave"
+    fi
 fi
 
 if [[ $install_signer_enclave -eq 1 ]]; then
     echo "Installing signer enclave"
-    ensure_stopped_for_binaries
+    [[ $hold -eq 0 ]] && ensure_stopped_for_binaries
     signer_enclave_path="$qadenabuild/cmd/signer_enclave"
     # check if reproducible_build_unique_id.txt exists and $enclave_path/qadenad_enclave
     if [[ -f "$signer_enclave_path/reproducible_build_unique_id.txt" ]]; then
@@ -132,17 +155,25 @@ if [[ $install_signer_enclave -eq 1 ]]; then
         unique_id=$(cat "$signer_enclave_path/test_unique_id.txt")
     fi
     install_binary "$signer_enclave_path/signer_enclave" "$qadenabin/signer_enclave.$unique_id"
-    install_binary "$signer_enclave_path/signer_enclave" "$qadenabin/signer_enclave"
+    if [[ $hold -eq 1 ]]; then
+        echo "  held back: staged as signer_enclave.$unique_id; the live binary is unchanged"
+    else
+        install_binary "$signer_enclave_path/signer_enclave" "$qadenabin/signer_enclave"
+    fi
 fi
 
 if [[ $install_chain -eq 1 ]]; then
     echo "Installing chain"
-    ensure_stopped_for_binaries
+    [[ $hold -eq 0 ]] && ensure_stopped_for_binaries
     chain_path="$qadenabuild/cmd/qadenad"
     VERSION_FILE="$chain_path/version.txt"
     VERSION=$(cat "$VERSION_FILE")
-    install_binary "$chain_path/qadenad" "$qadenabin/qadenad"
     install_binary "$chain_path/qadenad" "$qadenabin/qadenad.$VERSION"
+    if [[ $hold -eq 1 ]]; then
+        echo "  held back: staged as qadenad.$VERSION; the live binary is unchanged"
+    else
+        install_binary "$chain_path/qadenad" "$qadenabin/qadenad"
+    fi
     cp $qadenabuild/vendor/github.com/CosmWasm/wasmvm/v2/internal/api/*.so $qadenabin/
 fi
 

@@ -1,5 +1,7 @@
 #!/bin/zsh
 
+hold_flag=""
+
 # get script dir
 SCRIPT_DIR="${0:A:h}"
 
@@ -11,6 +13,12 @@ TITLE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --hold)
+      # Pass through to install.sh: stage the measurement-labelled binary but leave the live one
+      # alone.  Required on SGX, where MRENCLAVE is only knowable after the build.
+      hold_flag="--hold"
+      shift
+      ;;
     --update-test-unique-id)
       update_test_unique_id=1
       shift
@@ -29,7 +37,7 @@ while [[ $# -gt 0 ]]; do
       fi
       ;;
     --help)
-      echo "Usage: build_enclave.sh [--update-test-unique-id] [--build-sgx] [--title <title>]"
+      echo "Usage: build_enclave.sh [--update-test-unique-id] [--build-sgx] [--hold] [--title <title>]"
       exit 0
       ;;      
     *)
@@ -155,7 +163,7 @@ if [[ "$DOCKER_BUILD" = "" ]]; then
         echo "    To re-initialise a chain from scratch, use init.sh (which wipes the home first),"
         echo "    or pass FORCE_GENESIS_REWRITE=1 if you really mean to edit a live node's genesis."
         echo ""
-        $qadenabuildscripts/install.sh --enclave
+        $qadenabuildscripts/install.sh --enclave $hold_flag
         exit 0
     fi
 
@@ -190,7 +198,7 @@ if [[ "$DOCKER_BUILD" = "" ]]; then
     # Rename the new files
     mv $genesisfile.tmp $genesisfile
 
-    $qadenabuildscripts/install.sh --enclave
+    $qadenabuildscripts/install.sh --enclave $hold_flag
 fi
 
 

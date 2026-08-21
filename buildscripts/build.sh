@@ -7,6 +7,7 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 update_test_unique_id_flag=""
 build_sgx_flag=""
+hold_flag=""
 update_build_number=0
 TITLE="FINAL"
 skip_enclave=0
@@ -15,6 +16,12 @@ no_sgx=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --hold)
+      # Stage the new binaries but leave the LIVE ones alone -- see install.sh --hold.  The only
+      # correct order on SGX, where the measurement is not knowable until after the build.
+      hold_flag="--hold"
+      shift
+      ;;
     --update-test-unique-id)
       update_test_unique_id_flag="--update-test-unique-id"
       shift
@@ -49,7 +56,8 @@ while [[ $# -gt 0 ]]; do
       fi
       ;;
     --help)
-      echo "Usage: build.sh [--update-test-unique-id] [--update-build-number] [--skip-enclave] [--build-sgx] [--no-sgx] [--title <title>]"
+      echo "Usage: build.sh [--update-test-unique-id] [--update-build-number] [--skip-enclave] [--build-sgx] [--no-sgx] [--hold] [--title <title>]"
+      echo "  --hold  stage binaries without replacing the live ones (and without stopping the node)"
       echo "  SGX is the DEFAULT when ego is installed (it decides -tags realenclave, which"
       echo "  silently controls whether real attestation is verified).  --no-sgx opts out."
       exit 0
@@ -168,10 +176,10 @@ if [ $? -ne 0 ] ; then
     exit 1
 fi
 
-$qadenabuildscripts/install.sh --chain
+$qadenabuildscripts/install.sh --chain $hold_flag
 
 if [[ $skip_enclave == 0 ]] ; then
-    $qadenabuildscripts/build_enclave.sh --title $TITLE $update_test_unique_id_flag $build_sgx_flag
+    $qadenabuildscripts/build_enclave.sh --title $TITLE $update_test_unique_id_flag $build_sgx_flag $hold_flag
     if [ $? -ne 0 ] ; then
         echo "************"
         echo "   $TITLE ERROR"
@@ -179,7 +187,7 @@ if [[ $skip_enclave == 0 ]] ; then
         exit 1
     fi
 
-    $qadenabuildscripts/build_signer_enclave.sh --title $TITLE $update_test_unique_id_flag $build_sgx_flag
+    $qadenabuildscripts/build_signer_enclave.sh --title $TITLE $update_test_unique_id_flag $build_sgx_flag $hold_flag
     if [ $? -ne 0 ] ; then
         echo "************"
         echo "   $TITLE ERROR"

@@ -1755,13 +1755,32 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     characterization tests in `cmd/qadenad_enclave/enclave_trust_promotion_test.go`.
 
 93. **`test_update_enclave_identity.sh` votes only `--from pioneer1` and reports success regardless.**
-    On a balanced fleet pioneer1 holds 25%, below the 33.4% gov quorum, so the proposal expires
-    unpassed while all three transactions (submit, deposit, vote) succeed and the script exits 0.
-    Observed 2026-08-21: registering `unique049` needed a manual second vote from the treasury
-    account to reach quorum. The script should assert the proposal actually PASSED, not that its
-    transactions landed.
+    The proposal expires unpassed while all three transactions (submit, deposit, vote) succeed and
+    the script exits 0. Observed twice on 2026-08-21; both times a manual treasury vote was needed.
 
-94. **There are no node-operator scripts for governance, so every proposal is hand-rolled.**
+    AND THE SHORTFALL IS FAR WORSE THAN IT LOOKS. An earlier draft of this item said pioneer1 holds
+    25% -- the validator's share on a balanced fleet. Measured with `gov_can_reach_quorum`, the
+    pioneer1 ACCOUNT controls **0.2475%**. Governance power follows the DELEGATOR, and essentially
+    all of every validator's stake is delegated by the treasury (98.94%). So operating a validator
+    conveys almost no voting power, and reasoning about quorum from validator shares is wrong by two
+    orders of magnitude. `scripts/gov_vote.sh` and `gov_register_enclave_identity.sh` report the
+    real per-account share before submitting, for exactly this reason.
+
+    The script should assert the proposal PASSED, not that its transactions landed.
+
+94. **DONE 2026-08-21 -- there were no node-operator scripts for governance.**
+    Built: `scripts/gov_lib.sh` (shared helpers), `gov_register_enclave_identity.sh` (submit,
+    deposit, vote, wait for PASSED, then wait for the peer quorum to promote it, with `--dry-run`
+    and a refusal to submit when the named voters cannot reach quorum), `gov_vote.sh` (vote from
+    several accounts, report the resulting tally), and `gov_proposal_status.sh` (status, tally, and
+    distance from quorum; exits non-zero unless PASSED so it can gate a deploy).
+
+    Two arithmetic traps were found while building them, both of which produce WRONG NUMBERS RATHER
+    THAN ERRORS: zsh's `$(( ))` is 64-bit and silently truncates ~1e25 stake values, and jq's
+    `tonumber` converts them to IEEE doubles and prints `1.01e+25`, which `bc` cannot parse. All
+    stake arithmetic in these scripts sums decimal strings through `bc`.
+
+    Original item, kept for the rationale:
     Registering an enclave identity, the one routine operation that REQUIRES governance, has no
     operator-facing tooling. The only script that submits a proposal is
     `testscripts/test_update_enclave_identity.sh`, which is a test fixture: it hardcodes the message
