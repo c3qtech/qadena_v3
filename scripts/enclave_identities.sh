@@ -47,6 +47,7 @@
 
 SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh" > /dev/null 2>&1
+source "$SCRIPT_DIR/enclave_lib.sh"
 
 quiet=0
 explicit_build_dir=""
@@ -65,37 +66,11 @@ bad()  { printf "  \033[31m%-6s\033[0m %s\n" "BAD" "$1"; problems=$((problems + 
 warn() { printf "  \033[33m%-6s\033[0m %s\n" "WARN" "$1" }
 info() { printf "         %s\n" "$1" }
 
-# The measurement that is ACTUALLY RUNNING, which is not necessarily the one in bin/.
-#
-# Taken from the enclave's own startup line, because that is the only record of what the running
-# process reported about itself.  Deriving it from bin/qadenad_enclave instead would be wrong
-# exactly when it matters: after a binary is swapped in, the file says the NEW measurement while the
-# old process is still serving.
-#
-# ALL LOG FILES ARE SCANNED, newest first.  The first version of this looked only at the newest
-# qadena-*.log and reported "could not determine the running measurement" on a perfectly healthy
-# node -- rotatelogs rotates daily, so an enclave up for 17 hours has its startup line in
-# YESTERDAY's file.  The symptom looked like a dead enclave on a fleet whose enclave was fine.
-running_measurement() {
-    local l out pid exe
-    for l in "$QADENAHOME"/logs/qadena-*.log(Nom); do
-        out=$(grep -a "Enclave starting" "$l" 2>/dev/null | tail -1 \
-              | sed -e 's/\x1b\[[0-9;]*m//g' -e 's/.*Enclave starting //' | awk '{print $3}')
-        if [ -n "$out" ]; then printf "%s" "$out"; return 0; fi
-    done
-    # Fallback for a node whose logs have been rotated away entirely: ask the running process which
-    # binary it came from.  Only valid because install.sh now refuses to replace a running binary --
-    # otherwise this path would report the file's NEW identity for the OLD process.
-    pid=$(pgrep -x qadenad_enclave 2>/dev/null | head -1)
-    if [ -n "$pid" ]; then
-        exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null)
-        if [ -n "$exe" ] && [ -x "$exe" ]; then
-            out=$("$exe" -unique-id 2>/dev/null)
-            if [ -n "$out" ]; then printf "%s" "$out"; return 0; fi
-        fi
-    fi
-    return 1
-}
+# Which measurement is running, and which one a binary carries, both come from enclave_lib.sh --
+# because `-unique-id` reports the embedded DEBUG LABEL on an SGX build, not MRENCLAVE.  See the
+# header there; getting this wrong makes a healthy SGX node look like it runs an unregistered
+# measurement.
+running_measurement() { enclave_running_measurement }
 
 # What the SOURCE TREE would build, read without building anything.  On a debug build the
 # measurement is just the //go:embed-ed label in test_unique_id.txt, so it is known before the
@@ -137,6 +112,7 @@ fi
 running=$(running_measurement)
 live_sha=$(sha256sum "$qadenabin/qadenad_enclave" 2>/dev/null | cut -c1-12)
 live_ver=$("$qadenabin/qadenad_enclave" -version 2>/dev/null)
+live_measurement=$(enclave_measurement "$qadenabin/qadenad_enclave")
 
 printf "  %-12s %-12s %-12s %s\n" "MEASUREMENT" "SIGNER" "STATUS" ""
 echo "$rows" | while IFS=$'\t' read -r uid sid idstatus; do
@@ -187,7 +163,7 @@ for f in "$qadenabin"/qadenad_enclave.*(N); do
     base="${f##*/}"; label="${base##*.}"
     sha=$(sha256sum "$f" 2>/dev/null | cut -c1-12)
     ver=$("$f" -version 2>/dev/null)
-    embedded=$("$f" -unique-id 2>/dev/null)
+    embedded=$(enclave_measurement "$f")
     note=""
     if [ "$sha" = "$live_sha" ]; then
         note="== live binary"

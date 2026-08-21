@@ -1844,3 +1844,26 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     the binary goes live, because the outgoing enclave refuses to hand its keys to an inactive
     identity. A stricter bar therefore lengthens every legitimate upgrade too, which is the real
     cost to weigh.
+
+96. **`qadenad_enclave -unique-id` reports the DEBUG LABEL on an SGX build, not MRENCLAVE.**
+    Observed on SGX1 2026-08-21: the flag answered `unique047` while `ego uniqueid` on the same
+    binary answered `cc3518658aa8bf13de1b37533b8742a18c2685042a66aac20ed86657073b49e9` -- and the
+    hash is what everything else on that machine is keyed by:
+
+        qadenad_enclave.ab35560151defd04...        (staged binaries)
+        enclave_params_cc3518658aa8bf13...json     (sealed params)
+
+    The label is `//go:embed`-ed from `cmd/qadenad_enclave/test_unique_id.txt` and is compiled in
+    whether or not the binary is ego-signed, so the flag cannot distinguish the two builds. Any tool
+    trusting it on SGX compares a debug label against a chain full of hashes, finds no match, and
+    reports a healthy node as running an unregistered measurement.
+
+    `scripts/enclave_lib.sh` now centralises the rule -- ego present means ego is authoritative, ego
+    absent means the build is debug and the embedded label IS the identity -- and
+    `enclave_identities.sh`, `activate_enclave.sh` and `check_upgrade_enclave.sh` use it. Verified
+    against both a debug node and SGX1.
+
+    THE FLAG ITSELF IS STILL MISLEADING and is what should really be fixed: on a real enclave it
+    could report the measurement the runtime knows about instead of the compile-time label, or refuse
+    to answer. Until then, every new caller has to remember this, which is the kind of thing nobody
+    remembers.

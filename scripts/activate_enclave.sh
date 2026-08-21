@@ -24,6 +24,7 @@
 SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh" > /dev/null 2>&1
 source "$SCRIPT_DIR/gov_lib.sh"
+source "$SCRIPT_DIR/enclave_lib.sh"
 
 uid="$1"; shift 2>/dev/null
 no_start=0
@@ -56,7 +57,8 @@ case "$st" in
         exit 1 ;;
 esac
 
-current=$("$qadenabin/qadenad_enclave" -unique-id 2>/dev/null)
+# enclave_measurement, not -unique-id: the latter reports the embedded debug label on SGX.
+current=$(enclave_measurement "$qadenabin/qadenad_enclave")
 newver=$("$staged" -version 2>/dev/null)
 oldver=$("$qadenabin/qadenad_enclave" -version 2>/dev/null)
 echo "  live now : ${current:-unknown} (version $oldver)"
@@ -79,7 +81,7 @@ alive=$(( $(pgrep -cx qadenad) + $(pgrep -cx qadenad_enclave) + $(pgrep -cx sign
 [ "$alive" -ne 0 ] && { echo "  $alive process(es) still running -- refusing to swap"; exit 1 }
 
 cp "$staged" "$qadenabin/qadenad_enclave" || { echo "  copy failed"; exit 1 }
-echo "  live is now $("$qadenabin/qadenad_enclave" -unique-id) (version $("$qadenabin/qadenad_enclave" -version))"
+echo "  live is now $(enclave_measurement "$qadenabin/qadenad_enclave") (version $("$qadenabin/qadenad_enclave" -version))"
 
 if [ $no_start -eq 1 ]; then
     echo "  --no-start: the node is stopped.  Start it with scripts/start_qadena.sh"

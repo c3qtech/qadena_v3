@@ -108,7 +108,10 @@ if [[ -n "$latest_version" ]] ; then
         # success while actually meaning "you rebuilt at a version that is already taken, and nothing
         # happened".  The measurement is what the chain trusts and the version only schedules the
         # handover, so a decision stated in versions alone cannot be checked by the person reading it.
-        main_unique=$("$main_executable" -unique-id 2>/dev/null)
+        # NOT `-unique-id`: on an SGX build that reports the embedded debug label rather than
+        # MRENCLAVE, so the message would name a measurement the chain has never heard of.
+        source "$qadenascripts/enclave_lib.sh" 2>/dev/null
+        main_unique=$(enclave_measurement "$main_executable" 2>/dev/null)
         echo "Main enclave: ${main_unique:-unknown} (version $main_version)"
         
         # Compare versions and upgrade if main version is higher
