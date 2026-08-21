@@ -1921,3 +1921,45 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     which waits for the identity but not for the node to be able to SEE it; a sync-aware wait, or at
     least reporting `catching_up=true` as the reason rather than "not registered, or the chain is not
     reachable", would have made this self-explanatory.
+
+99. **A node that is behind when a measurement is promoted can never trust it, and if every peer
+    upgrades it is stranded permanently.**
+    Hit on SGX2 2026-08-21. Two-node chain; SGX1 upgraded cc3518658a -> 22f4780f while SGX2 was
+    ~28,000 blocks behind. SGX2 can no longer use any peer enclave:
+
+        [SGX1] ss-reconstruct: SERVE OK ... to=A/iVV4U1v9Z/     (467 of them, zero refusals)
+        [SGX2] remote report unverified
+        [SGX2] not enough shares to reconstruct privk
+
+    SGX1 served every share it was asked for. SGX2 DISCARDED all 467, because it verifies the
+    responder's report against its own trusted set and 22f4780f is not in it.
+
+    WHY IT CANNOT RECOVER. Trust in a new measurement normally arrives by executing the promotion
+    block while LIVE (the attested route). A node that is replaying defers trust changes; on going
+    live `reconcileTrustOnGoingLive` only QUEUES the identity for validation; and validation polls
+    peers, where counting an answer requires verifying that peer's report -- which requires already
+    trusting its measurement. With every peer upgraded there is no trusted enclave left to learn
+    from. The circle closes.
+
+    Note the item-92 fix does NOT help here. That changed the RESPONDER (a node now vouches for a
+    measurement governance registered). This is the REQUESTER side, which still authenticates
+    answers against its own trusted set.
+
+    WHY IT USUALLY STAYS HIDDEN: a lagging node replays on its CACHED SS interval keys and never
+    asks a peer for anything -- SGX2 did that for hours at 64 blocks/min. The trap springs only when
+    the cache is gone (here: enclave_secrets wiped in lockstep with enclave_data, as required) or
+    when a key minted after the upgrade is needed.
+
+    OPERATIONAL RULE UNTIL FIXED: every node must be live and caught up when a measurement is
+    promoted. Check `catching_up` on every node before registering; if one is behind, wait for it or
+    deliberately hold one peer on the old measurement until it lands. This is what made the M1-M4
+    rolling upgrade uneventful -- all four were in sync at height 19756 when unique050 was promoted,
+    so all four trusted it before any binary was swapped.
+
+    POSSIBLE FIXES, all trust-model changes and none obviously right:
+      - let a stranded node accept the on-chain attested claim's own report when the chain row is
+        active AND the claim verifies against a measurement named in a governance proposal
+      - allow sync-enclave bootstrap from a peer running a DIFFERENT but chain-active measurement,
+        which today is refused (the seed must run OUR build)
+      - keep the previous measurement trusted for a grace period after an upgrade, so a straggler
+        has a trusted peer to learn from
