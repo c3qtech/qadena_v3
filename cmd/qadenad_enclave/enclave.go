@@ -512,6 +512,65 @@ func findSenderOption(senderOptions []string, option string) bool {
 	return true
 }
 
+// getVoteThreshold is the QUORUM for a peer vote, and is deliberately NOT getThreshold.
+//
+// getThreshold is a SHAMIR threshold: how many shares reconstruct a secret, trading availability
+// against confidentiality.  A vote asks a different question -- how many compromised voters the
+// verdict must survive -- and the two curves disagree in the dangerous direction.  getThreshold(3)
+// is 1, so on the 4-validator fleet ONE peer's "yes" promoted a measurement; and it FLATTENS as the
+// fleet grows (7 voters still only 3), making trust cheaper to forge the larger the network gets.
+// That is backwards for a security threshold, and it is why these must not share a function.
+//
+// Strictly more than half, for both parities: 3 voters -> 2, 4 -> 3, 5 -> 3, 6 -> 4.  An even voter
+// count therefore cannot promote on a tie, and -- because condemnation is gated on the same number
+// -- cannot condemn on one either.  A tie abstains and is retried, which is the only safe reading of
+// a split vote given that `inactive` is permanent.
+// identityVerdict is the outcome of one promotion poll.  Three outcomes, not two: "we could not
+// decide" is a real answer and must not collapse into "no", which is what burned unique049.
+type identityVerdict int
+
+const (
+	verdictAbstain identityVerdict = iota
+	verdictPromote
+	verdictCondemn
+)
+
+func (v identityVerdict) String() string {
+	switch v {
+	case verdictPromote:
+		return "promote"
+	case verdictCondemn:
+		return "condemn"
+	default:
+		return "abstain"
+	}
+}
+
+// decideIdentity is the entire promotion rule, extracted from validateEnclaveIdentities so it can be
+// tested without a network.  It was previously inline among the peer calls and therefore unreachable
+// from any unit test -- for the one decision in this file that hands out (or permanently withholds)
+// the right to receive jar and regulator keys.
+//
+// Both verdicts require their own majority; anything else abstains and is retried.
+func decideIdentity(pioneerCount int, activeCount int, answered int, threshold int) identityVerdict {
+	// Nobody to ask.  The first node of a chain must still be able to promote its successor, and
+	// there is no evidence to gather -- see the SELF-PROMOTING log.
+	if pioneerCount == 0 {
+		return verdictPromote
+	}
+	if activeCount >= threshold {
+		return verdictPromote
+	}
+	if answered-activeCount >= threshold {
+		return verdictCondemn
+	}
+	return verdictAbstain
+}
+
+func getVoteThreshold(voters int) int {
+	return voters/2 + 1
+}
+
 func getThreshold(shareCount int) int {
 	threshold := 1
 	switch shareCount {
@@ -693,6 +752,13 @@ func (s *qadenaServer) fetchShareFrom(ctx context.Context, node string, report [
 // The counts that matter operationally are "LAZY PATH" (should be zero in steady state) and
 // "INSUFFICIENT" (a node that could not gather enough shares -- see backlog item 90).
 const ssTag = "ss-reconstruct: "
+
+// trustTag prefixes every line of the enclave-identity promotion path, so one grep follows a
+// measurement across BOTH sides of the decision -- the asker tallying votes and the peers answering
+// them.  Those halves live in different processes on different machines, and until they shared a tag
+// the only record of a promotion failing was the verdict itself, with nothing saying who voted what
+// or why.
+const trustTag = "enclave-identity: "
 
 // ssReconstructJob is everything a reconstruction needs, RESOLVED IN ADVANCE.
 //
@@ -2833,6 +2899,57 @@ func (s *qadenaServer) getOwnersPage(cursor string, budget int) (page map[string
 	return page, nextCursor, true
 }
 
+// vouchesForIdentity answers "would we vouch for this measurement to a peer polling us".
+//
+// THIS IS THE ONE PLACE THAT DOES NOT ANSWER FROM THE TRUSTED SET ALONE, and the exception is
+// deliberate.  Everywhere else -- verifyRemoteReport gating every peer-facing handler -- the trusted
+// set is the right authority, because the question there is "may this measurement have secrets".
+// Here the question is "is this measurement one the network has AUTHORISED", which is a different
+// question and cannot be answered from the trusted set at all.
+//
+// Answering from the trusted set alone deadlocked the enclave upgrade path (backlog 92).  Trust is
+// gained only by self / attested / quorum / bootstrap / handover, so a measurement NO ENCLAVE IS
+// RUNNING YET is in nobody's set; every peer truthfully answered inactive, the quorum condemned it,
+// and `inactive` is permanent.  A fresh upgrade target could never be promoted on any fleet with a
+// second addressable pioneer.  unique049 died exactly this way on 2026-08-21.
+//
+// The mirrored EnclaveIdentity row breaks the cycle because it is not OUR opinion -- it is the
+// chain's, written by a governance proposal that passed with stake behind it, and every node holds
+// the identical row from consensus.  So each voter reaches the same verdict independently, without
+// asking anyone and without inheriting trust from anyone.
+//
+// WHY READING THE MIRROR IS SAFE HERE, given that enclave_trusted_identities.go treats it as
+// untrusted input: this returns an ANSWER, not a grant.  Nothing is added to our trusted set by
+// saying "yes" -- the asker still needs its own quorum, and the trust it then records is its own
+// verdict.  The asymmetry that matters ("a mirror push may remove trust but never add it") is
+// untouched: SetEnclaveIdentity still refuses to trust a mirrored row.
+//
+// AND NOTE WHAT STILL GATES THE SECRETS.  Promotion does not hand anything to a measurement; it only
+// makes it eligible.  To actually receive a share or a sealed key an enclave must present a remote
+// report proving it IS that measurement (verifyRemoteReport, trusts(..., false)).  So a wrongly
+// promoted identity is inert unless someone can genuinely run that MRENCLAVE -- which is precisely
+// the judgement governance exists to make, and which no attestation can make for it.
+func (s *qadenaServer) vouchesForIdentity(uid string, sid string) (bool, string) {
+	// Our own judgement first: self, or trust we already hold.  Kept ahead of the chain lookup so
+	// that an enclave still vouches for what it knows even if the mirrored row is missing.
+	if s.trusts(uid, sid, true) {
+		return true, "it is our own measurement, or already in our trusted set"
+	}
+
+	found, row := s.getEnclaveIdentityByUniqueID(uid)
+	if !found {
+		return false, "not in our trusted set and no governance record exists on chain for it"
+	}
+	if row.SignerID != sid {
+		return false, "the chain's record for " + uid + " names signerID " + row.SignerID +
+			", not the " + sid + " being asked about"
+	}
+	if row.Status == types.InactiveStatus {
+		return false, "the chain's record says inactive -- it was retired or condemned, and that is permanent"
+	}
+	return true, "governance authorised it on chain (status " + row.Status + ")"
+}
+
 func (s *qadenaServer) QueryEnclaveValidateEnclaveIdentity(goCtx context.Context, in *types.QueryEnclaveValidateEnclaveIdentityRequest) (*types.QueryEnclaveValidateEnclaveIdentityResponse, error) {
 	if s.RealEnclave {
 		c.LoggerDebug(logger, "QueryEnclaveValidateEnclaveIdentity")
@@ -2851,11 +2968,22 @@ func (s *qadenaServer) QueryEnclaveValidateEnclaveIdentity(goCtx context.Context
 		return nil, types.ErrRemoteReportNotVerified
 	}
 
-	found := s.getEnclaveIdentity(in.UniqueID, in.SignerID, true) // get active and unvalidated ones
+	vouches, why := s.vouchesForIdentity(in.UniqueID, in.SignerID)
 
 	status := types.InactiveStatus
-	if found {
+	if vouches {
 		status = types.ActiveStatus
+	}
+
+	// ANSWER AND REASON, ALWAYS LOGGED.  This query is one half of the only mechanism that promotes
+	// a new measurement, and it used to record nothing at all -- from the asker's side a "no" is
+	// indistinguishable from a peer that was never reached, and from this side there was no trace
+	// that we had been asked.
+	if vouches {
+		c.LoggerInfo(logger, trustTag+"ANSWER active for "+in.UniqueID+"/"+in.SignerID+" -- "+why)
+	} else {
+		c.LoggerInfo(logger, trustTag+"ANSWER inactive for "+in.UniqueID+"/"+in.SignerID+" -- "+why+
+			" (we run "+uniqueID+"/"+signerID+")")
 	}
 
 	report, err := s.getRemoteReport(strings.Join([]string{
@@ -6089,7 +6217,22 @@ func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 	// randomize the array
 	pioneers = randomizePioneerIDs(pioneers, s.getPrivateEnclaveParamsPioneerID())
 	c.LoggerDebug(logger, "randomizePioneerIDs "+c.PrettyPrint(pioneers))
-	threshold := getThreshold(len(pioneers))
+	threshold := getVoteThreshold(len(pioneers))
+
+	// THE INPUTS TO THE DECISION, at Info, before any of it is acted on.  A verdict is only
+	// interpretable next to the pioneer count and threshold it was reached against -- the same
+	// measurement is self-promoted at len(pioneers)==0 and condemned at len(pioneers)==4.
+	if len(unvalidated.Identity) > 0 {
+		ids := make([]string, 0, len(unvalidated.Identity))
+		for _, id := range unvalidated.Identity {
+			if id != nil {
+				ids = append(ids, id.UniqueID)
+			}
+		}
+		c.LoggerInfo(logger, trustTag+"validating ["+strings.Join(ids, " ")+"] against "+
+			strconv.Itoa(len(pioneers))+" addressable pioneers, threshold "+strconv.Itoa(threshold)+
+			", broadcast="+strconv.FormatBool(broadcast))
+	}
 
 	// deep copy unvalidated into tmp
 	newUnvalidated := types.EnclaveEnclaveIdentityArray{Identity: make([]*types.EnclaveIdentity, 0)}
@@ -6165,6 +6308,7 @@ func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 				continue
 			}
 			answered++
+			c.LoggerInfo(logger, trustTag+"VOTE "+pioneer+" answered "+res.Status+" for "+identity.UniqueID)
 
 			if res.Status == types.ActiveStatus {
 				activeCount++
@@ -6175,27 +6319,41 @@ func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 			}
 		}
 
-		// ABSTAIN RATHER THAN CONDEMN.  A verdict needs enough answers we could actually verify; if
-		// fewer than the threshold came back verifiable, we have learned nothing about this identity
-		// and must not say otherwise.  Leaving it queued means we try again later, when peers are
-		// reachable or our trusted set has grown.
+		// CONDEMNATION NEEDS A MAJORITY OF ITS OWN, not merely the absence of one.  `inactive` is
+		// broadcast and permanent -- a mirror push may remove trust but never add it -- so the
+		// expensive verdict must be positively voted for, exactly like the cheap one.
 		//
-		// This replaces a blunter guard that skipped validation whenever the trusted set was empty.
-		// That was wrong in both directions: it stopped the FIRST node of a multi-node chain from
-		// ever promoting anything (its set is empty by construction, and one live peer was enough to
-		// trip it), while doing nothing about the real hazard, which is not an empty set but an
-		// unverifiable answer being counted as a rejection.  Deciding here, where the answers
-		// actually arrive, distinguishes "my peers say no" from "I cannot tell what my peers say".
-		if len(pioneers) > 0 && answered < threshold {
-			c.LoggerInfo(logger, "abstaining on "+identity.UniqueID+": only "+strconv.Itoa(answered)+
-				" of "+strconv.Itoa(len(pioneers))+" pioneers gave an answer this enclave could verify (threshold "+
-				strconv.Itoa(threshold)+") -- leaving it unvalidated to retry rather than calling it inactive")
+		// The old rule condemned whenever `activeCount < threshold` and enough answers had arrived,
+		// which made three different situations indistinguishable: peers voting NO, peers unable to
+		// evaluate the question, and a genuine SPLIT.  On an even voter count that last one is a
+		// 2-2 tie, and it burned the measurement forever.  Now each verdict needs its own majority
+		// and anything short of either abstains, staying queued to be retried when peers are
+		// reachable or the evidence has changed.
+		//
+		// This subsumes the previous `answered < threshold` guard: if too few answered, neither
+		// count can reach the threshold and we fall through to the abstain below.
+		refusedCount := answered - activeCount
+		verdict := decideIdentity(len(pioneers), activeCount, answered, threshold)
+		c.LoggerDebug(logger, trustTag+"verdict for "+identity.UniqueID+" is "+verdict.String())
+
+		if verdict == verdictAbstain {
+			c.LoggerInfo(logger, trustTag+"ABSTAINING on "+identity.UniqueID+": "+strconv.Itoa(activeCount)+
+				" active / "+strconv.Itoa(refusedCount)+" refused of "+strconv.Itoa(len(pioneers))+
+				" pioneers (threshold "+strconv.Itoa(threshold)+") -- no majority either way, so it stays "+
+				"unvalidated to retry rather than being permanently marked inactive")
 			continue
 		}
 
-		if len(pioneers) == 0 || activeCount >= threshold {
+		if verdict == verdictPromote {
 			if len(pioneers) == 0 {
-				c.LoggerInfo(logger, "no pioneers (except self), will mark it as valid")
+				// THE ONLY UNATTESTED ROUTE, and it has to stay: the first node of a chain has
+				// nobody to ask and must still be able to promote the next enclave.  Logged as the
+				// exception it is -- on this fleet it is how unique047 and unique048 went active,
+				// back when M1 was the only addressable pioneer, and it closes permanently the
+				// moment a second node proposes a block.
+				c.LoggerInfo(logger, trustTag+"SELF-PROMOTING "+identity.UniqueID+
+					": no addressable pioneers except ourselves, so there is nobody to vouch and we "+
+					"mark it valid on our own authority")
 			} else {
 				c.LoggerInfo(logger, "Active count", activeCount, "threshold", threshold, "total pioneers", len(pioneers))
 			}
@@ -6207,6 +6365,24 @@ func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 			// still hold the judgement we reached, and every other node reaches its own.
 			s.trustEnclaveIdentity(identity, "our own quorum confirmed it")
 		} else {
+			// CONDEMNATION IS THE EXPENSIVE VERDICT, so it says what it counted.  `inactive` is
+			// broadcast to the whole network and a mirror push can never restore trust, so this
+			// branch permanently burns the measurement -- re-registering it by governance will not
+			// undo it.  It used to leave a single Debug line with no tally.
+			c.LoggerError(logger, trustTag+"CONDEMNING "+identity.UniqueID+": "+
+				strconv.Itoa(refusedCount)+" of "+strconv.Itoa(answered)+" verifiable answers refused it, "+
+				"a majority (threshold "+strconv.Itoa(threshold)+" of "+strconv.Itoa(len(pioneers))+
+				" addressable pioneers). This is PERMANENT -- re-registering by governance cannot undo it.")
+			if activeCount == 0 {
+				c.LoggerError(logger, trustTag+"NOBODY VOUCHED FOR "+identity.UniqueID+" -- peers vouch "+
+					"for a measurement they already trust OR one the chain has a governance record for, so "+
+					"zero votes means the peers see NEITHER.  Check that the registration proposal actually "+
+					"PASSED (a submitted proposal that never reached quorum leaves no row, and the "+
+					"submitting transactions all report success anyway -- backlog 93).  If this is an "+
+					"upgrade target it is about to be marked inactive, the old enclave will refuse to hand "+
+					"its sealed keys to it, and that is PERMANENT: governance cannot move an existing row "+
+					"back to unvalidated, so the measurement is spent and a new one must be built.")
+			}
 			// mark as inactive
 			identity.Status = types.InactiveStatus
 			c.LoggerDebug(logger, "enclave identity is INVALID", identity)

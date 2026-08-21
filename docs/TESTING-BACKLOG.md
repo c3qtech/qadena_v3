@@ -1694,3 +1694,69 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     anyway because under SGX a crashed enclave loses its working state and needs restart and
     re-attestation. It also cannot be made complete: OOM is not defensible by any input check, and
     item 80's incident was an enclave OOM death.
+
+92. **A new enclave measurement can never be promoted while any other pioneer is addressable, so
+    the enclave upgrade path deadlocks on a multi-pioneer fleet.**
+    Hit on 2026-08-21 rolling `unique049` onto the 4-validator ARM fleet. The upgrade failed with
+
+        [enclave-old-unique048 - E]: But couldn't find an active enclave identity for uniqueID: unique049
+
+    and by then `unique049` was already `inactive` on chain -- not merely `unvalidated`.
+
+    THE CYCLE. `validateEnclaveIdentities` asks every addressable pioneer, and each peer answers from
+    `QueryEnclaveValidateEnclaveIdentity` -> `getEnclaveIdentity` -> `trusts()`, which reads the
+    TRUSTED SET, not the chain's mirrored `EnclaveIdentity` row. Trust is granted by exactly five
+    routes -- `isSelf`, bootstrap (`enclave.go:3527`), attested-by-a-trusted-enclave (`:3891`), own
+    quorum (`:6208`), and upgrade handover. A measurement NO ENCLAVE IS RUNNING YET satisfies none of
+    them, so every peer truthfully answers `InactiveStatus`. Note `randomizePioneerIDs` removes SELF
+    before the threshold is computed, so on the 4-validator fleet it is `getThreshold(3)` = 1, not 2:
+    `answered=3`, `activeCount=0`, `threshold=1` -- enough answers to clear the abstain guard
+    (`answered < threshold` is false), so it CONDEMNS. Only ONE peer ever needed to vouch, and none
+    could.
+
+    THE ONE NON-CIRCULAR BRANCH IS UNREACHABLE ONCE A SECOND NODE HAS EVER PROPOSED. Promotion can
+    also happen via `len(pioneers) == 0` ("no pioneers (except self), will mark it as valid"), which
+    skips the poll. `getAddressablePioneers` keys off a published `ExternalIPAddress`, written by
+    `updateIsValidator` on a node's first proposed block -- and NEVER cleared: no code path sets a
+    pioneer's address back to `""` (only service providers get that, on deactivate), and
+    `updateIsValidator` is guarded by `!PioneerIsValidator`, which is sealed true permanently. So the
+    branch closes for good the moment a second node proposes, and stopping peers does not reopen it:
+    unreachable peers abstain, they do not become un-addressable. A full fleet rebuild therefore buys
+    exactly ONE promotion -- the window before any second node has ever proposed.
+
+    IT IS NOT RECOVERABLE BY RE-REGISTERING. A mirror push may remove trust but never add it
+    (`enclave_trusted_identities.go`, "HOW TRUST IS LOST"), so a fresh governance proposal setting the
+    identity back to `unvalidated` -- or even to `active` -- restores nothing. `reconcileTrustOnGoingLive`
+    only re-QUEUES such a row for validation, which condemns it again. The measurement is burned.
+
+    WHY IT WAS NEVER SEEN. It has only ever worked through the `len(pioneers)==0` self-promotion
+    branch ("no pioneers (except self), will mark it as valid"). M1's log shows exactly that for both
+    live identities, at 1:00 and 1:01 AM, when M1 was the only addressable pioneer; M2/M3/M4 then
+    inherited that trust by bootstrap. Making M3/M4 validators turned a latent gap into a hard block.
+    `testscripts/test_enclave_upgrade.sh` cannot catch it: it restarts the chain to make promotion
+    reachable in bounded time, and that chain has one addressable pioneer.
+
+    ANY FIX IS A TRUST-MODEL CHANGE AND MUST BE DESIGNED, NOT PATCHED. The honest framing is that
+    quorum cannot answer "should we trust code nobody is running" -- attestation of a measurement is
+    not the same question as whether peers have seen it. Options, none free:
+      - Let governance be a trust anchor: a passed proposal is a human decision with a quorum behind
+        it. Weakens "a mirror push never adds trust", which exists because mirrored rows arrive from
+        an untrusted node -- so it would have to bind to the gov result, not the row.
+      - Let a peer vouch for a measurement it can ATTEST rather than one it already trusts, i.e. have
+        the upgrading node present a remote report from the new enclave. Closest to the SGX model,
+        and useless on debug builds where reports are forgeable.
+      - Accept it and document that upgrades roll from a single addressable pioneer.
+
+    OBSERVABILITY WAS THE REAL FAILURE and is fixed (2026-08-21): the answering side logged NOTHING
+    about its decision, so a condemnation left no record of who voted what. Both sides now log under
+    `enclave-identity: ` -- `ANSWER active/inactive` with its reason on the responder, `VOTE <pioneer>
+    answered <status>` on the asker, the pioneer count and threshold before the decision, and a loud
+    `CONDEMNING` / `NOBODY VOUCHED FOR` naming this exact case. `trusts()` is pinned by
+    characterization tests in `cmd/qadenad_enclave/enclave_trust_promotion_test.go`.
+
+93. **`test_update_enclave_identity.sh` votes only `--from pioneer1` and reports success regardless.**
+    On a balanced fleet pioneer1 holds 25%, below the 33.4% gov quorum, so the proposal expires
+    unpassed while all three transactions (submit, deposit, vote) succeed and the script exits 0.
+    Observed 2026-08-21: registering `unique049` needed a manual second vote from the treasury
+    account to reach quorum. The script should assert the proposal actually PASSED, not that its
+    transactions landed.
