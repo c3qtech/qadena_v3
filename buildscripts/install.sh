@@ -65,8 +65,51 @@ if [[ $install_enclave -eq 0  && $install_signer_enclave -eq 0 && $install_chain
     exit 1
 fi
 
+# INSTALLING A BINARY OVER A RUNNING NODE SILENTLY DOES NOTHING.
+#
+# These were plain `cp`, unchecked.  Copying to qadenad_enclave.<uniqueID> succeeds (a new filename
+# is never busy) while copying to the LIVE qadenad_enclave fails with "Text file busy" -- and with
+# the error discarded, the build prints "Install done" and exits 0 while the node keeps running the
+# OLD binary.  Every other signal says the deploy worked.
+#
+# That cost two separate debugging sessions on 2026-08-21: a staged qadenad_enclave.unique049
+# appeared next to an unchanged live binary, and the mismatch was only found by hashing them.
+#
+# So: stop the node before touching any binary, refuse to continue if it will not stop, and check
+# every copy.  Scripts and test data are NOT binaries and do not require this -- installing those
+# over a running node is fine and is done routinely.
+#
+# THE NODE IS LEFT STOPPED.  Restarting is the caller's decision, because the caller is usually
+# doing something else next -- run.sh performs the enclave upgrade check on the way up, and starting
+# here would race it.
+node_stopped=0
+ensure_stopped_for_binaries() {
+    [[ $node_stopped -eq 1 ]] && return 0
+    echo "Stopping the node before installing binaries (a running binary cannot be replaced)"
+    "$qadenascripts/stop_qadena.sh" --all > /dev/null 2>&1
+    local alive
+    alive=$(( $(pgrep -cx qadenad) + $(pgrep -cx qadenad_enclave) + $(pgrep -cx signer_enclave) ))
+    if [[ $alive -ne 0 ]]; then
+        echo "Error: $alive qadena process(es) still running after stop_qadena.sh --all."
+        echo "       Refusing to install over them -- the copy would fail silently and you would be"
+        echo "       left running the old binary while this script reported success."
+        exit 1
+    fi
+    node_stopped=1
+    echo "Node stopped.  It is NOT restarted by this script -- start it when you are ready."
+}
+
+# install_binary <src> <dst> -- a cp whose failure is fatal.
+install_binary() {
+    if ! cp "$1" "$2"; then
+        echo "Error: failed to install $2 (from $1)"
+        exit 1
+    fi
+}
+
 if [[ $install_enclave -eq 1 ]]; then
     echo "Installing enclave"
+    ensure_stopped_for_binaries
     enclave_path="$qadenabuild/cmd/qadenad_enclave"
     # check if reproducible_build_unique_id.txt exists and $enclave_path/qadenad_enclave
     if [[ -f "$enclave_path/reproducible_build_unique_id.txt" ]]; then
@@ -74,12 +117,13 @@ if [[ $install_enclave -eq 1 ]]; then
     else
         unique_id=$(cat "$enclave_path/test_unique_id.txt")
     fi
-    cp $enclave_path/qadenad_enclave $qadenabin/qadenad_enclave.$unique_id
-    cp $enclave_path/qadenad_enclave $qadenabin/qadenad_enclave
+    install_binary "$enclave_path/qadenad_enclave" "$qadenabin/qadenad_enclave.$unique_id"
+    install_binary "$enclave_path/qadenad_enclave" "$qadenabin/qadenad_enclave"
 fi
 
 if [[ $install_signer_enclave -eq 1 ]]; then
     echo "Installing signer enclave"
+    ensure_stopped_for_binaries
     signer_enclave_path="$qadenabuild/cmd/signer_enclave"
     # check if reproducible_build_unique_id.txt exists and $enclave_path/qadenad_enclave
     if [[ -f "$signer_enclave_path/reproducible_build_unique_id.txt" ]]; then
@@ -87,17 +131,18 @@ if [[ $install_signer_enclave -eq 1 ]]; then
     else
         unique_id=$(cat "$signer_enclave_path/test_unique_id.txt")
     fi
-    cp $signer_enclave_path/signer_enclave $qadenabin/signer_enclave.$unique_id
-    cp $signer_enclave_path/signer_enclave $qadenabin/signer_enclave
+    install_binary "$signer_enclave_path/signer_enclave" "$qadenabin/signer_enclave.$unique_id"
+    install_binary "$signer_enclave_path/signer_enclave" "$qadenabin/signer_enclave"
 fi
 
 if [[ $install_chain -eq 1 ]]; then
     echo "Installing chain"
+    ensure_stopped_for_binaries
     chain_path="$qadenabuild/cmd/qadenad"
     VERSION_FILE="$chain_path/version.txt"
     VERSION=$(cat "$VERSION_FILE")
-    cp $chain_path/qadenad "$qadenabin/qadenad"
-    cp $chain_path/qadenad $qadenabin/qadenad.$VERSION
+    install_binary "$chain_path/qadenad" "$qadenabin/qadenad"
+    install_binary "$chain_path/qadenad" "$qadenabin/qadenad.$VERSION"
     cp $qadenabuild/vendor/github.com/CosmWasm/wasmvm/v2/internal/api/*.so $qadenabin/
 fi
 
