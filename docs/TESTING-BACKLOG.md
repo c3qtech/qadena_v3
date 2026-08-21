@@ -1963,3 +1963,55 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
         which today is refused (the seed must run OUR build)
       - keep the previous measurement trusted for a grace period after an upgrade, so a straggler
         has a trusted peer to learn from
+
+100. **State-sync needs enclave keys the snapshot does not carry, so it works for a joiner or a node
+     with a trusted peer -- and for nothing else.**
+     Measured on SGX2 2026-08-21, three runs.
+
+     THE CHAIN HALF IS FINE. Discovery, App.OfferSnapshot's enclave-aware accept, chunk transfer,
+     app-hash verification and restore at height 102000 all worked, every time. Nothing below is a
+     criticism of state-sync itself.
+
+     WHAT A SNAPSHOT DOES NOT CARRY. The enclave holds private tables nothing on chain encodes, and
+     rebuilding them is not a copy: SeedStorePage calls the real SetProtectKey/SetRecoverKey, which
+     DECRYPT a VShare using the SS interval private key that was current WHEN THAT ROW WAS CREATED.
+     So seeding needs historical interval keys, one per row's era.
+
+     WHY A NODE'S CACHE IS THE WRONG SHAPE. Replay walks forward and needs only the key current at
+     each block. Seeding applies EVERY row at once, each bound to its own era's key. A node's cache
+     therefore covers the blocks it WALKED, not the rows the snapshot HOLDS. The two coincide only
+     for a node that was present for all of history.
+
+     MEASURED, with everything else held constant:
+       enclave_secrets wiped  -> 467 rows rejected
+       enclave_secrets kept   ->  77 rows rejected (62 ProtectKey + 15 RecoverKey)
+     i.e. the cache covered 83%, and the residue was exactly the rows created during the ~29,000
+     blocks the node was behind. A third run with every config value read back and verified before
+     start produced 77 again, so configuration was never a factor.
+
+     For the residue it must fetch shares from a peer, which requires TRUSTING that peer's enclave.
+     SGX1 served every request (467 "ss-reconstruct: SERVE OK", zero refusals); SGX2 discarded all of
+     them because SGX1 had upgraded to a measurement absent from SGX2's sealed trusted set (item 99).
+
+     SO STATE-SYNC HAS THREE SHAPES AND ONLY TWO EXIST:
+       fresh joiner            no cache, no trust -- but sync-enclave bootstraps trust from a seed
+                               running its OWN measurement.  This is why add_full_node.sh works: it
+                               wipes enclave_config, so the enclave is a fresh build matching the seed.
+       trusted peer available  fetches whatever the cache lacks.  The normal case.
+       stale identity, no      neither route.  Created here by upgrading the node's only peer.
+       trusted peer
+
+     WHAT TO BUILD, in increasing order of ambition:
+       - PRE-FLIGHT CHECK, cheap and worth doing regardless: before enabling state-sync, verify the
+         node can authenticate at least one peer's enclave measurement. If it cannot, seeding WILL
+         fail -- say so before downloading and restoring a snapshot, not after. The failure currently
+         arrives as "Encryption generic error" on a ProtectKey row, which names neither cause.
+       - PREFER THE NEAREST SNAPSHOT, not the highest. CometBFT offers the newest first; the smaller
+         the gap between the node's current height and the snapshot, the more of the seeding its
+         existing cache covers. A node a few thousand blocks behind would likely seed cleanly.
+       - LET SEEDING DEFER WHAT IT CANNOT DECRYPT. Today one undecryptable row halts the node. If
+         ProtectKey/RecoverKey rows whose era-key is unavailable could be recorded as pending and
+         resolved once trust or the key arrives, a node could state-sync now and complete later --
+         PROVIDED the pending set is genuinely inert, which needs care: half-seeded private tables
+         are exactly the silent-fork hazard OfferSnapshot exists to prevent.
+       - FIX THE STRANDING (item 99), which removes the trust half of the problem entirely.
