@@ -32,7 +32,7 @@ echo "proposal $id: $st"
 # reading the wrong one printed "message: null" for a perfectly well-formed proposal.
 qq q gov proposal "$id" -o json 2>/dev/null | jq -r '
   (.proposal.messages[0] // .messages[0]) as $m
-  | ($m.type // $m["@type"] // "unknown") as $t
+  | ($m.type // $m["@type"] // "(none -- text proposal)") as $t
   | ($m.value // $m) as $v
   | "  message: \($t)" + (if $v.uniqueID then "\n  identity: \($v.uniqueID) / \($v.signerID) -> \($v.status)" else "" end)'
 

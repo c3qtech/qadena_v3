@@ -115,23 +115,34 @@ gov_wait_proposal() {
 
 # Submit a transaction and fail loudly on a non-zero code.  `qadenad tx` exits 0 for a transaction
 # that was ACCEPTED, which is not the same as one that SUCCEEDED.
+# PROGRESS GOES TO STDERR, THE HASH GOES TO STDOUT.
+#
+# Both used to go to stdout, so any caller that captured the hash also swallowed the progress line
+# -- and a caller that wanted the progress had to discard the hash.  gov_vote.sh did the latter and
+# printed nothing at all per vote.
 gov_tx() {
     local desc="$1"; shift
     local out hash code
     out=$(qq "$@" -y --output json --gas-prices "$minimum_gas_prices" --gas auto --gas-adjustment "$gas_adjustment" 2>&1)
-    hash=$(echo "$out" | jq -r '.txhash // empty' 2>/dev/null)
+    # EXTRACT THE HASH, DO NOT PARSE THE WHOLE STREAM AS JSON.  `qadenad tx` prints a human line
+    # ("gas estimate: 88012") before the JSON object, so `jq -r .txhash` over the combined output
+    # fails with "Invalid numeric literal" -- and the transaction has ALREADY BEEN BROADCAST by
+    # then, so the caller reports a failure for a vote that in fact landed.  Observed twice.
+    hash=$(echo "$out" | sed -n 's/.*"txhash":"\([0-9A-Fa-f]*\)".*/\1/p' | head -1)
     if [ -z "$hash" ]; then
-        echo "  $desc: no txhash returned"
-        echo "$out" | tail -3 | sed 's/^/    /'
+        echo "  $desc: no txhash returned" >&2
+        echo "$out" | tail -3 | sed 's/^/    /' >&2
         return 1
     fi
     qq q wait-tx "$hash" --timeout 60s > /dev/null 2>&1
+    # `qadenad tx` exits 0 for a transaction that was ACCEPTED, which is not the same as one that
+    # SUCCEEDED -- the result code only exists once it is in a block.
     code=$(qq q tx "$hash" -o json 2>/dev/null | jq -r '.code // 0')
     if [ "$code" != "0" ]; then
-        echo "  $desc: tx $hash failed with code $code"
-        qq q tx "$hash" -o json 2>/dev/null | jq -r '.raw_log' | head -3 | sed 's/^/    /'
+        echo "  $desc: FAILED with code $code (tx $hash)" >&2
+        qq q tx "$hash" -o json 2>/dev/null | jq -r '.raw_log' | head -3 | sed 's/^/    /' >&2
         return 1
     fi
-    echo "  $desc: $hash"
+    echo "  $desc: ok ($hash)" >&2
     printf "%s" "$hash"
 }

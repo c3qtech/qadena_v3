@@ -29,13 +29,20 @@ for name in "$@"; do
 done
 
 echo
-"$SCRIPT_DIR/gov_proposal_status.sh" "$id"
-rc=$?
+# Informational: the proposal will usually still be in its voting period here.  The exit code
+# reflects whether the VOTES landed, not whether the proposal has passed -- a vote that succeeded on
+# a proposal still being voted on is not a failure, and treating it as one made this script unusable
+# in a pipeline.
+"$SCRIPT_DIR/gov_proposal_status.sh" "$id" || true
 
 if [ $reachable -ne 0 ]; then
     echo
     echo "NOTE: the accounts voted here do not by themselves reach quorum.  The proposal will"
     echo "      expire unless other stake votes as well."
 fi
-[ $failed -eq 0 ] || exit 1
-exit $rc
+if [ $failed -ne 0 ]; then
+    echo
+    echo "at least one vote FAILED -- see above"
+    exit 1
+fi
+exit 0
