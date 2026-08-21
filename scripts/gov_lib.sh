@@ -33,7 +33,13 @@ local_operator() {
     printf "%s" "$id"
 }
 
-gov_param() { qq q gov params -o json 2>/dev/null | jq -r "$1" }
+# ALWAYS --output json, NEVER -o json.
+#
+# `-o` is accepted by most query subcommands but NOT by all of them: `keys list` and `q account`
+# reject it with "unknown shorthand flag: 'o'" and write nothing to stdout.  Both failures look like
+# an empty result rather than an error -- an empty key list, and a missing account_number that then
+# fails offline signing with a confusing strconv error several steps later.
+gov_param() { qq q gov params --output json 2>/dev/null | jq -r "$1" }
 
 # total bonded stake, and the stake a given account can actually swing.
 #
@@ -55,13 +61,13 @@ sum_lines() {
 }
 
 bonded_total() {
-    qq q staking validators -o json 2>/dev/null \
+    qq q staking validators --output json 2>/dev/null \
       | jq -r '.validators[] | select(.status=="BOND_STATUS_BONDED") | .tokens' 2>/dev/null \
       | sum_lines
 }
 
 voter_power() {
-    qq q staking delegations "$1" -o json 2>/dev/null \
+    qq q staking delegations "$1" --output json 2>/dev/null \
       | jq -r '.delegation_responses[]?.balance.amount' 2>/dev/null \
       | sum_lines
 }
@@ -96,12 +102,12 @@ account_power() {
     v=$(qq keys show "$name" --bech val -a 2>/dev/null)
     valtok=0
     if [ -n "$v" ]; then
-        valtok=$(qq q staking validator "$v" -o json 2>/dev/null | jq -r '.validator.tokens // .tokens // empty')
+        valtok=$(qq q staking validator "$v" --output json 2>/dev/null | jq -r '.validator.tokens // .tokens // empty')
         [ -z "$valtok" ] && valtok=0
     fi
     if [ "$valtok" != "0" ]; then
         # Our self-delegation is already inside valtok; delegations to OTHER validators add on top.
-        selfd=$(qq q staking delegation "$a" "$v" -o json 2>/dev/null \
+        selfd=$(qq q staking delegation "$a" "$v" --output json 2>/dev/null \
                 | jq -r '.delegation_response.balance.amount // .balance.amount // 0')
         [ -z "$selfd" ] && selfd=0
         othr=$(echo "$own - $selfd" | bc)
@@ -125,7 +131,7 @@ pct() {
 # missing key produces instructions instead of a signing error midway through a multi-account run.
 have_key() { qq keys show "$1" -a > /dev/null 2>&1 }
 
-# Note: `keys list -o json` is NOT valid (cosmos wants --output json); -o is parsed as a shorthand
+# Note: `keys list --output json` is NOT valid (cosmos wants --output json); -o is parsed as a shorthand
 # flag and the command fails, which silently produced an empty key list here more than once.
 list_keys() { qq keys list --output json 2>/dev/null | jq -r '.[].name' 2>/dev/null }
 
@@ -209,7 +215,7 @@ gov_can_reach_quorum() {
 gov_wait_proposal() {
     local id="$1" secs="${2:-420}" st prev="" waited=0
     while [ $waited -lt $secs ]; do
-        st=$(qq q gov proposal "$id" -o json 2>/dev/null | jq -r '.proposal.status // empty')
+        st=$(qq q gov proposal "$id" --output json 2>/dev/null | jq -r '.proposal.status // empty')
         [ -z "$st" ] && st="(not found)"
         if [ "$st" != "$prev" ]; then
             printf "  %s  proposal %s: %s\n" "$(date +%H:%M:%S)" "$id" "$st"
@@ -253,10 +259,10 @@ gov_tx() {
     qq q wait-tx "$hash" --timeout 60s > /dev/null 2>&1
     # `qadenad tx` exits 0 for a transaction that was ACCEPTED, which is not the same as one that
     # SUCCEEDED -- the result code only exists once it is in a block.
-    code=$(qq q tx "$hash" -o json 2>/dev/null | jq -r '.code // 0')
+    code=$(qq q tx "$hash" --output json 2>/dev/null | jq -r '.code // 0')
     if [ "$code" != "0" ]; then
         echo "  $desc: FAILED with code $code (tx $hash)" >&2
-        qq q tx "$hash" -o json 2>/dev/null | jq -r '.raw_log' | head -3 | sed 's/^/    /' >&2
+        qq q tx "$hash" --output json 2>/dev/null | jq -r '.raw_log' | head -3 | sed 's/^/    /' >&2
         return 1
     fi
     echo "  $desc: ok ($hash)" >&2

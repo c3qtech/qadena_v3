@@ -39,7 +39,7 @@ fi
 staged="$qadenabin/qadenad_enclave.$uid"
 [ -x "$staged" ] || { echo "no staged binary at $staged"; exit 1 }
 
-st=$(qq q qadena show-enclave-identity "$uid" -o json 2>/dev/null | jq -r '.enclaveIdentity.status // empty')
+st=$(qq q qadena show-enclave-identity "$uid" --output json 2>/dev/null | jq -r '.enclaveIdentity.status // empty')
 case "$st" in
     active) echo "$uid is active on chain -- proceeding" ;;
     unvalidated)

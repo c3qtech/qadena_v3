@@ -126,7 +126,7 @@ echo "=========================================="
 echo "enclave identities registered on chain"
 echo "=========================================="
 
-rows=$(qadenad_alias q qadena list-enclave-identity -o json 2>/dev/null \
+rows=$(qadenad_alias q qadena list-enclave-identity --output json 2>/dev/null \
         | jq -r '.enclaveIdentity[] | "\(.uniqueID)\t\(.signerID)\t\(.status)"' 2>/dev/null)
 
 if [ -z "$rows" ]; then

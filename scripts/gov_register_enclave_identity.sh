@@ -52,7 +52,7 @@ fi
 
 echo "registering $uniqueid / $signerid"
 
-existing=$(qq q qadena show-enclave-identity "$uniqueid" -o json 2>/dev/null | jq -r '.enclaveIdentity.status // empty')
+existing=$(qq q qadena show-enclave-identity "$uniqueid" --output json 2>/dev/null | jq -r '.enclaveIdentity.status // empty')
 if [ -n "$existing" ]; then
     echo "  $uniqueid is ALREADY registered with status '$existing'."
     case "$existing" in
@@ -93,7 +93,7 @@ jq --arg u "$uniqueid" --arg s "$signerid" --arg st "unvalidated" \
 
 echo "  submitting..."
 hash=$(gov_tx "submit" tx gov submit-proposal "$gen" --from "${voters[1]}" | tail -1) || exit 1
-id=$(qq q tx "$hash" -o json 2>/dev/null \
+id=$(qq q tx "$hash" --output json 2>/dev/null \
      | jq -r '.events[] | select(.type=="submit_proposal") | .attributes[] | select(.key=="proposal_id") | .value' | head -1)
 rm -f "$gen"
 [ -z "$id" ] && { echo "  could not determine the proposal id from $hash"; exit 1 }
@@ -123,7 +123,7 @@ gov_wait_proposal "$id" 420 || exit 1
 
 echo "  waiting for the peer quorum to promote $uniqueid..."
 for i in {1..60}; do
-    st=$(qq q qadena show-enclave-identity "$uniqueid" -o json 2>/dev/null | jq -r '.enclaveIdentity.status // empty')
+    st=$(qq q qadena show-enclave-identity "$uniqueid" --output json 2>/dev/null | jq -r '.enclaveIdentity.status // empty')
     case "$st" in
         active)   echo "  $uniqueid is ACTIVE -- safe to build and restart"; exit 0 ;;
         inactive) echo "  $uniqueid was CONDEMNED by the peer quorum.  It is spent; build a new"

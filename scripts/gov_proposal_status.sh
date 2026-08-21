@@ -17,20 +17,20 @@ id="$1"
 
 if [ -z "$id" ]; then
     echo "proposals in a voting period:"
-    qq q gov proposals --status voting_period -o json 2>/dev/null \
+    qq q gov proposals --status voting_period --output json 2>/dev/null \
       | jq -r '.proposals[]? | "  \(.id)  \(.title // .messages[0]["@type"])"' 2>/dev/null \
       || echo "  (none, or the query failed)"
     exit 0
 fi
 
-st=$(qq q gov proposal "$id" -o json 2>/dev/null | jq -r '.proposal.status // empty')
+st=$(qq q gov proposal "$id" --output json 2>/dev/null | jq -r '.proposal.status // empty')
 [ -z "$st" ] && { echo "proposal $id not found"; exit 1 }
 
 echo "proposal $id: $st"
 
 # The message is wrapped as {type, value} here, not the {"@type", ...} form jq examples assume --
 # reading the wrong one printed "message: null" for a perfectly well-formed proposal.
-qq q gov proposal "$id" -o json 2>/dev/null | jq -r '
+qq q gov proposal "$id" --output json 2>/dev/null | jq -r '
   (.proposal.messages[0] // .messages[0]) as $m
   | ($m.type // $m["@type"] // "(none -- text proposal)") as $t
   | ($m.value // $m) as $v
@@ -41,8 +41,8 @@ total=$(bonded_total)
 # Tally as TEXT summed through bc.  $(( )) is 64-bit and these are ~1e25, so zsh reported
 # "number truncated after 19 digits" and then printed a turnout of 0.00% and a yes-share of
 # 1000000000.00% -- numbers wrong enough to be obvious only if you happen to look.
-tally=$(qq q gov tally "$id" -o json 2>/dev/null | jq -c '.tally // empty')
-[ -z "$tally" ] && tally=$(qq q gov proposal "$id" -o json 2>/dev/null | jq -c '.proposal.final_tally_result // empty')
+tally=$(qq q gov tally "$id" --output json 2>/dev/null | jq -c '.tally // empty')
+[ -z "$tally" ] && tally=$(qq q gov proposal "$id" --output json 2>/dev/null | jq -c '.proposal.final_tally_result // empty')
 
 yes=$(echo "$tally"     | jq -r '.yes_count // "0"')
 no=$(echo "$tally"      | jq -r '.no_count // "0"')
