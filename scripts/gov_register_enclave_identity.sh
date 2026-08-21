@@ -6,7 +6,13 @@
 #   gov_register_enclave_identity.sh <uniqueID> <signerID> [voter ...]
 #   gov_register_enclave_identity.sh --dry-run <uniqueID> <signerID> [voter ...]
 #
-# Voters default to the accounts in $gov_default_voters, else "treasury pioneer1".
+# Run by ONE operator, on their own node.  Voters default to this node's operator
+# (config/node_params.json pioneer_id); name more accounts only if this node holds their keys.
+#
+# ONE OPERATOR NORMALLY CANNOT PASS IT ALONE, and that is not an error.  Voting power follows the
+# DELEGATOR, so an operator typically controls a fraction of a percent even while running a
+# validator holding 25%.  When the submitter cannot reach quorum this prints the exact command the
+# other operators must run on THEIR nodes and exits 0 -- the proposal is live and waiting for them.
 #
 # THIS IS THE STEP THAT MUST HAPPEN BEFORE YOU BUILD.  build.sh installs the new binary as the live
 # one and stops the node to do it; if the measurement is not ACTIVE by then, the old enclave refuses
@@ -36,7 +42,7 @@ done
 
 uniqueid="$1"; signerid="$2"; shift 2 2>/dev/null
 voters=("$@")
-[ ${#voters[@]} -eq 0 ] && voters=(${=gov_default_voters:-treasury pioneer1})
+[ ${#voters[@]} -eq 0 ] && voters=(${=gov_default_voters:-$(local_operator)})
 
 if [ -z "$uniqueid" ] || [ -z "$signerid" ]; then
     echo "Usage: gov_register_enclave_identity.sh [--dry-run] [--force] <uniqueID> <signerID> [voter ...]"
@@ -57,15 +63,17 @@ if [ -n "$existing" ]; then
     esac
 fi
 
-echo "  voters:"
+if ! require_keys "${voters[@]}"; then
+    exit 1
+fi
+
+echo "  voters (on this node):"
 gov_can_reach_quorum "${voters[@]}"
 reachable=$?
 if [ $reachable -ne 0 ]; then
     echo
-    echo "  These voters cannot reach quorum.  The proposal would EXPIRE, not fail, while every"
-    echo "  transaction reported success -- which is why this refuses up front."
-    echo "  Add accounts, or re-run with --force if you intend to gather votes separately."
-    [ $force -eq 0 ] && exit 1
+    echo "  This node cannot pass the proposal alone -- normal when several operators must vote."
+    echo "  It will be submitted and voted; the other operators then run it on their own nodes."
 fi
 
 if [ $dry_run -eq 1 ]; then
@@ -94,6 +102,20 @@ gov_tx "deposit" tx gov deposit "$id" 1000qdn --from "${voters[1]}" > /dev/null 
 for v in "${voters[@]}"; do
     gov_tx "vote from $v" tx gov vote "$id" yes --from "$v" > /dev/null || exit 1
 done
+
+if [ $reachable -ne 0 ]; then
+    # Do NOT block on a quorum this node cannot produce: waiting would time out and report failure
+    # for a proposal that is perfectly healthy and simply needs other operators to vote.
+    echo
+    echo "  proposal $id is live and voted by ${voters[*]} ($(pct "$(voter_power "$(addr_of "${voters[1]}")")" "$(bonded_total)")%)."
+    echo "  Ask every other operator to run, ON THEIR OWN NODE:"
+    echo "      scripts/gov_vote.sh $id yes"
+    echo
+    echo "  Watch it with:   scripts/gov_proposal_status.sh $id"
+    echo "  Once it passes, $uniqueid still has to be promoted by the peer quorum; check with:"
+    echo "      scripts/enclave_identities.sh"
+    exit 0
+fi
 
 echo "  waiting for the proposal..."
 gov_wait_proposal "$id" 420 || exit 1

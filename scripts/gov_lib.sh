@@ -19,6 +19,20 @@
 # scripts that had sourced it successfully.
 qq() { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
+# THIS NODE'S OWN OPERATOR KEY.
+#
+# Governance is a multi-operator activity and these scripts run on the operator's OWN node, so the
+# sensible default voter is this node's identity -- not a list of accounts that only exists on a
+# test fleet where one machine holds everyone's keys.  $QADENAHOME/config/node_params.json is what
+# the node itself uses to know which pioneer it is.
+local_operator() {
+    local f="$QADENAHOME/config/node_params.json" id=""
+    [ -r "$f" ] && id=$(jq -r '.pioneer_id // empty' "$f" 2>/dev/null)
+    # Fall back to the moniker, which is normally the same name.
+    [ -z "$id" ] && id=$(grep -a '^moniker' "$QADENAHOME/config/config.toml" 2>/dev/null | sed -e 's/.*= *["'"'"']\([^"'"'"']*\)["'"'"'].*/\1/')
+    printf "%s" "$id"
+}
+
 gov_param() { qq q gov params -o json 2>/dev/null | jq -r "$1" }
 
 # total bonded stake, and the stake a given account can actually swing.
@@ -56,6 +70,51 @@ voter_power() {
 pct() {
     [ -z "$1" ] || [ -z "$2" ] || [ "$2" = "0" ] && { echo 0; return }
     echo "scale=4; $1 * 100 / $2" | bc 2>/dev/null || echo 0
+}
+
+# DOES THIS NODE ACTUALLY HOLD THE KEY?
+#
+# A governance vote is signed locally, so the account must exist in THIS node's keyring -- being the
+# operator of a validator does not put a key on the box.  Checked BEFORE anything is broadcast, so a
+# missing key produces instructions instead of a signing error midway through a multi-account run.
+have_key() { qq keys show "$1" -a > /dev/null 2>&1 }
+
+# Note: `keys list -o json` is NOT valid (cosmos wants --output json); -o is parsed as a shorthand
+# flag and the command fails, which silently produced an empty key list here more than once.
+list_keys() { qq keys list --output json 2>/dev/null | jq -r '.[].name' 2>/dev/null }
+
+explain_missing_key() {
+    local name="$1" backend
+    # client.toml quotes with either " or ' depending on how it was written; matching only one
+    # left the whole line in place of the value.
+    backend=$(grep -a 'keyring-backend' "$QADENAHOME/config/client.toml" 2>/dev/null | sed -e 's/.*= *["'"'"']\([^"'"'"']*\)["'"'"'].*/\1/')
+    echo "  '$name' is NOT in this node's keyring (backend: ${backend:-unknown})."
+    echo
+    echo "  A vote is signed locally, so the key has to be on THIS machine.  Add it with one of:"
+    echo "      $qadenabin/qadenad --home $QADENAHOME keys add $name --recover"
+    echo "          then paste the mnemonic when prompted"
+    echo "      $qadenabin/qadenad --home $QADENAHOME keys add $name --ledger"
+    echo "          for a hardware wallet"
+    echo "      $qadenabin/qadenad --home $QADENAHOME keys import $name <armored-file>"
+    echo "          for a backup exported with 'keys export'"
+    echo
+    echo "  Then confirm with:"
+    echo "      $qadenabin/qadenad --home $QADENAHOME keys show $name -a"
+    local have
+    have=$(list_keys | tr '\n' ' ')
+    [ -n "$have" ] && echo "  keys this node currently holds: $have"
+}
+
+# require_keys <name...> -- 0 only if every name is present locally.
+require_keys() {
+    local name missing=0
+    for name in "$@"; do
+        if ! have_key "$name"; then
+            explain_missing_key "$name"
+            missing=1
+        fi
+    done
+    return $missing
 }
 
 addr_of() { qq keys show "$1" -a 2>/dev/null }
