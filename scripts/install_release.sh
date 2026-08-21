@@ -415,6 +415,7 @@ fi
 # signer, inactive with no --wait-active -- never takes the node down for nothing.
 needs_stop=0
 stop_reason=""
+stage_only=0
 if [[ -n "$(echo "$stage"/bin/*(N))" ]]; then
     needs_stop=1; stop_reason="the packaged binaries are in use (ETXTBSY)"
 elif [[ -d "$stage/scripts" ]]; then
@@ -431,6 +432,13 @@ elif [[ $node_running -eq 1 ]]; then
         echo "=== 4. leaving the node running ==="
         echo "  the cutover cannot happen yet, so nothing that is in use will be written."
         echo "  Only the new enclave is staged alongside; the running node is untouched."
+        # AND THE INSTALL STEP HAS TO HONOUR THAT.  It used to print this and then install
+        # everything anyway, dying on `cp: cannot create regular file .../qadenad: Text file busy`
+        # -- a confusing ETXTBSY several screens after a message promising the opposite.  Staging
+        # the measurement-named copies is safe on a running node (a new filename is never busy);
+        # writing the live names is not, and neither is rewriting scripts/ while run.sh executes
+        # out of it by byte offset.
+        stage_only=1
     else
         echo ""
         echo "=== 4. stopping the node ==="
@@ -509,8 +517,12 @@ for f in "$stage"/bin/*(N); do
         signer_enclave)
             m=$(read_unique "$f")
             install_versioned "$f" "$qadenabin/signer_enclave.$m" "signer_enclave"
-            install_file "$f" "$qadenabin/signer_enclave"
-            echo "  installed signer_enclave ($m)"
+            if [[ $stage_only -eq 1 ]]; then
+                echo "  staged   signer_enclave.$m (live copy left alone -- node is running)"
+            else
+                install_file "$f" "$qadenabin/signer_enclave"
+                echo "  installed signer_enclave ($m)"
+            fi
             ;;
         qadenad)
             # cobra wants the `version` SUBCOMMAND, not -version, and qadenad links libwasmvm at load
@@ -519,12 +531,22 @@ for f in "$stage"/bin/*(N); do
             [[ -n "$v" ]] || v="$(mval qadenad.version)"
             [[ -n "$v" ]] || v="unknown"
             install_versioned "$f" "$qadenabin/qadenad.$v" "qadenad"
-            install_file "$f" "$qadenabin/qadenad"
-            echo "  installed qadenad ($v)"
+            if [[ $stage_only -eq 1 ]]; then
+                echo "  staged   qadenad.$v (live copy left alone -- node is running)"
+            else
+                install_file "$f" "$qadenabin/qadenad"
+                echo "  installed qadenad ($v)"
+            fi
             ;;
         libwasmvm*.so)
-            install_file "$f" "$qadenabin/$name"
-            echo "  installed $name"
+            # Loaded at process start and held open for the life of the node, so replacing it under
+            # a running qadenad is the same hazard as the binary itself.
+            if [[ $stage_only -eq 1 ]]; then
+                echo "  skipped  $name (node is running)"
+            else
+                install_file "$f" "$qadenabin/$name"
+                echo "  installed $name"
+            fi
             ;;
     esac
 done
@@ -561,7 +583,9 @@ if grep -q '^update.since:' "$stage/manifest.txt" 2>/dev/null; then
     is_delta=1
 fi
 
-if [[ -d "$stage/scripts" ]]; then
+if [[ -d "$stage/scripts" && $stage_only -eq 1 ]]; then
+    echo "  skipped  scripts/ (node is running; run.sh re-reads its own script by byte offset)"
+elif [[ -d "$stage/scripts" ]]; then
     changed=0
     for f in "$stage"/scripts/*(N); do
         dest="$QADENAHOME/scripts/$(basename "$f")"

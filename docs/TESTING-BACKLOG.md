@@ -1892,3 +1892,32 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
         script. Anything that shells out during a reproducible build can do this. Worth checking
         whether the builder needs to be privileged, or whether `/dev/sgx` alone is enough.
       - `stop_qadena.sh` could refuse to run when it detects it is inside a container.
+
+98. **`install_release.sh` promised not to touch a running node, then touched it.**
+    When the enclave identity is not yet active it deliberately declines the cutover and prints
+
+        === 4. leaving the node running ===
+          the cutover cannot happen yet, so nothing that is in use will be written.
+          Only the new enclave is staged alongside; the running node is untouched.
+
+    and then step 5 installed everything anyway, dying on
+
+        cp: cannot create regular file '/home/alvillarica/qadena/bin/qadenad': Text file busy
+
+    Observed on SGX2 2026-08-21. The ETXTBSY arrives several screens after a message promising the
+    opposite, so it reads as a mysterious permissions problem rather than the script contradicting
+    itself. Fixed with a `stage_only` flag honoured by the binary, library and scripts installs: the
+    measurement- and version-named copies are still written (a new filename is never busy), the live
+    names and `scripts/` are not.
+
+    WHY IT WENT UNNOTICED: the branch only runs when a node is ALREADY installed, RUNNING, and the
+    packaged identity is not yet active on the chain that node can see. On a fresh install or a
+    stopped node it never fires.
+
+    THE UNDERLYING CONDITION IS WORTH KNOWING, because it is not an error: SGX2's local state was at
+    height 71208 while the identity had been registered at ~99781, so the identity genuinely did not
+    exist in the state it could see. A catching-up node cannot verify a recent registration, and at
+    ~93 blocks/minute it needed ~5 hours before it could. `install_release.sh` has `--wait-active`,
+    which waits for the identity but not for the node to be able to SEE it; a sync-aware wait, or at
+    least reporting `catching_up=true` as the reason rather than "not registered, or the chain is not
+    reachable", would have made this self-explanatory.
