@@ -2015,3 +2015,27 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
          PROVIDED the pending set is genuinely inert, which needs care: half-seeded private tables
          are exactly the silent-fork hazard OfferSnapshot exists to prevent.
        - FIX THE STRANDING (item 99), which removes the trust half of the problem entirely.
+
+101. **`test_enclave_rollback.sh`'s networked branch asserts against a variable that is never set.**
+     Line 239 compares `"$bal_now" = "$bal_after"`, and `bal_after` is assigned NOWHERE in the
+     script -- only `bal_before` (129) and `bal_now` (215) exist. So the branch can only ever fail:
+
+         FAIL(test_enclave_rollback): re-sync did not restore the transaction: expected , got 899999997352269658972280
+
+     Note the empty "expected". Observed on the 4-validator ARM fleet 2026-08-21.
+
+     WHY IT SURVIVED: the branch runs only when the node HAS PEERS. On a solo chain the other branch
+     runs, and that one is complete and correct -- it checks the enclave store hashes reverted, which
+     is the assertion the whole test exists for. So the suite passes everywhere it is usually run and
+     fails only on a fleet, where the failure reads as a product bug rather than a test bug.
+
+     THE FIX IS NOT JUST ADDING THE ASSIGNMENT. The intent (from the comment at 238: "the peers still
+     hold the block, so we must have re-synced INTO it") is that after re-sync the balance equals its
+     post-transaction value. That snapshot has to be taken between the transaction landing and the
+     rollback, and getting the point wrong turns a never-passing assertion into a wrongly-passing
+     one, which is worse. Whoever fixes it should also assert the enclave side on this branch --
+     re-syncing the CHAIN back into the block says nothing about whether the ENCLAVE followed.
+
+     `run_regression_continually.sh` now auto-skips this test when the node has peers. That is a
+     STOPGAP so the loop stops reporting a red suite, not a fix: while it is skipped, the networked
+     rollback path is untested on the only topology it exists for.

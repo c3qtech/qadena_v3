@@ -13,7 +13,7 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
-	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
+	ethsecp256k1 "github.com/cosmos/evm/crypto/ethsecp256k1"
 	"github.com/hashicorp/vault/shamir"
 	"github.com/spf13/cobra"
 )
@@ -45,7 +45,18 @@ func CmdShowRecoverKey() *cobra.Command {
 			if len(privBytes) != 32 {
 				return fmt.Errorf("unexpected private key length: got %d, want 32", len(privBytes))
 			}
-			privKey := secp256k1.PrivKey{Key: privBytes}
+			// eth_secp256k1, NOT cosmos secp256k1 -- THE TWO HALVES MUST AGREE.
+			//
+			// The keeper verifies this signature with evmsecp256k1 (query_recover_key.go), which
+			// keccak256-hashes the message; cosmos secp256k1 signs a SHA-256 digest and produces a
+			// bare 64-byte [R||S].  Signing here with the wrong one produces a signature the chain
+			// rejects as "invalid timestamp signature", and the caller sees no seed phrase released
+			// rather than a signing error -- the failure surfaces a whole request later, on the
+			// server, in a different process.
+			//
+			// This chain's keys ARE eth_secp256k1 (crypto/keyring/options.go), so the private key
+			// bytes are the same 32 either way; only the hash and encoding differ.
+			privKey := ethsecp256k1.PrivKey{Key: privBytes}
 			sig, err := privKey.Sign(tsBytes)
 			if err != nil {
 				return fmt.Errorf("failed to sign timestamp: %w", err)
