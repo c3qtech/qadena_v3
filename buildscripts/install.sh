@@ -103,6 +103,22 @@ fi
 node_stopped=0
 ensure_stopped_for_binaries() {
     [[ $node_stopped -eq 1 ]] && return 0
+
+    # NEVER INSIDE THE BUILD CONTAINER.  build.sh re-invokes itself with DOCKER_BUILD=1 for the SGX
+    # reproducible build, and that inner invocation does not carry --hold.  A build container has no
+    # node to stop -- but the SGX builder is privileged and bind-mounts $QADENAHOME (it needs
+    # /dev/sgx), so stop_qadena.sh reached out of the container and stopped the REAL node on the
+    # host, halting a chain at height 98145 during what was supposed to be a --hold build that
+    # touched nothing.
+    #
+    # Guarding on DOCKER_BUILD rather than on --hold on purpose: the flag has to be threaded through
+    # correctly to help, and this must hold even when it is not.  Stopping a node is never the right
+    # thing to do from inside a build.
+    if [[ "$DOCKER_BUILD" = "1" ]]; then
+        echo "  (inside the build container -- not stopping anything)"
+        node_stopped=1
+        return 0
+    fi
     echo "Stopping the node before installing binaries (a running binary cannot be replaced)"
     "$qadenascripts/stop_qadena.sh" --all > /dev/null 2>&1
     local alive

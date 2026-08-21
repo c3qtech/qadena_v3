@@ -1867,3 +1867,28 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     could report the measurement the runtime knows about instead of the compile-time label, or refuse
     to answer. Until then, every new caller has to remember this, which is the kind of thing nobody
     remembers.
+
+97. **A build stopped a running node on another machine's chain.**
+    Introduced and hit the same day, 2026-08-21. `install.sh` was changed to stop the node before
+    installing binaries (item: a plain `cp` silently fails with "Text file busy" against a running
+    node, so builds reported success while deploying nothing). That change is right on a normal
+    host and wrong inside a build container.
+
+    `build.sh` re-invokes itself with `DOCKER_BUILD=1` for the SGX reproducible build, and the inner
+    invocation does not carry `--hold`. So the in-container `install.sh` called `stop_qadena.sh
+    --all`. A build container has no node to stop -- except the SGX builder is privileged and
+    bind-mounts `$QADENAHOME` because it needs `/dev/sgx`, so the stop reached OUT of the container
+    and halted the host's chain at height 98145, during a `--hold` build whose entire purpose was to
+    touch nothing. The host's own log recorded the `stop_qadena.sh` lines, which is what made it
+    attributable.
+
+    Fixed by guarding on `DOCKER_BUILD` rather than on `--hold`: a flag has to be threaded correctly
+    to help, and this has to hold even when it is not. Stopping a node is never right from inside a
+    build.
+
+    STILL WORTH DOING, because the guard only covers the case we know about:
+      - `--hold` is not threaded into the Docker invocation at all. It should be, so the two agree.
+      - the SGX builder having host reach is the underlying hazard, and it is not specific to this
+        script. Anything that shells out during a reproducible build can do this. Worth checking
+        whether the builder needs to be privileged, or whether `/dev/sgx` alone is enough.
+      - `stop_qadena.sh` could refuse to run when it detects it is inside a container.
