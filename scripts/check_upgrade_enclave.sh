@@ -103,12 +103,18 @@ if [[ -n "$latest_version" ]] ; then
     if [[ -x "$main_executable" ]] ; then
         echo "Checking version of main enclave executable..."
         main_version=$("$main_executable" -version)
-        echo "Main enclave version: $main_version"
+        # ALWAYS NAME BOTH SIDES.  These messages used to report a version without the measurement it
+        # belongs to, so "No upgrade needed. Main version (1.1.6) is not higher than..." read as
+        # success while actually meaning "you rebuilt at a version that is already taken, and nothing
+        # happened".  The measurement is what the chain trusts and the version only schedules the
+        # handover, so a decision stated in versions alone cannot be checked by the person reading it.
+        main_unique=$("$main_executable" -unique-id 2>/dev/null)
+        echo "Main enclave: ${main_unique:-unknown} (version $main_version)"
         
         # Compare versions and upgrade if main version is higher
         if compare_versions "$main_version" "$latest_version"; then
-            echo "Main enclave version ($main_version) is higher than latest enclave type version ($latest_version)"
-            echo "Initiating upgrade from enclave type: $latest_type"
+            echo "UPGRADE: ${latest_type} (version ${latest_version})  ->  ${main_unique:-unknown} (version ${main_version})"
+            echo "Initiating upgrade from enclave type: $latest_type to ${main_unique:-unknown}"
             # absolute, not ./upgrade_enclave.sh -- run.sh invokes this script by full path from
             # whatever directory it was started in, so the relative form only resolved when the
             # caller happened to be sitting in scripts/
@@ -122,7 +128,13 @@ if [[ -n "$latest_version" ]] ; then
                 exit 0
             fi
         else
-            echo "No upgrade needed. Main version ($main_version) is not higher than latest enclave type version ($latest_version)"
+            echo "No upgrade needed: this binary is ${main_unique:-unknown} (version $main_version); the newest"
+            echo "  enclave already holding sealed params is $latest_type (version $latest_version)."
+            if [[ "$main_version" == "$latest_version" ]]; then
+                echo "  The versions are EQUAL, and an upgrade requires a STRICT increase.  If you meant to"
+                echo "  deploy a new measurement, bump cmd/qadenad_enclave/version.txt -- rebuilding at a"
+                echo "  version that is already taken does nothing and looks exactly like this."
+            fi
             exit 0
         fi
     else

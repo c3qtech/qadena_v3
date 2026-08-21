@@ -1760,3 +1760,31 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     Observed 2026-08-21: registering `unique049` needed a manual second vote from the treasury
     account to reach quorum. The script should assert the proposal actually PASSED, not that its
     transactions landed.
+
+94. **There are no node-operator scripts for governance, so every proposal is hand-rolled.**
+    Registering an enclave identity, the one routine operation that REQUIRES governance, has no
+    operator-facing tooling. The only script that submits a proposal is
+    `testscripts/test_update_enclave_identity.sh`, which is a test fixture: it hardcodes the message
+    type, votes only `--from pioneer1`, and asserts nothing about the outcome (item 93).
+
+    WHAT THIS COST ON 2026-08-21. Registering `unique049` needed three transactions plus a second
+    vote from the treasury account to clear the 33.4% quorum, none of which is scripted. Every step
+    was assembled by hand against `qadenad tx gov`, and each hand-assembly is a chance to get the
+    deposit, the voting period, or the voter set wrong -- all of which fail by TIMING OUT rather
+    than erroring, so the failure arrives minutes later as "the proposal is still in voting period"
+    with no indication of which step was wrong.
+
+    Wanted, as `scripts/` (operator) rather than `testscripts/` (fixtures):
+      - submit a proposal from a template, print the proposal id, and WAIT for it to leave the
+        deposit period -- the id is only discoverable by parsing tx events today
+      - vote from a named set of accounts, and report the running tally against quorum and threshold
+        rather than just that the vote transaction landed
+      - poll a proposal to a terminal state and exit non-zero on REJECTED or FAILED, so it can gate
+        a deployment script instead of being watched by a human
+      - a `--dry-run` that reports whether the named voters can actually reach quorum BEFORE
+        submitting, since on a balanced 4-validator fleet no single pioneer can
+
+    Note the enclave-identity case specifically: the status a proposal may set is constrained
+    (`msg_server_update_enclave_identity.go` allows a NEW identity only as `unvalidated` and an
+    EXISTING one only to `inactive`), so a wrapper should refuse an impossible transition up front
+    instead of letting it pass, spend a voting period, and fail at execution.
