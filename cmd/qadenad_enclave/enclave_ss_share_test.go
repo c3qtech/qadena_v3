@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -150,4 +151,110 @@ func TestPanicRecoveryInterceptorReturnsAnError(t *testing.T) {
 	require.Nil(t, resp, "a panicking handler must not return a usable reply")
 	require.Equal(t, codes.Internal, status.Code(err))
 	require.Contains(t, err.Error(), "ValidatePersonalInfo", "the error should name the method that panicked")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phase 1: eager reconstruction off the consensus path.
+//
+// The point of these is the SPLIT between planning (reads the block store, must run on the
+// block-execution goroutine) and running (network + combine, safe anywhere).  Getting that
+// boundary wrong is not a compile error and not a test failure -- it is a data race that shows
+// up as a corrupted store under load, so the tests assert the boundary explicitly.
+
+// withPioneer registers a pioneer that getPioneerIPAddress can resolve.
+func withPioneer(s *qadenaServer, pioneerID, ip string) {
+	s.setIntervalPublicKeyIdNoNotify(types.IntervalPublicKeyID{
+		NodeID:            pioneerID,
+		NodeType:          types.PioneerNodeType,
+		PubKID:            "wallet-" + pioneerID,
+		ExternalIPAddress: ip,
+	})
+}
+
+func TestPlanSSReconstructResolvesPeersAndThreshold(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	s.setPrivateEnclaveParamsPioneerInfo("pioneer2", "wallet-pioneer2", "", "", "")
+
+	owners := []string{"pioneer1", "pioneer2", "pioneer3", "pioneer4"}
+	for i, p := range owners {
+		withPioneer(s, p, "192.168.0."+strconv.Itoa(10+i))
+	}
+	s.setOwnersAndShare("split-key", owners, aShare())
+
+	job, ok := s.planSSReconstruct("split-key")
+	require.True(t, ok)
+
+	require.Equal(t, 2, job.threshold, "four owners must be a split key")
+	require.Equal(t, "pioneer2", job.owners[0], "our own id must be sorted first so the local share is free")
+	require.Len(t, job.nodes, 3, "every owner EXCEPT us should be a fetch target")
+	require.NotContains(t, job.nodes, "pioneer2", "we must not ask ourselves over the network")
+	for _, n := range job.nodes {
+		require.Regexp(t, `^tcp://192\.168\.0\.\d+:26657$`, n)
+	}
+}
+
+// A pioneer with no published address cannot be asked, and that must be visible rather than
+// silently reducing the pool below threshold.
+func TestPlanSSReconstructSkipsUnaddressablePioneers(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	s.setPrivateEnclaveParamsPioneerInfo("pioneer1", "wallet-pioneer1", "", "", "")
+
+	owners := []string{"pioneer1", "pioneer2", "pioneer3", "pioneer4"}
+	withPioneer(s, "pioneer2", "192.168.0.11")
+	withPioneer(s, "pioneer3", "") // registered but never published an address
+	// pioneer4 not registered at all
+	s.setOwnersAndShare("split-key", owners, aShare())
+
+	job, ok := s.planSSReconstruct("split-key")
+	require.True(t, ok)
+	require.Len(t, job.nodes, 1, "only the addressable peer is a target")
+	require.Contains(t, job.nodes, "pioneer2")
+}
+
+func TestPlanSSReconstructFailsWithNoOwners(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	_, ok := s.planSSReconstruct("never-seen")
+	require.False(t, ok, "a key with no owner record cannot be planned")
+}
+
+// scheduleSSReconstruct must be a no-op in the cases where background work would be wasted --
+// otherwise every rotation kicks off pointless peer traffic across the fleet.
+func TestScheduleSSReconstructNoOps(t *testing.T) {
+	t.Run("already cached", func(t *testing.T) {
+		s := newTestEnclaveServer(t)
+		s.setPrivKCache("k", aKey())
+		s.scheduleSSReconstruct("k")
+		require.True(t, ssInFlightClaim("k"), "nothing should have been scheduled")
+		ssInFlightRelease("k")
+	})
+
+	t.Run("unsplit key", func(t *testing.T) {
+		s := newTestEnclaveServer(t)
+		s.setPrivateEnclaveParamsPioneerInfo("pioneer1", "wallet-pioneer1", "", "", "")
+		withPioneer(s, "pioneer1", "192.168.0.10")
+		s.setOwnersAndShare("unsplit", []string{"pioneer1"}, aKey())
+		require.Equal(t, 1, getThreshold(1), "premise")
+
+		s.scheduleSSReconstruct("unsplit")
+		require.True(t, ssInFlightClaim("unsplit"), "an unsplit key needs no gathering")
+		ssInFlightRelease("unsplit")
+	})
+
+	t.Run("no owners", func(t *testing.T) {
+		s := newTestEnclaveServer(t)
+		s.scheduleSSReconstruct("never-seen")
+		require.True(t, ssInFlightClaim("never-seen"), "nothing should have been scheduled")
+		ssInFlightRelease("never-seen")
+	})
+}
+
+// Two triggers for the same key must not both gather.  Duplicate work is harmless for
+// correctness -- any threshold shares rebuild the same secret -- but it doubles peer load at
+// exactly the moment a rotation is rippling through the fleet.
+func TestSSInFlightClaimIsExclusive(t *testing.T) {
+	require.True(t, ssInFlightClaim("dup"), "first claim wins")
+	require.False(t, ssInFlightClaim("dup"), "second claim must be refused while the first is running")
+	ssInFlightRelease("dup")
+	require.True(t, ssInFlightClaim("dup"), "and is claimable again once released")
+	ssInFlightRelease("dup")
 }

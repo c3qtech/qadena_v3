@@ -645,6 +645,305 @@ func isPrivKHex(s string) bool {
 	return err == nil && len(b) == 32
 }
 
+// ssShareFetchTimeout bounds ONE peer's share fetch.
+//
+// This call used to run on context.Background() -- no deadline whatsoever -- inside block
+// execution.  A peer that REFUSED the connection failed fast and collection moved on; a peer that
+// accepted it and then never answered (black-holed, SIGSTOPped, disk-wedged) blocked here forever
+// and froze the node with no panic, no height and no reason anywhere.  See enclave_call_context.go
+// for the same lesson learned on the EndBlock path.
+const ssShareFetchTimeout = 5 * time.Second
+
+// fetchShareFrom performs ONLY the network round-trip to one owner, returning the still-encrypted
+// share for the caller to verify and decrypt.
+//
+// It deliberately touches no enclave state, because it runs in a goroutine.  Two things forced
+// that split:
+//
+//   - getPioneerIPAddress reads s.CacheCtx, the BLOCK-EXECUTION store, which is not safe to touch
+//     concurrently.  Addresses are therefore resolved by the caller, in order, before any fan-out.
+//   - the previous code set the target with RootCmd.Flags().Set(flags.FlagNode, node), mutating
+//     PROCESS-GLOBAL cobra state.  That was already a latent race -- the enclave's gRPC server has
+//     always served calls concurrently -- and it made parallel collection impossible.  The client
+//     context is now built per call.
+func (s *qadenaServer) fetchShareFrom(ctx context.Context, node string, report []byte, pubKID string) (peerReport []byte, encShare []byte, err error) {
+	rpcClient, err := client.NewClientFromNode(node)
+	if err != nil {
+		return nil, nil, fmt.Errorf("dial %s: %w", node, err)
+	}
+	queryClient := types.NewQueryClient(clientCtx.WithNodeURI(node).WithClient(rpcClient))
+
+	res, err := queryClient.EnclaveSecretShare(ctx, &types.QueryEnclaveSecretShareRequest{
+		RemoteReport: report,
+		EnclavePubK:  s.getPrivateEnclaveParamsEnclavePubK(),
+		PubKID:       pubKID,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("query %s: %w", node, err)
+	}
+	// BOTH halves are returned: the caller verifies the PEER's report against the share it sent.
+	// Dropping the report here would silently skip attestation.
+	return res.GetRemoteReport(), res.GetEncSecretShareEnclavePubK(), nil
+}
+
+// ssTag prefixes every line of the reconstruction path so one grep follows a key end to end:
+//
+//	grep 'ss-reconstruct:' | grep <pubKID>
+//
+// The counts that matter operationally are "LAZY PATH" (should be zero in steady state) and
+// "INSUFFICIENT" (a node that could not gather enough shares -- see backlog item 90).
+const ssTag = "ss-reconstruct: "
+
+// ssReconstructJob is everything a reconstruction needs, RESOLVED IN ADVANCE.
+//
+// It exists so the work can run off the block-execution goroutine.  Exactly one input comes from
+// the block store -- getPioneerIPAddress reads s.CacheCtx, which is not safe to touch
+// concurrently -- so the peer addresses are resolved by the planner and carried here.  Everything
+// else the run phase touches (the secrets store, sharedEnclaveParams) is mutex-guarded and safe
+// from any goroutine.
+type ssReconstructJob struct {
+	pubKID    string
+	owners    []string // self first, see reorderPioneerIDs
+	me        string
+	threshold int
+	nodes     map[string]string // pioneerID -> "tcp://ip:26657", self excluded
+}
+
+// ssInFlight stops the eager and lazy paths -- or two eager triggers -- from reconstructing the
+// same key at once.  Duplicate work is harmless for correctness (any threshold shares rebuild the
+// same secret) but it doubles peer load at exactly the moment a rotation is rippling through.
+var ssInFlight = struct {
+	mu  sync.Mutex
+	set map[string]bool
+}{set: make(map[string]bool)}
+
+func ssInFlightClaim(pubKID string) bool {
+	ssInFlight.mu.Lock()
+	defer ssInFlight.mu.Unlock()
+	if ssInFlight.set[pubKID] {
+		return false
+	}
+	ssInFlight.set[pubKID] = true
+	return true
+}
+
+func ssInFlightRelease(pubKID string) {
+	ssInFlight.mu.Lock()
+	defer ssInFlight.mu.Unlock()
+	delete(ssInFlight.set, pubKID)
+}
+
+// planSSReconstruct resolves what a reconstruction of pubKID would need.  MUST run on the
+// block-execution goroutine, because it reads the block store.
+func (s *qadenaServer) planSSReconstruct(pubKID string) (*ssReconstructJob, bool) {
+	owners, ok := s.getOwners(pubKID)
+	if !ok {
+		c.LoggerError(logger, "No SS owners found, can't reconstruct privk for "+pubKID)
+		return nil, false
+	}
+
+	me := s.getPrivateEnclaveParamsPioneerID()
+	job := &ssReconstructJob{
+		pubKID: pubKID,
+		owners: reorderPioneerIDs(owners.PioneerIDs, me),
+		me:     me,
+		nodes:  make(map[string]string),
+	}
+	job.threshold = getThreshold(len(job.owners))
+
+	for _, owner := range job.owners {
+		if owner == me {
+			continue
+		}
+		// The EMPTY check is not redundant: getPioneerIPAddress reports found=true for a pioneer
+		// that is registered but has never PUBLISHED an address (updateIsValidator only does that
+		// on a node's first proposed block).  Without it the plan carries "tcp://:26657", which
+		// burns one of the threshold fetch slots on a dial that cannot succeed.  This mirrors the
+		// filter getAddressablePioneers already applies.
+		ip, okIP := s.getPioneerIPAddress(owner)
+		if !okIP || ip == "" {
+			c.LoggerError(logger, ssTag+"no address for pioneer "+owner+
+				" -- cannot ask it for a share (registered but never published one?)")
+			continue
+		}
+		job.nodes[owner] = "tcp://" + ip + ":26657"
+	}
+	return job, true
+}
+
+// scheduleSSReconstruct rebuilds pubKID in the BACKGROUND, off the consensus path.
+//
+// Called when a rotation tells us a new split key exists, so that by the time a transaction needs
+// it the answer is already cached and getSSPrivK never touches the network during execution.  The
+// plan is built here, synchronously, because it reads the block store; only the run phase is
+// detached.
+func (s *qadenaServer) scheduleSSReconstruct(pubKID string) {
+	if privK, found := s.getPrivKCache(pubKID); found && privK != "" && isPrivKHex(privK) {
+		c.LoggerDebug(logger, ssTag+"skip pubKID="+pubKID+" reason=already-cached")
+		return
+	}
+	job, ok := s.planSSReconstruct(pubKID)
+	if !ok {
+		return
+	}
+	if job.threshold <= 1 {
+		// Nothing was split, so there is nothing to gather -- SetPublicKey caches it directly.
+		c.LoggerDebug(logger, ssTag+"skip pubKID="+pubKID+" reason=not-split threshold=1")
+		return
+	}
+	if !ssInFlightClaim(pubKID) {
+		c.LoggerDebug(logger, ssTag+"skip pubKID="+pubKID+" reason=already-in-flight")
+		return
+	}
+	c.LoggerInfo(logger, ssTag+"SCHEDULED eager pubKID="+pubKID+
+		" owners="+strconv.Itoa(len(job.owners))+
+		" threshold="+strconv.Itoa(job.threshold)+
+		" peers="+strconv.Itoa(len(job.nodes)))
+	go func() {
+		defer ssInFlightRelease(pubKID)
+		start := time.Now()
+		if s.runSSReconstruct(job, "eager") == "" {
+			c.LoggerError(logger, ssTag+"FAILED eager pubKID="+pubKID+
+				" after="+time.Since(start).String()+
+				" -- a transaction needing this key will fall back to the LAZY path")
+			return
+		}
+		c.LoggerInfo(logger, ssTag+"DONE eager pubKID="+pubKID+
+			" after="+time.Since(start).String())
+	}()
+}
+
+// runSSReconstruct performs the gather-and-combine.  Safe on any goroutine: it touches no block
+// store, only the mutex-guarded secrets store and params.
+func (s *qadenaServer) runSSReconstruct(job *ssReconstructJob, via string) string {
+	start := time.Now()
+	shares := make([]string, 0, job.threshold)
+
+	// Our own share, if we hold one, costs nothing and needs no network.
+	if slices.Contains(job.owners, job.me) {
+		if myShare, held := s.getShare(job.pubKID); held && myShare != "" {
+			shares = append(shares, myShare)
+			c.LoggerDebug(logger, ssTag+"own share held pubKID="+job.pubKID+" via="+via)
+		} else {
+			c.LoggerError(logger, "we are an owner of "+job.pubKID+" but hold no share")
+		}
+	}
+
+	if len(shares) < job.threshold && len(job.nodes) > 0 {
+		// The report certifies (our enclave pubK | pubKID) and does NOT depend on the peer, so it
+		// is built once rather than per request.
+		report, rerr := s.getRemoteReport(strings.Join([]string{
+			s.getPrivateEnclaveParamsEnclavePubK(), job.pubKID,
+		}, "|"))
+		if rerr != nil {
+			c.LoggerError(logger, "couldn't build a remote report for "+job.pubKID+": "+rerr.Error())
+			return ""
+		}
+
+		// ASK EVERY OWNER AT ONCE.  Any `threshold` valid shares reconstruct the same secret, so
+		// which peers answer changes nothing but the latency -- and asking them one at a time meant
+		// a single slow peer delayed every peer queued behind it.
+		fetchCtx, cancel := context.WithTimeout(context.Background(), ssShareFetchTimeout)
+		defer cancel()
+
+		type fetched struct {
+			owner      string
+			peerReport []byte
+			enc        []byte
+			err        error
+		}
+		ch := make(chan fetched, len(job.nodes))
+		for owner, node := range job.nodes {
+			go func(owner, node string) {
+				pr, enc, err := s.fetchShareFrom(fetchCtx, node, report, job.pubKID)
+				ch <- fetched{owner: owner, peerReport: pr, enc: enc, err: err}
+			}(owner, node)
+		}
+
+		// Verification and decryption are serialised here rather than in the workers: both are
+		// cheap, and keeping them on one goroutine keeps the concurrency surface to the network
+		// call alone.
+		for i := 0; i < len(job.nodes) && len(shares) < job.threshold; i++ {
+			f := <-ch
+			if f.err != nil {
+				c.LoggerError(logger, "share fetch from "+f.owner+" failed: "+f.err.Error())
+				continue
+			}
+			if !s.verifyRemoteReport(f.peerReport, strings.Join([]string{string(f.enc)}, "|")) {
+				c.LoggerError(logger, "remote report from "+f.owner+" did not verify")
+				continue
+			}
+			var share string
+			if _, err := c.BDecryptAndUnmarshal(s.getPrivateEnclaveParamsEnclavePrivK(), f.enc, &share); err != nil {
+				c.LoggerError(logger, "couldn't decrypt the share from "+f.owner+": "+err.Error())
+				continue
+			}
+			c.LoggerDebug(logger, ssTag+"share OK from="+f.owner+" pubKID="+job.pubKID+" via="+via)
+			shares = append(shares, share)
+		}
+		cancel() // stop any straggler as soon as we have enough
+	}
+
+	if len(shares) < job.threshold {
+		c.LoggerError(logger, ssTag+"INSUFFICIENT pubKID="+job.pubKID+" via="+via+
+			" have="+strconv.Itoa(len(shares))+" need="+strconv.Itoa(job.threshold)+
+			" owners="+strconv.Itoa(len(job.owners))+" peers="+strconv.Itoa(len(job.nodes))+
+			" after="+time.Since(start).String())
+		return ""
+	}
+
+	// At threshold 1 nothing was split: addSSShare handed every owner the WHOLE key, so the single
+	// "share" IS the private key and there is nothing to combine.
+	if job.threshold == 1 {
+		s.setPrivKCache(job.pubKID, shares[0])
+		return shares[0]
+	}
+
+	bshares := make([][]byte, 0, len(shares))
+	for _, sh := range shares {
+		b, err := hex.DecodeString(sh)
+		if err != nil {
+			c.LoggerError(logger, "couldn't hex decode a share for "+job.pubKID+": "+err.Error())
+			continue
+		}
+		bshares = append(bshares, b)
+	}
+	if len(bshares) < job.threshold {
+		c.LoggerError(logger, "not enough DECODABLE shares to reconstruct privk for "+job.pubKID)
+		return ""
+	}
+
+	combined, err := shamir.Combine(bshares)
+	if err != nil {
+		c.LoggerError(logger, "error from shamir for "+job.pubKID+": "+err.Error())
+		return ""
+	}
+	sPrivK := string(combined)
+	if !isPrivKHex(sPrivK) {
+		// Combining shares that belong to DIFFERENT secrets yields garbage with no error -- Shamir
+		// has no integrity check.  Refuse to cache it rather than hand ScalarMult a bad scalar.
+		c.LoggerError(logger, "reconstructed privk for "+job.pubKID+" is not a 32-byte key -- refusing to cache it")
+		return ""
+	}
+	s.setPrivKCache(job.pubKID, sPrivK)
+	c.LoggerInfo(logger, ssTag+"RECONSTRUCTED pubKID="+job.pubKID+" via="+via+
+		" shares="+strconv.Itoa(len(bshares))+"/"+strconv.Itoa(job.threshold)+
+		" after="+time.Since(start).String())
+	return sPrivK
+}
+
+// getSSPrivK returns the interval private key for pubKID, reconstructing it from peers if it is
+// not already cached.
+//
+// THIS IS THE LAZY PATH AND IT IS DELIBERATELY KEPT.  scheduleSSReconstruct covers keys minted
+// while this node is executing, but a node needing a HISTORICAL key it never saw -- a state-synced
+// joiner, or SetProtectKey/SetRecoverKey reaching for an older interval -- has no such trigger, and
+// this is the only way it can obtain one.  Removing it would not avoid the network-in-consensus
+// hazard; it would fail outright and diverge anyway.
+//
+// What remains unsafe is the FAILURE case: returning "" here is a node-local answer that a healthy
+// peer will not produce, which is a fork.  See backlog item 90 -- the caller must halt rather than
+// proceed on "".
 func (s *qadenaServer) getSSPrivK(pubKID string) string {
 	privK, found := s.getPrivKCache(pubKID)
 
@@ -658,130 +957,25 @@ func (s *qadenaServer) getSSPrivK(pubKID string) string {
 		found = false
 	}
 
-	if !found || privK == "" {
-		// check if this can be reconstructed via Shamir Secret Sharing
-		owners, found := s.getOwners(pubKID)
-
-		if !found {
-			c.LoggerError(logger, "No SS owners found, can't reconstruct privk for "+pubKID)
-			return ""
-		}
-
-		// for now, reach out to all owners to get their shares
-		bshares := make([][]byte, 0)
-
-		ownersPioneerIDs := reorderPioneerIDs(owners.PioneerIDs, s.getPrivateEnclaveParamsPioneerID())
-
-		// make a copy of owners.PioneerIDs, but if
-		shareCount := len(ownersPioneerIDs)
-		c.LoggerDebug(logger, "SS owners", c.PrettyPrint(owners))
-		c.LoggerDebug(logger, "shareCount", shareCount)
-		threshold := getThreshold(shareCount)
-		collectedShares := 0
-		for _, owner := range ownersPioneerIDs {
-			c.LoggerDebug(logger, "SS owner "+owner)
-			var share string
-			if owner == s.getPrivateEnclaveParamsPioneerID() {
-				// we are one of the owners
-				share, _ = s.getShare(pubKID)
-				collectedShares++
-			} else {
-				ownerIP, found := s.getPioneerIPAddress(owner)
-				if !found {
-					continue
-				}
-				node := "tcp://" + ownerIP + ":26657"
-				RootCmd.Flags().Set(flags.FlagNode, node)
-				queryClientCtx, err := client.ReadPersistentCommandFlags(clientCtx, RootCmd.Flags())
-
-				if err != nil {
-					continue
-				}
-
-				queryClient := types.NewQueryClient(queryClientCtx)
-
-				c.LoggerDebug(logger, "Calling QueryEnclaveSecretShare "+owner+" "+pubKID)
-
-				report, err := s.getRemoteReport(strings.Join([]string{
-					s.getPrivateEnclaveParamsEnclavePubK(),
-					pubKID,
-				}, "|"))
-				if err != nil {
-					continue
-				}
-
-				params := &types.QueryEnclaveSecretShareRequest{
-					RemoteReport: report,
-					EnclavePubK:  s.getPrivateEnclaveParamsEnclavePubK(),
-					PubKID:       pubKID,
-				}
-
-				if s.RealEnclave {
-					c.LoggerDebug(logger, "params (redacted)")
-				} else {
-					c.LoggerDebug(logger, "params "+c.PrettyPrint(params))
-				}
-
-				res, err := queryClient.EnclaveSecretShare(context.Background(), params)
-				if err != nil {
-					c.LoggerError(logger, "err "+err.Error())
-					continue
-				}
-
-				// need to verify remote report
-
-				if !s.verifyRemoteReport(
-					res.GetRemoteReport(),
-					strings.Join([]string{
-						string(res.GetEncSecretShareEnclavePubK()),
-					}, "|")) {
-					c.LoggerError(logger, "remote report unverified")
-					continue
-				}
-
-				_, err = c.BDecryptAndUnmarshal(s.getPrivateEnclaveParamsEnclavePrivK(), res.GetEncSecretShareEnclavePubK(), &share)
-				if err != nil {
-					c.LoggerError(logger, "couldn't decrypt "+err.Error())
-					continue
-				}
-				collectedShares++
-			}
-
-			// special case, there's only 1 share so this is the actual privk!
-			if threshold == 1 && collectedShares == threshold {
-				// store it for later use
-				s.setPrivKCache(pubKID, share)
-				return share
-			}
-
-			bshare, err := hex.DecodeString(share)
-			if err != nil {
-				c.LoggerError(logger, "couldn't hex decode "+err.Error())
-				continue
-			}
-			bshares = append(bshares, bshare)
-
-			if len(bshares) == threshold {
-				c.LoggerDebug(logger, "we have enough to reconstruct the privk")
-				break
-			}
-		}
-
-		if len(bshares) < threshold {
-			c.LoggerError(logger, "not enough shares to reconstruct privk")
-			return ""
-		}
-		privK, err := shamir.Combine(bshares)
-		if err != nil {
-			c.LoggerError(logger, "error from shamir "+err.Error())
-			return ""
-		}
-		sPrivK := string(privK)
-		// store it for later use
-		s.setPrivKCache(pubKID, sPrivK)
-		return sPrivK
+	if found && privK != "" {
+		return privK
 	}
-	return privK
+
+	job, ok := s.planSSReconstruct(pubKID)
+	if !ok {
+		return ""
+	}
+	// AT ERROR LEVEL ON PURPOSE.  Reaching here means a transaction is about to do network I/O
+	// inside block execution -- the fork hazard.  In steady state, with eager reconstruction
+	// working, this line should never appear; its COUNT is the metric that says whether the
+	// eager path is doing its job.  A historical key legitimately lands here (see the doc
+	// comment above), so it is not automatically a defect -- but it is always worth knowing.
+	c.LoggerError(logger, ssTag+"LAZY PATH pubKID="+pubKID+
+		" owners="+strconv.Itoa(len(job.owners))+
+		" threshold="+strconv.Itoa(job.threshold)+
+		" peers="+strconv.Itoa(len(job.nodes))+
+		" -- reconstructing DURING block execution")
+	return s.runSSReconstruct(job, "lazy")
 }
 
 func (s *qadenaServer) getEnclavePubK(pioneerID string) (enclavePubK string, found bool) {
@@ -5029,8 +5223,6 @@ func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*
 		// ScalarMult, which panics above 32 bytes, and the recovered panic was returned as a
 		// verdict that convicted a well-formed credential.
 		//
-		// At threshold >= 2 the cache is deliberately LEFT ALONE.  getSSPrivK reconstructs
-		// from the owners' shares on first use and caches the real key then.
 		if getThreshold(len(owners)) == 1 {
 			oldPrivK, found := s.getPrivKCache(in.PubKID)
 			if !found {
@@ -5040,6 +5232,20 @@ func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*
 				// The key material itself is deliberately NOT logged.
 				c.LoggerError(logger, "inconsistency: cached privk differs from the distributed key for "+in.PubKID)
 			}
+		} else {
+			// THE KEY IS GENUINELY SPLIT, so nothing here can cache it -- myShare is one piece.
+			// Rebuild it NOW, in the background, rather than leaving the first transaction that
+			// needs it to fetch shares from peers in the middle of block execution.
+			//
+			// Network I/O inside deterministic execution cannot be made deterministic by tuning
+			// timeouts (enclave_call_context.go): a node that cannot reach its peers returns a
+			// different answer from one that can, and that is a fork.  This does not remove the
+			// lazy path in getSSPrivK -- a historical key has no trigger and still needs it -- it
+			// removes the reason the COMMON case would ever enter it.
+			//
+			// Scheduling is synchronous and cheap; only the gathering is detached.  The plan has
+			// to be built here because it reads the block store.
+			s.scheduleSSReconstruct(in.PubKID)
 		}
 
 		oldPubK, found := s.getPubKCache(in.PubKID)
@@ -8230,14 +8436,33 @@ func (s *qadenaServer) EndBlock(ctx context.Context, tc *types.MsgEndBlock) (*ty
 		c.LoggerDebug(logger, "has changed")
 		c.LoggerDebug(logger, "LastCommitID "+c.PrettyPrint(lastCommitID))
 		c.LoggerDebug(logger, "CommitID "+c.PrettyPrint(commitID))
-
-		keys := []string{types.WalletKeyPrefix, types.CredentialKeyPrefix, types.JarRegulatorKeyPrefix, types.PublicKeyKeyPrefix, types.IntervalPublicKeyIDKeyPrefix, types.ProtectKeyKeyPrefix, types.RecoverKeyKeyPrefix}
-
-		for _, k := range keys {
-			h := c.StoreHashByStoreKey(s.ServerCtx, s.StoreKey, k)
-			c.LoggerDebug(logger, "key="+k+" hash="+c.DisplayHash(h))
-		}
 	}
+
+	// A PER-PREFIX STORE HASH USED TO BE COMPUTED HERE, EVERY BLOCK, AND IT WAS NOT FREE.
+	//
+	// It looked like debug output and cost like a full table scan: StoreHashByStoreKey iterates a
+	// whole prefix and SHA-256s every key and value, and it was called for seven prefixes.  Three
+	// separate things hid the cost:
+	//
+	//   1. `h := c.StoreHashByStoreKey(...)` is a PLAIN ASSIGNMENT.  LoggerDebug discards the
+	//      RESULT; the scan has already happened.  Turning debug off saved nothing.
+	//   2. The guard above is always true.  setPreparedHeight(tc.Height) writes a fresh stamp
+	//      earlier in this function, so the commit hash differs from the last one every block --
+	//      measured on the ARM fleet at exactly 7.00 scans per block over 688 consecutive blocks.
+	//   3. It grows with the chain.  Cost is per ROW, so it is invisible on a young chain and
+	//      compounds silently: 8,091 rows here, 17,388 on the SGX pair, where EndBlock reached
+	//      1.45s against a 1.5s timeout_commit and starved peer gossip badly enough that a joiner
+	//      fell 11,757 blocks behind and -- because CometBFT never re-enters blocksync from
+	//      consensus -- could not recover.
+	//
+	// The information was redundant anyway: collectAccumulatorEntries() runs a few lines above and
+	// already ships per-prefix values in EndBlockReply.  The list here was also a stale hardcoded
+	// seven against storeHashKeys' canonical ten (no EnclaveIdentity, PioneerJar or
+	// AuthorizedSignatory), which is its own sign that nothing depended on it.
+	//
+	// The OTHER caller of StoreHashByStoreKey -- GetStoreHash -- is deliberate and must stay: see
+	// the header comment in enclave_accumulator.go.  The scan there IS the truth that the
+	// accumulator is checked against, and it runs on demand rather than every block.
 
 	return &types.EndBlockReply{PreparedHeight: tc.Height, Version: commitID.Version, Accumulators: blockAccumulators}, nil
 }
