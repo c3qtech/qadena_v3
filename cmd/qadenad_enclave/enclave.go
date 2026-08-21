@@ -2871,13 +2871,22 @@ func (s *qadenaServer) QueryEnclaveValidateEnclaveIdentity(goCtx context.Context
 }
 
 func (s *qadenaServer) QueryEnclaveSecretShare(goCtx context.Context, in *types.QueryEnclaveSecretShareRequest) (*types.QueryEnclaveSecretShareResponse, error) {
-	if err := s.refuseIfCatchingUp("a secret share"); err != nil {
-		return nil, err
+	// asker identifies the requesting enclave without printing its whole public key.  It is not
+	// secret, just long; a prefix is enough to correlate the two sides of one reconstruction.
+	asker := in.EnclavePubK
+	if len(asker) > 12 {
+		asker = asker[:12]
 	}
-	if s.RealEnclave {
-		c.LoggerDebug(logger, "QueryEnclaveSecretShare")
-	} else {
-		c.LoggerDebug(logger, "QueryEnclaveSecretShare "+c.PrettyPrint(in))
+
+	// EVERY OUTCOME IS LOGGED, INCLUDING SUCCESS.  Releasing a secret share to another enclave is
+	// a security-relevant event, and it used to leave no record at all: entry was debug-only, the
+	// success path logged nothing, and a FAILED ATTESTATION returned silently.  From the
+	// requester's side those are indistinguishable from "the peer was never asked", which is
+	// exactly the ambiguity that makes a reconstruction failure hard to chase across a fleet.
+	// Same ssTag as the requester side, so one grep follows a key across both.
+	if err := s.refuseIfCatchingUp("a secret share"); err != nil {
+		c.LoggerError(logger, ssTag+"SERVE REFUSED pubKID="+in.PubKID+" to="+asker+" reason=catching-up")
+		return nil, err
 	}
 
 	// need to validate the incoming request's remote report before we response back
@@ -2887,15 +2896,20 @@ func (s *qadenaServer) QueryEnclaveSecretShare(goCtx context.Context, in *types.
 			in.EnclavePubK,
 			in.PubKID,
 		}, "|")) {
+		c.LoggerError(logger, ssTag+"SERVE REFUSED pubKID="+in.PubKID+" to="+asker+
+			" reason=remote-report-unverified (requester is not a trusted measurement?)")
 		return nil, types.ErrRemoteReportNotVerified
 	}
 
 	share, found := s.getShare(in.PubKID)
 
 	if !found || share == "" {
-		c.LoggerError(logger, "Could not find share for "+in.PubKID)
+		c.LoggerError(logger, ssTag+"SERVE REFUSED pubKID="+in.PubKID+" to="+asker+
+			" reason=no-share-held")
 		return nil, types.ErrKeyNotFound
 	}
+
+	c.LoggerInfo(logger, ssTag+"SERVE OK pubKID="+in.PubKID+" to="+asker)
 
 	encSecretShareEncPubK := c.MarshalAndBEncrypt(in.EnclavePubK, share)
 
