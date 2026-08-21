@@ -1758,13 +1758,22 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     The proposal expires unpassed while all three transactions (submit, deposit, vote) succeed and
     the script exits 0. Observed twice on 2026-08-21; both times a manual treasury vote was needed.
 
-    AND THE SHORTFALL IS FAR WORSE THAN IT LOOKS. An earlier draft of this item said pioneer1 holds
-    25% -- the validator's share on a balanced fleet. Measured with `gov_can_reach_quorum`, the
-    pioneer1 ACCOUNT controls **0.2475%**. Governance power follows the DELEGATOR, and essentially
-    all of every validator's stake is delegated by the treasury (98.94%). So operating a validator
-    conveys almost no voting power, and reasoning about quorum from validator shares is wrong by two
-    orders of magnitude. `scripts/gov_vote.sh` and `gov_register_enclave_identity.sh` report the
-    real per-account share before submitting, for exactly this reason.
+    THE SHORTFALL DEPENDS ON WHO ELSE VOTES, which is why it is so easy to get wrong -- this item
+    has now been wrong in BOTH directions. Measured on 2026-08-21:
+
+      - pioneer1 voting ALONE on a proposal the treasury ignored: **25.0000%** of bonded stake. An
+        operator's vote carries its validator's entire delegated stake.
+      - pioneer1 + pioneer2, treasury still silent: **50.0000%** -- past the 33.4% quorum. Two
+        operators are enough.
+      - on a proposal the treasury DID vote on, the same accounts carried only their
+        self-delegations (0.2475% and 0.2722%), because a delegator's vote overrides its validator
+        for that portion, and the treasury has delegated 98.94% of all stake across all four.
+
+    So `--from pioneer1` alone reaches 25%, short of quorum but not by the two orders of magnitude
+    an earlier draft of this item claimed. `gov_can_reach_quorum` now reports both bounds.
+
+    Also worth recording: the treasury holds ~48x the entire bonded supply in LIQUID aqdn, which
+    carries zero voting power. Its 98.94% comes entirely from having delegated.
 
     The script should assert the proposal PASSED, not that its transactions landed.
 

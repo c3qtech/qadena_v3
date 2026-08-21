@@ -9,10 +9,11 @@
 # Run by ONE operator, on their own node.  Voters default to this node's operator
 # (config/node_params.json pioneer_id); name more accounts only if this node holds their keys.
 #
-# ONE OPERATOR NORMALLY CANNOT PASS IT ALONE, and that is not an error.  Voting power follows the
-# DELEGATOR, so an operator typically controls a fraction of a percent even while running a
-# validator holding 25%.  When the submitter cannot reach quorum this prints the exact command the
-# other operators must run on THEIR nodes and exits 0 -- the proposal is live and waiting for them.
+# ONE OPERATOR NORMALLY CANNOT PASS IT ALONE, and that is not an error.  An operator's vote carries
+# its validator's delegated stake -- 25% on a four-validator fleet -- which is short of the 33.4%
+# quorum by itself but clears it with one more operator.  So this submits, votes, and prints the
+# exact command the others run on THEIR nodes, then exits 0 rather than blocking on a quorum this
+# node cannot produce alone.
 #
 # THIS IS THE STEP THAT MUST HAPPEN BEFORE YOU BUILD.  build.sh installs the new binary as the live
 # one and stops the node to do it; if the measurement is not ACTIVE by then, the old enclave refuses

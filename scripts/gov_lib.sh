@@ -66,7 +66,53 @@ voter_power() {
       | sum_lines
 }
 
-# pct <part> <whole> -- percentage as a plain decimal string, "0" if the inputs are unusable.
+# account_power <keyname> -> "<floor> <ceiling>" in aqdn.
+#
+# VOTING POWER IS STAKED TOKENS ONLY -- a liquid balance counts for nothing, however large. The
+# treasury here holds ~48x the entire bonded supply in liquid aqdn and would have ZERO say if it had
+# not delegated.
+#
+# There are TWO ways an account has power, and counting only the first understates an operator by
+# two orders of magnitude:
+#
+#   own delegations        what the account itself staked.  A delegator's vote OVERRIDES its
+#                          validator for that portion.
+#   validator operator     if the account operates a validator, its vote carries that validator's
+#                          ENTIRE delegated stake, minus whatever delegators vote for themselves.
+#
+# Measured on this fleet: pioneer1 self-delegates 0.2475%, but voting from pioneer1 alone put
+# 25.0000% of bonded stake on the proposal, because it operates a 25% validator and the treasury
+# had not voted. When the treasury DOES vote, its delegation is subtracted from every validator and
+# each operator falls back to its self-delegation. Both are correct; which applies depends on who
+# else votes, so both are reported.
+#
+#   floor    what this account carries if every other delegator votes independently
+#   ceiling  what it carries if none of them do
+account_power() {
+    local name="$1" a v own valtok selfd othr ceiling
+    a=$(addr_of "$name")
+    [ -z "$a" ] && { printf "0 0"; return 1 }
+    own=$(voter_power "$a")
+    v=$(qq keys show "$name" --bech val -a 2>/dev/null)
+    valtok=0
+    if [ -n "$v" ]; then
+        valtok=$(qq q staking validator "$v" -o json 2>/dev/null | jq -r '.validator.tokens // .tokens // empty')
+        [ -z "$valtok" ] && valtok=0
+    fi
+    if [ "$valtok" != "0" ]; then
+        # Our self-delegation is already inside valtok; delegations to OTHER validators add on top.
+        selfd=$(qq q staking delegation "$a" "$v" -o json 2>/dev/null \
+                | jq -r '.delegation_response.balance.amount // .balance.amount // 0')
+        [ -z "$selfd" ] && selfd=0
+        othr=$(echo "$own - $selfd" | bc)
+        ceiling=$(echo "$valtok + $othr" | bc)
+    else
+        ceiling="$own"
+    fi
+    printf "%s %s" "$own" "$ceiling"
+}
+
+# pct <part> <whole># pct <part> <whole> -- percentage as a plain decimal string, "0" if the inputs are unusable.
 pct() {
     [ -z "$1" ] || [ -z "$2" ] || [ "$2" = "0" ] && { echo 0; return }
     echo "scale=4; $1 * 100 / $2" | bc 2>/dev/null || echo 0
@@ -125,7 +171,7 @@ addr_of() { qq keys show "$1" -a 2>/dev/null }
 # "number truncated after 20 digits" and yields garbage, which first showed up as every voter having
 # 0.00% of bonded stake -- a number that looks like a real answer.
 gov_can_reach_quorum() {
-    local total quorum sum=0 p a name share combined qpct
+    local total quorum floor_sum=0 ceil_sum=0 name pair own ceil qpct fpct cpct is_val
     total=$(bonded_total)
     quorum=$(gov_param '.params.quorum // .quorum')
     if [ -z "$total" ] || [ "$total" = "0" ]; then
@@ -134,17 +180,28 @@ gov_can_reach_quorum() {
     fi
     [ -z "$quorum" ] || [ "$quorum" = "null" ] && quorum="0.334"
     for name in "$@"; do
-        a=$(addr_of "$name")
-        if [ -z "$a" ]; then echo "  $name: NO SUCH KEY in this keyring"; continue; fi
-        p=$(voter_power "$a")
-        sum=$(echo "$sum + $p" | bc)
-        share=$(pct "$p" "$total")
-        printf "  %-12s %-46s %s%% of bonded\n" "$name" "$a" "$share"
+        if ! have_key "$name"; then echo "  $name: NO SUCH KEY in this keyring"; continue; fi
+        pair=$(account_power "$name")
+        own=${pair%% *}; ceil=${pair##* }
+        floor_sum=$(echo "$floor_sum + $own" | bc)
+        ceil_sum=$(echo "$ceil_sum + $ceil" | bc)
+        if [ "$own" != "$ceil" ]; then
+            printf "  %-12s staked %s%%  |  as validator operator up to %s%%\n" \
+                "$name" "$(pct "$own" "$total")" "$(pct "$ceil" "$total")"
+        else
+            printf "  %-12s staked %s%%\n" "$name" "$(pct "$own" "$total")"
+        fi
     done
-    combined=$(pct "$sum" "$total")
     qpct=$(echo "scale=4; $quorum * 100" | bc)
-    printf "  combined %s%%   quorum needs %s%%\n" "$combined" "$qpct"
-    [ "$(echo "$combined >= $qpct" | bc)" = "1" ]
+    fpct=$(pct "$floor_sum" "$total")
+    cpct=$(pct "$ceil_sum" "$total")
+    if [ "$fpct" != "$cpct" ]; then
+        printf "  combined %s%% .. %s%%   quorum needs %s%%\n" "$fpct" "$cpct" "$qpct"
+        echo "    (the lower figure applies if every other delegator to your validator also votes)"
+    else
+        printf "  combined %s%%   quorum needs %s%%\n" "$cpct" "$qpct"
+    fi
+    [ "$(echo "$cpct >= $qpct" | bc)" = "1" ]
 }
 
 # Poll a proposal to a terminal state.  Prints each transition, exits non-zero on anything but

@@ -8,11 +8,17 @@
 # is the intended use: each operator runs this on their own node, against a proposal id someone
 # shared.  Keys live in the local keyring, so you can only ever vote as an account this node holds.
 #
-# ONE OPERATOR USUALLY CANNOT PASS ANYTHING, and that is by design: voting power follows the
-# DELEGATOR, so an operator running a validator whose stake was delegated by someone else controls
-# very little of it.  On this fleet the pioneer1 account holds 0.2475% while its validator holds
-# 25%.  The per-account shares are printed before voting so a shortfall is visible immediately
-# rather than showing up later as a proposal that quietly expired.
+# WHAT YOUR VOTE WEIGHS.  Only STAKED tokens count -- a liquid balance is worth nothing, however
+# large.  An operator gets power two ways:
+#
+#   what the account itself delegated, and
+#   if the account operates a validator, that validator's ENTIRE delegated stake, minus whatever
+#   delegators vote for themselves (a delegator's own vote overrides its validator).
+#
+# So the same account can be worth 0.2475% or 25% of the chain depending on who else votes.  Both
+# figures are printed before voting.  Measured here: pioneer1 alone put 25.0000% on a proposal the
+# treasury ignored; pioneer1 + pioneer2 reached 50.0000%, past the 33.4% quorum -- while on a
+# proposal the treasury DID vote on, the same two accounts carried only their self-delegations.
 
 SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh" > /dev/null 2>&1
