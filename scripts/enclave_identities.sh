@@ -94,7 +94,26 @@ find_build_tree() {
     done
     return 1
 }
-source_measurement() { [ -n "$build_tree" ] && cat "$build_tree/cmd/qadenad_enclave/test_unique_id.txt" 2>/dev/null }
+# WHAT THE TREE WOULD BUILD, and on SGX that is NOT test_unique_id.txt.
+#
+# The label in test_unique_id.txt is the identity only on a debug build.  On SGX the measurement is
+# MRENCLAVE, a hash of the signed image, which does not exist until the build runs -- build_enclave.sh
+# writes it to reproducible_build_unique_id.txt afterwards, and install.sh prefers that file for the
+# staged filename for exactly this reason.  Mirror that order, or this advises registering
+# "unique050" on a chain whose identities are all 64-hex hashes.
+source_measurement() {
+    [ -n "$build_tree" ] || return 1
+    local repro="$build_tree/cmd/qadenad_enclave/reproducible_build_unique_id.txt"
+    if [ -r "$repro" ]; then
+        local id
+        id=$(cat "$repro" 2>/dev/null)
+        if enclave_is_measurement "$id"; then printf "%s" "$id"; return 0; fi
+    fi
+    # No reproducible id.  On an SGX host that means "not built yet", and the answer is unknowable
+    # rather than the debug label -- say nothing and let the caller explain.
+    enclave_is_sgx && return 1
+    cat "$build_tree/cmd/qadenad_enclave/test_unique_id.txt" 2>/dev/null
+}
 source_version()     { [ -n "$build_tree" ] && cat "$build_tree/cmd/qadenad_enclave/version.txt" 2>/dev/null }
 
 echo "=========================================="
@@ -134,7 +153,13 @@ echo "this node"
 echo "=========================================="
 
 if [ -z "$running" ]; then
-    warn "could not determine the running measurement from the log (has the enclave started?)"
+    if ! enclave_is_running; then
+        bad "the enclave process is NOT RUNNING, so this node has no measurement in service."
+        info "an upgrade handover needs the OLD enclave to start and hand its sealed keys across,"
+        info "so fix this before attempting one.  Start it with scripts/start_qadena.sh"
+    else
+        warn "the enclave is running but its measurement could not be read"
+    fi
 else
     running_status=$(echo "$rows" | awk -F'\t' -v u="$running" '$1==u {print $3}')
     case "$running_status" in
@@ -208,7 +233,7 @@ echo "=========================================="
 if [ -z "$newest_ver" ]; then
     info "no measurement here holds sealed params, so there is no upgrade source"
 elif [ "$live_ver" = "$newest_ver" ]; then
-    info "nothing.  live is ${running:-?} (version $live_ver); newest holding sealed params is"
+    info "nothing.  live binary is ${running:-${live_measurement:-?}} (version $live_ver); newest holding sealed params is"
     info "$newest_id (version $newest_ver).  Equal versions do nothing -- an upgrade needs a STRICT increase."
 elif [ "$(printf '%s\n%s\n' "$live_ver" "$newest_ver" | sort -V | tail -1)" = "$live_ver" ]; then
     target="${running:-${found_live:-?}}"
@@ -248,7 +273,14 @@ find_build_tree
 src=$(source_measurement)
 srcver=$(source_version)
 
-if [ -z "$src" ]; then
+if [ -z "$src" ] && [ -n "$build_tree" ] && enclave_is_sgx; then
+    info "checkout                : $build_tree"
+    warn "this is an SGX host and the tree has not been built yet, so the measurement it would"
+    info "produce is NOT KNOWABLE: MRENCLAVE is a hash of the signed image.  Build it first --"
+    info "  1.  ./buildscripts/build.sh --build-sgx --hold   # stages it; live binary untouched"
+    info "  2.  re-run this script; it will read the measurement from"
+    info "      cmd/qadenad_enclave/reproducible_build_unique_id.txt and advise from there"
+elif [ -z "$src" ]; then
     info "no source checkout found -- looked in \$QADENA_BUILD_DIR, \$qadenabuild, ~/qv3,"
     info "~/qadena_v3, ~/qadena-build.  Point at one with:  --build-dir <path>"
     info "(this section only advises on deploys; everything above is already accurate)"

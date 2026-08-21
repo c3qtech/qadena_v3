@@ -45,20 +45,58 @@ enclave_measurement() {
 # not need to know.
 enclave_is_sgx() { command -v ego > /dev/null 2>&1 }
 
-# enclave_running_measurement -- what the RUNNING process is, not what is installed in bin/.
+# PROCESS DETECTION MUST HANDLE `ego run`.
 #
-# Taken from the running process's own executable via /proc/<pid>/exe, which is correct on SGX where
-# the startup log line prints the embedded debug label rather than MRENCLAVE.  Falls back to the log
-# only on a debug build, where that line IS the identity -- and scans every rotated file, because
-# rotatelogs rotates daily and an enclave up 17 hours has its startup line in yesterday's.
-enclave_running_measurement() {
-    local pid exe out l
+# On SGX the enclave is launched as `ego run .../qadenad_enclave`, so the process COMM is "ego" and
+# "ego-host" -- `pgrep -x qadenad_enclave` returns 0 on a perfectly healthy node.  That false
+# negative made this library report "the enclave is NOT RUNNING" on SGX1 while it was serving
+# happily on /tmp/qadena_50051.sock.
+#
+# `pgrep -f` is the other trap: it matches the full command line, so it matches the checking command
+# itself.  Everything here reads `ps` and filters explicitly instead.
+
+# enclave_running_binary -- path of the qadenad_enclave binary the running process was started from,
+# for both launch styles.  Empty if nothing is running.
+enclave_running_binary() {
+    local line pid exe
+    # SGX: `ego run <path> ...`.  Excluding awk/grep by name, since ps lists the filter too.
+    line=$(ps -eo args --no-headers 2>/dev/null \
+           | awk '/ego run/ && /qadenad_enclave/ && !/awk/ && !/grep/ {print; exit}')
+    if [ -n "$line" ]; then
+        line="${line#*ego run }"
+        printf "%s" "${line%% *}"
+        return 0
+    fi
+    # Debug: the binary is the executable itself.
     pid=$(pgrep -x qadenad_enclave 2>/dev/null | head -1)
     if [ -n "$pid" ]; then
         exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null)
-        if [ -n "$exe" ] && [ -x "$exe" ]; then
-            out=$(enclave_measurement "$exe") && [ -n "$out" ] && { printf "%s" "$out"; return 0 }
-        fi
+        [ -n "$exe" ] && { printf "%s" "$exe"; return 0 }
+    fi
+    return 1
+}
+
+# enclave_process_count -- how many enclave processes are up, counting the ego wrappers as one node.
+enclave_process_count() {
+    local n
+    n=$(ps -eo args --no-headers 2>/dev/null \
+        | awk '/qadenad_enclave/ && !/awk/ && !/grep/' | wc -l | tr -d ' ')
+    printf "%s" "$n"
+}
+
+enclave_is_running() { [ "$(enclave_process_count)" != "0" ] }
+
+# enclave_running_measurement -- what the RUNNING process is, not what is installed in bin/.
+#
+# Read from the binary the process was started from, which is correct on SGX where the startup log
+# line prints the embedded debug label rather than MRENCLAVE.  Falls back to the log only on a debug
+# build, where that line IS the identity -- scanning every rotated file, because rotatelogs rotates
+# daily and an enclave up 17 hours has its startup line in yesterday's.
+enclave_running_measurement() {
+    local bin out l
+    bin=$(enclave_running_binary)
+    if [ -n "$bin" ] && [ -x "$bin" ]; then
+        out=$(enclave_measurement "$bin") && [ -n "$out" ] && { printf "%s" "$out"; return 0 }
     fi
     enclave_is_sgx && return 1   # never trust the log line on SGX; it prints the debug label
     for l in "$QADENAHOME"/logs/qadena-*.log(Nom); do
