@@ -314,6 +314,98 @@ except Exception:
         warn "still catching up with the network"
     fi
 
+    # ---------------------------------------------------------------------------------------
+    # THE FLEET, AS EACH NODE SEES ITSELF.
+    #
+    # Two questions an operator has before touching anything, neither answerable from this node
+    # alone:
+    #
+    #   1. "If I stop this one, does the chain keep producing?"  CometBFT needs MORE than 2/3 of
+    #      voting power online, so the answer is (total - this one)/total per validator -- not
+    #      visible from a stake list.  On 2026-08-21 a build stopped the primary while it held
+    #      47% and the chain halted ~25 minutes, because nothing said THAT node was the unsafe
+    #      one while the other three were fine.
+    #
+    #   2. "Is everyone actually keeping up?"  A node can hold its RPC open, report
+    #      catching_up=false, and still be thousands of blocks behind -- CometBFT reports
+    #      caught-up once it leaves blocksync, not once it is current.  So height is asked of
+    #      EACH peer and shown as a lag against the furthest ahead.
+    #
+    # Peers come from the chain's own IntervalPublicKeyID rows, the same source getSSPrivK uses
+    # to find them, so this reports the set the enclave would actually try to reach.
+    myaddr=$(echo "$node_status" | jq -r '.result.validator_info.address // empty')
+    vals=$(curl -s -m 5 "$rpc/validators?per_page=100" 2>/dev/null)
+    if [ -n "$vals" ] && [ "$(echo "$vals" | jq -r '.result.validators // empty')" != "" ]; then
+        echo ""
+        echo "VALIDATORS"
+        total=$(echo "$vals" | jq -r '[.result.validators[].voting_power|tonumber] | add')
+        count=$(echo "$vals" | jq -r '.result.validators | length')
+        info "$count active, total voting power $total"
+
+        peers=$(qadenad_alias q qadena list-interval-public-key-id -o json 2>/dev/null \
+            | jq -r '.intervalPublicKeyID[] | select(.nodeType=="pioneer" and .externalIPAddress!="") | .nodeID+"\t"+.externalIPAddress' 2>/dev/null)
+
+        # Ask every peer where it is, then work out the furthest ahead so the rest can be shown
+        # as a lag rather than as a bare number nobody can compare.
+        rows=""; best=0
+        while IFS=$'\t' read -r pid pip; do
+            [ -z "$pip" ] && continue
+            st=$(curl -s -m 3 "http://$pip:26657/status" 2>/dev/null)
+            if [ -z "$st" ]; then
+                rows="$rows$pid\t$pip\t?\t?\t?\tNO RPC\n"
+                continue
+            fi
+            h=$(echo "$st"  | jq -r '.result.sync_info.latest_block_height // "?"')
+            cu=$(echo "$st" | jq -r '.result.sync_info.catching_up // "?"')
+            pw=$(echo "$st" | jq -r '.result.validator_info.voting_power // "0"')
+            ad=$(echo "$st" | jq -r '.result.validator_info.address // ""')
+            [ "$h" != "?" ] && [ "$h" -gt "$best" ] 2>/dev/null && best=$h
+            rows="$rows$pid\t$pip\t$h\t$cu\t$pw\t$ad\n"
+        done < <(echo "$peers")
+
+        info ""
+        info "  node       address        height      lag   power        share  if stopped  state"
+        unsafe=0
+        printf "$rows" | while IFS=$'\t' read -r pid pip h cu pw ad; do
+            [ -z "$pid" ] && continue
+            mark="  "; [ -n "$ad" ] && [ "$ad" = "$myaddr" ] && mark="=>"
+            if [ "$h" = "?" ]; then
+                bad "$mark $(printf %-10s "$pid") unreachable at $pip"
+                continue
+            fi
+            lag=$((best - h))
+            share=$(echo "$pw $total" | awk '{printf "%.1f", $1*100/$2}')
+            rest=$(echo "$pw $total"  | awk '{printf "%.1f", ($2-$1)*100/$2}')
+            state="ok"; [ "$cu" = "true" ] && state="CATCHING UP"
+            [ "$lag" -gt 20 ] && state="BEHIND"
+            # Both names, because they answer different questions.  The pioneer id is what the
+            # scripts, the owner lists and the ss-reconstruct: log lines use; the consensus
+            # address is what /validators, the block headers and a CONSENSUS FAILURE report use.
+            # Having only one of them means translating by hand at exactly the wrong moment.
+            addr="${ad:0:12}"; [ -z "$addr" ] && addr="-"
+            line="$mark $(printf %-9s "$pid") $(printf %-13s "$addr") $(printf %-10s "$h") $(printf %5s "$lag")  $(printf %-12s "$pw") $(printf %5s "$share")%  $(printf %6s "$rest")%   $state"
+            if [ "$(echo "$rest" | awk '{print ($1 > 66.67) ? 1 : 0}')" = "1" ] && [ "$state" = "ok" ]; then
+                info "$line"
+            else
+                warn "$line"
+            fi
+        done
+
+        # The safety verdict is recomputed here rather than inside the loop above: that loop runs
+        # in a subshell (it is the right-hand side of a pipe), so a counter incremented there does
+        # not survive it.
+        unsafe=$(echo "$vals" | jq -r --argjson t "$total" \
+            '[.result.validators[] | select((($t - (.voting_power|tonumber)) / $t * 100) <= 66.67)] | length')
+        info ""
+        if [ "$unsafe" = "0" ]; then
+            info "every validator can be stopped one at a time without halting the chain"
+        else
+            info "$unsafe validator(s) hold more than 1/3 -- a ROLLING UPGRADE IS NOT POSSIBLE"
+            info "until stake is spread so that no one validator exceeds 33.33%"
+        fi
+        info "(=> marks this node; consensus needs MORE than 66.67% online)"
+    fi
+
     # Height moving is the difference between "running" and "working".  A node can hold an RPC port
     # open while consensus is stalled, and every check above would still pass.
     if [ $quick -eq 0 ]; then
