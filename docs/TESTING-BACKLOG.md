@@ -2076,3 +2076,38 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
      distinction. Either explain the variance and set the bound from it, or split the assertion so
      the safety property (froze, did not fork) reports separately from the promptness bound -- the
      first is the one that must stay loud.
+
+103. Nothing restarts a node that halts on purpose -- the "supervisor" is not installed
+
+     M4 halted itself on 2026-08-22 at 18:06 local, correctly, logging
+
+         signer_enclave process exited unexpectedly (code 0) -- halting the node so the
+         supervisor can restart it; startup reconciliation will recover
+
+     and then stayed down for 75 minutes until someone looked. There is no supervisor on any of
+     M1-M4: `systemctl list-unit-files | grep qadena` is empty on every node, and qadenad's parent
+     is a hand-run `/bin/zsh .../run.sh`. scripts/qadena.service-skel exists and carries
+     `Restart=on-failure` -- the very line that comment is written against -- but installing it
+     (scripts/install_qadena_service.sh) has never been part of bringing a node up.
+
+     The halt design DEPENDS on something restarting the process. Deliberate halt plus no
+     supervisor is just an outage, and it is worse than an outage on a validator: the chain keeps
+     going without it, so nothing is obviously broken until enough nodes have quietly dropped out
+     to threaten the 2/3 threshold. With 4 validators of near-equal stake, two silent halts is a
+     stopped chain.
+
+     Decide whether the fleet should run under systemd (and make install_qadena_service.sh part of
+     bringup), or whether the halt path should be documented as requiring manual recovery. It
+     should not stay in the current state, where the code says a supervisor exists and none does.
+
+104. Debug logging is the reason a node fills its disk in five days
+
+     Every node runs with `--log-level debug`, which produced 11-13 GB of log PER DAY per node on
+     M1-M4, against a 60 GB disk shared with chain data, the Go toolchain and pre-bringup backups.
+     rotatelogs was rotating daily and deleting nothing (fixed -- see scripts/prune_logs.sh), but
+     the retention fix only bounds the symptom. At 12 GB/day even a 3-day window is 36 GB.
+
+     Decide the steady-state log level for a long-running fleet node. Debug is what makes the
+     enclave diagnosis in this backlog possible, so this is a real trade, not an obvious cut --
+     but it should be a choice, with the disk budget written down next to it, rather than a
+     default nobody revisited.

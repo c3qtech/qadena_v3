@@ -25,7 +25,13 @@ User=<username>
 # below never fired: verified with `bash -c '(exit 1) | cat'; echo $?` -> 0.  That was survivable
 # while the enclaves had their own respawn loops; it is not now that a dying enclave deliberately
 # takes the node down for this line to restart.
-ExecStart=/bin/bash -c "set -o pipefail; /home/<username>/qadena/scripts/run.sh 2>&1 | rotatelogs -l -D -L /home/<username>/qadena/logs/qadena.log /home/<username>/qadena/logs/qadena-%%Y-%%m-%%d.log 86400"
+# -p prune_logs.sh is NOT optional housekeeping.  rotatelogs rotates and never deletes, so the dated
+# files grow without bound -- ~12 GB/day at debug level, which fills a 60 GB disk in about five days.
+# That is precisely what took the ARM fleet down on 2026-08-22: M4 hit 99%, its enclave stopped
+# answering health checks because writes stall on a full filesystem, signer_enclave exited and the
+# node halted; M1 hit 100% and stalled behind its peers.  prune_logs.sh enforces both an age limit
+# and a total-size budget (QADENA_LOG_KEEP_DAYS / QADENA_LOG_MAX_TOTAL_MB).
+ExecStart=/bin/bash -c "set -o pipefail; /home/<username>/qadena/scripts/run.sh 2>&1 | rotatelogs -l -D -p /home/<username>/qadena/scripts/prune_logs.sh -L /home/<username>/qadena/logs/qadena.log /home/<username>/qadena/logs/qadena-%%Y-%%m-%%d.log 86400"
 WorkingDirectory=/home/<username>/qadena
 # Restart=on-failure is the ENCLAVE-CRASH recovery path, not just the node's: qadenad spawns and
 # owns its enclave processes, and a spawned enclave that dies takes the node down with a named,
