@@ -2111,3 +2111,38 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
      enclave diagnosis in this backlog possible, so this is a real trade, not an obvious cut --
      but it should be a choice, with the disk budget written down next to it, rather than a
      default nobody revisited.
+
+105. The build is not reproducible, so building per node forges the measurement
+
+     Measured 2026-08-22 while rolling unique051 across M1-M4. Three builds of the SAME source
+     produced three different binaries:
+
+         M1, first build (tree dirty, pre-commit)   enclave f68d1417a30665c3
+         M2 / M3 / M4, from clean 3cef2824          enclave 9103e44956e9974a  (all three identical)
+         M1, rebuilt from that same clean 3cef2824  enclave d448ef07617dbf80
+
+     M2/M3/M4 agreeing is not reproducibility -- they built simultaneously from identical trees.
+     M1 built the same commit at a different time and got a different binary, so something
+     time- or environment-dependent is embedded.
+
+     WHY THIS MATTERS MORE HERE THAN IN A NORMAL PROJECT. A debug enclave takes its identity from
+     an embedded text file, so four separately-built binaries all report `unique051` and the chain
+     cannot tell them apart. The registry says one measurement is active; four different binaries
+     answer to it. That is precisely the property MRENCLAVE exists to deny, and the debug id file
+     exists to IMITATE MRENCLAVE, not to opt out of it. On SGX these four builds would have had
+     four different measurements and three of them would have been refused.
+
+     Building on each node was how this was nearly deployed, and it was the operator who stopped
+     it. install_release.sh caught the tail of it -- "qadenad.1.1.11 already exists with different
+     contents ... refusing to overwrite" -- which is a good check, but it only fires when a name
+     collides, not when four nodes each build their own from scratch.
+
+     THE FIX IS PROCESS, AND IT ALREADY EXISTS: build once, package_release.sh, distribute, install
+     everywhere. That is what was ultimately done, and all four nodes now run enclave sha
+     d448ef07617d. What is missing is anything that makes the wrong path hard: nothing warns when a
+     node builds a measurement that another node already runs a different binary for.
+
+     Worth deciding: either make the build reproducible (so per-node building is harmless and
+     verifiable), or have the fleet refuse a binary whose hash does not match what the chain's
+     active measurement was registered with. The second needs the hash recorded at registration,
+     which it is not today.
