@@ -43,7 +43,26 @@ ulimit -c unlimited
 # exactly like a spawned one.  The pruning window matters even standalone: the enclave must retain
 # at least as much history as the chain, or a rollback the chain accepts fails on the enclave.
 log_level=$(grep "log_level" $QADENAHOME/config/config.toml | awk '{print $3}' | tr -d '"' | tr -d "'")
-[[ $log_level == "debug" ]] || log_level="info"
+
+# THE SAME RULE common.DebugEnabledForLevel APPLIES, because config.toml's log_level may be a
+# per-module list ("p2p:info,consensus:info,*:debug") rather than a plain level.  A straight
+# compare against "debug" -- which is what stood here -- reads every list form as "not debug" and
+# starts the enclave at info, discarding exactly the output such a list is written to keep.  The
+# wildcard entry governs; with no wildcard, any explicit debug entry counts.
+case "$log_level" in
+    *:*)
+        wildcard=$(printf '%s' "$log_level" | tr ',' '\n' | grep '^[[:space:]]*\*:' | tail -1 | cut -d: -f2-)
+        if [[ -n "$wildcard" ]]; then
+            [[ "$wildcard" == "debug" ]] && log_level="debug" || log_level="info"
+        elif printf '%s' "$log_level" | tr ',' '\n' | grep -q ':[[:space:]]*debug[[:space:]]*$'; then
+            log_level="debug"
+        else
+            log_level="info"
+        fi
+        ;;
+    debug) log_level="debug" ;;
+    *)     log_level="info" ;;
+esac
 
 toml_value() {
     grep "^$2[[:space:]]*=" "$1" 2>/dev/null | head -1 | cut -d= -f2- | tr -d ' "'"'"''

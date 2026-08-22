@@ -105,9 +105,13 @@ func SetExternalChainEnclave(v bool) { externalChainEnclave = v }
 func ConfigureEnclaveSupervisor(logger log.Logger, appOpts servertypes.AppOptions) {
 	supervisorHome = cast.ToString(appOpts.Get(flags.FlagHome))
 
-	// Parity with run.sh: anything that is not exactly "debug" runs the enclave at info.
+	// THE SPAWNED ENCLAVE'S LEVEL, and it must follow the same rule the chain uses for its own.
+	// This compared the whole log_level against "debug", so the moment config.toml carried a
+	// per-module list -- "p2p:info,consensus:info,*:debug", the only way to quiet the p2p and
+	// consensus firehose -- it silently dropped the enclave to info and took MOST OF THE ENCLAVE'S
+	// DEBUG OUTPUT with it, which is the output that list was written to preserve.
 	supervisorLogLevel = "info"
-	if cast.ToString(appOpts.Get("log_level")) == "debug" {
+	if c.DebugEnabledForLevel(cast.ToString(appOpts.Get("log_level"))) {
 		supervisorLogLevel = "debug"
 	}
 
