@@ -69,6 +69,7 @@ import (
 	"github.com/cometbft/cometbft/crypto/tmhash"
 	//	"github.com/cometbft/cometbft/libs/log"
 
+	cryptorand "crypto/rand"
 	"io/ioutil"
 	"math/big"
 	"math/rand/v2"
@@ -611,6 +612,349 @@ func getThreshold(shareCount int) int {
 	}
 	c.LoggerDebug(logger, "threshold for shareCount", shareCount, "is", strconv.Itoa(threshold))
 	return threshold
+}
+
+// maxSSShareSplits caps how many pioneers receive a share of any one SS interval key.
+//
+// THE KNOB.  Change this value; everything else follows from it.
+//
+// WHY THERE IS A CAP.  Every owner costs one encrypted blob in the rotation message that
+// MsgPioneerAddPublicKey carries -- 161 bytes on the wire, measured on a real rotation tx -- so
+// without a cap that message grows linearly with the fleet, forever.  Nothing is bought past a
+// point: getThreshold's default arm tops the threshold out at 5, so owner 21 and owner 200 deliver
+// exactly the same recoverability as owner 20 while both keep paying for the bytes.
+//
+// WHY 20.  Four times the threshold ceiling of 5, so a key survives losing three quarters of its
+// owners at once, while holding the rotation message near 6 KB at any fleet size.
+//
+// DO NOT SET THIS BELOW minSSShareSplits.  getThreshold(3) is 1, and at threshold 1 addSSShare does
+// not split at all -- it hands every owner the WHOLE private key.  A cap of 3 would therefore
+// silently convert a hundred-node fleet's keys from 5-of-20 Shamir into three plaintext copies,
+// with nothing in the logs calling it a downgrade.  effectiveShareCap clamps rather than trusting
+// this value.
+var maxSSShareSplits = 20
+
+// minSSShareSplits is the smallest cap that still splits anything at all.  See maxSSShareSplits.
+const minSSShareSplits = 4
+
+// maxSSLivenessProbes caps how many pioneers are DIALLED to find live ones.
+//
+// THE SECOND KNOB.  Without it the probe fans out to the whole fleet -- one goroutine and one
+// socket per addressable pioneer, every rotation -- so a thousand-node fleet would open a thousand
+// concurrent dials to choose twenty owners.  That is unbounded work, unbounded file descriptors,
+// and a self-inflicted burst of traffic aimed at every peer at once.
+//
+// WHY 30, AGAINST A SPLIT CAP OF 20.  The probe only has to find maxSSShareSplits live pioneers, so
+// the useful range is between the split cap (no headroom at all) and whatever fan-out is tolerable.
+// Half again the split cap means a THIRD of the sample can be down and the owner set is still
+// filled entirely from peers that answered -- which covers ordinary churn, restarts and a rolling
+// upgrade.  Pushing it higher buys headroom only for a fleet so dead that the unprobed and silent
+// tiers are carrying the set anyway, and it costs a dial per peer on every rotation.
+//
+// Probing FEWER than the split cap would be pointless -- the live set could never fill the owner
+// set on its own -- so effectiveProbeCap raises it to the split cap rather than trusting this.
+var maxSSLivenessProbes = 30
+
+// effectiveProbeCap is maxSSLivenessProbes, never below the split cap.  See maxSSLivenessProbes.
+func effectiveProbeCap() int {
+	if maxSSLivenessProbes < effectiveShareCap() {
+		return effectiveShareCap()
+	}
+	return maxSSLivenessProbes
+}
+
+// effectiveShareCap is maxSSShareSplits with the floor applied.  Callers log it, so a misconfigured
+// cap shows up as the number actually used rather than the number asked for.
+func effectiveShareCap() int {
+	if maxSSShareSplits < minSSShareSplits {
+		return minSSShareSplits
+	}
+	return maxSSShareSplits
+}
+
+// ssRotationPlan is everything a rotation needs from the BLOCK STORE, gathered up front.
+//
+// THIS IS THE planSSReconstruct/runSSReconstruct SPLIT, APPLIED TO ROTATION.  This race has been
+// fixed twice before, once per half.  The write half: commit 98edd048 moved the keygen goroutine's
+// writes out of the per-transaction CacheCtx after a concurrent failed transaction re-derived the
+// cache and silently destroyed a fresh private key.  The read half: commit 95277e29 split
+// getSSPrivK into a plan phase that "reads the block store, must run on the block-execution
+// goroutine" and a run phase that is safe anywhere -- "exactly one input forced the split:
+// getPioneerIPAddress reads s.CacheCtx".
+//
+// The rotation had the same disease and never got the same cure: UpdateHeight detached
+// updateSSIntervalKey wholesale, so getAddressablePioneers ITERATED CacheCtx from a goroutine
+// while block execution wrote to it -- and TransactionComplete's failure path re-derives
+// s.CacheCtx outright, so even the field read races.  Cloning the context would not help: the
+// sdk.Context is a value but the cachekv store inside it is a pointer to the same unsynchronized
+// maps.  The only shape that works is the one 95277e29 established: snapshot on the execution
+// thread, detach the rest.
+//
+// Everything else the detached phase touches was already safe -- params getters under s.mutex,
+// the secrets DB under its own mutex (98edd048), clientCtx keyring/network calls.
+type ssRotationPlan struct {
+	// pioneers is the addressable set, in store order; selection truncates it to the owner set.
+	pioneers []string
+	// ips carries each pioneer's published address, for the liveness probe.
+	ips map[string]string
+	// enclavePubKs carries each pioneer's enclave public key, for encrypting its share.  A
+	// pioneer can be addressable yet have no resolvable key; the gShares loop treats selecting
+	// such a pioneer as the same hard error the store lookup used to raise.
+	enclavePubKs map[string]string
+}
+
+// planSSRotation reads the block store and must therefore run on the block-execution goroutine --
+// in practice, inside the UpdateHeight or InitEnclave handler, before anything detaches.
+func (s *qadenaServer) planSSRotation() *ssRotationPlan {
+	plan := &ssRotationPlan{
+		pioneers:     s.getAddressablePioneers(),
+		ips:          make(map[string]string),
+		enclavePubKs: make(map[string]string),
+	}
+	for _, p := range plan.pioneers {
+		if ip, ok := s.getPioneerIPAddress(p); ok && ip != "" {
+			plan.ips[p] = ip
+		}
+		if pioneerWalletID, _, _, found := s.getIntervalPublicKeyId(p, types.PioneerNodeType); found {
+			if pubK, found := s.getPublicKey(pioneerWalletID, types.EnclavePubKType); found {
+				plan.enclavePubKs[p] = pubK
+			}
+		}
+	}
+	return plan
+}
+
+// ssLivenessProbeTimeout bounds the WHOLE probe round, not one peer.
+//
+// The round deliberately runs to completion or to this deadline rather than stopping as soon as
+// enough peers have answered.  Stopping early would select the FASTEST maxSSShareSplits pioneers,
+// and "fastest" is a stable property -- the same well-connected nodes would win every rotation,
+// which is the fixed-custody failure the random draw exists to prevent, reintroduced through a side
+// door.  Every peer gets the full window, and the draw happens afterwards over everyone who
+// answered.
+//
+// Three seconds because this is a reachability check, not real work: the peer answers out of its
+// enclave's memory.  A rotation therefore costs at most this once per key, against a cadence
+// measured in thousands of blocks.
+const ssLivenessProbeTimeout = 3 * time.Second
+
+// pioneerAnswers is one liveness probe: did this peer's ENCLAVE respond?
+//
+// EnclaveMeasurement is the right question to ask.  It takes an empty request, so it needs no
+// pre-existing key or state to reference, and the keeper forwards it to the enclave -- so an answer
+// proves the whole path this selection cares about is alive (node up, RPC serving, enclave
+// responsive), not merely that a TCP port is open.  A node can sign every block with a wedged
+// enclave; consensus liveness would call that node healthy and it would serve no shares.
+//
+// Only reachability is judged here.  The CONTENT of the reply is deliberately ignored: whether the
+// peer would actually hand over a share depends on trust decided elsewhere, and folding that in
+// would make key custody depend on a second, unrelated verdict.  The threshold margin -- 5 of 20 --
+// is what absorbs a bad pick.
+func (s *qadenaServer) pioneerAnswers(ctx context.Context, node string) bool {
+	rpcClient, err := client.NewClientFromNode(node)
+	if err != nil {
+		return false
+	}
+	queryClient := types.NewQueryClient(clientCtx.WithNodeURI(node).WithClient(rpcClient))
+	_, err = queryClient.EnclaveMeasurement(ctx, &types.QueryEnclaveMeasurementRequest{})
+	return err == nil
+}
+
+// probePioneerLiveness asks every candidate at once and returns those that answered in time.
+//
+// It takes RESOLVED addresses, not pioneer IDs to resolve: address resolution reads the block
+// store, so it happened in planSSRotation on the execution thread.  Nothing here touches enclave
+// state -- the dials use only the plan's snapshot.
+//
+// A candidate with no published address is not dialled and not returned.  It cannot be reached,
+// so it cannot be shown live -- the caller sorts it into the silent tier.
+func (s *qadenaServer) probePioneerLiveness(candidates []string, ips map[string]string) []string {
+	type target struct{ id, node string }
+
+	targets := make([]target, 0, len(candidates))
+	for _, p := range candidates {
+		ip := ips[p]
+		if ip == "" {
+			continue
+		}
+		targets = append(targets, target{id: p, node: "tcp://" + ip + ":26657"})
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), ssLivenessProbeTimeout)
+	defer cancel()
+
+	type answer struct {
+		id string
+		ok bool
+	}
+	ch := make(chan answer, len(targets))
+	for _, t := range targets {
+		go func(t target) {
+			ch <- answer{id: t.id, ok: s.pioneerAnswers(ctx, t.node)}
+		}(t)
+	}
+
+	live := make([]string, 0, len(targets))
+	for i := 0; i < len(targets); i++ {
+		select {
+		case a := <-ch:
+			if a.ok {
+				live = append(live, a.id)
+			}
+		case <-ctx.Done():
+			// Deadline reached -- but DRAIN what already arrived before giving up.
+			//
+			// select picks uniformly among ready cases, and once the deadline fires ctx.Done()
+			// is ready forever.  Returning straight from here would therefore be a coin toss
+			// against every answer already sitting in the buffer, silently discarding peers that
+			// DID respond and pushing their slots down into the unprobed and silent tiers.
+			for {
+				select {
+				case a := <-ch:
+					if a.ok {
+						live = append(live, a.id)
+					}
+				default:
+					// Nothing more buffered.  Whatever is still outstanding counts as not
+					// answering; those goroutines end on the same cancelled context, and the
+					// buffered channel means none of them block on the send.
+					return live
+				}
+			}
+		}
+	}
+	return live
+}
+
+// randomSubset draws k distinct entries from pool, uniformly at random.
+//
+// crypto/rand rather than math/rand/v2, which this file uses elsewhere for fan-out ordering.  This
+// decides who can reconstruct a private key, so it does not ride on a PRNG.  A draw that fails is
+// returned as an error and aborts the rotation; it must NEVER fall back to a fixed or partial
+// selection, because that is the fixed-custody outcome arriving silently.
+//
+// Partial Fisher-Yates: each step swaps the next slot with a uniform pick from the untouched tail,
+// so every entry is equally likely and none can be drawn twice.  A repeated owner would be a
+// repeated Shamir x-coordinate, which shamir.Combine has no integrity check to catch.
+func randomSubset(pool []string, k int) ([]string, error) {
+	if k >= len(pool) {
+		out := make([]string, len(pool))
+		copy(out, pool)
+		return out, nil
+	}
+
+	// Never shuffle the caller's slice -- it is the live pioneer list.
+	work := make([]string, len(pool))
+	copy(work, pool)
+
+	for i := 0; i < k; i++ {
+		n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(len(work)-i)))
+		if err != nil {
+			return nil, fmt.Errorf("drawing share holders: %w", err)
+		}
+		j := i + int(n.Int64())
+		work[i], work[j] = work[j], work[i]
+	}
+	return work[:k], nil
+}
+
+// chooseHolders fills an owner set of `limit` from tiers of candidates, best tier first.
+//
+// The tiers carry how much is KNOWN about each pioneer, and the order is the whole point:
+//
+//	live      answered the probe          -- a share here can actually be gathered
+//	unprobed  never asked, cap ran out    -- unknown, but no evidence against it
+//	silent    could not be shown live     -- did not answer, or has no address to answer on
+//
+// WHY THE SET IS NEVER ALLOWED TO SHRINK TO THE LIVE COUNT.  Fewer than four owners sends
+// getThreshold to 1, which stops splitting altogether and hands every owner the whole private key.
+// So a thin live set is topped up rather than accepted: an unprobed or silent pioneer is not
+// necessarily dead, and keeping the count keeps the split.
+//
+// WITHIN EVERY TIER THE DRAW IS RANDOM.  Taking the first entries of the live tier would rank by
+// latency, and latency is stable -- the same well-connected nodes would own every key, which is the
+// fixed-custody failure arriving through a side door.
+func chooseHolders(limit int, tiers ...[]string) ([]string, error) {
+	holders := make([]string, 0, limit)
+	for _, tier := range tiers {
+		if len(holders) >= limit {
+			break
+		}
+		picked, err := randomSubset(tier, limit-len(holders))
+		if err != nil {
+			return nil, err
+		}
+		holders = append(holders, picked...)
+	}
+	return holders, nil
+}
+
+// selectShareHolders picks the owners of one interval key: capped at effectiveShareCap(), preferring
+// pioneers whose enclave answered a capped, bounded probe, drawn at random within that preference.
+//
+// Safe to run detached because it touches no enclave state: the pioneer set and their addresses
+// arrive in the plan, snapshotted on the execution thread.  Network I/O off the consensus path
+// cannot fork anything; the same probe during block execution would be a fork hazard (see
+// enclave_call_context.go).
+//
+// DEGRADES, NEVER ABORTS.  If nothing answers -- a partition, a probe that fails wholesale -- the
+// live tier is empty and the draw falls through to the unprobed and silent tiers, which together
+// are the whole fleet.  That is exactly the behaviour from before liveness was consulted.  A
+// rotation must not fail because the network hiccuped.
+func (s *qadenaServer) selectShareHolders(plan *ssRotationPlan) ([]string, error) {
+	pioneers := plan.pioneers
+	limit := effectiveShareCap()
+	if len(pioneers) <= limit {
+		// Everyone owns regardless, so no probe could change the answer.  Skipping it keeps small
+		// fleets off the network entirely.
+		return pioneers, nil
+	}
+
+	// WHICH pioneers get dialled is itself a random draw.  Sampling the first N of store order
+	// would aim every rotation's probe traffic at the same peers and, on a fleet where most are
+	// healthy, hand them custody every time.
+	candidates, err := randomSubset(pioneers, effectiveProbeCap())
+	if err != nil {
+		return nil, err
+	}
+
+	live := s.probePioneerLiveness(candidates, plan.ips)
+
+	answered := make(map[string]bool, len(live))
+	for _, p := range live {
+		answered[p] = true
+	}
+	asked := make(map[string]bool, len(candidates))
+	for _, p := range candidates {
+		asked[p] = true
+	}
+
+	// Silent is the only tier carrying evidence AGAINST a pioneer, so it sorts below the ones that
+	// were simply never asked.
+	silent := make([]string, 0, len(candidates)-len(live))
+	unprobed := make([]string, 0, len(pioneers)-len(candidates))
+	for _, p := range pioneers {
+		switch {
+		case answered[p]:
+		case asked[p]:
+			silent = append(silent, p)
+		default:
+			unprobed = append(unprobed, p)
+		}
+	}
+
+	c.LoggerInfo(logger, "ss-liveness: addressable="+strconv.Itoa(len(pioneers))+
+		" probed="+strconv.Itoa(len(candidates))+
+		" live="+strconv.Itoa(len(live))+
+		" silent="+strconv.Itoa(len(silent))+
+		" unprobed="+strconv.Itoa(len(unprobed))+
+		" cap="+strconv.Itoa(limit)+
+		" within="+ssLivenessProbeTimeout.String())
+
+	return chooseHolders(limit, live, unprobed, silent)
 }
 
 func (s *qadenaServer) addSSShare(pioneerIDs []string, pubKID string, privK string, pubK string) (shares []string, err error) {
@@ -1567,7 +1911,11 @@ func (s *qadenaServer) UpdateSSIntervalKey(ctx context.Context, in *types.MsgUpd
 		return nil, types.ErrGenericTransaction
 	}
 
-	if !s.updateSSIntervalKey() {
+	// Debug-only endpoint (refused on a real enclave), so it takes the shortcut of building the
+	// plan on its own handler goroutine.  That read of the block store is only safe because debug
+	// use means no concurrent block execution worth protecting; the production path builds its
+	// plan inside UpdateHeight.
+	if !s.updateSSIntervalKey(s.planSSRotation()) {
 		c.LoggerError(logger, "couldn't update SS interval key")
 	}
 
@@ -1859,7 +2207,33 @@ func (s *qadenaServer) exportSealedCredentialIdentityHistoryTable() (tableMap ma
 	return
 }
 
-func (s *qadenaServer) GenerateSecretShare(nodeID string, nodeType string) (msgPAPK *types.MsgPioneerAddPublicKey, msgPUIPKI *types.MsgPioneerUpdateIntervalPublicKeyID, msgPBSSPK *types.MsgPioneerBroadcastSecretSharePrivateKey, err error) {
+// GenerateSecretShare mints one interval key and returns the two messages that publish it.
+//
+// IT NO LONGER BROADCASTS THE INTERVAL PRIVATE KEY.  There used to be a third message,
+// MsgPioneerBroadcastSecretSharePrivateKey, carrying the WHOLE intervalPrivK encrypted separately
+// to every addressable pioneer's enclave key, which SetSecretSharePrivateKey then cached verbatim.
+//
+// It was redundant with the share path in both regimes, which is why the InitEnclave path had
+// already stopped sending it (it built the message and dropped it on the floor with a bare `_ =`,
+// undocumented, which is the only reason anyone still thought it was gone everywhere):
+//
+//	threshold 1  (<=3 owners)  SetPublicKey caches myShare AS the key -- at threshold 1 addSSShare
+//	                           hands every owner the whole key, so the share IS the key.
+//	threshold >=2 (>=4 owners) SetPublicKey calls scheduleSSReconstruct, which rebuilds the key in
+//	                           the background, off the consensus path.
+//	the generator itself       addSSShare calls setPrivKCache directly.
+//
+// So nothing read it that would not have obtained the key anyway, and it cost two things that
+// matter.  It was the LARGER of the two per-pioneer terms in the rotation message -- 256 bytes
+// against the share's 161, measured on the wire -- so the message grew without bound at ~640 bytes
+// per pioneer.  And it handed the complete key to every addressable pioneer regardless of the
+// Shamir threshold, which meant "2-of-4" described recovery only; there was no split to defeat
+// because every owner already held the whole secret.
+//
+// THE MESSAGE TYPE, ITS CODEC ENTRY AND ITS HANDLER ALL STAY.  Historical blocks contain these
+// transactions, and a node replaying them must still route and apply them or it diverges.  What is
+// removed here is only the PRODUCER.
+func (s *qadenaServer) GenerateSecretShare(nodeID string, nodeType string, plan *ssRotationPlan) (msgPAPK *types.MsgPioneerAddPublicKey, msgPUIPKI *types.MsgPioneerUpdateIntervalPublicKeyID, err error) {
 
 	// create ss key
 	var mnemonic string
@@ -1884,25 +2258,25 @@ func (s *qadenaServer) GenerateSecretShare(nodeID string, nodeType string) (msgP
 	var walletID, intervalPubK, intervalPrivK string
 	walletID, _, intervalPubK, intervalPrivK, err = c.GetAddressByNameNoArmor(clientCtx, mnemonic)
 
-	pioneers := s.getAddressablePioneers()
-
-	// generate broadcast SS message
-	privKeys := make([]*types.SecretSharePrivK, 0)
-	for _, pioneer := range pioneers {
-		var ssPrivK types.SecretSharePrivK
-		ssPrivK.PioneerID = pioneer
-		enclavePubK, found := s.getEnclavePubK(pioneer)
-		if !found {
-			c.LoggerError(logger, "couldn't find enclave pubk for "+pioneer)
-			return
-		}
-		var ssIDAndPrivK types.EncryptableSSIDAndPrivK
-		ssIDAndPrivK.PubKID = walletID
-		ssIDAndPrivK.PrivK = intervalPrivK
-		ssIDAndPrivK.PubK = intervalPubK
-		ssPrivK.EncEnclaveSSIDAndPrivK = c.ProtoMarshalAndBEncrypt(enclavePubK, &ssIDAndPrivK)
-		privKeys = append(privKeys, &ssPrivK)
+	// TRUNCATE ONCE, HERE, so owners and shares can never disagree.
+	//
+	// Everything downstream keys off this one slice: addSSShare sizes the split by len(), records
+	// it as the owner list, and derives the threshold from it; the gShares loop below indexes it
+	// positionally; and SetPublicKey on every receiver rebuilds the owner list from the shares that
+	// arrive.  Cap it anywhere else and those diverge -- the generator would record N owners while
+	// only maxSSShareSplits of them hold anything, and reconstruction would spend its threshold
+	// budget dialling peers that have nothing to give.
+	addressable := plan.pioneers
+	pioneers, err := s.selectShareHolders(plan)
+	if err != nil {
+		c.LoggerError(logger, "couldn't select share holders: "+err.Error())
+		return
 	}
+	c.LoggerInfo(logger, "selectShareHolders pubKID="+walletID+
+		" addressable="+strconv.Itoa(len(addressable))+
+		" cap="+strconv.Itoa(effectiveShareCap())+
+		" owners="+strconv.Itoa(len(pioneers))+
+		" capped="+strconv.FormatBool(len(pioneers) < len(addressable)))
 
 	// generate shares
 
@@ -1916,13 +2290,10 @@ func (s *qadenaServer) GenerateSecretShare(nodeID string, nodeType string) (msgP
 	gShares := make([]*types.Share, 0)
 
 	for i, share := range shares {
-		pioneerWalletID, _, _, found := s.getIntervalPublicKeyId(pioneers[i], types.PioneerNodeType)
-		if !found {
-			c.LoggerError(logger, "BAD!  Couldn't find walletID for pioneerID "+pioneers[i])
-			err = types.ErrKeyNotFound
-			return
-		}
-		enclavePubK, found := s.getPublicKey(pioneerWalletID, types.EnclavePubKType)
+		// From the plan, not the store -- this loop runs on the detached goroutine.  Missing means
+		// the pioneer had no resolvable enclave key at plan time, which is the same hard error the
+		// store lookups used to raise from here.
+		enclavePubK, found := plan.enclavePubKs[pioneers[i]]
 		if !found {
 			c.LoggerError(logger, "BAD!  Couldn't find enclave pubk for pioneerID "+pioneers[i])
 			err = types.ErrKeyNotFound
@@ -1989,25 +2360,6 @@ func (s *qadenaServer) GenerateSecretShare(nodeID string, nodeType string) (msgP
 		report,
 	)
 
-	b, err = json.Marshal(privKeys)
-	if err != nil {
-		return
-	}
-
-	report, err = s.getRemoteReport(strings.Join([]string{
-		pwalletAddr.String(),
-		string(b),
-	}, "|"))
-	if err != nil {
-		return
-	}
-
-	msgPBSSPK = types.NewMsgPioneerBroadcastSecretSharePrivateKey(
-		pwalletAddr.String(),
-		privKeys,
-		report,
-	)
-
 	return
 }
 
@@ -2059,7 +2411,10 @@ func (s *qadenaServer) InitEnclave(ctx context.Context, in *types.MsgInitEnclave
 
 	_ = enclaveWalletID // unused
 
-	ssNewMsgPioneerAddPublicKey, ssNewMsgPioneerUpdateIntervalPublicKeyId, ssNewMsgPioneerBroadcastSecretSharePrivateKey, err := s.GenerateSecretShare(types.SSNodeID, types.SSNodeType)
+	// The plan is built here, in the handler, where block-store reads are safe; InitEnclave runs
+	// nothing concurrently with execution, but taking the same shape as the rotation path keeps
+	// one rule: GenerateSecretShare never touches the block store itself.
+	ssNewMsgPioneerAddPublicKey, ssNewMsgPioneerUpdateIntervalPublicKeyId, err := s.GenerateSecretShare(types.SSNodeID, types.SSNodeType, s.planSSRotation())
 
 	if err != nil {
 		c.LoggerError(logger, "couldn't GenerateSecretShare "+err.Error())
@@ -2263,8 +2618,6 @@ func (s *qadenaServer) InitEnclave(ctx context.Context, in *types.MsgInitEnclave
 
 	msgs = append(msgs, ssNewMsgPioneerUpdateIntervalPublicKeyId)
 
-	_ = ssNewMsgPioneerBroadcastSecretSharePrivateKey
-
 	// jar
 	report, err = s.getRemoteReport(strings.Join([]string{
 		pwalletAddr.String(),
@@ -2409,11 +2762,24 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 		}
 
 		if in.Height%keyUpdateFrequency == 0 {
-			go func() {
-				if !s.updateSSIntervalKey() {
-					c.LoggerError(logger, "failed updateSSIntervalKey()")
-				}
-			}()
+			// LIVE BLOCKS ONLY.  IsProposer means "I proposed THIS block", so replaying our own
+			// history sets it again for every block we once proposed -- and without this gate a
+			// node rolling forward through a rotation boundary would mint fresh key material and
+			// broadcast a rotation transaction on the strength of replayed history.  Same guard,
+			// same reason as the four serving paths; setChainPosition recorded this block's
+			// position above, so the answer is current.
+			if err := s.refuseIfCatchingUp("an SS interval key rotation"); err == nil {
+				// THE PLAN IS BUILT HERE, ON THE EXECUTION THREAD; ONLY THEN DOES THE WORK
+				// DETACH.  updateSSIntervalKey used to be detached wholesale, which put
+				// getAddressablePioneers' CacheCtx iteration on a goroutine racing block
+				// execution -- see ssRotationPlan for the history of this exact bug.
+				plan := s.planSSRotation()
+				go func() {
+					if !s.updateSSIntervalKey(plan) {
+						c.LoggerError(logger, "failed updateSSIntervalKey()")
+					}
+				}()
+			}
 		}
 
 	}
@@ -2440,7 +2806,7 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 	return &types.UpdateHeightReply{Status: true}, nil
 }
 
-func (s *qadenaServer) updateSSIntervalKey() bool {
+func (s *qadenaServer) updateSSIntervalKey(plan *ssRotationPlan) bool {
 	c.LoggerDebug(logger, "updateSSIntervalKey")
 
 	c.LoggerDebug(logger, "Going to create a new SS share")
@@ -2451,11 +2817,10 @@ func (s *qadenaServer) updateSSIntervalKey() bool {
 		c.LoggerDebug(logger, "enclaveParams"+c.PrettyPrint(s.privateEnclaveParams))
 	}
 
-	ssNewMsgPioneerAddPublicKey, ssNewMsgPioneerUpdateIntervalPublicKeyId, ssNewMsgPioneerBroadcastSecretSharePrivateKey, err := s.GenerateSecretShare(types.SSNodeID, types.SSNodeType)
+	ssNewMsgPioneerAddPublicKey, ssNewMsgPioneerUpdateIntervalPublicKeyId, err := s.GenerateSecretShare(types.SSNodeID, types.SSNodeType, plan)
 	msgs := make([]sdk.Msg, 0)
 	msgs = append(msgs, ssNewMsgPioneerAddPublicKey)
 	msgs = append(msgs, ssNewMsgPioneerUpdateIntervalPublicKeyId)
-	msgs = append(msgs, ssNewMsgPioneerBroadcastSecretSharePrivateKey)
 
 	flagSet := RootCmd.Flags()
 
@@ -5584,6 +5949,14 @@ func (s *qadenaServer) getAddressablePioneers() (pioneers []string) {
 	return
 }
 
+// SetSecretSharePrivateKey is REPLAY-ONLY as of the removal of the privK broadcast.
+//
+// Nothing produces MsgPioneerBroadcastSecretSharePrivateKey any more (see GenerateSecretShare for
+// why), but blocks already on every chain DO contain it, and a node replaying them must apply it
+// exactly as it did the first time or it diverges.  So this stays, unchanged, and must keep
+// working: it is history, not a live path.
+//
+// Do not "clean it up" because nothing calls it -- the callers are in the block store.
 func (s *qadenaServer) SetSecretSharePrivateKey(ctx context.Context, in *types.SecretSharePrivK) (*types.SetSecretSharePrivateKeyReply, error) {
 	c.LoggerDebug(logger, "SetSecretSharePrivateKey")
 	var ssIDAndPrivK types.EncryptableSSIDAndPrivK
