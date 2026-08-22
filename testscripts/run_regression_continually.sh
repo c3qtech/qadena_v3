@@ -277,7 +277,66 @@ treasury_qdn() {
 stop_requested=0
 trap 'stop_requested=1; echo ""; echo "stop requested; finishing the current run first"' INT TERM
 
+# PER-SUITE TALLY ACROSS EVERY RUN OF THIS LOOP.
+#
+# history.tsv answers "did run 7 fail", which is the wrong question after a long soak.  What matters
+# is WHICH SUITE keeps failing: one suite failing 9 times in 30 runs is a flaky test to chase, and
+# nine suites failing once each is a chain that is sick.  Both look identical in a column of
+# PASS/FAIL per run, and the per-run summaries scroll away.
+#
+# Suite rows are also appended to suites.tsv so the breakdown survives the loop being restarted --
+# the in-memory tally only covers this invocation.
+typeset -A agg_pass agg_fail agg_skip
+suite_file="$archive/suites.tsv"
+[ -f "$suite_file" ] || printf 'run\tstarted\tsuite\tresult\tseconds\n' > "$suite_file"
+
+tally_run() {   # runlog started
+    local log="$1" when="$2" verdict label secs
+    # Read from a process substitution rather than a pipe: in zsh EVERY pipeline component runs in a
+    # subshell, so `... | while read` would increment the arrays in a child and discard them.
+    while read -r verdict label secs; do
+        case "$verdict" in
+            PASS) agg_pass[$label]=$(( ${agg_pass[$label]:-0} + 1 )) ;;
+            FAIL) agg_fail[$label]=$(( ${agg_fail[$label]:-0} + 1 )) ;;
+            SKIP) agg_skip[$label]=$(( ${agg_skip[$label]:-0} + 1 )) ;;
+        esac
+        printf '%s\t%s\t%s\t%s\t%s\n' "$run" "$when" "$label" "$verdict" "$secs" >> "$suite_file"
+    done < <(sed -n '/^REGRESSION SUMMARY/,$p' "$log" \
+             | awk '/^[[:space:]]+(PASS|FAIL|SKIP)[[:space:]]/ {print $1, $2, $3}')
+}
+
+print_aggregate() {
+    [ "$run" -gt 0 ] || return 0
+    local label p f s tot
+    echo ""
+    echo "======================================================================"
+    echo "PER-SUITE TOTALS ACROSS $run RUN(S)"
+    echo "======================================================================"
+    printf "  %-22s %6s %6s %6s   %s\n" "SUITE" "PASS" "FAIL" "SKIP" "NOTE"
+    # Union of every suite seen, so a suite that only ever failed still gets a row.
+    for label in ${(ko)agg_pass} ${(ko)agg_fail} ${(ko)agg_skip}; do
+        print -r -- "$label"
+    done | sort -u | while read -r label; do
+        p=${agg_pass[$label]:-0}; f=${agg_fail[$label]:-0}; s=${agg_skip[$label]:-0}
+        tot=$(( p + f ))
+        note=""
+        # Flag the two shapes worth acting on differently, rather than leaving the reader to divide.
+        if [ "$f" -gt 0 ] && [ "$p" -gt 0 ]; then
+            note="FLAKY ($f of $tot failed)"
+        elif [ "$f" -gt 0 ]; then
+            note="ALWAYS FAILS"
+        fi
+        printf "  %-22s %6s %6s %6s   %s\n" "$label" "$p" "$f" "$s" "$note"
+    done
+    echo ""
+    echo "  per-suite rows: $suite_file"
+}
+
 run=0
+# Print the tally however the loop ends -- max-runs, Ctrl-C, treasury floor or an error exit.  A
+# summary that only appears on the happy path is missing exactly when it is most wanted.
+trap print_aggregate EXIT
+
 while true; do
     if [ "$stop_requested" -eq 1 ]; then
         echo "stopping as requested after $run run(s)"
@@ -337,8 +396,14 @@ while true; do
         result=PASS
     fi
 
+    tally_run "$runlog" "$started"
+
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$started" "$ended" "$run" "$result" "$failed" "$(treasury_qdn)" \
         >> "$history_file"
+
+    # A running tally after every run, so a soak left overnight is readable at a glance in the
+    # morning without reconstructing it from scrollback.
+    print_aggregate
 
     [ "$pause" -gt 0 ] 2>/dev/null && sleep "$pause"
 done
