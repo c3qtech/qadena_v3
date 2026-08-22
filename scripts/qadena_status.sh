@@ -39,6 +39,18 @@ bad()  { printf "  \033[31m%-4s\033[0m %s\n" "DOWN" "$1"; problems=$((problems +
 warn() { printf "  \033[33m%-4s\033[0m %s\n" "WARN" "$1" }
 info() { printf "       %s\n" "$1" }
 
+# A measurement is either a 64-hex MRENCLAVE (SGX) or a short label like unique051 (debug), and
+# they want opposite treatment in a fixed-width column: the hash is unreadable whole and identified
+# perfectly well by its tail, while the label is already short and loses its meaning if trimmed --
+# "unique051" cut to 7 becomes "ique051", which is narrower and tells you less. So the hash is cut
+# and the label is not; both fit the same 9-wide column either way.
+short_uid() {
+    case "$1" in
+        "" ) printf "?" ;;
+        *) if [[ "$1" =~ ^[0-9a-f]{64}$ ]]; then printf "%s" "${1: -7}"; else printf "%s" "$1"; fi ;;
+    esac
+}
+
 # is_measurement -- a measurement is 32 bytes as 64 lowercase hex.  Used to reject ego's error
 # output, which is NOT distinguishable by exit status alone (see below).
 is_measurement() { [[ "$1" =~ ^[0-9a-f]{64}$ ]] }
@@ -352,21 +364,34 @@ except Exception:
             [ -z "$pip" ] && continue
             st=$(curl -s -m 3 "http://$pip:26657/status" 2>/dev/null)
             if [ -z "$st" ]; then
-                rows="$rows$pid\t$pip\t?\t?\t?\tNO RPC\n"
+                rows="$rows$pid\t$pip\t?\t?\t?\tNO RPC\t?\t?\n"
                 continue
             fi
             h=$(echo "$st"  | jq -r '.result.sync_info.latest_block_height // "?"')
             cu=$(echo "$st" | jq -r '.result.sync_info.catching_up // "?"')
             pw=$(echo "$st" | jq -r '.result.validator_info.voting_power // "0"')
             ad=$(echo "$st" | jq -r '.result.validator_info.address // ""')
+            # WHAT EACH PEER IS ACTUALLY RUNNING, asked of the peer rather than assumed from this
+            # node.  A rolling upgrade is precisely the window where the fleet is NOT uniform, and
+            # that is the window in which this table gets read -- "did M4 come back on the new
+            # enclave" has no answer here without these two columns.  /abci_info carries the app
+            # version; enclave-measurement is a normal chain query, so both work against a remote
+            # node with no ssh.  Neither is fatal if it fails: a "?" costs nothing, and blocking
+            # the whole table on one slow peer would.
+            ver=$(curl -s -m 3 "http://$pip:26657/abci_info" 2>/dev/null \
+                  | jq -r '.result.response.version // "?"')
+            [ -z "$ver" ] && ver="?"
+            uid=$(timeout 6 "$qadenabin/qadenad" --home "$QADENAHOME" q qadena enclave-measurement \
+                    --node "tcp://$pip:26657" -o json 2>/dev/null | jq -r '.uniqueID // empty')
+            [ -z "$uid" ] && uid="?"
             [ "$h" != "?" ] && [ "$h" -gt "$best" ] 2>/dev/null && best=$h
-            rows="$rows$pid\t$pip\t$h\t$cu\t$pw\t$ad\n"
+            rows="$rows$pid\t$pip\t$h\t$cu\t$pw\t$ad\t$ver\t$uid\n"
         done < <(echo "$peers")
 
         info ""
-        info "  node       ip                address        height      lag   power        share  if stopped  state"
+        info "  node       ip                address        ver      enclave    height      lag   power        share  if stopped  state"
         unsafe=0
-        printf "$rows" | while IFS=$'\t' read -r pid pip h cu pw ad; do
+        printf "$rows" | while IFS=$'\t' read -r pid pip h cu pw ad ver uid; do
             [ -z "$pid" ] && continue
             mark="  "; [ -n "$ad" ] && [ "$ad" = "$myaddr" ] && mark="=>"
             if [ "$h" = "?" ]; then
@@ -387,7 +412,7 @@ except Exception:
             # it -- to ssh in, to curl its RPC, or to see which box a BEHIND row actually is.
             # It comes from the chain's own IntervalPublicKeyID row, so it is also exactly the
             # address the enclave would dial for a secret share.
-            line="$mark $(printf %-9s "$pid") $(printf %-17s "$pip") $(printf %-13s "$addr") $(printf %-10s "$h") $(printf %5s "$lag")  $(printf %-12s "$pw") $(printf %5s "$share")%  $(printf %6s "$rest")%   $state"
+            line="$mark $(printf %-9s "$pid") $(printf %-17s "$pip") $(printf %-13s "$addr") $(printf %-8s "$ver") $(printf %-10s "$(short_uid "$uid")") $(printf %-10s "$h") $(printf %5s "$lag")  $(printf %-12s "$pw") $(printf %5s "$share")%  $(printf %6s "$rest")%   $state"
             if [ "$(echo "$rest" | awk '{print ($1 > 66.67) ? 1 : 0}')" = "1" ] && [ "$state" = "ok" ]; then
                 info "$line"
             else
