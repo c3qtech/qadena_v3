@@ -87,6 +87,12 @@
 #   regression.sh --with-sgx          also verify the SGX build is signed and reproducible (SGX hw only)
 #   regression.sh --stop-on-fail      stop at the first failure
 #   regression.sh --skip a,b,c        do not run these suites
+#   regression.sh --json PATH         also write the per-suite results as JSON (default: LOGDIR/results.json)
+#
+# THE JSON IS THE MACHINE-READABLE COPY of the summary table, written last.  Anything tallying
+# results should read it rather than parse the printed table, whose layout is for humans and will
+# change.  A run that dies part-way writes no JSON at all, which is how a caller tells "finished and
+# passed" from "never finished" -- two things that look identical in a log that simply stops.
 #
 # SETUP HAS NO FLAG.  setup.sh runs automatically whenever the test users are incomplete -- checked
 # against test_data/users.json in the keyring AND against the wallets this chain actually holds --
@@ -121,6 +127,7 @@ with_sgx=false
 stop_on_fail=false
 skip_list=""
 advertise_ip=""
+json_out=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -129,6 +136,7 @@ while [[ $# -gt 0 ]]; do
         --with-sgx)         with_sgx=true; shift ;;
         --stop-on-fail)     stop_on_fail=true; shift ;;
         --skip)             skip_list="$2"; shift 2 ;;
+        --json)             json_out="$2"; shift 2 ;;
         --advertise-ip-address) advertise_ip="$2"; shift 2 ;;
         --help)
             sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//'
@@ -302,6 +310,57 @@ summarize() {
     echo "======================================================================"
     echo "logs: $logdir"
     } | tee -a "$logdir/summary.log"
+
+    emit_results_json
+}
+
+# THE SAME RESULTS, MACHINE-READABLE.
+#
+# run_regression_continually.sh used to recover these numbers by re-parsing the block printed above
+# with sed and awk -- matching on leading whitespace, on the column the verdict happens to sit in,
+# and on stripping the "s" off "33s". Every one of those is a property of how the table is FORMATTED,
+# so widening a column or renaming a heading silently breaks the tallies, and breaks them QUIETLY:
+# the parse yields nothing, the aggregate prints zero rows, and a clean-looking summary means the
+# reader concludes nothing failed. The formatted table is for humans; this is for programs.
+#
+# A run killed part-way writes no file at all, which is precisely the signal wanted -- the loop can
+# then distinguish "ran and passed" from "never finished", instead of both looking like silence.
+# Written last, after the summary, so a partial file cannot be mistaken for a complete run.
+emit_results_json() {
+    local out="${json_out:-$logdir/results.json}" tmp i n pass=0 skip=0 esc
+    mkdir -p "${out:h}" 2>/dev/null
+    tmp="$out.tmp$$"
+
+    for r in "${results[@]}"; do
+        [[ "$r" == "PASS" ]] && pass=$((pass + 1))
+        [[ "$r" == "SKIP" ]] && skip=$((skip + 1))
+    done
+    n=${#names[@]}
+
+    {
+        printf '{\n'
+        printf '  "finished": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '  "host": "%s",\n' "${HOST:-$(hostname)}"
+        printf '  "counts": { "total": %d, "pass": %d, "fail": %d, "skip": %d },\n' \
+               "$n" "$pass" "$failed" "$skip"
+        printf '  "suites": ['
+        i=1
+        while [ $i -le $n ]; do
+            # Labels are plain identifiers today; escaped anyway so a future label with a quote in
+            # it cannot produce a file that parses as valid JSON meaning something else.
+            esc=${names[$i]//\\/\\\\}; esc=${esc//\"/\\\"}
+            [ $i -gt 1 ] && printf ','
+            printf '\n    { "name": "%s", "result": "%s", "seconds": %d }' \
+                   "$esc" "${results[$i]}" "${seconds[$i]}"
+            i=$((i + 1))
+        done
+        [ $n -gt 0 ] && printf '\n  '
+        printf ']\n}\n'
+    } > "$tmp"
+
+    # Rename, so a reader never sees a half-written file. A truncated JSON would be a PARSE error
+    # the loop reports as a broken run, which is a lie about the run rather than about the file.
+    mv -f "$tmp" "$out"
 }
 
 # ---------------------------------------------------------------------------------------------

@@ -42,10 +42,13 @@
 #   run_regression_continually.sh --skip a,b,c      forward --skip to every regression.sh run
 #   run_regression_continually.sh --dry-run          say what this node would run, then stop
 #   run_regression_continually.sh --summary          per-suite totals over every archived run, then stop
+#   run_regression_continually.sh --clear-results    delete the archived results and start the history over
+#                                                    (asks first; -y / --yes skips the prompt)
 #   run_regression_continually.sh --help
 #
-# --summary reads the archived run logs, so it reports on a loop that is ALREADY RUNNING (or one
-# that finished days ago) without starting or disturbing anything.
+# --summary reads the archived per-run JSON, so it reports on a loop that is ALREADY RUNNING (or one
+# that finished days ago) without starting or disturbing anything.  regression.sh writes that JSON;
+# the printed summary table is for humans and nothing parses it.
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
@@ -87,6 +90,8 @@ regression_args=()
 auto_skip=1
 dry_run=0
 summary_only=0
+clear_results=0
+assume_yes=0
 manual_skip=""
 
 while [[ $# -gt 0 ]]; do
@@ -94,10 +99,12 @@ while [[ $# -gt 0 ]]; do
         --max-runs) max_runs="$2"; shift 2 ;;
         --floor)    floor_qdn="$2"; shift 2 ;;
         --pause)    pause="$2"; shift 2 ;;
-        --skip)     manual_skip="$2"; regression_args+=(--skip "$2"); shift 2 ;;
+        --skip)     manual_skip="$2"; shift 2 ;;   # merged with the auto list below, see there
         --no-auto-skip) auto_skip=0; shift ;;
         --dry-run)  dry_run=1; shift ;;
         --summary)  summary_only=1; shift ;;
+        --clear-results) clear_results=1; shift ;;
+        --yes|-y)   assume_yes=1; shift ;;
         --help)
             sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//'
 
@@ -203,16 +210,28 @@ topology_skips() {
 # Not under --summary: that reports on runs already archived and must not query the chain, so that
 # it stays usable on a node whose chain is down -- which is one of the times you most want to read
 # what the last runs did.
-if [ $auto_skip -eq 1 ] && [ $summary_only -eq 0 ]; then
+if [ $auto_skip -eq 1 ] && [ $summary_only -eq 0 ] && [ $clear_results -eq 0 ]; then
     echo "auto-skip: inspecting this node's place in the chain"
     auto=$(topology_skips)
     if [ -n "$auto" ]; then
         echo "auto-skip: skipping $auto  (override with --no-auto-skip)"
-        regression_args+=(--skip "$auto")
     else
         echo "auto-skip: nothing to skip -- this node can run the full suite"
     fi
 fi
+
+# ONE --skip, NOT TWO.
+#
+# Both lists used to be appended as separate --skip flags, and regression.sh parses that with
+# `skip_list="$2"` -- so the SECOND one replaced the first and whichever list was appended last was
+# the only one honoured. In practice that silently discarded the operator's own --skip, and the
+# suites they asked to skip ran anyway. Worse, --dry-run merged the two correctly when reporting, so
+# the preview said one thing and the run did another: the failure was invisible in the one output
+# whose job is to predict the run. Caught running exactly that case on a local chain -- params ran
+# despite being named in --skip.
+effective_skip="$auto"
+[ -n "$manual_skip" ] && effective_skip="${effective_skip:+$effective_skip,}$manual_skip"
+[ -n "$effective_skip" ] && regression_args+=(--skip "$effective_skip")
 
 # --dry-run: SAY WHAT WOULD RUN, THEN STOP.
 #
@@ -303,13 +322,23 @@ agg_incomplete=0              # runs that produced no summary block at all
 suite_file="$archive/suites.tsv"
 [ -f "$suite_file" ] || printf 'run\tstarted\tsuite\tresult\tseconds\n' > "$suite_file"
 
-tally_run() {   # runlog started
-    local log="$1" when="$2" verdict label secs seen=0
+tally_run() {   # results.json started
+    local js="$1" when="$2" verdict label secs seen=0
+
+    # NO FILE, OR A FILE THAT WILL NOT PARSE, MEANS THE RUN DID NOT FINISH.
+    #
+    # regression.sh writes this last and renames it into place, so its absence is not ambiguous: the
+    # run was killed, or died before summarize().  Counted as incomplete rather than skipped
+    # silently, because a run that scored nothing must not be able to hide inside a clean table.
+    if [ ! -s "$js" ] || ! jq -e . "$js" >/dev/null 2>&1; then
+        agg_incomplete=$(( agg_incomplete + 1 ))
+        return 0
+    fi
+
     # Read from a process substitution rather than a pipe: in zsh EVERY pipeline component runs in a
     # subshell, so `... | while read` would increment the arrays in a child and discard them.
-    while read -r verdict label secs; do
+    while IFS=$'\t' read -r verdict label secs; do
         seen=$(( seen + 1 ))
-        secs=${secs%s}                                  # the summary prints "33s"; store the number
         [ -n "${agg_order[(r)$label]}" ] || agg_order+=("$label")
         [ "$verdict" = FAIL ] && agg_runfail[$run]=$(( ${agg_runfail[$run]:-0} + 1 ))
         case "$verdict" in
@@ -319,17 +348,29 @@ tally_run() {   # runlog started
             SKIP) agg_skip[$label]=$(( ${agg_skip[$label]:-0} + 1 )) ;;
         esac
         printf '%s\t%s\t%s\t%s\t%s\n' "$run" "$when" "$label" "$verdict" "$secs" >> "$suite_file"
-    done < <(sed -n '/^REGRESSION SUMMARY/,$p' "$log" \
-             | awk '/^[[:space:]]+(PASS|FAIL|SKIP)[[:space:]]/ {print $1, $2, $3}')
-    # A run killed part-way writes no summary block and so contributes NOTHING above.  Counted, or
-    # the header would claim more runs than the columns actually add up to and the reader would be
-    # left to notice the arithmetic themselves.
+    # @tsv, and IFS set to tab: a suite label containing a space would otherwise split across
+    # $label and $secs and be tallied under a name that does not exist.  None do today, which is
+    # exactly why it would go unnoticed the day one does.
+    done < <(jq -r '.suites[] | [.result, .name, .seconds] | @tsv' "$js")
+
+    # Parsed, but with an empty suite list -- a run that started and recorded nothing.
     [ "$seen" -gt 0 ] || agg_incomplete=$(( agg_incomplete + 1 ))
 }
 
+agg_last_printed=-1
 print_aggregate() {
     [ "$run" -gt 0 ] || return 0
+    # The loop prints after every run AND the EXIT trap prints again, which on a normal finish means
+    # the same table twice in a row with nothing between them. Reprint only if a run has happened
+    # since the last one -- so an abort part-way through a run still gets its summary.
+    [ "$run" -ne "$agg_last_printed" ] || return 0
+    agg_last_printed=$run
     local label p f s tot note avg
+    # Runs that actually produced results.  Needed by the table below, not just the footer: a suite
+    # skipped in every SCORED run is "never ran", and comparing against $run instead made that note
+    # vanish as soon as one run died without results -- the note disappearing exactly when the data
+    # got thinner.
+    local scored=$(( run - agg_incomplete ))
     echo ""
     echo "======================================================================"
     echo "PER-SUITE TOTALS ACROSS $run RUN(S)"
@@ -350,7 +391,7 @@ print_aggregate() {
             note="FLAKY ($f of $tot failed)"
         elif [ "$f" -gt 0 ]; then
             note="ALWAYS FAILS"
-        elif [ "$s" -eq "$run" ]; then
+        elif [ "$s" -gt 0 ] && [ "$s" -eq "$scored" ]; then
             # Distinct from a blank note: this suite has no result at all, so a clean-looking table
             # is not evidence it works.  Usually auto-skip; --dry-run says which.
             note="never ran (skipped every run)"
@@ -371,10 +412,12 @@ print_aggregate() {
         if [ "$nf" -ge 3 ]; then cas=$(( cas + 1 )); casf=$(( casf + nf )); caslist="$caslist $r"; fi
     done
     echo ""
-    if [ "$bad" -eq 0 ]; then
-        echo "  no failures in $(( run - agg_incomplete )) scored run(s)"
+    if [ "$scored" -eq 0 ]; then
+        echo "  NO RUN PRODUCED RESULTS -- nothing above is based on a completed run"
+    elif [ "$bad" -eq 0 ]; then
+        echo "  no failures in $scored scored run(s)"
     else
-        echo "  $tf failure(s), in $bad of $(( run - agg_incomplete )) scored run(s)"
+        echo "  $tf failure(s), in $bad of $scored scored run(s)"
         [ "$cas" -gt 0 ] && echo "  $casf of them landed in $cas run(s) that failed 3+ suites at once --" \
                                  "likely ONE fault, not many flaky suites: run${caslist}"
     fi
@@ -385,6 +428,51 @@ print_aggregate() {
 
 run=0
 
+# --clear-results: START THE HISTORY OVER.
+#
+# The tally is only as useful as the runs it covers, and after a change to the chain or the suites
+# the old runs describe a system that no longer exists -- a suite that failed nine times last week
+# keeps reading as FLAKY long after the fix, which is the one thing this reporting must not do.
+#
+# It DELETES, so it says exactly what and asks first (-y to skip the prompt).  Only this loop's own
+# archive is touched; the per-suite logs under logs/regression belong to regression.sh and are
+# overwritten by its next run anyway.
+if [ "$clear_results" -eq 1 ]; then
+    setopt local_options null_glob
+    # Counted from separate arrays rather than by filtering one combined list.  `${#${(M)a:#pat}}`
+    # looks like "how many matched" and is not: the inner expansion joins to a scalar, so it returns
+    # the LENGTH OF THAT STRING -- it reported 14056 of each here, a plausible-looking number in a
+    # confirmation prompt for an unrecoverable delete.
+    runfiles=("$archive"/run-*.json "$archive"/run-*.log)
+    faildirs=("$archive"/failed-*)
+    doomed=("${runfiles[@]}" "${faildirs[@]}")
+    for f in "$history_file" "$suite_file"; do
+        [ -e "$f" ] && doomed+=("$f")
+    done
+    if [ ${#doomed} -eq 0 ]; then
+        echo "nothing to clear in $archive"
+        exit 0
+    fi
+    echo "this will DELETE from $archive:"
+    [ ${#runfiles} -gt 0 ] && printf '  %s run result file(s)\n' "${#runfiles}"
+    [ ${#faildirs} -gt 0 ] && printf '  %s preserved failure dir(s)\n' "${#faildirs}"
+    for f in "$history_file" "$suite_file"; do
+        [ -e "$f" ] && printf '  %s\n' "$f"
+    done
+    if [ "$assume_yes" -ne 1 ]; then
+        # Default NO on a bare Enter: this is unrecoverable and the archive is the only copy.
+        printf 'proceed? [y/N] '
+        read -r reply
+        case "$reply" in
+            [yY]|[yY][eE][sS]) ;;
+            *) echo "left alone"; exit 0 ;;
+        esac
+    fi
+    rm -rf -- "${doomed[@]}"
+    echo "cleared ${#doomed} item(s); the next run starts the history over"
+    exit 0
+fi
+
 # --summary: REPORT ON RUNS THAT ALREADY HAPPENED, then stop.
 #
 # The tally above only covers runs THIS invocation performed, which makes it useless in the case it
@@ -394,7 +482,7 @@ run=0
 # anything -- in particular without writing over the file a running loop is still reading.
 if [ "$summary_only" -eq 1 ]; then
     setopt local_options null_glob
-    logs=("$archive"/run-*.log)
+    logs=("$archive"/run-*.json)
     if [ ${#logs} -eq 0 ]; then
         echo "no archived runs in $archive"
         exit 0
@@ -405,7 +493,7 @@ if [ "$summary_only" -eq 1 ]; then
     suite_file=/dev/null
     for f in ${(o)logs}; do
         run=$(( run + 1 ))
-        tally_run "$f" "$(basename ${f%.log})"
+        tally_run "$f" "$(basename ${f%.json})"
     done
     print_aggregate
     exit 0
@@ -454,15 +542,18 @@ while true; do
     echo "######################################################################"
 
     runlog="$archive/run-$stamp.log"
-    "$qadenatestscripts/regression.sh" "${regression_args[@]}" > "$runlog" 2>&1
+    runjson="$archive/run-$stamp.json"
+    "$qadenatestscripts/regression.sh" "${regression_args[@]}" --json "$runjson" > "$runlog" 2>&1
     rc=$?
     ended=$(date -u +%FT%TZ)
 
     # The summary block is the useful part; the per-suite detail stays in logs/regression, which the
     # NEXT run overwrites -- so a failing run's suite logs are copied out before that can happen.
     sed -n '/^REGRESSION SUMMARY/,$p' "$runlog"
-    failed=$(sed -n 's/^  \([0-9][0-9]*\) of [0-9][0-9]* SUITES FAILED$/\1/p' "$runlog" | tail -1)
-    [ -n "$failed" ] || failed=0
+    # From the JSON, not from the printed line: the same reason the tally reads it.  Falls back to
+    # the exit status alone if the run never wrote one, which is the case where there is no count.
+    failed=$(jq -r '.counts.fail' "$runjson" 2>/dev/null)
+    [[ "$failed" == <-> ]] || failed=0
 
     if [ "$rc" -ne 0 ]; then
         faildir="$archive/failed-$stamp"
@@ -474,7 +565,7 @@ while true; do
         result=PASS
     fi
 
-    tally_run "$runlog" "$started"
+    tally_run "$runjson" "$started"
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$started" "$ended" "$run" "$result" "$failed" "$(treasury_qdn)" \
         >> "$history_file"
