@@ -221,7 +221,8 @@ fi
 for sock in /tmp/qadena_*.sock ; do
     [[ -e $sock ]] || continue
     if ! rm -f "$sock" 2>/dev/null; then
-        owner=$(stat -c %U "$sock" 2>/dev/null)
+        # `stat -c` is GNU, `stat -f` is BSD/macOS; try both rather than print "?" on a Mac.
+        owner=$(stat -c %U "$sock" 2>/dev/null || stat -f %Su "$sock" 2>/dev/null)
         echo "stop_qadena.sh: WARNING: could not remove $sock (owned by ${owner:-?}, /tmp is sticky)"
         echo "stop_qadena.sh:          the next start will fail to bind it.  Remove it with:"
         echo "stop_qadena.sh:              sudo rm -f $sock"

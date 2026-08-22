@@ -40,7 +40,12 @@
 #   run_regression_continually.sh --floor QDN        treasury floor (default 50000000)
 #   run_regression_continually.sh --pause SECONDS    wait between runs (default 0, back to back)
 #   run_regression_continually.sh --skip a,b,c      forward --skip to every regression.sh run
+#   run_regression_continually.sh --dry-run          say what this node would run, then stop
+#   run_regression_continually.sh --summary          per-suite totals over every archived run, then stop
 #   run_regression_continually.sh --help
+#
+# --summary reads the archived run logs, so it reports on a loop that is ALREADY RUNNING (or one
+# that finished days ago) without starting or disturbing anything.
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
@@ -81,6 +86,7 @@ floor_qdn=50000000
 regression_args=()
 auto_skip=1
 dry_run=0
+summary_only=0
 manual_skip=""
 
 while [[ $# -gt 0 ]]; do
@@ -91,6 +97,7 @@ while [[ $# -gt 0 ]]; do
         --skip)     manual_skip="$2"; regression_args+=(--skip "$2"); shift 2 ;;
         --no-auto-skip) auto_skip=0; shift ;;
         --dry-run)  dry_run=1; shift ;;
+        --summary)  summary_only=1; shift ;;
         --help)
             sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//'
 
@@ -193,7 +200,10 @@ topology_skips() {
     printf '%s\n' "${out[@]}" | sort -u | paste -sd, -
 }
 
-if [ $auto_skip -eq 1 ]; then
+# Not under --summary: that reports on runs already archived and must not query the chain, so that
+# it stays usable on a node whose chain is down -- which is one of the times you most want to read
+# what the last runs did.
+if [ $auto_skip -eq 1 ] && [ $summary_only -eq 0 ]; then
     echo "auto-skip: inspecting this node's place in the chain"
     auto=$(topology_skips)
     if [ -n "$auto" ]; then
@@ -286,53 +296,121 @@ trap 'stop_requested=1; echo ""; echo "stop requested; finishing the current run
 #
 # Suite rows are also appended to suites.tsv so the breakdown survives the loop being restarted --
 # the in-memory tally only covers this invocation.
-typeset -A agg_pass agg_fail agg_skip
+typeset -A agg_pass agg_fail agg_skip agg_secs
+typeset -A agg_runfail        # run number -> how many suites failed in THAT run
+typeset -a agg_order          # suites in FIRST-SEEN order == the order regression.sh runs them
+agg_incomplete=0              # runs that produced no summary block at all
 suite_file="$archive/suites.tsv"
 [ -f "$suite_file" ] || printf 'run\tstarted\tsuite\tresult\tseconds\n' > "$suite_file"
 
 tally_run() {   # runlog started
-    local log="$1" when="$2" verdict label secs
+    local log="$1" when="$2" verdict label secs seen=0
     # Read from a process substitution rather than a pipe: in zsh EVERY pipeline component runs in a
     # subshell, so `... | while read` would increment the arrays in a child and discard them.
     while read -r verdict label secs; do
+        seen=$(( seen + 1 ))
+        secs=${secs%s}                                  # the summary prints "33s"; store the number
+        [ -n "${agg_order[(r)$label]}" ] || agg_order+=("$label")
+        [ "$verdict" = FAIL ] && agg_runfail[$run]=$(( ${agg_runfail[$run]:-0} + 1 ))
         case "$verdict" in
-            PASS) agg_pass[$label]=$(( ${agg_pass[$label]:-0} + 1 )) ;;
+            PASS) agg_pass[$label]=$(( ${agg_pass[$label]:-0} + 1 ))
+                  agg_secs[$label]=$(( ${agg_secs[$label]:-0} + secs )) ;;
             FAIL) agg_fail[$label]=$(( ${agg_fail[$label]:-0} + 1 )) ;;
             SKIP) agg_skip[$label]=$(( ${agg_skip[$label]:-0} + 1 )) ;;
         esac
         printf '%s\t%s\t%s\t%s\t%s\n' "$run" "$when" "$label" "$verdict" "$secs" >> "$suite_file"
     done < <(sed -n '/^REGRESSION SUMMARY/,$p' "$log" \
              | awk '/^[[:space:]]+(PASS|FAIL|SKIP)[[:space:]]/ {print $1, $2, $3}')
+    # A run killed part-way writes no summary block and so contributes NOTHING above.  Counted, or
+    # the header would claim more runs than the columns actually add up to and the reader would be
+    # left to notice the arithmetic themselves.
+    [ "$seen" -gt 0 ] || agg_incomplete=$(( agg_incomplete + 1 ))
 }
 
 print_aggregate() {
     [ "$run" -gt 0 ] || return 0
-    local label p f s tot
+    local label p f s tot note avg
     echo ""
     echo "======================================================================"
     echo "PER-SUITE TOTALS ACROSS $run RUN(S)"
     echo "======================================================================"
-    printf "  %-22s %6s %6s %6s   %s\n" "SUITE" "PASS" "FAIL" "SKIP" "NOTE"
-    # Union of every suite seen, so a suite that only ever failed still gets a row.
-    for label in ${(ko)agg_pass} ${(ko)agg_fail} ${(ko)agg_skip}; do
-        print -r -- "$label"
-    done | sort -u | while read -r label; do
+    printf "  %-22s %6s %6s %6s %7s   %s\n" "SUITE" "PASS" "FAIL" "SKIP" "AVG" "NOTE"
+    # In run order, not alphabetical: the table then mirrors the lap, and the suites that dominate
+    # the wall clock are read in the sequence they actually cost it.  agg_order holds every suite
+    # ever seen, so one that has only ever failed still gets a row.
+    for label in "${agg_order[@]}"; do
         p=${agg_pass[$label]:-0}; f=${agg_fail[$label]:-0}; s=${agg_skip[$label]:-0}
         tot=$(( p + f ))
+        # Average over PASSES only.  A failing run aborts its suite early, so folding those in would
+        # make a broken suite look FASTER -- the opposite of the truth.
+        if [ "$p" -gt 0 ]; then avg="$(( (${agg_secs[$label]:-0} + p / 2) / p ))s"; else avg="-"; fi
         note=""
-        # Flag the two shapes worth acting on differently, rather than leaving the reader to divide.
+        # Flag the shapes worth acting on differently, rather than leaving the reader to divide.
         if [ "$f" -gt 0 ] && [ "$p" -gt 0 ]; then
             note="FLAKY ($f of $tot failed)"
         elif [ "$f" -gt 0 ]; then
             note="ALWAYS FAILS"
+        elif [ "$s" -eq "$run" ]; then
+            # Distinct from a blank note: this suite has no result at all, so a clean-looking table
+            # is not evidence it works.  Usually auto-skip; --dry-run says which.
+            note="never ran (skipped every run)"
         fi
-        printf "  %-22s %6s %6s %6s   %s\n" "$label" "$p" "$f" "$s" "$note"
+        printf "  %-22s %6s %6s %6s %7s   %s\n" "$label" "$p" "$f" "$s" "$avg" "$note"
+    done
+
+    # WHETHER THE FAILURES CLUSTER -- the column above cannot answer this, and read alone it misleads.
+    # A real archive of 115 runs showed eleven suites marked FLAKY; the failures were actually five
+    # bad runs, two of which failed seven and eight suites AT ONCE.  That is one fault cascading, not
+    # eleven flaky tests, and it points at the chain rather than at the suites.  Same numbers in the
+    # table either way, opposite conclusions -- so the loop states which it saw instead of leaving
+    # the reader to cross-reference suites.tsv by hand.
+    local r nf tf=0 bad=0 cas=0 casf=0 caslist=""
+    for r in ${(k)agg_runfail}; do
+        nf=${agg_runfail[$r]}
+        tf=$(( tf + nf )); bad=$(( bad + 1 ))
+        if [ "$nf" -ge 3 ]; then cas=$(( cas + 1 )); casf=$(( casf + nf )); caslist="$caslist $r"; fi
     done
     echo ""
-    echo "  per-suite rows: $suite_file"
+    if [ "$bad" -eq 0 ]; then
+        echo "  no failures in $(( run - agg_incomplete )) scored run(s)"
+    else
+        echo "  $tf failure(s), in $bad of $(( run - agg_incomplete )) scored run(s)"
+        [ "$cas" -gt 0 ] && echo "  $casf of them landed in $cas run(s) that failed 3+ suites at once --" \
+                                 "likely ONE fault, not many flaky suites: run${caslist}"
+    fi
+    # Loud, because these runs are invisible in every column above.
+    [ "$agg_incomplete" -gt 0 ] && echo "  $agg_incomplete run(s) ended without a summary and are scored NOWHERE above"
+    [ "$suite_file" = /dev/null ] || echo "  per-suite rows: $suite_file"
 }
 
 run=0
+
+# --summary: REPORT ON RUNS THAT ALREADY HAPPENED, then stop.
+#
+# The tally above only covers runs THIS invocation performed, which makes it useless in the case it
+# is most wanted: a loop is already soaking, and restarting it to pick up the reporting would throw
+# away the very history being asked about.  Every run archives its own log here, across every
+# invocation, so the same two functions replay them and answer the question without disturbing
+# anything -- in particular without writing over the file a running loop is still reading.
+if [ "$summary_only" -eq 1 ]; then
+    setopt local_options null_glob
+    logs=("$archive"/run-*.log)
+    if [ ${#logs} -eq 0 ]; then
+        echo "no archived runs in $archive"
+        exit 0
+    fi
+    # Oldest first, so run numbers in the clustering line read in chronological order.  Suite rows
+    # are NOT appended to suites.tsv here: this replays history rather than making it, and writing
+    # would duplicate every row a live loop already recorded.
+    suite_file=/dev/null
+    for f in ${(o)logs}; do
+        run=$(( run + 1 ))
+        tally_run "$f" "$(basename ${f%.log})"
+    done
+    print_aggregate
+    exit 0
+fi
+
 # Print the tally however the loop ends -- max-runs, Ctrl-C, treasury floor or an error exit.  A
 # summary that only appears on the happy path is missing exactly when it is most wanted.
 trap print_aggregate EXIT

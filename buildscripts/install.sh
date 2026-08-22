@@ -101,6 +101,24 @@ fi
 # doing something else next -- run.sh performs the enclave upgrade check on the way up, and starting
 # here would race it.
 node_stopped=0
+
+# count_procs <exact-process-name> -- how many are running, printed as a bare integer, always.
+#
+# NOT `pgrep -c`.  That is a Linux-only (procps) flag: BSD pgrep on macOS rejects it, prints its
+# usage to stderr and NOTHING to stdout, so `$(( $(pgrep -cx qadenad) + ... ))` became `$(( + ))`
+# and the shell died with "bad math expression" -- taking init.sh down with it before a single
+# binary was installed.  This ran fine on the Linux fleet for months and only broke on a Mac.
+#
+# `pgrep -x <name> | wc -l` is the portable spelling.  Note pgrep exits 1 when there are no
+# matches, which under `set -e` would be fatal even though "nothing is running" is the outcome we
+# WANT -- hence the `|| true`.  `-x` (exact COMM match) is on both platforms and keeps this from
+# matching the ssh/shell command line that mentions the name, which `-f` would.
+count_procs() {
+    local n
+    n=$( { pgrep -x "$1" 2>/dev/null || true; } | wc -l | tr -d '[:space:]' )
+    printf "%s" "${n:-0}"
+}
+
 ensure_stopped_for_binaries() {
     [[ $node_stopped -eq 1 ]] && return 0
 
@@ -122,7 +140,8 @@ ensure_stopped_for_binaries() {
     echo "Stopping the node before installing binaries (a running binary cannot be replaced)"
     "$qadenascripts/stop_qadena.sh" --all > /dev/null 2>&1
     local alive
-    alive=$(( $(pgrep -cx qadenad) + $(pgrep -cx qadenad_enclave) + $(pgrep -cx signer_enclave) ))
+    alive=$(( $(count_procs qadenad) + $(count_procs qadenad_enclave) \
+              + $(count_procs signer_enclave) + $(count_procs ego-host) ))
     if [[ $alive -ne 0 ]]; then
         echo "Error: $alive qadena process(es) still running after stop_qadena.sh --all."
         echo "       Refusing to install over them -- the copy would fail silently and you would be"

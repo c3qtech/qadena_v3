@@ -2039,3 +2039,40 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
      `run_regression_continually.sh` now auto-skips this test when the node has peers. That is a
      STOPGAP so the loop stops reporting a red suite, not a fix: while it is skipped, the networked
      rollback path is untested on the only topology it exists for.
+
+102. test_enclave_crash_recovery's PROMPTNESS bound asserts more than the system guarantees
+
+     `[ "$advanced" -le 5 ]` (testscripts/test_enclave_crash_recovery.sh:104) fails intermittently on
+     the 4-validator ARM fleet. Observed over 119 archived runs on M1:
+
+         run  64  advanced=6   FAIL
+         run  66  advanced=10  FAIL
+         run  67  advanced=6   FAIL
+         (2026-08-21, last recorded pass)  advanced=5  PASS -- exactly at the ceiling
+
+     THE SAFETY PROPERTY NEVER FAILED. Line 100 -- "chain is STILL ADVANCING against a stalled
+     enclave ... the fork-instead-of-halt bug is back" -- passed in every one of these runs. The
+     chain froze rather than committing enclave-less blocks each time; only the bound on HOW SOON
+     it froze was exceeded. Reading these as a halt regression would be wrong.
+
+     TWO EXPLANATIONS CHECKED AND DISPROVEN, so whoever picks this up does not repeat them:
+     - NOT faster blocks shortening the fixed detection window. The detection loop sleeps 2s and
+       needs two consecutive equal heights, so its slop is fixed in WALL CLOCK and converts to more
+       blocks if blocks speed up. Measured: 2.12s/block at the passing run (h~35150) versus
+       2.28s/block at the failures (h~67900). Essentially unchanged, and slightly SLOWER.
+     - NOT the `header.Height%11` UpdateHeight cadence gating when a call first blocks. Distance
+       from the stall height to the next multiple of 11 was 8, 1, 4, 9 for advanced = 5, 6, 10, 6.
+       No correlation.
+
+     So the source of the variance is not yet established, and four samples is not enough to find
+     it. WHAT IS NEEDED FIRST IS DATA: the per-suite logs are only archived for FAILING runs, so
+     the distribution of `advanced` across passing runs does not exist and could not be recovered
+     when this was investigated. Retain that number per run -- then the ceiling can be set from a
+     real distribution instead of a guess.
+
+     DO NOT simply raise the constant to make the red go away. The bound exists to distinguish
+     "halted promptly, as designed" from "wandered on for dozens of blocks and stopped for some
+     unrelated reason", and a ceiling loosened to fit unexplained variance stops making that
+     distinction. Either explain the variance and set the bound from it, or split the assertion so
+     the safety property (froze, did not fork) reports separately from the promptness bound -- the
+     first is the one that must stay loud.
