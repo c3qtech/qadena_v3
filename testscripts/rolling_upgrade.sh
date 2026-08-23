@@ -93,8 +93,14 @@ identity_status() { rsh "${NODES[1]}" "~/qadena/bin/qadenad q qadena show-enclav
 restart_node() {
     local h="$1" i n
     rsh "$h" '~/qadena/scripts/stop_qadena.sh --all' >/dev/null 2>&1 || true
+    # `pgrep -c` PRINTS the count AND EXITS NON-ZERO when it is zero, so the obvious
+    # `pgrep -c ... || echo 0` appends a SECOND zero and yields "00" -- which never equals "0"
+    # and loops until the timeout, reporting "still alive" about a node that stopped immediately.
+    # Same trap nth_node_bringup.sh:465 records.  `; true` keeps the non-zero exit from killing
+    # the remote shell, and head -1 takes the count pgrep already printed.
     for i in $(seq 1 40); do
-        n=$(rsh "$h" 'pgrep -c qadenad 2>/dev/null || echo 0' 2>/dev/null | tr -d '[:space:]')
+        n=$(rsh "$h" 'pgrep -c qadenad 2>/dev/null; true' 2>/dev/null | tr -d '\r' | head -1 | tr -d '[:space:]')
+        [[ -z "$n" ]] && n=0
         [[ "$n" == "0" ]] && break
         sleep 3
     done
