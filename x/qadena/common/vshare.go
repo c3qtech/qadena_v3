@@ -843,13 +843,16 @@ func GenerateSharedSecret() (sharedSecret []byte) {
 
 func generateVSharedSecret() (sharedSecret *VSharedSecret) {
 	var out VSharedSecret
+	// Same discipline as GenerateSharedSecret: a failed draw leaves privateKeyN nil, and the
+	// non-test branch below dereferences .PublicKey.X immediately.  Printing and falling through
+	// turns "the entropy source failed" into an unattributable nil-pointer panic.
 	privateKey1, err := ecies.GenerateKey()
 	if err != nil {
-		fmt.Println("cannot generate shared secret")
+		panic("qadena: cannot generate a vshared secret: " + err.Error())
 	}
 	privateKey2, err := ecies.GenerateKey()
 	if err != nil {
-		fmt.Println("cannot generate shared secret")
+		panic("qadena: cannot generate a vshared secret: " + err.Error())
 	}
 
 	if testVShareEncryption {
@@ -879,9 +882,18 @@ func sharedSecretEncrypt(sharedSecret []byte, msg []byte) []byte {
 	// mostly cloned code from ECIES
 
 	// AES encryption
+	//
+	// RETURN, DO NOT JUST PRINT.  aes.NewCipher takes 16/24/32 bytes only; on anything else it
+	// returns a nil cipher, and NewGCMWithNonceSize below would dereference it.  Every caller
+	// today passes a sha256 sum, which is always 32 bytes, so this is unreachable as written --
+	// but it is the EXACT shape of the GenerateSharedSecret bug (see that function), where the
+	// same swallowed error turned a rejected key into a nil-pointer panic inside crypto/cipher
+	// that named nothing and was misread as test flakiness for over a year.  sharedSecretDecrypt
+	// below already returns nil here; this is only making the pair agree.
 	block, err := aes.NewCipher(sharedSecret)
 	if err != nil {
-		fmt.Println("cannot create new aes block")
+		fmt.Println("sharedSecretEncrypt: shared secret is not a valid AES key:", err)
+		return nil
 	}
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
@@ -896,7 +908,8 @@ func sharedSecretEncrypt(sharedSecret []byte, msg []byte) []byte {
 
 	aesgcm, err := cipher.NewGCMWithNonceSize(block, 16)
 	if err != nil {
-		fmt.Println("cannot create aes gcm")
+		fmt.Println("sharedSecretEncrypt: cannot create aes gcm:", err)
+		return nil
 	}
 
 	ciphertext := aesgcm.Seal(nil, nonce, msg, nil)
