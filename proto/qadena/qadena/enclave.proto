@@ -76,6 +76,12 @@ service QadenaEnclave {
   rpc ExportPrivateState (MsgExportPrivateState) returns (ExportPrivateStateReply) {}
   rpc RemovePrivateKey (MsgRemovePrivateKey) returns (RemovePrivateKeyReply) {}
   rpc UpdateSSIntervalKey (MsgUpdateSSIntervalKey) returns (UpdateSSIntervalKeyReply) {}
+  // debug-only: run the re-share AUDIT without minting a key -- lets a test drain a re-share
+  // backlog without creating one junk interval key per forced rotation
+  rpc AuditSSKeys (MsgAuditSSKeys) returns (AuditSSKeysReply) {}
+  // debug-only: force a WHO-HAS query for one pubKID -- ask peer enclaves who holds it cached.
+  // Exercises the rescue path directly, without having to contrive a threshold failure first.
+  rpc WhoHasSSKey (MsgWhoHasSSKey) returns (WhoHasSSKeyReply) {}
 
   // Fetch this enclave's PRIVATE tables as of a height, for a peer that joined by state-sync and
   // therefore never executed the blocks that would have produced them.  Attested and paged.
@@ -93,6 +99,8 @@ service QadenaEnclave {
   // these are called from the chain by an enclave
   rpc QueryEnclaveSyncEnclave (QueryEnclaveSyncEnclaveRequest) returns (QueryEnclaveSyncEnclaveResponse) {}
   rpc QueryEnclaveSecretShare (QueryEnclaveSecretShareRequest) returns (QueryEnclaveSecretShareResponse) {}
+  // who-has: a cached interval privK for an attested peer (see query.proto for the domain tags)
+  rpc QueryEnclaveSecretSharePrivK (QueryEnclaveSecretSharePrivKRequest) returns (QueryEnclaveSecretSharePrivKResponse) {}
   rpc QueryEnclaveRecoverKeyShare (QueryEnclaveRecoverKeyShareRequest) returns (QueryEnclaveRecoverKeyShareResponse) {}
   rpc QueryEnclaveValidateEnclaveIdentity (QueryEnclaveValidateEnclaveIdentityRequest) returns (QueryEnclaveValidateEnclaveIdentityResponse) {}
   // which build am I, and do I hold a trusted set -- see query.proto for why this is unauthenticated
@@ -426,6 +434,26 @@ message PrivateStateSectionDigest {
 }
 
 message MsgUpdateSSIntervalKey {
+}
+
+message MsgAuditSSKeys {
+}
+
+message MsgWhoHasSSKey {
+  string pubKID = 1;
+}
+
+message WhoHasSSKeyReply {
+  bool   found    = 1;
+  string fromPeer = 2;
+  int32  asked    = 3;
+}
+
+message AuditSSKeysReply {
+  bool  status   = 1;
+  int32 audited  = 2;
+  int32 selected = 3;
+  int32 emitted  = 4;
 }
 
 message UpdateSSIntervalKeyReply {

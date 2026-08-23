@@ -809,18 +809,36 @@ func VShareBDecryptAndProtoUnmarshal(priv string, pubK string, bindData *VShareB
 	return nil
 }
 
+// GenerateSharedSecret mints a 32-byte secret for AES-256.
+//
+// ALWAYS EXACTLY 32 BYTES.  This used to return privateKey.D.Bytes(), and big.Int.Bytes() emits the
+// MINIMAL big-endian encoding -- it strips leading zero bytes.  A scalar whose top byte happens to
+// be zero therefore produced a 31-byte secret, which aes.NewCipher rejects; measured rate 0.380%,
+// i.e. 1 in 256, exactly as the arithmetic predicts.
+//
+// That was not a cosmetic problem.  preInitEnclave mints SealedTableSharedSecret here, so roughly
+// one enclave initialisation in 263 produced a node that panicked the first time it stable-sealed
+// anything -- and because SharedSecretNoNonceEncrypt discarded the aes.NewCipher error (fixed in
+// encrypt.go), the symptom was a nil-pointer dereference deep inside crypto/cipher rather than
+// anything naming the cause.  In this repo's test suite it presented as an unrelated test failing
+// at random, roughly one run in four, and was written off as harness flakiness for weeks.
+//
+// FillBytes left-pads into a fixed 32-byte buffer.  For any secret that is already 32 bytes -- every
+// one that works today -- the bytes are IDENTICAL, so nothing sealed by an existing node changes
+// meaning.  The only behaviour that changes is the 0.38% that could not work at all.
 func GenerateSharedSecret() (sharedSecret []byte) {
 	privateKey, err := ecies.GenerateKey()
 	if err != nil {
-		fmt.Println("cannot generate shared secret")
+		// Unreachable short of the OS entropy source failing, and there is no sane way to continue:
+		// returning a nil or short secret is what this function exists to prevent.  Previously this
+		// printed and fell through to a nil-pointer dereference one frame later.
+		panic("qadena: cannot generate a shared secret: " + err.Error())
 	}
-	//  logger.Debug("key size " + strconv.FormatInt(int64(len(pk.D.Bytes())), 10))
 	if testVShareEncryption {
 		sharedSecret, _ = hex.DecodeString("5321d8cd34c5b255977f2af43dc69011f6fffb6cde44a487912b31bde6a7aabf")
-	} else {
-		sharedSecret = privateKey.D.Bytes()
+		return
 	}
-	return
+	return privateKey.D.FillBytes(make([]byte, 32))
 }
 
 func generateVSharedSecret() (sharedSecret *VSharedSecret) {

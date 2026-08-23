@@ -58,7 +58,9 @@ sync-enclave    - Sync enclave for use by new full/validator nodes
 export-private-key - Export private key (for demo purposes)
 remove-private-key - Remove private key from cache (for debug)
 export-private-state - Export enclave state (for debug)
-update-ss-interval-key - Update SS interval key
+update-ss-interval-key - Update SS interval key (also runs the re-share audit)
+audit-ss-keys   - Run the SS re-share audit only, no new key (debug)
+who-has         - Ask peers who holds an SS interval key cached (debug)
 height          - Show the enclave's height watermarks
 rollback        - Roll the enclave's store back to a chain height`,
 	}
@@ -75,6 +77,8 @@ rollback        - Roll the enclave's store back to a chain height`,
 		newRemovePrivateKeyCmd(),
 		newExportPrivateStateCmd(),
 		newUpdateSSIntervalKeyCmd(),
+		newAuditSSKeysCmd(),
+		newWhoHasSSKeyCmd(),
 		newEnclaveHeightCmd(),
 		newEnclaveRollbackCmd(),
 		newEnclaveStoreHashCmd(),
@@ -528,6 +532,68 @@ func newExportPrivateStateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&section, "section", "", "dump only this section (see --digest-only for the names)")
 	cmd.Flags().Uint64Var(&maxBytes, "max-bytes", 0, "refuse a content dump larger than this, naming the section that blew the budget (0 = built-in default)")
 	return cmd
+}
+
+func newWhoHasSSKeyCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "who-has <pubKID>",
+		Short: "Ask peer enclaves who holds an SS interval key cached (debug enclaves only)",
+		Long: "Forces the who-has rescue path for one pubKID without waiting for a reconstruction\n" +
+			"to run out of shares.  Queries peers even if this node already holds the key.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			enclaveClient, err := getEnclaveConnection(cmd)
+			if err != nil {
+				return err
+			}
+
+			// Two 5s rounds plus dial overhead; give it room.
+			grpcctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			r, err := enclaveClient.WhoHasSSKey(grpcctx, &types.MsgWhoHasSSKey{PubKID: args[0]})
+			if err != nil {
+				c.LoggerError(logger, "could not run the who-has query", err)
+				return err
+			}
+			// Printed, not just logged: the E2E test reads these.
+			fmt.Printf("who-has: pubKID=%s found=%v from=%s asked=%d\n",
+				args[0], r.GetFound(), r.GetFromPeer(), r.GetAsked())
+			if !r.GetFound() {
+				return fmt.Errorf("no peer holds %s cached", args[0])
+			}
+			return nil
+		},
+	}
+}
+
+func newAuditSSKeysCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "audit-ss-keys",
+		Short: "Run the SS re-share audit without minting a new interval key (debug enclaves only)",
+		Args:  cobra.ExactArgs(0),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			enclaveClient, err := getEnclaveConnection(cmd)
+			if err != nil {
+				return err
+			}
+
+			// The audit may probe peers and broadcast a tx; give it more room than a local call.
+			grpcctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			r, err := enclaveClient.AuditSSKeys(grpcctx, &types.MsgAuditSSKeys{})
+			if err != nil {
+				c.LoggerError(logger, "could not run the SS re-share audit", err)
+				return err
+			}
+			// Printed, not just logged: the E2E test loops on these numbers.
+			fmt.Printf("audit-ss-keys: status=%v audited=%d selected=%d emitted=%d\n",
+				r.GetStatus(), r.GetAudited(), r.GetSelected(), r.GetEmitted())
+			if !r.GetStatus() {
+				return fmt.Errorf("audit ran but the re-share broadcast failed; see the enclave log")
+			}
+			return nil
+		},
+	}
 }
 
 func newUpdateSSIntervalKeyCmd() *cobra.Command {

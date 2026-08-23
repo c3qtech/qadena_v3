@@ -49,6 +49,9 @@ func RegisterInterfaces(registry cdctypes.InterfaceRegistry) {
 		&MsgPioneerAddPublicKey{},
 	)
 	registry.RegisterImplementations((*sdk.Msg)(nil),
+		&MsgPioneerUpdatePublicKey{},
+	)
+	registry.RegisterImplementations((*sdk.Msg)(nil),
 		&MsgPioneerUpdateIntervalPublicKeyID{},
 	)
 	registry.RegisterImplementations((*sdk.Msg)(nil),

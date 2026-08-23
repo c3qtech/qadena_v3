@@ -158,6 +158,11 @@ service Query {
   // the only intended caller is another enclave over gRPC.
   rpc EnclavePrivateState (QueryEnclavePrivateStateRequest) returns (QueryEnclavePrivateStateResponse) {}
 
+  // WHO-HAS: serves a CACHED interval private key to an attested peer enclave, for keys whose
+  // share-owners can no longer reach threshold.  Same trust bar as EnclaveSecretShare and
+  // sync-enclave (which ships jar/regulator private keys); enclave-to-enclave only, no REST route.
+  rpc EnclaveSecretSharePrivK (QueryEnclaveSecretSharePrivKRequest) returns (QueryEnclaveSecretSharePrivKResponse) {}
+
   // Which heights this node's enclave can serve private state for.  Unattested on purpose: it
   // carries no secrets, and a peer that lies about its range costs the caller only a wasted
   // attempt -- the transfer itself fails closed.
@@ -494,6 +499,20 @@ message QueryEnclaveSecretShareRequest {
 message QueryEnclaveSecretShareResponse {
   bytes remoteReport              = 1;
   bytes  encSecretShareEnclavePubK = 2;
+}
+
+// The requester's report certifies enclavePubK|pubKID|"whohas" -- the literal domain tag keeps a
+// share-fetch report from being replayed into a privK fetch.  The reply's report certifies
+// "whohas|"+ciphertext for the same reason in the other direction.
+message QueryEnclaveSecretSharePrivKRequest {
+  bytes  remoteReport = 1;
+  string enclavePubK  = 2;
+  string pubKID       = 3;
+}
+
+message QueryEnclaveSecretSharePrivKResponse {
+  bytes remoteReport       = 1;
+  bytes encPrivKEnclavePubK = 2;
 }
 
 message QueryEnclaveRecoverKeyShareRequest {

@@ -17,6 +17,9 @@ import (
 
 	ecies "github.com/ecies/go/v2"
 
+	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
+	secp256k1ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
+
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
@@ -28,36 +31,46 @@ import (
 )
 
 // This is used by the enclave to create stable encryptions used for keys
+//
+// ERRORS ARE RETURNED, NOT PRINTED.  These three checks used to log and fall through, so a
+// rejected key (aes.NewCipher takes 16/24/32 bytes only) left `block` nil and the very next line
+// dereferenced it inside crypto/cipher.  The caller -- MustSealStable -- is written to panic on a
+// returned error with a message naming the operation, so returning turns an unreadable
+// segmentation fault into "Could not seal stable: ...".  See GenerateSharedSecret for the bug that
+// made this reachable 0.38% of the time.
 func SharedSecretNoNonceEncrypt(sharedSecret []byte, plainText []byte) (cipherText []byte, err error) {
 	// AES encryption
 	block, err := aes.NewCipher(sharedSecret)
 	if err != nil {
-		fmt.Println("cannot create new aes block")
+		return nil, fmt.Errorf("shared secret is not a valid AES key (%d bytes): %w", len(sharedSecret), err)
 	}
 	aesgcm, err := cipher.NewGCMWithNonceSize(block, 16)
 	if err != nil {
-		fmt.Println("cannot create aes gcm")
+		return nil, fmt.Errorf("cannot create aes gcm: %w", err)
 	}
+	// The nonce is the first 16 bytes of the secret, so a secret shorter than the nonce would slice
+	// out of range.  aes.NewCipher already refused anything under 16 bytes above.
 	nonce := sharedSecret[0:16]
 	cipherText = aesgcm.Seal(nil, nonce, plainText, nil)
-	return
+	return cipherText, nil
 }
 
-// This is used by the enclave to decrypt stable encryptions used for keys
+// This is used by the enclave to decrypt stable encryptions used for keys.  Same error discipline
+// as SharedSecretNoNonceEncrypt above, and for the same reason.
 func SharedSecretNoNonceDecrypt(sharedSecret []byte, cipherText []byte) (plainText []byte, err error) {
 	block, err := aes.NewCipher(sharedSecret)
 	if err != nil {
-		fmt.Println("cannot create new aes block")
+		return nil, fmt.Errorf("shared secret is not a valid AES key (%d bytes): %w", len(sharedSecret), err)
 	}
 
 	gcm, err := cipher.NewGCMWithNonceSize(block, 16)
 	if err != nil {
-		fmt.Println("cannot create gcm cipher")
+		return nil, fmt.Errorf("cannot create gcm cipher: %w", err)
 	}
 
 	nonce := sharedSecret[0:16]
 	plainText, err = gcm.Open(nil, nonce, cipherText, nil)
-	return
+	return plainText, err
 }
 
 func Encrypt(pub, plainText string) string {
@@ -417,4 +430,55 @@ func BDecryptAndUnmarshal(priv string, encrypted []byte, v *string) ([]byte, err
 	*v = string(j)
 
 	return j, nil
+}
+
+// --- Re-share possession proof -------------------------------------------------------------
+//
+// A MsgPioneerUpdatePublicKey re-shares an EXISTING interval key to a grown owner set.
+// Attestation proves the sender runs trusted code; it does not prove the sender holds THIS key,
+// and without that proof any active enclave could rewrite any key's owner set with garbage
+// shares -- destroying the real ones (the receivers overwrite on receipt).  The proof is an
+// ECDSA signature by the interval private key itself, verifiable against the pubK the chain
+// already stores for the row.  The interval keys are ecies secp256k1 keys, so the same scalar
+// signs and the same 33-byte compressed point verifies.
+//
+// The digest is domain-tagged so the signature can never be confused with any other use of the
+// key, and it covers the full shares JSON so a valid proof cannot be re-attached to a different
+// owner set.
+
+// PossessionDigest is sha256("qadena-reshare|" + creator + "|" + pubKID + "|" + pubKType + "|" + sharesJSON).
+// Deterministic and consensus-safe: every validator recomputes it from the message alone.
+func PossessionDigest(creator string, pubKID string, pubKType string, sharesJSON string) []byte {
+	h := sha256.Sum256([]byte(strings.Join([]string{"qadena-reshare", creator, pubKID, pubKType, sharesJSON}, "|")))
+	return h[:]
+}
+
+// SignPossession signs the digest with the interval private key (64-hex scalar), returning a DER
+// signature.  Used by the re-sharing enclave; the chain verifies with VerifyPossessionSig.
+func SignPossession(privKHex string, digest []byte) ([]byte, error) {
+	b, err := hex.DecodeString(privKHex)
+	if err != nil || len(b) != 32 {
+		return nil, errors.New("possession sign: not a 32-byte hex scalar")
+	}
+	priv := secp256k1.PrivKeyFromBytes(b)
+	sig := secp256k1ecdsa.Sign(priv, digest)
+	return sig.Serialize(), nil
+}
+
+// VerifyPossessionSig verifies a DER signature over digest against a base64(33-byte compressed
+// secp256k1) public key -- the exact format PublicKey rows store.
+func VerifyPossessionSig(pubKBase64 string, digest []byte, sigDER []byte) bool {
+	pubBytes, err := base64.StdEncoding.DecodeString(pubKBase64)
+	if err != nil {
+		return false
+	}
+	pub, err := secp256k1.ParsePubKey(pubBytes)
+	if err != nil {
+		return false
+	}
+	sig, err := secp256k1ecdsa.ParseDERSignature(sigDER)
+	if err != nil {
+		return false
+	}
+	return sig.Verify(digest, pub)
 }

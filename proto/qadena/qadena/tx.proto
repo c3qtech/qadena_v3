@@ -58,6 +58,12 @@ service Msg {
   // AUTHORIZATION:
   // make sure that the creator *IS* a Pioneer via enclave
   rpc PioneerAddPublicKey                   (MsgPioneerAddPublicKey                  ) returns (MsgPioneerAddPublicKeyResponse                  );
+  // Re-shares an EXISTING key's secret shares to a grown owner set.  Add rejects an existing
+  // pubKID and Update rejects a missing one -- together the existence check stays the ACL.  The
+  // handler additionally requires a PROPER SUPERSET of the current owners and a possession
+  // signature verifiable against the STORED row's pubK; the message carries no pubK field at all,
+  // so it structurally cannot re-key.
+  rpc PioneerUpdatePublicKey                (MsgPioneerUpdatePublicKey               ) returns (MsgPioneerUpdatePublicKeyResponse               );
   rpc PioneerUpdateIntervalPublicKeyID      (MsgPioneerUpdateIntervalPublicKeyID     ) returns (MsgPioneerUpdateIntervalPublicKeyIDResponse     );
   rpc PioneerEnclaveExchange                (MsgPioneerEnclaveExchange               ) returns (MsgPioneerEnclaveExchangeResponse               );
   rpc PioneerBroadcastSecretSharePrivateKey (MsgPioneerBroadcastSecretSharePrivateKey) returns (MsgPioneerBroadcastSecretSharePrivateKeyResponse);
@@ -386,6 +392,25 @@ message MsgPioneerAddPublicKey {
 }
 
 message MsgPioneerAddPublicKeyResponse {}
+
+// RE-SHARE, NOT REKEY: no pubK field.  The handler inherits pubK from the stored row, so this
+// message cannot change what the pubKID means -- only who holds shares of it.  shares is the FULL
+// new owner set with fresh shares for every owner (old and new): shares from two different Split
+// calls combine to garbage, so partial distribution is never valid.
+message MsgPioneerUpdatePublicKey {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator        = 1;
+  string pubKID         = 2;
+  string pubKType       = 3;
+  repeated Share shares = 4;
+  // DER ECDSA signature by the interval private key over
+  // sha256("qadena-reshare|" + creator + "|" + pubKID + "|" + pubKType + "|" + sharesJSON):
+  // proof the sender HOLDS the key it is re-sharing, verified against the stored row's pubK.
+  bytes possessionSig   = 5;
+  bytes remoteReport    = 6;
+}
+
+message MsgPioneerUpdatePublicKeyResponse {}
 
 message MsgPioneerUpdateIntervalPublicKeyID {
   option (cosmos.msg.v1.signer) = "creator";

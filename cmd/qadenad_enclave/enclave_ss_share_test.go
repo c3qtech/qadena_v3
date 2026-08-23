@@ -217,6 +217,14 @@ func TestPlanSSReconstructFailsWithNoOwners(t *testing.T) {
 	require.False(t, ok, "a key with no owner record cannot be planned")
 }
 
+// mustClaim asserts a claim succeeds and returns its generation.
+func mustClaim(t *testing.T, pubKID, why string) uint64 {
+	t.Helper()
+	gen, ok := ssInFlightClaim(pubKID)
+	require.True(t, ok, why)
+	return gen
+}
+
 // scheduleSSReconstruct must be a no-op in the cases where background work would be wasted --
 // otherwise every rotation kicks off pointless peer traffic across the fleet.
 func TestScheduleSSReconstructNoOps(t *testing.T) {
@@ -224,8 +232,7 @@ func TestScheduleSSReconstructNoOps(t *testing.T) {
 		s := newTestEnclaveServer(t)
 		s.setPrivKCache("k", aKey())
 		s.scheduleSSReconstruct("k")
-		require.True(t, ssInFlightClaim("k"), "nothing should have been scheduled")
-		ssInFlightRelease("k")
+		ssInFlightRelease("k", mustClaim(t, "k", "nothing should have been scheduled"))
 	})
 
 	t.Run("unsplit key", func(t *testing.T) {
@@ -236,15 +243,13 @@ func TestScheduleSSReconstructNoOps(t *testing.T) {
 		require.Equal(t, 1, getThreshold(1), "premise")
 
 		s.scheduleSSReconstruct("unsplit")
-		require.True(t, ssInFlightClaim("unsplit"), "an unsplit key needs no gathering")
-		ssInFlightRelease("unsplit")
+		ssInFlightRelease("unsplit", mustClaim(t, "unsplit", "an unsplit key needs no gathering"))
 	})
 
 	t.Run("no owners", func(t *testing.T) {
 		s := newTestEnclaveServer(t)
 		s.scheduleSSReconstruct("never-seen")
-		require.True(t, ssInFlightClaim("never-seen"), "nothing should have been scheduled")
-		ssInFlightRelease("never-seen")
+		ssInFlightRelease("never-seen", mustClaim(t, "never-seen", "nothing should have been scheduled"))
 	})
 }
 
@@ -252,9 +257,28 @@ func TestScheduleSSReconstructNoOps(t *testing.T) {
 // correctness -- any threshold shares rebuild the same secret -- but it doubles peer load at
 // exactly the moment a rotation is rippling through the fleet.
 func TestSSInFlightClaimIsExclusive(t *testing.T) {
-	require.True(t, ssInFlightClaim("dup"), "first claim wins")
-	require.False(t, ssInFlightClaim("dup"), "second claim must be refused while the first is running")
-	ssInFlightRelease("dup")
-	require.True(t, ssInFlightClaim("dup"), "and is claimable again once released")
-	ssInFlightRelease("dup")
+	gen1 := mustClaim(t, "dup", "first claim wins")
+	_, ok := ssInFlightClaim("dup")
+	require.False(t, ok, "second claim must be refused while the first is running")
+	ssInFlightRelease("dup", gen1)
+	gen2 := mustClaim(t, "dup", "and is claimable again once released")
+	ssInFlightRelease("dup", gen2)
+}
+
+// A stale gather's deferred release must not clear a claim it no longer owns -- the bump that an
+// owner-set change performs hands the key to the NEXT gather, and the old goroutine's defer fires
+// after that handoff.
+func TestSSInFlightGenerations(t *testing.T) {
+	gen1 := mustClaim(t, "gen", "first claim wins")
+	ssInFlightBump("gen") // owner set changed mid-gather
+	gen2 := mustClaim(t, "gen", "bump must free the key for the new record's gather")
+	require.NotEqual(t, gen1, gen2)
+
+	ssInFlightRelease("gen", gen1) // the STALE gather completes and releases
+	_, ok := ssInFlightClaim("gen")
+	require.False(t, ok, "a stale release must not clear the new gather's claim")
+
+	ssInFlightRelease("gen", gen2)
+	gen3 := mustClaim(t, "gen", "the rightful release frees the key")
+	ssInFlightRelease("gen", gen3)
 }
