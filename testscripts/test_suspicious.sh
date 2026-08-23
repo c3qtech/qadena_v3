@@ -277,6 +277,14 @@ if [ $sealed_plaintext -eq 1 ]; then
     # are checked explicitly instead.
     decrypted=$(qadenad_alias query qadena list-suspicious-transaction "$regulator_privk" --reverse --limit 1 2>&1)
     [ -n "$decrypted" ] || fail "the regulator key decrypted nothing; the report is not readable by $regulator_id"
+    # BIND THE RECORD TO THIS RUN.  "Newest" is only this case's report because the count guard above
+    # proved one was filed; that is an inference across ten lines, and reordering or removing that
+    # guard would silently send this back to decrypting an ancient record and passing.  The header
+    # prints Id+1, and there were $mid_count reports before the transfer, so this run's report must
+    # number MORE than $mid_count.  Asserted here so the check does not depend on its neighbours.
+    seen_id=$(echo "$decrypted" | grep -oE "Suspicious Transaction [0-9]+" | head -1 | awk "{print \$3}")
+    [ -n "$seen_id" ] && [ "$seen_id" -gt "$mid_count" ] \
+        || fail "decrypted report #${seen_id:-none} does not postdate this run ($mid_count existed before the transfer); the newest record is not the one this case filed"
     echo "$decrypted" | grep -qiE "couldn't decrypt|invalid length|generic error" \
         && fail "the report this run filed did not decrypt with $regulator_id's key"
     echo "$decrypted" | tail -20
@@ -292,10 +300,58 @@ else
     # could not contain the report just written -- this scanned reports from days ago and passed
     # regardless of what the run under test produced.  A negative assertion over a page that cannot
     # hold the subject is not a check, and it silently got weaker as the chain grew.
+    #
+    # THE PATTERN THIS USED TO GREP FOR COULD NEVER MATCH.  It looked for "srcWalletID",
+    # "dstWalletID" and "amount" -- field names that belong to tx.proto and enclave.proto, NOT to
+    # SuspiciousTransaction, whose sensitive fields are all `bytes enc*RegulatorPubK`.  So the
+    # assertion was dead on every chain, and fixing the page it read did not revive it.
+    #
+    # What a leak would actually look like is a readable id INSIDE one of those enc* payloads, so
+    # they are base64-decoded and searched.  Scoping to enc* is what the original field list was
+    # reaching for: regulatorPubKID is a LEGITIMATE plaintext bech32 address, so scanning the whole
+    # record would fail on every healthy report.
     clear_listing=$(qadenad_alias query qadena list-suspicious-transaction --reverse --limit 1 --output json 2>/dev/null)
-    echo "$clear_listing" | grep -qiE '"(srcWalletID|dstWalletID|amount)"[[:space:]]*:[[:space:]]*"[a-z]+1[a-z0-9]{20,}"' \
-        && fail "a suspicious transaction lists readable wallet ids WITHOUT the regulator key; the report is not encrypted"
-    echo "reports are present and not readable without the regulator key"
+    leak=$(print -r -- "$clear_listing" | python3 -c '
+import sys, json, base64, re
+try:
+    rows = (json.load(sys.stdin).get("SuspiciousTransaction") or [])
+except Exception:
+    print("UNREADABLE"); raise SystemExit
+if not rows:
+    print("NORECORD"); raise SystemExit
+r = rows[0]
+print("ID", r.get("id", "?"))
+# THE AMOUNT MUST BE PRESENT AND ENCRYPTED.  Scanning only for leaks passes a record whose enc*
+# fields are all EMPTY -- encryption removed by dropping the payload rather than by exposing it,
+# which the loop below skips.  Requiring every enc* field is wrong: the proto populates personal-
+# info OR contract-info per side, so two nulls are legitimate on a healthy report.  encEAmount has
+# no such condition and is set on every report, so it is the one that can be demanded.
+if not r.get("encEAmountRegulatorPubK"):
+    print("EMPTY encEAmountRegulatorPubK")
+bech = re.compile(rb"[a-z]+1[a-z0-9]{20,}")
+for k, v in r.items():
+    if not k.startswith("enc") or not v:
+        continue
+    try:
+        raw = base64.b64decode(v)
+    except Exception:
+        continue
+    m = bech.search(raw)
+    if m:
+        print("LEAK", k, m.group().decode("ascii", "replace"))
+')
+    print -r -- "$leak" | grep -q "^UNREADABLE" \
+        && fail "could not parse the suspicious-transaction listing; the encryption assertion did not run"
+    print -r -- "$leak" | grep -q "^NORECORD" \
+        && fail "no suspicious transaction came back to inspect, though the count says one was filed"
+    seen_id=$(print -r -- "$leak" | awk "/^ID /{print \$2}")
+    [ -n "$seen_id" ] && [ "$seen_id" -ge "$mid_count" ] \
+        || fail "inspected report id ${seen_id:-none} predates this run ($mid_count existed before the transfer)"
+    print -r -- "$leak" | grep -q "^EMPTY" \
+        && fail "the report's encrypted amount field is empty; encryption was not applied at all: $(print -r -- "$leak" | grep "^EMPTY")"
+    print -r -- "$leak" | grep -q "^LEAK" \
+        && fail "a readable id is present INSIDE an encrypted field WITHOUT the regulator key: $(print -r -- "$leak" | grep "^LEAK")"
+    echo "report id $seen_id present; no readable id inside its encrypted fields"
 fi
 
 echo "========================="
