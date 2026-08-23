@@ -19,17 +19,35 @@
 # The alternative -- one roll, timed into a rotation gap -- relies on finishing before the next tick
 # (Height %6105 == 0, about five hours at 3s blocks).  That is a "be quick" guarantee.  This is not.
 #
-# WHAT KEEPS PHASE 1 FROM SILENTLY BECOMING PHASE 2.
+# WHAT KEEPS PHASE 1 FROM SILENTLY BECOMING PHASE 2 -- and it is NOT --wait-active.
 #
-# install_release.sh only ever stages the enclave under its measurement name
-# (bin/qadenad_enclave.<unique>); it replaces bin/qadenad_enclave -- the MAIN binary, the only one
-# that matters -- in exactly two cases: a fresh install, or when the chain has already PROMOTED the
-# new identity (--wait-active).  And run.sh's check_upgrade_enclave.sh compares the MAIN binary
-# against the newest enclave that ALREADY HOLDS SEALED PARAMS; a staged binary has no
-# enclave_params_<unique>.json, so it is not even a candidate.
+# install_release.sh decides whether to cut over from `can_activate`, which DEFAULTS TO 1 and drops
+# to 0 only when the new identity is unregistered or not yet active.  --wait-active controls whether
+# it WAITS for promotion, not whether it activates.  So if the identity is ALREADY ACTIVE on chain,
+# a plain `install_release.sh --restart` activates the enclave -- which is exactly the fork window
+# this script exists to close.
 #
-# Therefore: PHASE 1 MUST NOT PASS --wait-active.  That flag is the whole difference between the
-# phases, and it is asserted below rather than merely intended.
+# THEREFORE THE ORDER IS: PHASE 1 FIRST, WHILE unique<NEW> IS STILL UNREGISTERED.  That is what
+# holds can_activate at 0 and keeps the enclave staged.  Register and promote BETWEEN the phases.
+#
+# This inverts the advice package_release.sh prints ("If this enclave is NEW to the chain, register
+# it before installing anywhere"), which is right for an ordinary single-phase roll and wrong here.
+#
+# AND PHASE 1 CANNOT USE --restart.  With the node RUNNING and can_activate 0, install_release.sh
+# sets stage_only=1 and deliberately writes nothing that is in use -- it stages the new qadenad
+# under qadenad.<version> and leaves the live one alone -- and `--restart` is itself gated on
+# can_activate.  Running it that way installs NOTHING into service.  Phase 1 therefore stops the
+# node itself, installs (node_running=0 => qadenad goes live, enclave still only staged because
+# can_activate is 0), and starts it again.
+#
+# Starting is safe: run.sh's check_upgrade_enclave.sh compares the MAIN enclave binary against the
+# newest enclave that ALREADY HOLDS SEALED PARAMS, requiring a STRICT version increase.  After
+# phase 1 main is still the old binary at the old version, so it compares equal and does nothing.
+# A staged binary has no enclave_params_<unique>.json and is not even a candidate.
+#
+# ONE NODE AT A TIME, ALWAYS.  On this fleet the four validators hold ~25% each, so one down leaves
+# 75% and the chain advances; two down leaves 50% and it halts with every process still running.
+# That is why every step below waits for the height to move before touching the next node.
 #
 # Equally: do NOT run buildscripts/install.sh --enclave on any fleet node.  That writes MAIN
 # directly and would arm the handover on the next start -- on one node, while the others still run
@@ -155,8 +173,13 @@ if [[ "$PHASE" == (1|both) ]]; then
     say "      this phase from phase two; passing it would activate a staged enclave the moment"
     say "      the chain had promoted it, which is the fork window this script exists to close."
     for n in "${NODES[@]}"; do
-        say "$n: installing (chain live, enclave staged)"
-        run "$n" "~/qadena/scripts/install_release.sh $REMOTE_ARCHIVE --restart"
+        say "$n: stop -> install -> start  (chain goes live, enclave only staged)"
+        run "$n" "~/qadena/scripts/stop_qadena.sh --all"
+        # No --restart: it is gated on can_activate, which is 0 here by design.  Stopping first is
+        # what makes stage_only 0, so the new qadenad is written to the live name.
+        run "$n" "~/qadena/scripts/install_release.sh $REMOTE_ARCHIVE"
+        run "$n" "~/qadena/scripts/start_qadena.sh"
+        (( DRY )) || sleep 10
         (( DRY )) || require_advancing "$n"
     done
 
