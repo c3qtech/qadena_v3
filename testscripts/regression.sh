@@ -608,22 +608,29 @@ start_chain() {
 #                 without wiping ~/.qadena, and every key still answers `keys show` while none of
 #                 them exists on chain.
 #
-# THE CHAIN CHECK USES list-wallet, NOT show-wallet, and the difference is not stylistic.
-# `show-wallet <addr>` EXITS 0 FOR A WALLET THAT DOES NOT EXIST: it prints
+# THE CHAIN CHECK USES show-wallet PER USER.  It used to use one `list-wallet --limit 5000`, and
+# that is what broke on 2026-08-23: the chain passed 5,000 wallets, jill's address sorts past the
+# cut, and she was reported as owning no wallet at all.  The auto-setup below then fired and aborted
+# on the ten users that DO exist, so every run stopped after three suites -- 64 of them, until
+# someone read the logs.  A bigger --limit only moves the cliff; credential is already 28,428 and
+# public-key 10,716 on the same node.  A bound large enough today is a bound that expires.
+#
+# NEVER TEST show-wallet's EXIT STATUS.  It EXITS 0 FOR A WALLET THAT DOES NOT EXIST: it is a
+# balance view that reports the wallet lookup as one line among others, printing
 #
 #     err rpc error: code = NotFound desc = ... not found: key not found
 #
-# and returns success, because it is a balance view that reports the wallet lookup as one line among
-# others.  An `if ! show-wallet ... ; then` check therefore never fires -- it silently passes for
-# every address, existing or not, which is the worst kind of check.  (pioneer1 makes the same point
-# from the other side: it holds a transparent balance and no qadena wallet at all, so even reading
-# show-wallet's output would misclassify it.)  list-wallet answers the membership question directly,
-# in ONE query rather than one per user.
+# and then the transparent balance, successfully.  An `if ! show-wallet ...` check never fires -- it
+# passes for every address, existing or not, which is the worst kind of check.  The OUTPUT is read
+# instead, and read for two distinct markers rather than one: `walletID` means the wallet is here,
+# `code = NotFound` means it genuinely is not.  pioneer1 is the case that proves the pair is needed
+# -- it holds a transparent balance and no qadena wallet, so "did it print anything" says wallet
+# while `walletID` correctly says none.
 #
-# A FAILED QUERY IS NOT AN EMPTY CHAIN.  If list-wallet cannot be read at all, this reports nothing
-# missing rather than everything missing: "the chain did not answer" must not be turned into a
-# reason to re-provision every user.  `jq -e has("wallet")` separates the two -- a real empty chain
-# still returns the key with an empty list.
+# A FAILED QUERY IS NOT AN EMPTY CHAIN.  An answer carrying NEITHER marker -- node down, timeout,
+# half-written reply -- reports nothing missing rather than everything missing: "the chain did not
+# answer" must not be turned into a reason to re-provision every user.  That is the same guard the
+# old `jq -e has("wallet")` served, kept per-user now that the query is per-user.
 #
 # The ephemeral wallets are checked too, but only the four the suites hard-depend on: they are made
 # by create_user.sh in the same pass as their owner, so they are a cheap way to notice a user whose
@@ -651,23 +658,35 @@ setup_missing() {
     fi
 
     # Keys all present -- now confirm they belong to THIS chain.
-    local walletjson walletids
-    walletjson=$(qadenad_alias query qadena list-wallet --limit 5000 --output json 2>/dev/null)
-    # THE VALUE IS COMPARED, not jq's exit status.  `jq -e` exits 0 on EMPTY INPUT in jq 1.6 -- so
-    # `if ! ... | jq -e 'has("wallet")'` accepted a query that returned nothing at all, and the guard
-    # this line exists to be did not exist.  Demanding the literal "true" cannot be satisfied by
-    # silence: empty input and unparseable output both print nothing.
-    if [[ "$(print -r -- "$walletjson" | jq -r 'has("wallet")' 2>/dev/null)" != "true" ]]; then
-        echo "  (could not read the wallet list; judged the test users on the keyring alone)" >&2
-        return 0
-    fi
-    walletids=$(print -r -- "$walletjson" | jq -r '.wallet[].walletID' 2>/dev/null)
-
+    #
+    # ONE POINT QUERY PER USER, NOT ONE LIST OF EVERYTHING.  `list-wallet --limit 5000` truncated
+    # silently: this chain passed 5,000 wallets on 2026-08-23, jill's address sorts past the cut,
+    # and she was reported as having no wallet at all.  That tripped the auto-setup below, which
+    # then aborted on the ten users that DO exist ("friendly name already exists"), and every run
+    # stopped after three suites until someone read the logs.  64 consecutive runs died that way.
+    #
+    # Raising the limit only moves the cliff.  On that same node credential is already 28,428 and
+    # public-key 10,716; any bound large enough today is a bound that expires.
+    #
+    # show-wallet EXITS 0 WHETHER OR NOT THE WALLET EXISTS -- it falls through to printing the
+    # transparent bank balance -- so the exit status carries no information and must not be tested.
+    # Its output is mixed prose and JSON (jq cannot parse it whole), so it is matched as text.
+    local out
     for name in ${(f)names}; do
         addr=$(qadenad_alias keys show "$name" -a --keyring-backend test 2>/dev/null) || continue
         [ -n "$addr" ] || continue
-        if ! print -r -- "$walletids" | grep -qx "$addr"; then
-            missing="$missing $name"
+        out=$(qadenad_alias query qadena show-wallet "$addr" --output json 2>&1)
+        if print -r -- "$out" | grep -q "walletID"; then
+            continue                                    # on this chain
+        elif print -r -- "$out" | grep -q "code = NotFound"; then
+            missing="$missing $name"                    # genuinely absent
+        else
+            # ABSENT AND UNREACHABLE ARE NOT THE SAME ANSWER.  Anything that is neither a wallet
+            # nor an explicit NotFound -- node down, timeout, half-written reply -- means we do
+            # not know.  Guessing "missing" here restarts setup against a populated chain, which
+            # is the exact failure this function exists to prevent.
+            echo "  (could not read $name's wallet; judged the test users on the keyring alone)" >&2
+            return 0
         fi
     done
     [ -n "$missing" ] && print -r -- "${missing# } (keys exist, but no wallet on THIS chain)"
