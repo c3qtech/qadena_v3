@@ -33,7 +33,8 @@
 # x/qadena/common/vshare_test.go.  It matters: without a bound, "accept the previous key" would
 # decay into "accept any key this node has ever seen", and this script alone would not notice.
 #
-# Run AFTER testscripts/setup.sh.
+# Run AFTER testscripts/setup.sh -- except with --key-added-only, which exercises only the rotation
+# itself and therefore needs nothing but a running debug-enclave chain.
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
@@ -43,6 +44,26 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 set -e
 
 function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
+
+# --key-added-only runs ONE rotation and checks ONE thing: that it published exactly one new public
+# key.  Everything else here -- the previousPubKID record and the straddle cases -- is about the
+# GRACE PERIOD, needs credentials and a dsvs document, and therefore needs setup.sh to have run.
+# The minimal check needs none of that, so it also skips the prerequisite guards below: demanding
+# testidentitysrvprv on a chain where nothing but the rotation is being exercised would refuse to
+# run for a reason that does not apply.
+key_added_only=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --key-added-only) key_added_only=1; shift ;;
+        --help|-h)
+            echo "Usage: test_ss_key_rotation.sh [--key-added-only]"
+            echo "  (no flag)          the full rotation suite: grace-period record and straddle cases"
+            echo "  --key-added-only   one rotation, assert it published exactly one public key, stop"
+            echo "  Both are debug-enclave only; on SGX the suite skips (see preflight)."
+            exit 0 ;;
+        *) echo "unknown option: $1"; echo "try: $0 --help"; exit 1 ;;
+    esac
+done
 
 identityprovider="testidentitysrvprv"
 dsvsprovider="testdsvssrvprv"
@@ -91,6 +112,16 @@ ss_previous_pubkid() {
         | sed -n 's/.*"previousPubKID":"\([^"]*\)".*/\1/p'
 }
 
+# COUNTED WITH --count-total, never by measuring the returned array.  The default page is 100 rows
+# and this chain passes that quickly; a soak node is already past 10,000 public keys.  Counting the
+# array would silently stop rising at 100 and the assertion below would then compare two identical
+# numbers forever, reporting "no key added" on a healthy chain and, worse, "added exactly 1" never
+# again.  pagination.total is the count of the whole table regardless of the page.
+ss_pubkey_count() {
+    qadenad_alias q qadena list-public-key --count-total --limit 1 -o json 2>/dev/null \
+        | sed -n 's/.*"total":"\([0-9]*\)".*/\1/p'
+}
+
 # Rotating is asynchronous: UpdateSSIntervalKey hands off to a goroutine that broadcasts three
 # messages (enclave.go, updateSSIntervalKey), so the chain state changes some blocks later.  Polling
 # for the pubKID to actually change is the difference between a test and a flake.
@@ -126,14 +157,20 @@ if ! qadenad_alias enclave update-ss-interval-key > /dev/null 2>&1; then
     exit 0
 fi
 
-qadenad_alias keys show "$identityprovider" -a --keyring-backend test > /dev/null 2>&1 \
-    || fail "$identityprovider missing -- run testscripts/setup_prerequisites.sh first"
-qadenad_alias keys show "$sponsor" -a --keyring-backend test > /dev/null 2>&1 \
-    || fail "$sponsor missing -- run testscripts/setup_prerequisites.sh first"
+if [ $key_added_only -eq 0 ]; then
+    qadenad_alias keys show "$identityprovider" -a --keyring-backend test > /dev/null 2>&1 \
+        || fail "$identityprovider missing -- run testscripts/setup_prerequisites.sh first"
+    qadenad_alias keys show "$sponsor" -a --keyring-backend test > /dev/null 2>&1 \
+        || fail "$sponsor missing -- run testscripts/setup_prerequisites.sh first"
+fi
 echo "chain up; run id $suffix"
 
 echo "========================="
-echo "1. a rotation records the key it replaced"
+if [ $key_added_only -eq 1 ]; then
+    echo "1. a rotation publishes exactly one new key"
+else
+    echo "1. a rotation records the key it replaced"
+fi
 echo "========================="
 # The grace period reads previousPubKID out of consensus state rather than reconstructing history,
 # because pruning settings, uptime and state-sync method all differ between validators -- "what was
@@ -141,21 +178,60 @@ echo "========================="
 # in the record, and it has to be the RIGHT one.
 before=$(ss_pubkid)
 [ -n "$before" ] || fail "couldn't read the current SS interval pubKID"
-echo "current  $before"
+keys_before=$(ss_pubkey_count)
+[ -n "$keys_before" ] || fail "couldn't count public keys before the rotation"
+echo "current  $before  ($keys_before public keys on chain)"
 
 rotate_and_wait "$before"
 
 after=$(ss_pubkid)
-previous=$(ss_previous_pubkid)
 echo "rotated  $after"
-echo "previous $previous"
-
 [ "$after" != "$before" ] || fail "the pubKID did not change"
-[ "$previous" = "$before" ] \
-    || fail "previousPubKID is \"$previous\" but the key just replaced was \"$before\".
-       Without this the chain has no way to name the previous key, and the grace period
-       silently degrades to no grace at all."
-echo "previousPubKID names the replaced key, as expected"
+
+# THE GRACE-PERIOD RECORD IS NOT PART OF THE MINIMAL CHECK.  previousPubKID exists for the straddle
+# window, which --key-added-only does not exercise; asserting it there would make the flag claim
+# more than it ran.
+if [ $key_added_only -eq 0 ]; then
+    previous=$(ss_previous_pubkid)
+    echo "previous $previous"
+
+    [ "$previous" = "$before" ] \
+        || fail "previousPubKID is \"$previous\" but the key just replaced was \"$before\".
+           Without this the chain has no way to name the previous key, and the grace period
+           silently degrades to no grace at all."
+    echo "previousPubKID names the replaced key, as expected"
+fi
+
+# A ROTATION MUST PUBLISH EXACTLY ONE NEW PUBLIC KEY.  Rotating mints a fresh SS interval key and
+# broadcasts it as one MsgPioneerAddPublicKey; the pubKID assertions above prove the POINTER moved,
+# and this proves the KEY IT POINTS AT actually reached the chain.  Those are different failures: a
+# rotation that advanced the id without publishing the key leaves every peer naming a key it cannot
+# fetch, and the pubKID check alone would pass.
+#
+# EXACTLY one, not "at least one".  Too few means the key never landed.  Too many means a rotation
+# minted more than it announced -- which is how a fleet ends up with keys nobody rotated to and no
+# record of where they came from.  Both are worth failing on, so the count is compared, not just its
+# direction.
+keys_after=$(ss_pubkey_count)
+[ -n "$keys_after" ] || fail "couldn't count public keys after the rotation"
+added=$(( keys_after - keys_before ))
+[ "$added" -eq 1 ] \
+    || fail "one rotation added $added public keys ($keys_before -> $keys_after), expected exactly 1.
+         The SS interval key is published as a single MsgPioneerAddPublicKey; 0 means the new key
+         never reached the chain and peers will name a key they cannot fetch, more than 1 means the
+         rotation minted keys it did not announce."
+echo "the rotation added exactly 1 public key ($keys_before -> $keys_after)"
+
+if [ $key_added_only -eq 1 ]; then
+    # SAYING WHAT WAS NOT RUN.  A bare "PASSED" here would read as the rotation suite having passed,
+    # and the grace period is the part that actually regressed in the wild.  Naming the gap is the
+    # difference between a narrower run and a misleading one.
+    echo ""
+    echo "--key-added-only: stopping here."
+    echo "  NOT RUN: the previousPubKID record, and the straddle cases that prove a transaction"
+    echo "  built either side of a rotation is still accepted.  Run without the flag for those."
+    exit 0
+fi
 
 echo "========================="
 echo "2. transactions that straddle a rotation are accepted"
