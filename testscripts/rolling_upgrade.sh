@@ -114,9 +114,21 @@ if (( ! SKIP_GOV )); then
     step "2. register $NEW_UNIQUE by governance, and get it promoted"
     say "submitting from ${NODES[1]} (it also votes)"
     run "${NODES[1]}" "cd ~/qv3 && ./testscripts/test_update_enclave_identity.sh $NEW_UNIQUE $NEW_SIGNER unvalidated" >/dev/null
-    PROP=$(rsh "${NODES[1]}" '~/qadena/bin/qadenad q gov proposals --status voting_period -o json 2>/dev/null' \
-           | grep -oE '"id":"[0-9]+"' | tail -1 | grep -oE '[0-9]+')
+    # NEWEST PROPOSAL, VIA REVERSE PAGING -- not a filtered list.  `q gov proposals` PAGINATES at
+    # 100 and this chain already holds over a thousand, so listing and taking the last entry finds
+    # the hundredth-oldest proposal, or nothing at all.  (The same default silently truncated a
+    # list-public-key reading during the last rollout and made an owner-count report wrong.)
+    # --page-reverse --page-limit 1 asks the chain for exactly the newest one, which is immune to
+    # how many exist.  Note the id is a quoted STRING with a space after the colon in the
+    # pretty-printed output, so parse the JSON rather than grepping for `"id":"N"`.
+    PROP=$(rsh "${NODES[1]}" '~/qadena/bin/qadenad q gov proposals --page-reverse --page-limit 1 -o json 2>/dev/null' \
+           | python3 -c 'import json,sys; print(json.load(sys.stdin)["proposals"][0]["id"])' 2>/dev/null)
     [[ -n "$PROP" ]] || die "could not find the proposal just submitted"
+    # It must actually be OURS and still open -- a stale newest proposal would otherwise be voted on.
+    PSTAT=$(rsh "${NODES[1]}" "~/qadena/bin/qadenad q gov proposal $PROP -o json 2>/dev/null" \
+            | grep -oE 'PROPOSAL_STATUS_[A-Z_]+' | head -1)
+    [[ "$PSTAT" == "PROPOSAL_STATUS_VOTING_PERIOD" ]] \
+        || die "newest proposal $PROP is $PSTAT, not in its voting period -- did the submit fail?"
     say "  proposal $PROP"
     CHAIN=$(rsh "${NODES[1]}" '~/qadena/bin/qadenad status 2>/dev/null' | tr ',' '\n' | grep -oE '"network":"[^"]+"' | cut -d'"' -f4)
     # QUORUM: one validator is 25% against a 33.4% quorum.  Every node votes.
@@ -147,6 +159,11 @@ fi
 step "3. roll the fleet, one node at a time"
 for n in "${NODES[@]}"; do
     say "$n: activating"
+    # DO NOT HAND-ROLL THIS LOOP.  require_advancing below is the only thing standing between a
+    # rolling upgrade and a halted chain: on four equal validators, taking a SECOND node down
+    # before the first is back leaves 50%, which is under the two-thirds threshold, and the chain
+    # stops with every process still running and no error anywhere.  That happened on 2026-08-23
+    # doing exactly this by hand -- see backlog 108.
     # The signer keeps its name across a non-reproducible rebuild; move it aside (never delete --
     # the old enclave must stay on disk for the handover).
     run "$n" 'mkdir -p ~/qadena/bin/superseded; for f in ~/qadena/bin/signer_enclave.unique*; do [ -e "$f" ] && mv -f "$f" ~/qadena/bin/superseded/ ; done; true' >/dev/null 2>&1 || true

@@ -2211,3 +2211,43 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
      the audit until `updateIsValidator` publishes its external address, which happens on its
      FIRST PROPOSED BLOCK after bonding, not when it joins.
 
+
+108. **A ROLLING UPGRADE HALTED THE CHAIN, because the health gate was skipped -- by hand, in a
+     loop written to save two minutes.**  M1-M4, 2026-08-23, during the unique054 roll.
+
+     Four validators hold ~25% each.  One down leaves 75% and the chain advances; TWO down leaves
+     50%, which is under the two-thirds threshold, and consensus stops WITH EVERY PROCESS STILL
+     RUNNING.  There is no error, no crash and no log line saying "halted" -- the height simply
+     stops moving, which is why `pgrep` is not a health check and never was.
+
+     rolling_upgrade.sh calls require_advancing between nodes precisely to prevent this.  I did
+     not use it for the last two nodes; I wrote a `for n in 52 136` loop inline instead.  Node 3's
+     install stopped it and, because the chain query returned "unreachable", can_activate went to
+     0 -- so install_release.sh correctly staged rather than activated, and correctly did NOT
+     restart, since --restart is gated on can_activate.  The loop did not notice, moved on, and
+     stopped node 4.  Now two of four were down and the chain stopped.
+
+     RECOVERY WAS EASY AND THAT IS THE TRAP.  `start_qadena.sh` on both, and the chain resumed
+     within seconds (107286 -> 107320).  Nothing was lost, which is exactly why this is worth
+     writing down: the failure is cheap here and would not be on a chain that mattered.
+
+     WHAT TO DO ABOUT IT:
+       - The gate is already in the script; the fix is to USE the script.  A comment now says so
+         at the loop head, naming this item.
+       - Better: make install_release.sh refuse to stop a node when doing so would drop the
+         VALIDATOR SET below two thirds.  It already queries the chain in step 3; the bonded set
+         and this node's own power are one more query, and "stopping me would halt the chain" is
+         a thing only the node itself can cheaply know.  That turns a discipline into a guard.
+       - Also worth understanding: WHY the chain query said "unreachable" on those two nodes when
+         they were up moments earlier.  It was benign here (it only meant staged-not-activated),
+         but a false "unreachable" is indistinguishable from "not registered", and both routes end
+         in can_activate=0.  Not chased; reproduce before trusting the message.
+
+     Related: `q gov proposals` PAGINATES AT 100.  rolling_upgrade.sh found its own proposal by
+     listing and taking the last entry, which on a chain with 1045 proposals returns the
+     hundredth-oldest -- it found nothing and the votes had to be cast by hand.  Fixed to ask for
+     the newest directly (--page-reverse --page-limit 1) and to assert the proposal is actually in
+     its voting period before voting on it.  The same default truncated a list-public-key reading
+     earlier in the session and produced a wrong owner-count report; assume every list query
+     paginates until proven otherwise.
+
