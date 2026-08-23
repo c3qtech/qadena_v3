@@ -2146,3 +2146,68 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
      verifiable), or have the fleet refuse a binary whose hash does not match what the chain's
      active measurement was registered with. The second needs the hash recorded at registration,
      which it is not today.
+
+106. **The re-share audit converges only PROBABILISTICALLY, and on a big owners table that is a
+     long tail.**  Measured on M1-M4 2026-08-23, right after the unique053 rollout.
+
+     The audit examines at most `maxSSAuditScan` (256) keys per run, starting at a RANDOM offset
+     into the sorted owners table.  The randomisation works -- successive runs logged
+     `from=218`, `from=1294`, `from=983`, `from=897`, `from=199` -- but random sampling gives
+     FAIR coverage, not SYSTEMATIC coverage, and the table on that fleet holds 2233 entries:
+
+         scanned=256/2233   =  11.5% of the table per run
+         a given key is still unseen after  9 runs with p = 33%
+                                    after 14 runs with p = 18%
+                                    after 20 runs with p =  9%
+
+     So a backlog of 7 stragglers took roughly twenty forced audits to clear, with several runs
+     reporting `selected=0` while deficient keys demonstrably existed.  It DOES converge -- the
+     fleet reached 0 deficient across 495 SS keys -- but at the natural cadence (one audit per
+     6105-block tick, ~3h) that tail is days long, and an operator watching `selected=0` has no
+     way to tell "nothing to do" from "did not look there this time".
+
+     THE FIX IS CHEAPER THAN THE CAP IT REPLACES: a PERSISTENT ROTATING CURSOR instead of a random
+     start.  Store the last scan position in the secrets DB, resume from it, wrap at the end.
+     Identical per-run cost, no extra block-execution work, and it sweeps all 2233 in
+     ceil(2233/256) = 9 runs with a GUARANTEE rather than a probability.  Per-node cursors still
+     spread the work across proposers, which is what the randomisation was for.
+
+     Keep the scan cap itself.  It is doing its job: the audit runs on the block-execution thread
+     and the owners table grows one entry per rotation forever, so an uncapped scan is an
+     unbounded and GROWING stall -- worst in the quiescent case, where nothing is deficient and it
+     would walk every key to find that out.  `scanned=256/2233` in the log is the cap working.
+
+     Also make the log distinguish the two zeroes: `selected=0 scanned=256/2233` should say
+     whether the window was exhausted or merely unlucky.
+
+107. **A CLEAN-CHAIN GROWTH TEST is missing, and it is the only shape that exercises what the
+     re-share audit is FOR.**  Requested by Al 2026-08-23 after watching the first live audit.
+
+     The M1-M4 fleet cannot produce the interesting case any more.  Every node joined inside the
+     first rotation interval, so almost every SS interval key was minted with 4 pioneers already
+     addressable; the handful of genuine 1-owner keys were genesis-era leftovers and are now
+     healed.  A fleet that is already at the target teaches nothing about growth.
+
+     What to build: bring up a CLEAN chain and grow it one node at a time, forcing SS key
+     generation at each size, so keys exist that were minted at EVERY fleet size:
+
+         1 node   force several rotations   -> keys with 1 owner   (threshold 1, no split at all)
+         add 2nd, wait until ADDRESSABLE    -> audit heals 1 -> 2  (still threshold 1: 2 copies)
+                  force several rotations   -> new keys with 2 owners
+         add 3rd, wait until addressable    -> audit heals 1,2 -> 3 (still threshold 1)
+                  force several rotations   -> new keys with 3 owners
+         add 4th, wait until addressable    -> audit heals ALL -> 4, THRESHOLD CROSSES 1 -> 2,
+                                               shamir.Split runs for the first time
+                  force several rotations   -> new keys minted 2-of-4
+         add 5th (the Mac, built locally)   -> everything converges to 2-of-5
+
+     Assertions at each step: every key's chain row reaches min(fleet, cap) owners; the
+     threshold-crossing run logs `threshold 1->2 split=true`; a node that was NOT an owner of an
+     old key can still reconstruct it afterwards; and with the ORIGINAL node stopped, a fresh
+     joiner can still state-sync and seed -- which is the entire point of the feature and the one
+     thing no test has yet demonstrated.
+
+     "Wait until addressable" is load-bearing and easy to get wrong: a joined node is invisible to
+     the audit until `updateIsValidator` publishes its external address, which happens on its
+     FIRST PROPOSED BLOCK after bonding, not when it joins.
+
