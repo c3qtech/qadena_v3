@@ -99,9 +99,9 @@ FROM_STAGE="A0"
 PRIM_UID=""
 STAGE_ORDER=(A0 A B C D E F G H)
 
-fail()  { print -u2 "FAIL(full_fleet_bringup): $*"; note "FAILED: $*"; exit 1 }
-info()  { print "  $*" }
-stage() { print ""; print "###################################################################"; print "### $*"; print "###################################################################"; note "$*" }
+# Helpers, and the traps they encode, live in ONE place -- fleet_bringup_with_tests.sh drives the
+# same machines the same way and must not carry a second copy that can drift.  See fleet_lib.sh.
+source "$SCRIPT_DIR/fleet_lib.sh"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -176,31 +176,17 @@ mkdir -p "$RUN_DIR" || { print -u2 "FAIL: could not create $RUN_DIR"; exit 1 }
 ln -sfn "$RUN_DIR" "${RUN_DIR:h}/latest" 2>/dev/null
 
 STATUS="$RUN_DIR/status.txt"
-note() { print "$(date -u +%Y-%m-%dT%H:%M:%SZ)  $*" >> "$STATUS" }
 
 # Everything from here on is teed into the run directory as well as the terminal.
 exec > >(tee -a "$RUN_DIR/run.log") 2>&1
 
 note "run started: $INVOCATION"
 
-rsh_user() {
-    local host="$1"; shift
-    ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "zsh -lc $(printf '%q' "$*")"
-}
 
 # run_stage <letter> -- true once we have reached --from.  Stages are letters rather than numbers
 # because they are named that way everywhere else (logs, --help, the run directory).
-stage_index() {
-    local want="$1" i=1
-    for s in "${STAGE_ORDER[@]}"; do
-        [[ "$s" == "$want" ]] && { print $i; return 0 }
-        (( i++ ))
-    done
-    return 1
-}
 FROM_INDEX=$(stage_index "$FROM_STAGE") \
     || { print -u2 "FAIL: --from takes one of ${STAGE_ORDER[*]}, got \"$FROM_STAGE\""; exit 1 }
-run_stage() { [[ $(stage_index "$1") -ge $FROM_INDEX ]] }
 
 # RESUMING PAST A RED REGRESSION IS A DELIBERATE ACT.  --from D or later skips stage C entirely, so
 # say so out loud: the guard that refuses to package off a failed suite is the point of this script,
@@ -212,53 +198,18 @@ fi
 
 # Trap 4: builds go through a LOGIN bash with the toolchain path prepended.  zsh -lc is not enough
 # when the target's login shell is bash -- go is then absent and the failure names the enclave.
-BUILD_PATH='export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH;'
-rsh_build_detached() {   # host, remote-log, command
-    local host="$1" rlog="$2"; shift 2
-    ssh -f -o ConnectTimeout=10 -o BatchMode=yes "$host" \
-        "cd \$HOME/qv3 && nohup bash -lc $(printf '%q' "$BUILD_PATH $*") > $rlog 2>&1 < /dev/null"
-}
 
 # Pull a remote log into the run directory.  Cheap, and it is what makes one-directory monitoring
 # real rather than a claim -- the local copy is never more than a poll interval behind.
-sync_log() {   # host, remote-path, local-name
-    ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" "cat $2" > "$RUN_DIR/$3" 2>/dev/null || true
-}
 
 # Trap 7: the height must ADVANCE.  Processes being up says nothing -- a halted two-validator chain
 # looks perfectly healthy from ps.
-height_of() {
-    rsh_user "$1" 'curl -s --max-time 5 localhost:26657/status | jq -r ".result.sync_info.latest_block_height // empty"' 2>/dev/null | tr -d '\r'
-}
-assert_advancing() {   # host, label
-    local h0 h1
-    h0=$(height_of "$1")
-    [[ -n "$h0" ]] || fail "$2: the RPC on $1 did not answer"
-    sleep 12
-    h1=$(height_of "$1")
-    [[ -n "$h1" ]] || fail "$2: the RPC on $1 stopped answering"
-    [[ "$h1" -gt "$h0" ]] || fail "$2: $1 is NOT advancing (height stuck at $h1). A halted chain keeps every process running -- check the enclave, and the peers' app hashes."
-    info "$2: $1 advancing ($h0 -> $h1)"
-}
 
 # Same probe 1st_node_bringup uses: 0 = SGX usable, 1 = SGX present, needs root, 2 = no SGX.
-SGX_PROBE='e=""; p=""
-for d in /dev/sgx_enclave /dev/sgx/enclave;     do [ -e "$d" ] && { e="$d"; break; }; done
-for d in /dev/sgx_provision /dev/sgx/provision; do [ -e "$d" ] && { p="$d"; break; }; done
-[ -n "$e" ] && [ -n "$p" ] || exit 2
-[ -r "$e" ] && [ -w "$e" ] && [ -r "$p" ] && [ -w "$p" ] || exit 1
-exit 0'
-sgx_state() { ssh -o ConnectTimeout=10 "$1" "$SGX_PROBE" >/dev/null 2>&1; print $? }
 
 # READ THE MEASUREMENT FROM THE BINARY, TWO WAYS.  ego computes it on SGX; on ARM (no ego at all)
 # and on debug builds the identity IS the embedded string.  Never `qadenad_enclave --unique-id` on
 # SGX: it returns the embedded debug placeholder, which does not describe a signed enclave.
-measurement_of() {   # host
-    local h="$1" out
-    out=$(rsh_user "$h" 'ego uniqueid $HOME/qadena/bin/qadenad_enclave 2>/dev/null | head -1' | tr -d '\r')
-    [[ "$out" =~ ^[0-9a-f]{64}$ ]] && { print "$out"; return }
-    rsh_user "$h" 'strings $HOME/qadena/bin/qadenad_enclave 2>/dev/null | grep -m1 -ohE "unique[0-9]+"' | tr -d '\r'
-}
 
 rsh_user "$PRIMARY" 'print $HOME' >/dev/null 2>&1 || fail "cannot ssh to $PRIMARY"
 for j in "${JOINERS[@]}"; do
