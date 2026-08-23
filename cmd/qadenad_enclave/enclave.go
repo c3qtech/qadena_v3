@@ -19,6 +19,7 @@ import (
 	"strings"
 	"syscall"
 
+	"encoding/base64"
 	"encoding/hex"
 
 	"compress/gzip"
@@ -74,6 +75,7 @@ import (
 	"math/big"
 	"math/rand/v2"
 
+	ecies "github.com/ecies/go/v2"
 	"github.com/hashicorp/vault/shamir"
 
 	cosmossdkiolog "cosmossdk.io/log"
@@ -344,7 +346,12 @@ const (
 	EnclaveSSIntervalSharesKeyPrefix = "Enclave/SSIntervalShares/value/"
 	EnclaveSSIntervalPrivKKeyPrefix  = "Enclave/SSIntervalPrivK/value/"
 	EnclaveSSIntervalPubKKeyPrefix   = "Enclave/SSIntervalPubK/value/"
-	EnclaveCredentialHashKeyPrefix   = "Enclave/CredentialHash/value/"
+	// Where the re-share audit stopped scanning last time.  Node-local progress, NOT consensus
+	// state, and deliberately in the unversioned secrets DB: a chain rollback must not rewind it,
+	// and a restart must not lose it (a node that reboots oftener than a full sweep would never
+	// finish one).  See planSSReshare.
+	EnclaveSSAuditCursorKeyPrefix  = "Enclave/SSAuditCursor/value/"
+	EnclaveCredentialHashKeyPrefix = "Enclave/CredentialHash/value/"
 	// reverse of EnclaveCredentialHashKeyPrefix: credentialID -> every identity hash that
 	// resolves to it.  Hashes cannot be enumerated backwards out of the forward index, and
 	// without this a removed credential would leave its hashes permanently blocking the
@@ -992,7 +999,17 @@ func (s *qadenaServer) addSSShare(pioneerIDs []string, pubKID string, privK stri
 		}
 	}
 
-	s.setOwnersAndShare(pubKID, pioneerIDs, shares[0])
+	// OUR OWN SHARE IS THE ONE AT OUR INDEX -- not shares[0].  addSSShare hands shares[i] to
+	// pioneerIDs[i], and the generator has no guaranteed position: under capped random selection
+	// it may sit anywhere in the list, or (a re-sharing proposer that did not select itself --
+	// prevented by policy, but not by this function) nowhere.  Storing shares[0] regardless kept
+	// ANOTHER pioneer's share as our own: a duplicate x-coordinate that poisons any gather we
+	// serve until the broadcast's SetPublicKey overwrites it with the right one.
+	self := ""
+	if idx := slices.Index(pioneerIDs, s.getPrivateEnclaveParamsPioneerID()); idx >= 0 {
+		self = shares[idx]
+	}
+	s.setOwnersAndShare(pubKID, pioneerIDs, self)
 
 	s.setPrivKCache(pubKID, privK)
 	s.setPubKCache(pubKID, pubK)
@@ -1048,6 +1065,28 @@ func isPrivKHex(s string) bool {
 	return err == nil && len(b) == 32
 }
 
+// derivePubKBase64 derives the base64(33-byte compressed secp256k1) public key -- the exact wire
+// format PublicKey rows carry (see common.GetAddressAndFriendlyName / BEncrypt) -- from a 64-hex
+// private scalar.
+//
+// This is the INTEGRITY CHECK Shamir does not have.  shamir.Combine over shares from two different
+// Split calls -- or over any garbage of the right length -- returns bytes with no error, and
+// isPrivKHex only vouches for the LENGTH.  Deriving the public half and comparing it to the pubK
+// the chain already binds to the pubKID proves the reconstructed scalar is the real key, closing
+// both the mixed-generation window a re-share opens and the garbage-cache case behind backlog
+// item 90.  Also the producer-side RE-SHARE-NOT-REKEY assertion: what is about to be re-shared
+// must derive to the pubK already on chain.
+func derivePubKBase64(privKHex string) (string, error) {
+	if !isPrivKHex(privKHex) {
+		return "", fmt.Errorf("not a 32-byte hex scalar")
+	}
+	k, err := ecies.NewPrivateKeyFromHex(privKHex)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(k.PublicKey.Bytes(true)), nil
+}
+
 // ssShareFetchTimeout bounds ONE peer's share fetch.
 //
 // This call used to run on context.Background() -- no deadline whatsoever -- inside block
@@ -1089,6 +1128,118 @@ func (s *qadenaServer) fetchShareFrom(ctx context.Context, node string, report [
 	return res.GetRemoteReport(), res.GetEncSecretShareEnclavePubK(), nil
 }
 
+// fetchPrivKFrom performs ONLY the who-has round-trip to one peer, returning the still-encrypted
+// privK for the caller to verify and decrypt.  Touches no enclave state (runs in a goroutine).
+func (s *qadenaServer) fetchPrivKFrom(ctx context.Context, node string, report []byte, pubKID string) (peerReport []byte, encPrivK []byte, err error) {
+	rpcClient, err := client.NewClientFromNode(node)
+	if err != nil {
+		return nil, nil, fmt.Errorf("dial %s: %w", node, err)
+	}
+	queryClient := types.NewQueryClient(clientCtx.WithNodeURI(node).WithClient(rpcClient))
+
+	res, err := queryClient.EnclaveSecretSharePrivK(ctx, &types.QueryEnclaveSecretSharePrivKRequest{
+		RemoteReport: report,
+		EnclavePubK:  s.getPrivateEnclaveParamsEnclavePubK(),
+		PubKID:       pubKID,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("who-has %s: %w", node, err)
+	}
+	return res.GetRemoteReport(), res.GetEncPrivKEnclavePubK(), nil
+}
+
+// runSSWhoHas is the reactive fallback: when a gather cannot reach threshold, ask peers who holds
+// the whole key cached.  Two rounds -- the era's OWNERS first (most likely to hold it), then the
+// addressable non-owner FALLBACK set -- each bounded by ssShareFetchTimeout, first valid answer
+// wins.  Every answer is verified (peer report over "whohas|"+ciphertext), decrypted, and checked
+// against the chain's pubK before it is cached, so a lying peer cannot poison the cache.
+//
+// Safe on any goroutine: reads only mutex-guarded params and the job snapshot.  The two 5s rounds
+// plus the share round stay well inside enclavePeerCallTimeout (60s).
+func (s *qadenaServer) runSSWhoHas(job *ssReconstructJob, via string) (string, string) {
+	// One request report, reused across peers: it certifies (our enclave pubK | pubKID | "whohas")
+	// and does not depend on the peer.  The domain tag keeps it from being replayed as a share
+	// fetch.
+	report, rerr := s.getRemoteReport(strings.Join([]string{
+		s.getPrivateEnclaveParamsEnclavePubK(), job.pubKID, "whohas",
+	}, "|"))
+	if rerr != nil {
+		c.LoggerError(logger, whoHasTag+"could not build a request report for "+job.pubKID+": "+rerr.Error())
+		return "", ""
+	}
+
+	wantPubK, _ := s.getPubKCache(job.pubKID)
+
+	tryRound := func(round string, targets map[string]string) (string, string) {
+		if len(targets) == 0 {
+			return "", ""
+		}
+		c.LoggerInfo(logger, whoHasTag+"ASK pubKID="+job.pubKID+" via="+via+
+			" round="+round+" peers="+strconv.Itoa(len(targets)))
+		ctx, cancel := context.WithTimeout(context.Background(), ssShareFetchTimeout)
+		defer cancel()
+
+		type fetched struct {
+			peer       string
+			peerReport []byte
+			enc        []byte
+			err        error
+		}
+		ch := make(chan fetched, len(targets))
+		for peer, node := range targets {
+			go func(peer, node string) {
+				pr, enc, err := s.fetchPrivKFrom(ctx, node, report, job.pubKID)
+				ch <- fetched{peer: peer, peerReport: pr, enc: enc, err: err}
+			}(peer, node)
+		}
+
+		for i := 0; i < len(targets); i++ {
+			f := <-ch
+			if f.err != nil {
+				c.LoggerDebug(logger, whoHasTag+"no answer from "+f.peer+" for "+job.pubKID+": "+f.err.Error())
+				continue
+			}
+			// The peer report certifies "whohas|"+ciphertext -- the tag stops a share-serve report
+			// from being spliced in.
+			if !s.verifyRemoteReport(f.peerReport, strings.Join([]string{"whohas", string(f.enc)}, "|")) {
+				c.LoggerError(logger, whoHasTag+"report from "+f.peer+" did not verify for "+job.pubKID)
+				continue
+			}
+			var privK string
+			if _, err := c.BDecryptAndUnmarshal(s.getPrivateEnclaveParamsEnclavePrivK(), f.enc, &privK); err != nil {
+				c.LoggerError(logger, whoHasTag+"could not decrypt the privK from "+f.peer+" for "+job.pubKID)
+				continue
+			}
+			if !isPrivKHex(privK) {
+				c.LoggerError(logger, whoHasTag+"privK from "+f.peer+" for "+job.pubKID+" is not a 32-byte key")
+				continue
+			}
+			// The chain's pubK is the referee -- a peer cannot hand us a wrong key that we cache.
+			if wantPubK != "" {
+				got, derr := derivePubKBase64(privK)
+				if derr != nil || got != wantPubK {
+					c.LoggerError(logger, whoHasTag+"privK from "+f.peer+" for "+job.pubKID+" does not derive to the chain's pubK -- ignoring")
+					continue
+				}
+			}
+			s.setPrivKCache(job.pubKID, privK)
+			c.LoggerInfo(logger, whoHasTag+"RESCUED pubKID="+job.pubKID+" via="+via+" from="+f.peer+" round="+round)
+			return privK, f.peer
+		}
+		return "", ""
+	}
+
+	if privK, peer := tryRound("owners", job.nodes); privK != "" {
+		return privK, peer
+	}
+	if privK, peer := tryRound("fallback", job.fallback); privK != "" {
+		return privK, peer
+	}
+	c.LoggerError(logger, whoHasTag+"EXHAUSTED pubKID="+job.pubKID+" via="+via+
+		" -- no peer holds this key cached")
+	return "", ""
+}
+
 // ssTag prefixes every line of the reconstruction path so one grep follows a key end to end:
 //
 //	grep 'ss-reconstruct:' | grep <pubKID>
@@ -1117,30 +1268,57 @@ type ssReconstructJob struct {
 	me        string
 	threshold int
 	nodes     map[string]string // pioneerID -> "tcp://ip:26657", self excluded
+	// fallback is the WHO-HAS set: addressable NON-owner pioneers to ask for a cached privK when
+	// the owner shares cannot reach threshold.  Resolved here, on the execution thread, because
+	// it reads CacheCtx.  Capped at effectiveProbeCap().
+	fallback map[string]string
 }
 
 // ssInFlight stops the eager and lazy paths -- or two eager triggers -- from reconstructing the
 // same key at once.  Duplicate work is harmless for correctness (any threshold shares rebuild the
 // same secret) but it doubles peer load at exactly the moment a rotation is rippling through.
+//
+// GENERATIONS, NOT A SET.  Owner sets can now CHANGE under a gather (a re-share landing while
+// shares are being fetched).  With a plain set, the reschedule that the new owner record deserves
+// was dropped as "already-in-flight", and the stale gather's deferred release then cleared the
+// claim as though the new record had been handled.  Each claim now gets a generation; a bump
+// (ssInFlightBump, called when SetPublicKey sees an owner set change) invalidates the outstanding
+// claim so its release becomes a no-op and a fresh gather can claim immediately.  A stale gather
+// that still completes is harmless: runSSReconstruct's derive-pubK check refuses any result that
+// is not the true key, and the true key is the right thing to cache no matter which generation
+// fetched it.
 var ssInFlight = struct {
 	mu  sync.Mutex
-	set map[string]bool
-}{set: make(map[string]bool)}
+	gen map[string]uint64 // present == in flight; value identifies WHICH flight
+	seq uint64
+}{gen: make(map[string]uint64)}
 
-func ssInFlightClaim(pubKID string) bool {
+func ssInFlightClaim(pubKID string) (uint64, bool) {
 	ssInFlight.mu.Lock()
 	defer ssInFlight.mu.Unlock()
-	if ssInFlight.set[pubKID] {
-		return false
+	if _, busy := ssInFlight.gen[pubKID]; busy {
+		return 0, false
 	}
-	ssInFlight.set[pubKID] = true
-	return true
+	ssInFlight.seq++
+	ssInFlight.gen[pubKID] = ssInFlight.seq
+	return ssInFlight.seq, true
 }
 
-func ssInFlightRelease(pubKID string) {
+// ssInFlightRelease clears the claim only if it still belongs to this flight.
+func ssInFlightRelease(pubKID string, gen uint64) {
 	ssInFlight.mu.Lock()
 	defer ssInFlight.mu.Unlock()
-	delete(ssInFlight.set, pubKID)
+	if ssInFlight.gen[pubKID] == gen {
+		delete(ssInFlight.gen, pubKID)
+	}
+}
+
+// ssInFlightBump invalidates any outstanding claim for pubKID, so the owner-set change that
+// triggered it can schedule a fresh gather instead of being dropped.
+func ssInFlightBump(pubKID string) {
+	ssInFlight.mu.Lock()
+	defer ssInFlight.mu.Unlock()
+	delete(ssInFlight.gen, pubKID)
 }
 
 // planSSReconstruct resolves what a reconstruction of pubKID would need.  MUST run on the
@@ -1178,6 +1356,26 @@ func (s *qadenaServer) planSSReconstruct(pubKID string) (*ssReconstructJob, bool
 		}
 		job.nodes[owner] = "tcp://" + ip + ":26657"
 	}
+
+	// WHO-HAS fallback set: addressable pioneers that are NOT owners of this key.  A cached privK
+	// can live anywhere it was ever generated or reconstructed, so a non-owner is a legitimate
+	// place to ask when the owners are gone.  Capped so a rescue never fans out to the whole fleet.
+	job.fallback = make(map[string]string)
+	ownerSet := make(map[string]bool, len(job.owners))
+	for _, o := range job.owners {
+		ownerSet[o] = true
+	}
+	for _, p := range s.getAddressablePioneers() {
+		if len(job.fallback) >= effectiveProbeCap() {
+			break
+		}
+		if ownerSet[p] || p == me {
+			continue
+		}
+		if ip, okIP := s.getPioneerIPAddress(p); okIP && ip != "" {
+			job.fallback[p] = "tcp://" + ip + ":26657"
+		}
+	}
 	return job, true
 }
 
@@ -1192,6 +1390,15 @@ func (s *qadenaServer) scheduleSSReconstruct(pubKID string) {
 		c.LoggerDebug(logger, ssTag+"skip pubKID="+pubKID+" reason=already-cached")
 		return
 	}
+	// NOT WHILE CATCHING UP.  Replay and store-seeding re-apply every historical SetPublicKey --
+	// including, now, every historical re-share -- and each would fan out a gather whose peers
+	// refuse to serve a catching-up node anyway (refuseIfCatchingUp on the serving side).  The
+	// going-live transition schedules the current interval key once the answers would count; a
+	// HISTORICAL key a catching-up node truly needs still has the lazy path.
+	if err := s.refuseIfCatchingUp("an eager SS reconstruct"); err != nil {
+		c.LoggerDebug(logger, ssTag+"skip pubKID="+pubKID+" reason=catching-up")
+		return
+	}
 	job, ok := s.planSSReconstruct(pubKID)
 	if !ok {
 		return
@@ -1201,7 +1408,8 @@ func (s *qadenaServer) scheduleSSReconstruct(pubKID string) {
 		c.LoggerDebug(logger, ssTag+"skip pubKID="+pubKID+" reason=not-split threshold=1")
 		return
 	}
-	if !ssInFlightClaim(pubKID) {
+	gen, ok := ssInFlightClaim(pubKID)
+	if !ok {
 		c.LoggerDebug(logger, ssTag+"skip pubKID="+pubKID+" reason=already-in-flight")
 		return
 	}
@@ -1210,7 +1418,7 @@ func (s *qadenaServer) scheduleSSReconstruct(pubKID string) {
 		" threshold="+strconv.Itoa(job.threshold)+
 		" peers="+strconv.Itoa(len(job.nodes)))
 	go func() {
-		defer ssInFlightRelease(pubKID)
+		defer ssInFlightRelease(pubKID, gen)
 		start := time.Now()
 		if s.runSSReconstruct(job, "eager") == "" {
 			c.LoggerError(logger, ssTag+"FAILED eager pubKID="+pubKID+
@@ -1299,7 +1507,10 @@ func (s *qadenaServer) runSSReconstruct(job *ssReconstructJob, via string) strin
 			" have="+strconv.Itoa(len(shares))+" need="+strconv.Itoa(job.threshold)+
 			" owners="+strconv.Itoa(len(job.owners))+" peers="+strconv.Itoa(len(job.nodes))+
 			" after="+time.Since(start).String())
-		return ""
+		// LAST RESORT: the shares could not reach threshold, so ask peers who has the whole key
+		// cached.  Covers exactly the case this feature exists for -- a key whose owners have died.
+		privK, _ := s.runSSWhoHas(job, via)
+		return privK
 	}
 
 	// At threshold 1 nothing was split: addSSShare handed every owner the WHOLE key, so the single
@@ -1334,6 +1545,22 @@ func (s *qadenaServer) runSSReconstruct(job *ssReconstructJob, via string) strin
 		// has no integrity check.  Refuse to cache it rather than hand ScalarMult a bad scalar.
 		c.LoggerError(logger, "reconstructed privk for "+job.pubKID+" is not a 32-byte key -- refusing to cache it")
 		return ""
+	}
+	// THE REAL INTEGRITY CHECK.  isPrivKHex only vouches for length: 32 bytes of garbage -- a
+	// mixed-generation combine after a re-share, or any threshold-sized set of unrelated shares --
+	// sails through it.  The chain already binds pubKID to a public key; requiring the
+	// reconstructed scalar to derive to exactly that key is the check Shamir itself cannot do.
+	if wantPubK, found := s.getPubKCache(job.pubKID); found && wantPubK != "" {
+		gotPubK, derr := derivePubKBase64(sPrivK)
+		if derr != nil || gotPubK != wantPubK {
+			c.LoggerError(logger, ssTag+"INTEGRITY pubKID="+job.pubKID+" via="+via+
+				" -- combined scalar does not derive to the chain's pubK (mixed-generation shares?) -- refusing to cache it")
+			return ""
+		}
+	} else {
+		// SetPublicKey seeds the pubK cache before shares can arrive, so an absent entry is
+		// unexpected -- accept (the length check passed) but say so loudly.
+		c.LoggerError(logger, ssTag+"pubKID="+job.pubKID+" has no cached pubK to verify the reconstruction against -- caching UNVERIFIED")
 	}
 	s.setPrivKCache(job.pubKID, sPrivK)
 	c.LoggerInfo(logger, ssTag+"RECONSTRUCTED pubKID="+job.pubKID+" via="+via+
@@ -1912,14 +2139,102 @@ func (s *qadenaServer) UpdateSSIntervalKey(ctx context.Context, in *types.MsgUpd
 	}
 
 	// Debug-only endpoint (refused on a real enclave), so it takes the shortcut of building the
-	// plan on its own handler goroutine.  That read of the block store is only safe because debug
-	// use means no concurrent block execution worth protecting; the production path builds its
-	// plan inside UpdateHeight.
-	if !s.updateSSIntervalKey(s.planSSRotation()) {
+	// plans on its own handler goroutine.  That read of the block store is only safe because debug
+	// use means no concurrent block execution worth protecting; the production path builds both
+	// plans inside UpdateHeight.  The AUDIT RUNS HERE TOO -- a forced rotation must exercise the
+	// same coupling as the real tick, or the E2E test forces rotations and audits nothing.
+	plan := s.planSSRotation()
+	if !s.updateSSIntervalKey(plan, s.planSSReshare(plan)) {
 		c.LoggerError(logger, "couldn't update SS interval key")
 	}
 
 	return &types.UpdateSSIntervalKeyReply{}, nil
+}
+
+// WhoHasSSKey forces a who-has query for one pubKID: ask peer enclaves who holds it cached.
+//
+// DEBUG ONLY, refused on a real enclave, like every other endpoint in this family.  It exists
+// because the natural trigger -- a gather that cannot reach threshold -- is awkward to contrive on
+// a healthy fleet, so an E2E test would otherwise have to kill owners just to reach the rescue
+// path.  This asks the network directly.
+//
+// It queries peers UNCONDITIONALLY, even if this node already has the key cached: the point is to
+// exercise the round trip, and re-caching the same value is harmless.  Building the job here reads
+// CacheCtx from this handler's goroutine, which is the same debug-only shortcut UpdateSSIntervalKey
+// takes and is safe for the same reason -- debug use means no block execution worth racing.
+func (s *qadenaServer) WhoHasSSKey(ctx context.Context, in *types.MsgWhoHasSSKey) (*types.WhoHasSSKeyReply, error) {
+	if s.RealEnclave {
+		return nil, types.ErrGenericTransaction
+	}
+	if in.PubKID == "" {
+		return nil, types.ErrKeyNotFound
+	}
+
+	job, ok := s.planSSReconstruct(in.PubKID)
+	if !ok {
+		// No owners record for this key -- we may never have been told about it.  Ask every
+		// addressable pioneer anyway; who-has does not require us to be an owner.
+		me := s.getPrivateEnclaveParamsPioneerID()
+		job = &ssReconstructJob{
+			pubKID:   in.PubKID,
+			me:       me,
+			nodes:    make(map[string]string),
+			fallback: make(map[string]string),
+		}
+		for _, p := range s.getAddressablePioneers() {
+			if p == me {
+				continue
+			}
+			if ip, okIP := s.getPioneerIPAddress(p); okIP && ip != "" {
+				job.fallback[p] = "tcp://" + ip + ":26657"
+			}
+		}
+	}
+
+	asked := len(job.nodes) + len(job.fallback)
+	privK, peer := s.runSSWhoHas(job, "debug")
+	return &types.WhoHasSSKeyReply{
+		Found:    privK != "",
+		FromPeer: peer,
+		Asked:    int32(asked),
+	}, nil
+}
+
+// AuditSSKeys is the audit WITHOUT the rotation: a debug-only hook so a test can drain a re-share
+// backlog without minting one junk interval key per forced call.  Same plans, same producer, same
+// broadcast wallet as the tick -- only the mint is absent.
+func (s *qadenaServer) AuditSSKeys(ctx context.Context, in *types.MsgAuditSSKeys) (*types.AuditSSKeysReply, error) {
+	if s.RealEnclave {
+		return nil, types.ErrGenericTransaction
+	}
+
+	plan := s.planSSRotation()
+	rplan := s.planSSReshare(plan)
+	msgs := s.reshareSSIntervalKeys(plan, rplan)
+
+	reply := &types.AuditSSKeysReply{
+		Status:   true,
+		Audited:  int32(rplan.audited),
+		Selected: int32(len(rplan.keys)),
+		Emitted:  int32(len(msgs)),
+	}
+	if len(msgs) == 0 {
+		return reply, nil
+	}
+
+	pwalletAddr, err := sdk.AccAddressFromBech32(s.getPrivateEnclaveParamsPioneerWalletID())
+	if err != nil {
+		c.LoggerError(logger, "ss-reshare: bad pioneer wallet: "+err.Error())
+		reply.Status = false
+		return reply, nil
+	}
+	clientCtx = clientCtx.WithFrom(s.getPrivateEnclaveParamsPioneerWalletID()).WithFromAddress(pwalletAddr).WithFromName(s.getPrivateEnclaveParamsPioneerID())
+	err, _ = qadenatx.GenerateOrBroadcastTxCLISync(clientCtx, RootCmd.Flags(), "re-share msgs in AuditSSKeys", msgs...)
+	if err != nil {
+		c.LoggerError(logger, "ss-reshare: failed to broadcast audit re-shares: "+err.Error())
+		reply.Status = false
+	}
+	return reply, nil
 }
 
 func (s *qadenaServer) RemovePrivateKey(ctx context.Context, in *types.MsgRemovePrivateKey) (*types.RemovePrivateKeyReply, error) {
@@ -2205,6 +2520,404 @@ func (s *qadenaServer) exportSealedCredentialIdentityHistoryTable() (tableMap ma
 	}
 	itr.Close()
 	return
+}
+
+// maxSSResharesPerRotation caps how many keys one audit tick will re-share.
+//
+// A fleet growth makes EVERY historical key deficient at once; without a cap the tick after
+// "node 5 became addressable" would emit one message per key in the chain's history in a single
+// tx.  Four per tick drains that backlog at ~19 keys/day at the effective 6105-block cadence,
+// which is fast enough (custody is a slow-moving property) and keeps the tx small.  Selection
+// among the deficient is random (crypto/rand), and the audit predicate reads the CHAIN row, so
+// healed keys drop out and successive ticks -- on whichever proposer draws them -- cover the rest.
+var maxSSResharesPerRotation = 4
+
+// maxSSAuditScan caps how many keys ONE audit EXAMINES, which is a different cost from how many it
+// re-shares.
+//
+// The scan runs on the BLOCK-EXECUTION THREAD (planSSReshare reads CacheCtx), and every key it
+// looks at costs an IAVL read plus a getPrivKCache UNSEAL.  The owners table grows one entry per
+// rotation forever -- thousands of entries on a long-lived chain -- so an uncapped scan is an
+// unbounded, growing stall on block execution, and it is WORST IN THE QUIESCENT CASE: nothing is
+// deficient, and it walks every key to discover that.
+//
+// Bounded three ways together: this cap, an early exit once maxSSResharesPerRotation deficient keys
+// are found (so the backlog case is cheap -- it stops almost immediately), and a RANDOM START
+// OFFSET so successive ticks examine different windows and every key is eventually audited.
+var maxSSAuditScan = 256
+
+// ssReshareCandidate is one deficient key, with everything the detached goroutine needs snapshotted.
+type ssReshareCandidate struct {
+	pubKID    string
+	oldOwners []string
+}
+
+// ssResharePlan is the audit's output: which keys to re-share this tick, plus the enclave pubKs
+// for every possible owner (current fleet AND old owners no longer addressable), resolved on the
+// execution thread because resolution reads CacheCtx.
+type ssResharePlan struct {
+	keys []ssReshareCandidate
+	// enclavePubKs covers plan.pioneers ∪ every candidate's old owners.
+	enclavePubKs map[string]string
+	// audited is how many keys the audit examined -- carried for the debug endpoint's reply.
+	audited int
+}
+
+// getPublicKeyRowOwners reads the CHAIN-MIRRORED PublicKey row and returns the pioneer set of its
+// Shares.  The AUDIT MEASURES DEFICIENCY AGAINST THIS ROW, NOT the local secrets-DB owners record:
+// addSSShare updates the local record before the broadcast is known to land, so a failed emission
+// would look repaired locally and never retry.  The chain row is what peers see; a failed
+// broadcast leaves it unchanged, stays deficient, and is retried next tick.
+// Reads CacheCtx -- execution thread only.
+func (s *qadenaServer) getPublicKeyRowOwners(pubKID string, pubKType string) (owners []string, found bool) {
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.PublicKeyKeyPrefix))
+	b := store.Get(types.PublicKeyKey(pubKID, pubKType))
+	if b == nil {
+		return nil, false
+	}
+	var pk types.PublicKey
+	s.Cdc.MustUnmarshal(b, &pk)
+	owners = make([]string, 0, len(pk.Shares))
+	for _, share := range pk.Shares {
+		owners = append(owners, share.PioneerID)
+	}
+	return owners, true
+}
+
+// planSSReshare is the AUDIT.  Runs on the execution thread (reads CacheCtx via
+// getPublicKeyRowOwners and the enclave-pubK resolution); the secrets-DB reads are mutex-guarded
+// and would be safe anywhere.
+//
+// deficient(K) = privK cached  &&  len(chainRowOwners(K)) < min(len(fleet), effectiveShareCap())
+//
+// That is the whole predicate (user decision): every key converges to an owner set the size of
+// the fleet, capped.  Monotone (owner sets only grow -- the chain's proper-superset rule), and
+// quiescent (once owners == target nothing is deficient until the fleet grows again).
+func (s *qadenaServer) planSSReshare(plan *ssRotationPlan) *ssResharePlan {
+	target := len(plan.pioneers)
+	if cap := effectiveShareCap(); target > cap {
+		target = cap
+	}
+
+	rplan := &ssResharePlan{enclavePubKs: make(map[string]string, len(plan.enclavePubKs))}
+	for k, v := range plan.enclavePubKs {
+		rplan.enclavePubKs[k] = v
+	}
+
+	store := s.secrets(EnclaveSSIntervalOwnersKeyPrefix)
+	// Keys() is a snapshot, so the per-key reads below re-acquire the secrets lock safely.
+	rawKeys := store.Keys()
+	pubKIDs := make([]string, 0, len(rawKeys))
+	for _, key := range rawKeys {
+		pubKIDs = append(pubKIDs, string(key[:len(key)-1]))
+	}
+	// Sorted so the window is a well-defined slice of a stable order; the randomness that makes
+	// coverage fair comes from the START OFFSET, not from map iteration order.
+	sort.Strings(pubKIDs)
+
+	// RESUME WHERE THE LAST RUN STOPPED.  This used to start at a random offset, which gave FAIR
+	// coverage but not SYSTEMATIC coverage: a window of maxSSAuditScan over a table of N sees
+	// maxSSAuditScan/N of it per run, so a straggler survives k runs with probability
+	// (1 - cap/N)^k.  Measured on the M1-M4 fleet at 256/2233 = 11.5%: after fourteen runs a given
+	// key was still unseen with probability 18%, and clearing seven of them took about twenty
+	// forced audits, several of which honestly reported selected=0 while deficient keys existed.
+	//
+	// A cursor turns that probability into a guarantee: ceil(N/cap) runs cover the table, at the
+	// same cost per run.  The cursor is a pubKID rather than an index -- see getSSAuditCursor.
+	cursor := s.getSSAuditCursor()
+	startIdx := 0
+	for startIdx < len(pubKIDs) && pubKIDs[startIdx] <= cursor {
+		startIdx++
+	}
+	wrapped := false
+	if startIdx >= len(pubKIDs) {
+		// Past the end: the sweep is complete.  Wrap and begin a new one.
+		startIdx, wrapped = 0, true
+	}
+
+	audited, deficientCount := 0, 0
+	lastSeen := cursor
+	sweptToEnd := false
+	deficient := make([]ssReshareCandidate, 0, maxSSResharesPerRotation)
+	for i := startIdx; i < len(pubKIDs); i++ {
+		// EARLY EXIT: enough work already found for this tick.  Makes the backlog case (a fleet
+		// just grew, everything is deficient) nearly free, leaving the full scan cost only for
+		// quiescence -- which is exactly where the cap below bounds it.  The cursor is saved at
+		// the point we stop, so the next run resumes past what this one already handled.
+		if len(deficient) >= maxSSResharesPerRotation {
+			break
+		}
+		if audited >= maxSSAuditScan {
+			break
+		}
+		pubKID := pubKIDs[i]
+		lastSeen = pubKID
+		if i == len(pubKIDs)-1 {
+			sweptToEnd = true
+		}
+		audited++
+
+		chainOwners, found := s.getPublicKeyRowOwners(pubKID, types.TransactionPubKType)
+		if !found {
+			c.LoggerDebug(logger, "ss-reshare: CANDIDATE pubKID="+pubKID+" deficient=false reason=no-chain-row")
+			continue
+		}
+		if len(chainOwners) >= target {
+			c.LoggerDebug(logger, "ss-reshare: CANDIDATE pubKID="+pubKID+
+				" owners="+strconv.Itoa(len(chainOwners))+" target="+strconv.Itoa(target)+
+				" deficient=false reason=not-deficient")
+			continue
+		}
+		privK, cached := s.getPrivKCache(pubKID)
+		if !cached || !isPrivKHex(privK) {
+			// v1 NEVER reconstructs in order to re-share: the audit stays cheap, and proposer
+			// rotation means any proposer that ever held the key heals it.  (v2: reconstruct-
+			// then-re-share.)
+			c.LoggerInfo(logger, "ss-reshare: CANDIDATE pubKID="+pubKID+
+				" owners="+strconv.Itoa(len(chainOwners))+" target="+strconv.Itoa(target)+
+				" deficient=true eligible=false reason=no-privk")
+			continue
+		}
+		deficientCount++
+
+		// Resolve enclave pubKs for old owners outside the current addressable set (their
+		// EnclavePubKType rows persist forever, so even dead pioneers resolve).  An unresolvable
+		// owner skips the KEY -- fresh shares for everyone or nothing.
+		resolvable := true
+		for _, owner := range chainOwners {
+			if _, ok := rplan.enclavePubKs[owner]; ok {
+				continue
+			}
+			ownerWalletID, _, _, found := s.getIntervalPublicKeyId(owner, types.PioneerNodeType)
+			if !found {
+				resolvable = false
+				break
+			}
+			pubK, found := s.getPublicKey(ownerWalletID, types.EnclavePubKType)
+			if !found {
+				resolvable = false
+				break
+			}
+			rplan.enclavePubKs[owner] = pubK
+		}
+		if !resolvable {
+			c.LoggerError(logger, "ss-reshare: CANDIDATE pubKID="+pubKID+
+				" deficient=true eligible=false reason=owners-unresolvable -- retried next tick")
+			continue
+		}
+
+		c.LoggerInfo(logger, "ss-reshare: CANDIDATE pubKID="+pubKID+
+			" owners="+strconv.Itoa(len(chainOwners))+" target="+strconv.Itoa(target)+
+			" deficient=true eligible=true")
+		deficient = append(deficient, ssReshareCandidate{pubKID: pubKID, oldOwners: chainOwners})
+	}
+
+	// No post-hoc rate limit is needed: the loop above stops at maxSSResharesPerRotation, and the
+	// random start is what keeps successive ticks from always picking the same keys.
+	// Advance the cursor to where this run stopped.  Reaching the last key ends the sweep, so the
+	// next run wraps and starts over.
+	if sweptToEnd {
+		s.setSSAuditCursor("")
+	} else {
+		s.setSSAuditCursor(lastSeen)
+	}
+
+	rplan.keys = deficient
+	rplan.audited = audited
+
+	// TWO DIFFERENT ZEROES, AND THEY MUST BE TELLABLE APART.  selected=0 alone is ambiguous: it
+	// means either "nothing is deficient" or "this window did not happen to contain anything",
+	// and not being able to distinguish them is what made the coverage gap take twenty runs to
+	// diagnose.  sweep=complete says a full pass over the table has just finished, so
+	// "selected=0 sweep=complete" is an authoritative quiescent signal and anything else is not.
+	sweep := "partial"
+	if sweptToEnd {
+		sweep = "complete"
+	} else if wrapped {
+		sweep = "restarted"
+	}
+	c.LoggerInfo(logger, "ss-reshare: AUDIT addressable="+strconv.Itoa(len(plan.pioneers))+
+		" target="+strconv.Itoa(target)+
+		" scanned="+strconv.Itoa(audited)+"/"+strconv.Itoa(len(pubKIDs))+
+		" fromIdx="+strconv.Itoa(startIdx)+
+		" sweep="+sweep+
+		" deficient="+strconv.Itoa(deficientCount)+
+		" selected="+strconv.Itoa(len(rplan.keys))+
+		" cap="+strconv.Itoa(maxSSResharesPerRotation))
+	return rplan
+}
+
+// reshareSSIntervalKeys executes the audit's plan: for each selected key, RE-SHARE (never rekey)
+// to the grown owner set and emit one MsgPioneerUpdatePublicKey.  Runs on the same detached
+// goroutine as the rotation; everything it needs from the block store arrived in the plans.
+func (s *qadenaServer) reshareSSIntervalKeys(plan *ssRotationPlan, rplan *ssResharePlan) []sdk.Msg {
+	msgs := make([]sdk.Msg, 0, len(rplan.keys))
+	if len(rplan.keys) == 0 {
+		return msgs
+	}
+
+	target := len(plan.pioneers)
+	if cap := effectiveShareCap(); target > cap {
+		target = cap
+	}
+	me := s.getPrivateEnclaveParamsPioneerID()
+	creator := s.getPrivateEnclaveParamsPioneerWalletID()
+	pwalletAddr, err := sdk.AccAddressFromBech32(creator)
+	if err != nil {
+		c.LoggerError(logger, "ss-reshare: bad pioneer wallet "+creator+": "+err.Error())
+		return msgs
+	}
+
+	emitted := 0
+	for _, cand := range rplan.keys {
+		// RE-SHARE, NOT REKEY -- start from the cached key and PROVE it is the chain's key
+		// before anything else happens.
+		privK, ok := s.getPrivKCache(cand.pubKID)
+		if !ok || !isPrivKHex(privK) {
+			c.LoggerError(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+" skipped: privK no longer cached")
+			continue
+		}
+		pubK, ok := s.getPubKCache(cand.pubKID)
+		if !ok || pubK == "" {
+			c.LoggerError(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+" skipped: no cached pubK to verify against")
+			continue
+		}
+		derived, derr := derivePubKBase64(privK)
+		if derr != nil || derived != pubK {
+			c.LoggerError(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+
+				" skipped: cached privK does not derive to the cached pubK -- refusing to re-share it")
+			continue
+		}
+
+		// newOwners = oldOwners ∪ {self} ∪ random additions from the fleet, up to target.
+		// The old owners MUST all be present (the chain enforces a proper superset) and get fresh
+		// shares like everyone else -- shares from two Split calls combine to garbage, so partial
+		// distribution is never valid.
+		inSet := make(map[string]bool, target)
+		newOwners := make([]string, 0, target)
+		for _, o := range cand.oldOwners {
+			if !inSet[o] {
+				inSet[o] = true
+				newOwners = append(newOwners, o)
+			}
+		}
+		if me != "" && !inSet[me] && len(newOwners) < target {
+			inSet[me] = true
+			newOwners = append(newOwners, me)
+		}
+		pool := make([]string, 0, len(plan.pioneers))
+		for _, p := range plan.pioneers {
+			if !inSet[p] {
+				pool = append(pool, p)
+			}
+		}
+		if need := target - len(newOwners); need > 0 && len(pool) > 0 {
+			additions, aerr := randomSubset(pool, need)
+			if aerr != nil {
+				c.LoggerError(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+" skipped: could not draw additions: "+aerr.Error())
+				continue
+			}
+			for _, a := range additions {
+				inSet[a] = true
+				newOwners = append(newOwners, a)
+			}
+		}
+		if len(newOwners) <= len(cand.oldOwners) {
+			// Nothing to add (the chain would reject a non-superset anyway).
+			c.LoggerDebug(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+" skipped: no growth possible")
+			continue
+		}
+
+		oldThreshold := getThreshold(len(cand.oldOwners))
+		newThreshold := getThreshold(len(newOwners))
+		c.LoggerInfo(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+
+			" owners "+strconv.Itoa(len(cand.oldOwners))+"->"+strconv.Itoa(len(newOwners))+
+			" threshold "+strconv.Itoa(oldThreshold)+"->"+strconv.Itoa(newThreshold)+
+			" split="+strconv.FormatBool(newThreshold > 1))
+
+		// The SAME function the rotation uses: split (or copy at threshold 1), record our own
+		// share at our index, refresh caches with values proved unchanged above.
+		shares, serr := s.addSSShare(newOwners, cand.pubKID, privK, pubK)
+		if serr != nil {
+			c.LoggerError(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+" failed in addSSShare: "+serr.Error())
+			continue
+		}
+
+		// PRODUCER VERIFY, before anything leaves this enclave: a threshold subset of the fresh
+		// shares must rebuild the EXACT privK.  Stronger than a derive-only check, and it is what
+		// keeps a corrupt split from destroying the fleet's working shares on receipt.
+		if newThreshold > 1 {
+			a, e1 := hex.DecodeString(shares[0])
+			b, e2 := hex.DecodeString(shares[1])
+			var combined []byte
+			var e3 error
+			if e1 == nil && e2 == nil {
+				combined, e3 = shamir.Combine([][]byte{a, b})
+			}
+			if e1 != nil || e2 != nil || e3 != nil || string(combined) != privK {
+				c.LoggerError(logger, "ss-reshare: VERIFY FAILED pubKID="+cand.pubKID+" -- fresh shares do not rebuild the key; NOT emitting")
+				continue
+			}
+		} else if shares[0] != privK {
+			c.LoggerError(logger, "ss-reshare: VERIFY FAILED pubKID="+cand.pubKID+" -- threshold-1 copy mismatch; NOT emitting")
+			continue
+		}
+		c.LoggerInfo(logger, "ss-reshare: VERIFY OK pubKID="+cand.pubKID)
+
+		gShares := make([]*types.Share, 0, len(newOwners))
+		missingPubK := ""
+		for i, owner := range newOwners {
+			enclavePubK, ok := rplan.enclavePubKs[owner]
+			if !ok {
+				missingPubK = owner
+				break
+			}
+			gShares = append(gShares, &types.Share{
+				PioneerID:       owner,
+				EncEnclaveShare: c.MarshalAndBEncrypt(enclavePubK, shares[i]),
+			})
+		}
+		if missingPubK != "" {
+			c.LoggerError(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+" skipped: no enclave pubK for "+missingPubK)
+			continue
+		}
+
+		sharesJSONBytes, jerr := json.Marshal(gShares)
+		if jerr != nil {
+			c.LoggerError(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+" skipped: "+jerr.Error())
+			continue
+		}
+		sharesJSON := string(sharesJSONBytes)
+
+		sig, serr2 := c.SignPossession(privK, c.PossessionDigest(pwalletAddr.String(), cand.pubKID, types.TransactionPubKType, sharesJSON))
+		if serr2 != nil {
+			c.LoggerError(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+" skipped: possession sign failed: "+serr2.Error())
+			continue
+		}
+
+		report, rerr := s.getRemoteReport(strings.Join([]string{
+			pwalletAddr.String(),
+			cand.pubKID,
+			types.TransactionPubKType,
+			sharesJSON,
+			hex.EncodeToString(sig),
+		}, "|"))
+		if rerr != nil {
+			c.LoggerError(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+" skipped: remote report failed: "+rerr.Error())
+			continue
+		}
+
+		msgs = append(msgs, types.NewMsgPioneerUpdatePublicKey(
+			pwalletAddr.String(), cand.pubKID, types.TransactionPubKType, gShares, sig, report))
+		emitted++
+		c.LoggerInfo(logger, "ss-reshare: EMITTED pubKID="+cand.pubKID+
+			" shares="+strconv.Itoa(len(gShares))+
+			" bytes="+strconv.Itoa(len(sharesJSON)))
+	}
+
+	c.LoggerInfo(logger, "ss-reshare: DONE selected="+strconv.Itoa(len(rplan.keys))+
+		" emitted="+strconv.Itoa(emitted))
+	return msgs
 }
 
 // GenerateSecretShare mints one interval key and returns the two messages that publish it.
@@ -2741,6 +3454,16 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 			// skipped, and queue for validation anything the chain considers active that we do not
 			// trust.  Runs on the transition only, not per block.
 			go s.reconcileTrustOnGoingLive()
+			// Catching up suppressed eager reconstructs (scheduleSSReconstruct refuses while
+			// replaying -- peers would refuse to serve us anyway).  Now that answers count,
+			// settle the one key the next transaction is most likely to need: the CURRENT SS
+			// interval key.  Historical keys keep the lazy path, as always.
+			if ssPubKID, _, _, found := s.getIntervalPublicKeyId(types.SSNodeID, types.SSNodeType); found && ssPubKID != "" {
+				if _, cached := s.getPrivKCache(ssPubKID); !cached {
+					c.LoggerInfo(logger, ssTag+"going live -- scheduling reconstruct of the current SS interval key "+ssPubKID)
+					s.scheduleSSReconstruct(ssPubKID)
+				}
+			}
 		} else {
 			c.LoggerInfo(logger, "chain is REPLAYING at height "+strconv.FormatInt(in.Height, 10)+" -- trust changes are deferred until caught up")
 		}
@@ -2774,8 +3497,9 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 				// getAddressablePioneers' CacheCtx iteration on a goroutine racing block
 				// execution -- see ssRotationPlan for the history of this exact bug.
 				plan := s.planSSRotation()
+				rplan := s.planSSReshare(plan)
 				go func() {
-					if !s.updateSSIntervalKey(plan) {
+					if !s.updateSSIntervalKey(plan, rplan) {
 						c.LoggerError(logger, "failed updateSSIntervalKey()")
 					}
 				}()
@@ -2806,7 +3530,7 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 	return &types.UpdateHeightReply{Status: true}, nil
 }
 
-func (s *qadenaServer) updateSSIntervalKey(plan *ssRotationPlan) bool {
+func (s *qadenaServer) updateSSIntervalKey(plan *ssRotationPlan, rplan *ssResharePlan) bool {
 	c.LoggerDebug(logger, "updateSSIntervalKey")
 
 	c.LoggerDebug(logger, "Going to create a new SS share")
@@ -2821,6 +3545,14 @@ func (s *qadenaServer) updateSSIntervalKey(plan *ssRotationPlan) bool {
 	msgs := make([]sdk.Msg, 0)
 	msgs = append(msgs, ssNewMsgPioneerAddPublicKey)
 	msgs = append(msgs, ssNewMsgPioneerUpdateIntervalPublicKeyId)
+
+	// THE AUDIT RIDES IN THE SAME TX as the rotation.  One broadcast per tick means no
+	// account-sequence race between two back-to-back txs from the pioneer wallet; the coupling
+	// (a rotation failure sinks this tick's re-shares) costs one tick of delay, and the audit
+	// predicate reads the chain row, so anything sunk stays deficient and is retried.
+	if rplan != nil {
+		msgs = append(msgs, s.reshareSSIntervalKeys(plan, rplan)...)
+	}
 
 	flagSet := RootCmd.Flags()
 
@@ -3360,6 +4092,83 @@ func (s *qadenaServer) QueryEnclaveValidateEnclaveIdentity(goCtx context.Context
 
 	return &types.QueryEnclaveValidateEnclaveIdentityResponse{RemoteReport: report,
 		Status: status,
+	}, nil
+}
+
+// whoHasTag prefixes the who-has fallback so one grep follows a rescue across both sides, the same
+// way ssTag follows a reconstruction.
+const whoHasTag = "ss-whohas: "
+
+// QueryEnclaveSecretSharePrivK is the WHO-HAS server: it serves a CACHED interval private key to
+// an attested peer whose share-owners can no longer reach threshold.
+//
+// SECURITY -- why this leaks nothing a trusted peer could not already obtain:
+//   - The requester must verify against THIS enclave's own sealed trusted set (verifyRemoteReport
+//     -> getEnclaveIdentity, Active only).  A non-trusted measurement -- an attacker build, a
+//     deactivated one -- is refused, exactly as for share serving.
+//   - A trusted peer gains nothing new: with threshold shares it can already reconstruct any key,
+//     and sync-enclave already ships jar/regulator PRIVATE keys to any attested joiner.  This is
+//     availability for keys whose owners are gone, at the identical trust bar.
+//   - refuseIfCatchingUp closes the stale-trusted-set window: a node that has not yet processed a
+//     deactivation refuses to serve.
+//   - Domain tags on BOTH reports keep a share-fetch report from being replayed as a privK fetch
+//     or vice versa.
+//   - SS-INTERVAL KEYS ONLY: served only for a pubKID that has an owners record, so this can never
+//     become a generic oracle for whatever else might one day sit in the privK cache.
+//   - Never logs key material -- pubKID, peer prefix, reason only.
+func (s *qadenaServer) QueryEnclaveSecretSharePrivK(goCtx context.Context, in *types.QueryEnclaveSecretSharePrivKRequest) (*types.QueryEnclaveSecretSharePrivKResponse, error) {
+	asker := in.EnclavePubK
+	if len(asker) > 12 {
+		asker = asker[:12]
+	}
+
+	if err := s.refuseIfCatchingUp("a secret-share private key"); err != nil {
+		c.LoggerError(logger, whoHasTag+"SERVE REFUSED pubKID="+in.PubKID+" to="+asker+" reason=catching-up")
+		return nil, err
+	}
+
+	// The "whohas" domain tag is what stops a share-fetch report (which certifies enclavePubK|
+	// pubKID) from being replayed here.
+	if !s.verifyRemoteReport(
+		in.RemoteReport,
+		strings.Join([]string{
+			in.EnclavePubK,
+			in.PubKID,
+			"whohas",
+		}, "|")) {
+		c.LoggerError(logger, whoHasTag+"SERVE REFUSED pubKID="+in.PubKID+" to="+asker+
+			" reason=untrusted-report")
+		return nil, types.ErrRemoteReportNotVerified
+	}
+
+	// SS-interval-only: refuse anything that is not one of our interval keys, regardless of what
+	// else might be cached under that pubKID.
+	if _, isSS := s.getOwners(in.PubKID); !isSS {
+		c.LoggerError(logger, whoHasTag+"SERVE REFUSED pubKID="+in.PubKID+" to="+asker+
+			" reason=not-an-ss-interval-key")
+		return nil, types.ErrKeyNotFound
+	}
+
+	privK, found := s.getPrivKCache(in.PubKID)
+	if !found || !isPrivKHex(privK) {
+		c.LoggerError(logger, whoHasTag+"SERVE REFUSED pubKID="+in.PubKID+" to="+asker+
+			" reason=no-privk-cached")
+		return nil, types.ErrKeyNotFound
+	}
+
+	c.LoggerInfo(logger, whoHasTag+"SERVE OK pubKID="+in.PubKID+" to="+asker)
+
+	encPrivK := c.MarshalAndBEncrypt(in.EnclavePubK, privK)
+	report, err := s.getRemoteReport(strings.Join([]string{
+		"whohas",
+		string(encPrivK),
+	}, "|"))
+	if err != nil {
+		return nil, err
+	}
+	return &types.QueryEnclaveSecretSharePrivKResponse{
+		RemoteReport:        report,
+		EncPrivKEnclavePubK: encPrivK,
 	}, nil
 }
 
@@ -5680,16 +6489,47 @@ func (s *qadenaServer) setAllOwners(ownersMap *types.EncryptableEnclaveSSOwnerMa
 	}
 }
 
+// getSSAuditCursor / setSSAuditCursor remember where the re-share audit stopped scanning.
+//
+// THE CURSOR IS A pubKID, NOT AN INDEX, and that is the whole point.  The owners table grows by an
+// entry every rotation and the scan runs in sorted order, so a newly minted key whose id sorts
+// BEFORE an integer offset shifts every later position by one -- an index cursor would then skip
+// one key per insertion and re-scan another, silently reopening the coverage gap it exists to
+// close.  `key > cursor` is stable no matter what was inserted where.  getOwnersPage (the
+// sync-enclave pager over this same table) uses this discipline for the same reason.
+func (s *qadenaServer) getSSAuditCursor() string {
+	store := s.secrets(EnclaveSSAuditCursorKeyPrefix)
+	b := store.Get(s.MustSealStable(EnclaveKeyKey("cursor")))
+	if b == nil {
+		return ""
+	}
+	var v types.EnclaveStoreString
+	s.Cdc.MustUnmarshal(s.MustUnseal(b), &v)
+	return v.S
+}
+
+func (s *qadenaServer) setSSAuditCursor(cursor string) {
+	store := s.secrets(EnclaveSSAuditCursorKeyPrefix)
+	v := types.EnclaveStoreString{S: cursor}
+	store.Set(s.MustSealStable(EnclaveKeyKey("cursor")), s.MustSeal(s.Cdc.MustMarshal(&v)))
+}
+
 func (s *qadenaServer) setOwnersAndShare(pubKID string, owners []string, share string) {
 	c.LoggerDebug(logger, "setOwnersAndShare", pubKID)
 	ownerArray := types.EnclaveStoreStringArray{A: owners}
 	shareString := types.EnclaveStoreString{S: share}
-	store := s.secrets(EnclaveSSIntervalOwnersKeyPrefix)
-	b := s.Cdc.MustMarshal(&ownerArray)
-	store.Set(EnclaveKeyKey(pubKID), b)
-	store = s.secrets(EnclaveSSIntervalSharesKeyPrefix)
-	b = s.Cdc.MustMarshal(&shareString)
+	// SHARE FIRST, OWNERS SECOND -- the order matters now that re-shares mutate existing records.
+	// These are two independent SetSyncs; a crash between them leaves one old and one new.  With
+	// the share first, the bad pairing is new-share/old-owners: this node's own threshold math is
+	// briefly stale, but the share it SERVES to gatherers is the new polynomial's, which is the
+	// one their owner records expect.  The old order left old-share/new-owners -- a stale
+	// polynomial served under the new record, poisoning every gather until someone noticed.
+	store := s.secrets(EnclaveSSIntervalSharesKeyPrefix)
+	b := s.Cdc.MustMarshal(&shareString)
 	store.Set(s.MustSealStable(EnclaveKeyKey(pubKID)), s.MustSeal(b))
+	store = s.secrets(EnclaveSSIntervalOwnersKeyPrefix)
+	b = s.Cdc.MustMarshal(&ownerArray)
+	store.Set(EnclaveKeyKey(pubKID), b)
 }
 
 func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*types.SetPublicKeyReply, error) {
@@ -5711,14 +6551,56 @@ func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*
 			}
 			_, err := c.BDecryptAndUnmarshal(s.getPrivateEnclaveParamsEnclavePrivK(), share.EncEnclaveShare, &myShare)
 			if err != nil {
-				c.LoggerError(logger, "couldn't decrypt")
-				return nil, err
+				// LOG, DO NOT ERROR.  Returning err here reaches Keeper.SetPublicKey, which
+				// PANICS -- so one share encrypted to a stale enclave pubK (a re-share racing an
+				// enclave key change) HALTED that one pioneer while the rest of the fleet
+				// proceeded: a per-node halt on an already-accepted tx.  An undecryptable share
+				// is a node-local custody degradation, not divergence -- the row still lands in
+				// both stores on every node -- so treat it as "no share delivered" and let the
+				// keep-old-share guard below hold on to whatever we had.  (This softens the
+				// original AddPublicKey path too -- deliberate; see the re-share plan's flagged
+				// decisions.)
+				c.LoggerError(logger, "ss-reshare: RECEIVED pubKID="+in.PubKID+
+					" -- could not decrypt our share; treating as not delivered (was it encrypted to a stale enclave key?)")
+				myShare = ""
 			}
 		}
 	}
 
 	if len(owners) > 0 {
+		// NEVER REPLACE A HELD SHARE WITH NOTHING.  A row that did not deliver us a usable share
+		// -- our entry missing, our entry undecryptable, or us dropped from the owner list
+		// altogether -- must not destroy the share we already hold.  Under the chain's
+		// proper-superset rule every one of these is unreachable for an honest re-share, which is
+		// precisely why a guard must not rely on it: reaching here means something is wrong, and
+		// the OLD share is the fail-closed state (a stale share poisons a gather, which the
+		// derive-pubK integrity check refuses; a wiped share is custody destroyed, irreversibly).
+		// True non-owners never held one, so the guard is a no-op for them.
+		if myShare == "" {
+			if oldShare, held := s.getShare(in.PubKID); held && oldShare != "" {
+				weAreOwner := slices.Contains(owners, s.getPrivateEnclaveParamsPioneerID())
+				c.LoggerError(logger, "ss-reshare: RECEIVED pubKID="+in.PubKID+
+					" owners="+strconv.Itoa(len(owners))+
+					" listed="+strconv.FormatBool(weAreOwner)+
+					" myShare=absent -- KEEPING previous share; peers' integrity checks may refuse gathers from us until a correct re-share lands")
+				myShare = oldShare
+			}
+		}
+		ownersChanged := false
+		if prev, had := s.getOwners(in.PubKID); had && len(prev.PioneerIDs) != len(owners) {
+			ownersChanged = true
+			c.LoggerInfo(logger, "ss-reshare: RECEIVED pubKID="+in.PubKID+
+				" owners "+strconv.Itoa(len(prev.PioneerIDs))+"->"+strconv.Itoa(len(owners))+
+				" myShare="+map[bool]string{true: "held", false: "absent"}[myShare != ""])
+		}
 		s.setOwnersAndShare(in.PubKID, owners, myShare)
+		if ownersChanged {
+			// A gather started against the OLD owner record is now fetching from a stale plan.
+			// Invalidate its claim so the reschedule below (or the next trigger) can run against
+			// the new record; if the stale gather still completes with the TRUE key, the
+			// derive-pubK check lets it cache -- which is correct regardless of generation.
+			ssInFlightBump(in.PubKID)
+		}
 
 		// myShare is the PRIVATE KEY only when the secret was never split.  addSSShare hands
 		// every owner the whole key at threshold 1 -- hashicorp's shamir.Split refuses a
@@ -5732,12 +6614,28 @@ func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*
 		//
 		if getThreshold(len(owners)) == 1 {
 			oldPrivK, found := s.getPrivKCache(in.PubKID)
-			if !found {
-				s.setPrivKCache(in.PubKID, myShare)
-			} else if oldPrivK != myShare {
-				// Only meaningful for an UNSPLIT key, where every owner holds the same value.
-				// The key material itself is deliberately NOT logged.
-				c.LoggerError(logger, "inconsistency: cached privk differs from the distributed key for "+in.PubKID)
+			switch {
+			case !found:
+				if myShare != "" {
+					s.setPrivKCache(in.PubKID, myShare)
+				}
+			case oldPrivK != myShare && myShare != "":
+				// ARBITRATE, DO NOT JUST LOG.  The old behavior kept the stale cached value and
+				// moved on, leaving this node decrypting with a key that no longer matches the
+				// on-chain pubK -- silently.  The chain row's pubK is the referee: whichever of
+				// {cached, incoming} derives to in.PubK is the real key.  Key material itself is
+				// deliberately NOT logged, here as everywhere.
+				gotOld, errOld := derivePubKBase64(oldPrivK)
+				gotNew, errNew := derivePubKBase64(myShare)
+				switch {
+				case errNew == nil && gotNew == in.PubK && (errOld != nil || gotOld != in.PubK):
+					c.LoggerError(logger, "inconsistency: cached privk for "+in.PubKID+" does not derive to the chain's pubK; ADOPTING the distributed key, which does")
+					s.setPrivKCache(in.PubKID, myShare)
+				case errOld == nil && gotOld == in.PubK:
+					c.LoggerError(logger, "inconsistency: distributed key for "+in.PubKID+" differs from our cached privk, which derives correctly -- KEEPING the cache")
+				default:
+					c.LoggerError(logger, "inconsistency: NEITHER the cached nor the distributed key for "+in.PubKID+" derives to the chain's pubK -- keeping the cache and flagging loudly")
+				}
 			}
 		} else {
 			// THE KEY IS GENUINELY SPLIT, so nothing here can cache it -- myShare is one piece.

@@ -1604,6 +1604,20 @@ func (k Keeper) EnclaveQuerySecretShare(sdkctx sdk.Context, msg *types.QueryEncl
 	return nil, r
 }
 
+// who-has: same pipe shape as EnclaveQuerySecretShare, and on the same peer-serving timeout.
+func (k Keeper) EnclaveQuerySecretSharePrivK(sdkctx sdk.Context, msg *types.QueryEnclaveSecretSharePrivKRequest) (error, *types.QueryEnclaveSecretSharePrivKResponse) {
+	ctx, cancel := enclavePeerContext()
+	defer cancel()
+
+	r, err := EnclaveGRPCClient.QueryEnclaveSecretSharePrivK(ctx, msg)
+	if err != nil {
+		c.ContextError(sdkctx, "error returned by EnclaveQuerySecretSharePrivK on enclave "+err.Error())
+		return err, nil
+	}
+
+	return nil, r
+}
+
 func (k Keeper) EnclaveQueryRecoverKeyShare(sdkctx sdk.Context, msg *types.QueryEnclaveRecoverKeyShareRequest) (error, *types.QueryEnclaveRecoverKeyShareResponse) {
 	ctx, cancel := enclaveQueryContext()
 	defer cancel()

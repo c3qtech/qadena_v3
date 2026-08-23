@@ -72,6 +72,7 @@ require (
 	github.com/cosmos/evm v0.5.1
 	github.com/cosmos/iavl v1.2.8
 	github.com/cosmos/ibc-go/v10 v10.3.1-0.20250909102629-ed3b125c7b6f
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0
 	github.com/spf13/cast v1.10.0
 	sigs.k8s.io/yaml v1.6.0
 )
@@ -180,7 +181,6 @@ require (
 	github.com/danieljoos/wincred v1.2.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/deckarep/golang-set/v2 v2.6.0 // indirect
-	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/denis-tingaikin/go-header v0.5.0 // indirect
 	github.com/desertbit/timer v1.0.1 // indirect
 	github.com/dgraph-io/badger/v4 v4.2.0 // indirect

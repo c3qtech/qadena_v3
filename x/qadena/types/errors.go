@@ -135,4 +135,14 @@ var (
 	// pinned code ID, or a non-contract listed with one.  Rejected at proposal time so the mistake
 	// surfaces in review rather than as an unexplained refusal later.
 	ErrScannedContractCodeIDMismatch = sdkerrors.Register(ModuleName, 1163, "Whitelist codeID does not match the address; use the contract's current code ID, or 0 for a non-contract")
+
+	// A re-share must strictly GROW the owner set: equal or shrunken sets are rejected so a re-share
+	// can never destroy a held share by omission, never lower the Shamir threshold, and a replayed
+	// re-share fails idempotently instead of applying twice.
+	ErrNotOwnerSuperset = sdkerrors.Register(ModuleName, 1164, "re-share owner set must be a proper superset of the current owners")
+
+	// The possession signature did not verify against the STORED row's public key.  Only an enclave
+	// that holds the interval private key may re-share it; attestation alone proves the sender runs
+	// trusted code, not that it holds this particular key.
+	ErrPossessionProofInvalid = sdkerrors.Register(ModuleName, 1165, "re-share possession proof does not verify against the stored public key")
 )
