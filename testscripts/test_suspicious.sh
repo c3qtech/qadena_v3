@@ -266,8 +266,19 @@ echo "-------------------------"
 echo "the report must be readable BY THE REGULATOR -- it is encrypted to their key"
 echo "-------------------------"
 if [ $sealed_plaintext -eq 1 ]; then
-    decrypted=$(qadenad_alias query qadena list-suspicious-transaction "$regulator_privk" 2>&1)
+    # --reverse --limit 1 DECRYPTS THE REPORT THIS RUN FILED.  Unqualified this read the DEFAULT
+    # PAGE -- the oldest 100 -- so on a chain with any history it confirmed that some ancient report
+    # decrypts while never touching the one just written.  Same defect as the real-SGX branch below
+    # had, and this is the branch every debug-enclave node takes, so it is the one that runs most.
+    #
+    # "NON-EMPTY" IS ALSO TOO WEAK ON ITS OWN.  The CLI RETURNS on the first decrypt failure
+    # (query_suspicious_transaction.go:65-86) rather than skipping the record, so a listing that
+    # failed partway is still non-empty and still satisfied the old assertion.  The error markers
+    # are checked explicitly instead.
+    decrypted=$(qadenad_alias query qadena list-suspicious-transaction "$regulator_privk" --reverse --limit 1 2>&1)
     [ -n "$decrypted" ] || fail "the regulator key decrypted nothing; the report is not readable by $regulator_id"
+    echo "$decrypted" | grep -qiE "couldn't decrypt|invalid length|generic error" \
+        && fail "the report this run filed did not decrypt with $regulator_id's key"
     echo "$decrypted" | tail -20
 else
     # Under real sealing the key is unavailable to this script by design, so the strongest thing that
