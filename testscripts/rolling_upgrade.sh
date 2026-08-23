@@ -79,6 +79,38 @@ measure_of() { rsh "$1" '~/qadena/bin/qadenad q qadena enclave-measurement -o js
 identity_status() { rsh "${NODES[1]}" "~/qadena/bin/qadenad q qadena show-enclave-identity $1 -o json 2>/dev/null" 2>/dev/null \
                 | grep -oE '"status":"[a-z]+"' | head -1 | cut -d'"' -f4 }
 
+# restart_node -- stop, WAIT FOR THE STOP TO DRAIN, start, and verify it actually came back.
+#
+# `sleep 5` between the two is not enough and the failure is silent in the worst way.
+# stop_qadena.sh returns before the process group is gone; start_qadena.sh then sees the remnant,
+# prints "Qadena is already running" and does NOTHING; the old process finishes exiting a moment
+# later; and the node is left DOWN with nothing started and a success-looking log.  That cost M1
+# twice on 2026-08-23 -- once here and once during a build -- and both times the chain kept moving
+# on the other three, so nothing complained.
+#
+# So: poll until the processes are actually gone, then start, then poll until the node answers.
+# A restart that does not come back is a hard failure, not something to discover three steps later.
+restart_node() {
+    local h="$1" i n
+    rsh "$h" '~/qadena/scripts/stop_qadena.sh --all' >/dev/null 2>&1 || true
+    for i in $(seq 1 40); do
+        n=$(rsh "$h" 'pgrep -c qadenad 2>/dev/null || echo 0' 2>/dev/null | tr -d '[:space:]')
+        [[ "$n" == "0" ]] && break
+        sleep 3
+    done
+    [[ "$n" == "0" ]] || die "$h: qadenad still alive after stop_qadena.sh --all; refusing to start a second one"
+
+    # Detached, and with a command line that does NOT contain the words is_qadena_running greps
+    # for -- see scripts/setup_env.sh, where an -f pattern matching the caller made this report
+    # "already running" against a stopped node.
+    ssh -f -o BatchMode=yes "$h" 'nohup ~/qadena/scripts/start_qadena.sh >/tmp/rolling_start.log 2>&1 &' || true
+    for i in $(seq 1 25); do
+        [[ -n "$(height_of "$h")" ]] && { say "  $h restarted, answering"; return 0 }
+        sleep 10
+    done
+    die "$h did not come back after a restart -- check /tmp/rolling_start.log on it"
+}
+
 require_advancing() {
     local h1 h2
     h1=$(height_of "$1") || true; [[ -n "$h1" ]] || die "$1: no height -- is qadenad running?"
@@ -140,16 +172,24 @@ if (( ! SKIP_GOV )); then
     done
 
     say "restarting ${NODES[1]} on its OLD enclave to trigger the identity check"
-    run "${NODES[1]}" '~/qadena/scripts/stop_qadena.sh --all' >/dev/null 2>&1 || true
-    (( DRY )) || sleep 5
-    (( DRY )) || ssh -f -o BatchMode=yes "${NODES[1]}" "bash -lc 'nohup ~/qadena/scripts/start_qadena.sh >/tmp/rolling_start.log 2>&1 &'"
+    (( DRY )) || restart_node "${NODES[1]}"
 
     say "waiting for $NEW_UNIQUE to become active (up to ${WAIT_SECS}s)"
     if (( ! DRY )); then
         waited=0
         while [[ "$(identity_status $NEW_UNIQUE)" != "active" && $waited -lt $WAIT_SECS ]]; do
             sleep 15; waited=$(( waited + 15 ))
-            printf "    %4ds  status=%s\n" "$waited" "$(identity_status $NEW_UNIQUE)"
+            st=$(identity_status $NEW_UNIQUE)
+            # AN EMPTY STATUS IS AMBIGUOUS and that ambiguity wasted a full wait window once:
+            # it means EITHER "the chain has not promoted it yet" OR "the node we are asking is
+            # down".  Distinguish them, or a dead node looks exactly like a slow chain.
+            if [[ -z "$st" ]]; then
+                if [[ -z "$(height_of ${NODES[1]})" ]]; then
+                    die "${NODES[1]} stopped answering while waiting for promotion -- it is DOWN, not slow"
+                fi
+                st="(not registered yet)"
+            fi
+            printf "    %4ds  status=%s\n" "$waited" "$st"
         done
         [[ "$(identity_status $NEW_UNIQUE)" == "active" ]] || die "$NEW_UNIQUE never became active"
         say "  ACTIVE"

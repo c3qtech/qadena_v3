@@ -719,11 +719,36 @@ increment_version() {
 
 # function to detect if all of the qadena processes are running
 
+# BRACKET-CLASS THE -f PATTERNS, OR THIS MATCHES THE COMMAND THAT CALLED IT.
+#
+# `pgrep -f` tests the whole command line of every process, including the shell running this
+# script and any ssh command that carried the words along.  The two ego-host patterns were
+# unbracketed, so running anything whose command line happened to contain "ego-host" and
+# "qadenad_enclave" -- a deploy one-liner, a diagnostic, an ssh invocation -- made this report
+# "Qadena is running" when nothing was.  start_qadena.sh then refused to start with "Qadena is
+# already running" and the node stayed DOWN.  Reproduced 2026-08-23: pgrep returned the pid of
+# the very bash that was asking.
+#
+# `[e]go-host` matches the string "ego-host" but the literal text "[e]go-host" in a command line
+# does not match it, so the pattern can no longer find ITSELF -- which covers the case that bit us,
+# an ssh command or script carrying this very pgrep.  Same trap and same fix as
+# 1st_node_bringup.sh:35 and full_fleet_bringup.sh trap 8.
+#
+# WHAT THIS STILL DOES NOT FIX: a command line that contains "ego-host" and "qadenad_enclave" for
+# unrelated reasons -- a deploy one-liner naming both -- would still match, because -f tests the
+# whole command line and cannot tell a mention from a process.  The airtight version is the one in
+# enclave_lib.sh, which reads `ps` and filters explicitly (`!/awk/ && !/grep/`) for exactly this
+# reason.  Left as bracketing here because it is the smallest change that fixes the observed
+# failure and keeps the matching semantics identical for real processes.
+#
+# The -x checks need no bracketing: they match the executable NAME exactly, so a shell can never
+# satisfy them.  Output goes to /dev/null on every branch -- these two used to print their
+# matches, which is how a false positive looked like real evidence of a running node.
 is_qadena_running() {
   if pgrep -x qadenad >/dev/null ||
      pgrep -x qadenad_enclave >/dev/null ||
-     pgrep -af 'ego-host.*qadenad_enclave' ||
-     pgrep -af 'ego-host.*signer_enclave' ||
+     pgrep -af '[e]go-host.*qadenad_enclave' >/dev/null ||
+     pgrep -af '[e]go-host.*signer_enclave' >/dev/null ||
      pgrep -x signer_enclave >/dev/null; then
     echo "Qadena is running"
     return 0
