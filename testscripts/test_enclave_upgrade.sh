@@ -470,12 +470,20 @@ reports_after=$(suspicious_count)
     || fail "report count changed across the upgrade ($reports_before -> $reports_after)"
 
 if [ $can_read_sealed_keys -eq 1 ]; then
-    decrypted=$(qadenad_alias query qadena list-suspicious-transaction "$new_regulator" 2>&1)
+    # --limit "$reports_after" READS EVERY REPORT, and the count below states what was actually
+    # examined rather than what is on record.  Unqualified, this took the DEFAULT PAGE -- the oldest
+    # 100 -- and then printed "$reports_after reports still decrypt", claiming 2,300 verified on a
+    # soak node when it had looked at 100.  The sample was not wrong (pre-upgrade reports are the
+    # point) but the claim was, and a negative assertion is only as wide as the page it ran over.
+    decrypted=$(qadenad_alias query qadena list-suspicious-transaction "$new_regulator" --limit "$reports_after" 2>&1)
     echo "$decrypted" | grep -q "Suspicious Transaction" \
         || { echo "$decrypted" | head -5; fail "the migrated regulator key could not decrypt any report"; }
     echo "$decrypted" | grep -qiE "couldn't decrypt|invalid length|generic error" \
         && { echo "$decrypted" | head -5; fail "a report failed to decrypt with the migrated key"; }
-    echo "$reports_after reports still decrypt with the migrated key"
+    decrypted_seen=$(echo "$decrypted" | grep -c "Suspicious Transaction")
+    [ "$decrypted_seen" = "$reports_after" ] \
+        || fail "only $decrypted_seen of $reports_after reports came back; the listing was truncated and the check below would be partial"
+    echo "$decrypted_seen of $reports_after reports still decrypt with the migrated key"
 else
     echo "$reports_after reports still on record (unchanged); decryption needs the sealed regulator key and cannot be checked here"
 fi

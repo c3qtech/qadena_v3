@@ -276,7 +276,12 @@ else
     # mean the encryption had stopped being applied, which is the failure that matters most here and
     # is detectable without ever holding the key.
     echo "REAL SGX SEALING: the regulator key is inside the enclave, so decryption cannot be checked here."
-    clear_listing=$(qadenad_alias query qadena list-suspicious-transaction --output json 2>/dev/null)
+    # --reverse --limit 1 INSPECTS THE REPORT THIS RUN FILED.  The unqualified listing returns the
+    # DEFAULT PAGE, which is the OLDEST 100 records (ids 0-99 against 2,300 on a soak node), so it
+    # could not contain the report just written -- this scanned reports from days ago and passed
+    # regardless of what the run under test produced.  A negative assertion over a page that cannot
+    # hold the subject is not a check, and it silently got weaker as the chain grew.
+    clear_listing=$(qadenad_alias query qadena list-suspicious-transaction --reverse --limit 1 --output json 2>/dev/null)
     echo "$clear_listing" | grep -qiE '"(srcWalletID|dstWalletID|amount)"[[:space:]]*:[[:space:]]*"[a-z]+1[a-z0-9]{20,}"' \
         && fail "a suspicious transaction lists readable wallet ids WITHOUT the regulator key; the report is not encrypted"
     echo "reports are present and not readable without the regulator key"
