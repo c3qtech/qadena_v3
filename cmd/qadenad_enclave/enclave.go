@@ -346,7 +346,12 @@ const (
 	EnclaveSSIntervalSharesKeyPrefix = "Enclave/SSIntervalShares/value/"
 	EnclaveSSIntervalPrivKKeyPrefix  = "Enclave/SSIntervalPrivK/value/"
 	EnclaveSSIntervalPubKKeyPrefix   = "Enclave/SSIntervalPubK/value/"
-	EnclaveCredentialHashKeyPrefix   = "Enclave/CredentialHash/value/"
+	// Where the re-share audit stopped scanning last time.  Node-local progress, NOT consensus
+	// state, and deliberately in the unversioned secrets DB: a chain rollback must not rewind it,
+	// and a restart must not lose it (a node that reboots oftener than a full sweep would never
+	// finish one).  See planSSReshare.
+	EnclaveSSAuditCursorKeyPrefix  = "Enclave/SSAuditCursor/value/"
+	EnclaveCredentialHashKeyPrefix = "Enclave/CredentialHash/value/"
 	// reverse of EnclaveCredentialHashKeyPrefix: credentialID -> every identity hash that
 	// resolves to it.  Hashes cannot be enumerated backwards out of the forward index, and
 	// without this a removed credential would leave its hashes permanently blocking the
@@ -2610,28 +2615,46 @@ func (s *qadenaServer) planSSReshare(plan *ssRotationPlan) *ssResharePlan {
 	// coverage fair comes from the START OFFSET, not from map iteration order.
 	sort.Strings(pubKIDs)
 
-	start := 0
-	if len(pubKIDs) > 0 {
-		if n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(len(pubKIDs)))); err == nil {
-			start = int(n.Int64())
-		}
-		// A failed draw is not fatal: start at 0.  Losing the offset costs fairness across ticks,
-		// not correctness -- the predicate still only selects genuinely deficient keys.
+	// RESUME WHERE THE LAST RUN STOPPED.  This used to start at a random offset, which gave FAIR
+	// coverage but not SYSTEMATIC coverage: a window of maxSSAuditScan over a table of N sees
+	// maxSSAuditScan/N of it per run, so a straggler survives k runs with probability
+	// (1 - cap/N)^k.  Measured on the M1-M4 fleet at 256/2233 = 11.5%: after fourteen runs a given
+	// key was still unseen with probability 18%, and clearing seven of them took about twenty
+	// forced audits, several of which honestly reported selected=0 while deficient keys existed.
+	//
+	// A cursor turns that probability into a guarantee: ceil(N/cap) runs cover the table, at the
+	// same cost per run.  The cursor is a pubKID rather than an index -- see getSSAuditCursor.
+	cursor := s.getSSAuditCursor()
+	startIdx := 0
+	for startIdx < len(pubKIDs) && pubKIDs[startIdx] <= cursor {
+		startIdx++
+	}
+	wrapped := false
+	if startIdx >= len(pubKIDs) {
+		// Past the end: the sweep is complete.  Wrap and begin a new one.
+		startIdx, wrapped = 0, true
 	}
 
 	audited, deficientCount := 0, 0
+	lastSeen := cursor
+	sweptToEnd := false
 	deficient := make([]ssReshareCandidate, 0, maxSSResharesPerRotation)
-	for i := 0; i < len(pubKIDs); i++ {
+	for i := startIdx; i < len(pubKIDs); i++ {
 		// EARLY EXIT: enough work already found for this tick.  Makes the backlog case (a fleet
 		// just grew, everything is deficient) nearly free, leaving the full scan cost only for
-		// quiescence -- which is exactly where the cap below bounds it.
+		// quiescence -- which is exactly where the cap below bounds it.  The cursor is saved at
+		// the point we stop, so the next run resumes past what this one already handled.
 		if len(deficient) >= maxSSResharesPerRotation {
 			break
 		}
 		if audited >= maxSSAuditScan {
 			break
 		}
-		pubKID := pubKIDs[(start+i)%len(pubKIDs)]
+		pubKID := pubKIDs[i]
+		lastSeen = pubKID
+		if i == len(pubKIDs)-1 {
+			sweptToEnd = true
+		}
 		audited++
 
 		chainOwners, found := s.getPublicKeyRowOwners(pubKID, types.TransactionPubKType)
@@ -2691,16 +2714,33 @@ func (s *qadenaServer) planSSReshare(plan *ssRotationPlan) *ssResharePlan {
 
 	// No post-hoc rate limit is needed: the loop above stops at maxSSResharesPerRotation, and the
 	// random start is what keeps successive ticks from always picking the same keys.
+	// Advance the cursor to where this run stopped.  Reaching the last key ends the sweep, so the
+	// next run wraps and starts over.
+	if sweptToEnd {
+		s.setSSAuditCursor("")
+	} else {
+		s.setSSAuditCursor(lastSeen)
+	}
+
 	rplan.keys = deficient
 	rplan.audited = audited
 
-	// deficient= is "found WITHIN this tick's scan window", not a fleet-wide total -- the early
-	// exit means the total is deliberately unknown.  scanned/total says how much of the table
-	// this tick looked at, which is the number to watch if the backlog seems slow to drain.
+	// TWO DIFFERENT ZEROES, AND THEY MUST BE TELLABLE APART.  selected=0 alone is ambiguous: it
+	// means either "nothing is deficient" or "this window did not happen to contain anything",
+	// and not being able to distinguish them is what made the coverage gap take twenty runs to
+	// diagnose.  sweep=complete says a full pass over the table has just finished, so
+	// "selected=0 sweep=complete" is an authoritative quiescent signal and anything else is not.
+	sweep := "partial"
+	if sweptToEnd {
+		sweep = "complete"
+	} else if wrapped {
+		sweep = "restarted"
+	}
 	c.LoggerInfo(logger, "ss-reshare: AUDIT addressable="+strconv.Itoa(len(plan.pioneers))+
 		" target="+strconv.Itoa(target)+
 		" scanned="+strconv.Itoa(audited)+"/"+strconv.Itoa(len(pubKIDs))+
-		" from="+strconv.Itoa(start)+
+		" fromIdx="+strconv.Itoa(startIdx)+
+		" sweep="+sweep+
 		" deficient="+strconv.Itoa(deficientCount)+
 		" selected="+strconv.Itoa(len(rplan.keys))+
 		" cap="+strconv.Itoa(maxSSResharesPerRotation))
@@ -6447,6 +6487,31 @@ func (s *qadenaServer) setAllOwners(ownersMap *types.EncryptableEnclaveSSOwnerMa
 		b := s.Cdc.MustMarshal(ownerArray)
 		store.Set(EnclaveKeyKey(key), b)
 	}
+}
+
+// getSSAuditCursor / setSSAuditCursor remember where the re-share audit stopped scanning.
+//
+// THE CURSOR IS A pubKID, NOT AN INDEX, and that is the whole point.  The owners table grows by an
+// entry every rotation and the scan runs in sorted order, so a newly minted key whose id sorts
+// BEFORE an integer offset shifts every later position by one -- an index cursor would then skip
+// one key per insertion and re-scan another, silently reopening the coverage gap it exists to
+// close.  `key > cursor` is stable no matter what was inserted where.  getOwnersPage (the
+// sync-enclave pager over this same table) uses this discipline for the same reason.
+func (s *qadenaServer) getSSAuditCursor() string {
+	store := s.secrets(EnclaveSSAuditCursorKeyPrefix)
+	b := store.Get(s.MustSealStable(EnclaveKeyKey("cursor")))
+	if b == nil {
+		return ""
+	}
+	var v types.EnclaveStoreString
+	s.Cdc.MustUnmarshal(s.MustUnseal(b), &v)
+	return v.S
+}
+
+func (s *qadenaServer) setSSAuditCursor(cursor string) {
+	store := s.secrets(EnclaveSSAuditCursorKeyPrefix)
+	v := types.EnclaveStoreString{S: cursor}
+	store.Set(s.MustSealStable(EnclaveKeyKey("cursor")), s.MustSeal(s.Cdc.MustMarshal(&v)))
 }
 
 func (s *qadenaServer) setOwnersAndShare(pubKID string, owners []string, share string) {

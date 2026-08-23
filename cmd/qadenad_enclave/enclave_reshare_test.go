@@ -477,20 +477,109 @@ func TestAuditScanIsBoundedWhenNothingIsDeficient(t *testing.T) {
 	require.Equal(t, maxSSAuditScan, rplan.audited, "and it should use its full budget looking")
 }
 
-// The scan window must MOVE between ticks, or the keys past the cap would never be audited at all.
-func TestAuditScanWindowMovesBetweenTicks(t *testing.T) {
+// SYSTEMATIC COVERAGE.  A random start gave FAIR sampling but not full coverage: with a window of
+// cap over N keys, a straggler survived k runs with probability (1-cap/N)^k, and on the live fleet
+// (256/2233) that meant ~20 forced audits to clear seven of them.  The cursor must instead reach
+// EVERY key within ceil(N/cap) runs, guaranteed.
+func TestAuditCursorCoversEveryKeyWithinOneSweep(t *testing.T) {
 	s, _ := newSSTestServer(t, "p0")
-	seedKeys(t, s, 400, 3)
-
+	const total = 900
+	seedHealthyKeys(t, s, total, 3) // nothing deficient, so the scan runs to its cap each time
 	plan := s.planSSRotation()
-	seenFirst := map[string]bool{}
-	for i := 0; i < 25; i++ {
+
+	scanned := 0
+	runs := 0
+	for runs < 20 {
+		runs++
 		rplan := s.planSSReshare(plan)
-		require.NotEmpty(t, rplan.keys)
-		seenFirst[rplan.keys[0].pubKID] = true
+		scanned += rplan.audited
+		if s.getSSAuditCursor() == "" {
+			break // the sweep reached the end and reset
+		}
 	}
-	require.Greater(t, len(seenFirst), 1,
-		"every tick started at the same key -- keys past the scan cap could never be reached")
+	expected := (total + maxSSAuditScan - 1) / maxSSAuditScan
+	require.LessOrEqual(t, runs, expected,
+		"a sweep of %d keys at cap %d must finish in %d runs, took %d", total, maxSSAuditScan, expected, runs)
+	require.GreaterOrEqual(t, scanned, total,
+		"every key must have been examined at least once across the sweep")
+}
+
+// The cursor must be a pubKID, not an index: the owners table grows between runs, and an index
+// would skip a key for every insertion that sorts before it.
+func TestAuditCursorIsStableUnderInsertion(t *testing.T) {
+	s, _ := newSSTestServer(t, "p0")
+	seedKeys(t, s, 300, 3)
+	plan := s.planSSRotation()
+
+	s.planSSReshare(plan)
+	cur := s.getSSAuditCursor()
+	require.NotEmpty(t, cur, "the first run must leave a cursor")
+
+	// Insert keys that sort BEFORE the cursor.  An index cursor would now point somewhere else
+	// entirely; a keyed cursor still means exactly "the key after this one".
+	for i := 0; i < 50; i++ {
+		id := "!early-" + strconv.Itoa(i) // '!' sorts below 'k' of "key-"
+		s.setOwnersAndShare(id, []string{"p0"}, "share")
+		setChainRow(s, id, []string{"p0"})
+		s.setPrivKCache(id, aKey())
+	}
+	require.Equal(t, cur, s.getSSAuditCursor(), "insertion must not move the cursor")
+
+	rplan := s.planSSReshare(plan)
+	for _, cand := range rplan.keys {
+		require.Greater(t, cand.pubKID, cur,
+			"the run after an insertion must not go backwards behind the cursor")
+	}
+}
+
+// seedHealthyKeys registers n keys ALREADY at the fleet size, so the audit finds nothing to do and
+// the scan runs to its cap.  This is the case the cursor exists for: hunting a few stragglers in a
+// large table.
+func seedHealthyKeys(t *testing.T, s *qadenaServer, n, fleet int) {
+	t.Helper()
+	k, err := ecies.GenerateKey()
+	require.NoError(t, err)
+	owners := make([]string, 0, fleet)
+	for i := 0; i < fleet; i++ {
+		pid := "p" + strconv.Itoa(i)
+		withPioneer(s, pid, "192.168.0."+strconv.Itoa(10+i))
+		s.setPublicKeyNoNotify(types.PublicKey{PubKID: "wallet-" + pid, PubKType: types.EnclavePubKType,
+			PubK: base64.StdEncoding.EncodeToString(k.PublicKey.Bytes(true))})
+		owners = append(owners, pid)
+	}
+	for i := 0; i < n; i++ {
+		id := "key-" + strconv.Itoa(100000+i) // fixed width so sort order is the numeric order
+		s.setOwnersAndShare(id, owners, "share")
+		setChainRow(s, id, owners)
+		s.setPrivKCache(id, k.Hex())
+	}
+}
+
+// THE EARLY EXIT AND THE CURSOR INTERACT, and the interaction is deliberate.  When a run stops early
+// because it already found a tick's worth of work, the cursor advances only that far -- so a table
+// where everything is deficient sweeps at the RATE LIMIT rather than at the scan cap.  That is
+// harmless: in that state healing is the bottleneck anyway (4 per run either way), and the cursor
+// keeps pace with the healing rather than running ahead of it.
+func TestAuditCursorAdvancesByTheRateLimitWhenEverythingIsDeficient(t *testing.T) {
+	s, _ := newSSTestServer(t, "p0")
+	seedKeys(t, s, 300, 3) // all deficient
+	plan := s.planSSRotation()
+
+	rplan := s.planSSReshare(plan)
+	require.Len(t, rplan.keys, maxSSResharesPerRotation)
+	require.LessOrEqual(t, rplan.audited, maxSSResharesPerRotation+4,
+		"a fully deficient table must stop as soon as it has a tick's work, not scan to the cap")
+	require.NotEmpty(t, s.getSSAuditCursor(), "and it must still record where it stopped")
+}
+
+// A fresh enclave starts with no cursor and must simply begin at the beginning.
+func TestAuditCursorStartsEmpty(t *testing.T) {
+	s, _ := newSSTestServer(t, "p0")
+	require.Empty(t, s.getSSAuditCursor())
+	seedHealthyKeys(t, s, 10, 3)
+	s.planSSReshare(s.planSSRotation())
+	require.Equal(t, "", s.getSSAuditCursor(),
+		"a table smaller than the cap is swept in one run, which completes and resets the cursor")
 }
 
 // withChainPosition sets the package-global chain position for one test and RESTORES it after.
