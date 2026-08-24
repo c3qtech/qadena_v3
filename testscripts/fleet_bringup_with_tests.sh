@@ -141,12 +141,19 @@ run_scheduled() {   # slot-label, log-tag, command
     info ""
     info "[$slot] $cmd"
     note "$slot: $cmd"
-    if rsh_build "$PRIMARY" "$cmd" 2>&1 | tee "$log"; then
+    # ${pipestatus[1]}, NOT the pipeline's status.  A pipeline exits with its LAST command's status,
+    # which here is tee -- and tee always succeeds.  So `if cmd | tee log; then` reported EVERY
+    # scheduled test as passed, including one that printed FAILED and exited 1, and the halt-on-
+    # failure guarantee this whole script advertises never once held.  Observed on the growth run:
+    # the audit failed with 3 keys short and the driver logged "[after pioneer3 #1] passed" and
+    # carried on joining nodes off a red test.
+    rsh_build "$PRIMARY" "$cmd" 2>&1 | tee "$log"
+    if (( ${pipestatus[1]} == 0 )); then
         info "[$slot] passed"
         note "$slot: passed"
     else
         tail -30 "$log" | while read -r l; do info "$l"; done
-        fail "[$slot] FAILED: $cmd -- see $log"
+        fail "[$slot] FAILED (exit ${pipestatus[1]}): $cmd -- see $log"
     fi
     assert_advancing "$PRIMARY" "[$slot] after $cmd"
 }
