@@ -30,7 +30,7 @@ func TestDerivePubKBase64(t *testing.T) {
 	require.NoError(t, err)
 	want := base64.StdEncoding.EncodeToString(k.PublicKey.Bytes(true))
 
-	got, err := derivePubKBase64(k.Hex())
+	got, err := derivePubKBase64(keyHex(k))
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 
@@ -38,7 +38,7 @@ func TestDerivePubKBase64(t *testing.T) {
 	// an integrity check.
 	k2, err := ecies.GenerateKey()
 	require.NoError(t, err)
-	got2, err := derivePubKBase64(k2.Hex())
+	got2, err := derivePubKBase64(keyHex(k2))
 	require.NoError(t, err)
 	require.NotEqual(t, got, got2)
 
@@ -53,7 +53,7 @@ func TestDerivePubKBase64(t *testing.T) {
 func TestReshareIsNotRekey(t *testing.T) {
 	k, err := ecies.GenerateKey()
 	require.NoError(t, err)
-	privK := k.Hex()
+	privK := keyHex(k)
 	pubK := base64.StdEncoding.EncodeToString(k.PublicKey.Bytes(true))
 
 	s, _ := newSSTestServer(t, "pioneer1")
@@ -150,7 +150,7 @@ func TestSetPublicKeyKeepsShareOnEmpty(t *testing.T) {
 func TestSetPublicKeyThreshold1Arbitration(t *testing.T) {
 	real, err := ecies.GenerateKey()
 	require.NoError(t, err)
-	realPrivK := real.Hex()
+	realPrivK := keyHex(real)
 	realPubK := base64.StdEncoding.EncodeToString(real.PublicKey.Bytes(true))
 	other, err := ecies.GenerateKey()
 	require.NoError(t, err)
@@ -164,7 +164,7 @@ func TestSetPublicKeyThreshold1Arbitration(t *testing.T) {
 
 	t.Run("stale cache loses to correct incoming", func(t *testing.T) {
 		s, enclavePubK := newSSTestServer(t, "me")
-		s.setPrivKCache("arb-k", other.Hex()) // stale: derives to the WRONG pubK
+		s.setPrivKCache("arb-k", keyHex(other)) // stale: derives to the WRONG pubK
 		_, err := s.SetPublicKey(nil, mk("arb-k", s, enclavePubK, realPrivK))
 		require.NoError(t, err)
 		got, _ := s.getPrivKCache("arb-k")
@@ -173,7 +173,7 @@ func TestSetPublicKeyThreshold1Arbitration(t *testing.T) {
 	t.Run("correct cache survives garbage incoming", func(t *testing.T) {
 		s, enclavePubK := newSSTestServer(t, "me")
 		s.setPrivKCache("arb-k2", realPrivK)
-		_, err := s.SetPublicKey(nil, mk("arb-k2", s, enclavePubK, other.Hex()))
+		_, err := s.SetPublicKey(nil, mk("arb-k2", s, enclavePubK, keyHex(other)))
 		require.NoError(t, err)
 		got, _ := s.getPrivKCache("arb-k2")
 		require.Equal(t, realPrivK, got, "the cache derives correctly and must be kept")
@@ -199,7 +199,7 @@ func setChainRow(s *qadenaServer, pubKID string, owners []string) {
 func TestReshareAuditPredicate(t *testing.T) {
 	k, err := ecies.GenerateKey()
 	require.NoError(t, err)
-	privK := k.Hex()
+	privK := keyHex(k)
 	pubK := base64.StdEncoding.EncodeToString(k.PublicKey.Bytes(true))
 
 	cases := []struct {
@@ -259,7 +259,7 @@ func TestReshareProducerEmitsValidGrowth(t *testing.T) {
 	ensureQadenaPrefix()
 	k, err := ecies.GenerateKey()
 	require.NoError(t, err)
-	privK := k.Hex()
+	privK := keyHex(k)
 	pubK := base64.StdEncoding.EncodeToString(k.PublicKey.Bytes(true))
 
 	s, _ := newSSTestServer(t, "me")
@@ -331,7 +331,7 @@ func ensureQadenaPrefix() {
 func TestWhoHasServeRefusals(t *testing.T) {
 	k, err := ecies.GenerateKey()
 	require.NoError(t, err)
-	privK := k.Hex()
+	privK := keyHex(k)
 
 	newReqServer := func(t *testing.T) (*qadenaServer, string, []byte) {
 		s, _ := newSSTestServer(t, "server")
@@ -412,7 +412,7 @@ func seedKeys(t *testing.T, s *qadenaServer, n, fleet int) {
 	t.Helper()
 	k, err := ecies.GenerateKey()
 	require.NoError(t, err)
-	privK := k.Hex()
+	privK := keyHex(k)
 	pubK := base64.StdEncoding.EncodeToString(k.PublicKey.Bytes(true))
 
 	for i := 0; i < fleet; i++ {
@@ -467,7 +467,7 @@ func TestAuditScanIsBoundedWhenNothingIsDeficient(t *testing.T) {
 		id := "quiet-" + strconv.Itoa(i)
 		s.setOwnersAndShare(id, owners, "share")
 		setChainRow(s, id, owners)
-		s.setPrivKCache(id, k.Hex())
+		s.setPrivKCache(id, keyHex(k))
 	}
 
 	rplan := s.planSSReshare(s.planSSRotation())
@@ -551,7 +551,7 @@ func seedHealthyKeys(t *testing.T, s *qadenaServer, n, fleet int) {
 		id := "key-" + strconv.Itoa(100000+i) // fixed width so sort order is the numeric order
 		s.setOwnersAndShare(id, owners, "share")
 		setChainRow(s, id, owners)
-		s.setPrivKCache(id, k.Hex())
+		s.setPrivKCache(id, keyHex(k))
 	}
 }
 
