@@ -109,13 +109,21 @@ if [[ $build_sgx == 1 ]] ; then
   fi
 else
   if [[ $update_test_unique_id == 1 ]] ; then
-      # Files to update
-      signer_file="cmd/signer_enclave/test_signer_id.txt"
+      # THE SIGNER ID IS DELIBERATELY NOT INCREMENTED HERE -- same reasoning as
+      # build_enclave.sh, where this was diagnosed.  In a debug build the signer id IS the
+      # product sealing key: SealWithProductKey prefixes the plaintext with it and Unseal accepts
+      # only the CURRENT one, so rotating it makes every product-key-sealed value unreadable.
+      #
+      # On SGX a rebuild changes the measurement and nothing else; the signer id is the hash of the
+      # signing key, which a rebuild does not touch.  Incrementing it on every routine rebuild
+      # simulated re-signing with a different key -- which SGX never does -- and destroyed exactly
+      # the state that product-key sealing exists to carry across an upgrade.
+      #
+      # Rotating it is a real but deliberate operation: edit test_signer_id.txt by hand, knowing
+      # the node's product-key-sealed state does not survive it.
       unique_file="cmd/signer_enclave/test_unique_id.txt"
       version_file="cmd/signer_enclave/version.txt"
 
-      # Increment both files
-      signer_id=$(increment_id "$signer_file")
       unique_id=$(increment_id "$unique_file")
       version=$(increment_version "$version_file")
 
