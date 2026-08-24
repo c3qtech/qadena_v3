@@ -57,8 +57,39 @@ current fleet size.
 ```
 
 `--test` attaches to whatever node preceded it, so **the schedule is the command
-line**.  Add `--block-sync` to skip the ~35 minute wait for a state-sync snapshot;
-see *Choosing a sync mode* below.
+line**.
+
+### The same run, block-sync (faster, while iterating)
+
+Identical except for the last line.  `--block-sync` skips stage F, where the primary
+must pass the snapshot interval before a joiner can state-sync -- about 35 minutes.
+See *Choosing a sync mode* below for what that costs you.
+
+```sh
+./testscripts/fleet_bringup_with_tests.sh \
+  --primary alvillarica@192.168.86.162 \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_reshare_audit.sh" \
+  --joiner alvillarica@192.168.86.154 \
+    --test "./testscripts/test_ss_reshare_audit.sh" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+  --joiner alvillarica@192.168.86.52 \
+    --test "./testscripts/test_ss_reshare_audit.sh" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+  --joiner alvillarica@192.168.86.136 \
+    --test "./testscripts/test_ss_reshare_audit.sh" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/run_regression_continually.sh" \
+  --block-sync
+```
+
+The growth test itself is unaffected: bonding, addressability, re-sharing and the
+audit are identical either way.  What block-sync does not exercise is the joiner
+seeding its enclave store from a snapshot.
 
 ### What each position is for
 
