@@ -871,7 +871,19 @@ joiner_errors=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qad
     | grep -avE "credential hash (already )?(exists|belongs)|update rate limited|ScanTransaction failed" \
     | grep -avE "enclaveSynchronizeStores OUT-OF-SYNC|couldn't find an active enclave identity" \
     | grep -avE "SignerListener: Error accepting connection" \
-    | grep -avE "failed to fetch block .*is not available, lowest height is")
+    | grep -avE "failed to fetch block .*is not available, lowest height is" \
+      | grep -avE "ss-reconstruct: LAZY PATH")
+
+# COUNTED, NOT MERELY FORGIVEN.  The enclave logs LAZY PATH at ERROR level on purpose and says so at
+# the call site: "its COUNT is the metric that says whether the eager path is doing its job".
+# Filtering it out of the failure list and saying nothing would discard exactly the signal the error
+# level exists to carry, so it is reported here instead.
+lazy_n=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qadena/logs/qadena.log 2>/dev/null" \
+    | sed 's/\x1b\[[0-9;]*m//g' | grep -ac "ss-reconstruct: LAZY PATH" || true)
+if [[ "${lazy_n:-0}" -gt 0 ]] 2>/dev/null; then
+    info "ss-reconstruct took the LAZY PATH ${lazy_n} time(s) -- expected for a joiner reaching for"
+    info "  history it never saw.  Watch the count; INSUFFICIENT/EXHAUSTED are NOT allowed and fail."
+fi
 #   THE ALLOW-LIST, and why each entry is not evidence of trouble:
 #
 #   p2p/websocket/rpc-server lines   shutdown noise from stop_qadena.sh; the enclave ping failures
@@ -899,6 +911,20 @@ joiner_errors=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qad
 #   evm indexer "height 1 is    the EVM indexer walking from block 1 on a STATE-SYNCED node whose
 #   not available, lowest       history starts at the snapshot.  Structural to state-sync and
 #   height is N"                cosmetic: the blocks below the snapshot do not exist by design.
+#
+#   ss-reconstruct: LAZY PATH   a joiner reaching for an SS interval key from before it existed.
+#                               getSSPrivK names this case itself -- "a node needing a HISTORICAL
+#                               key it never saw ... has no such trigger, and this is the only way
+#                               it can obtain one" -- and logs it at ERROR "on purpose ... A
+#                               historical key legitimately lands here, so it is not automatically
+#                               a defect".  Unlike the transaction rejections above this IS
+#                               node-local: a node that already owns the key never takes this path.
+#                               Allowed only because a joiner by definition lacks history, and
+#                               COUNTED above rather than silently dropped.
+#                               NOT allowed, and deliberately absent from the filter: INSUFFICIENT
+#                               and EXHAUSTED.  Those mean the key could not be gathered at all,
+#                               which backlog 90 says the caller must HALT on -- returning "" is a
+#                               node-local answer a healthy peer will not produce, i.e. a fork.
 #
 #   What is deliberately NOT allowed: panics, halts, consensus failures, and divergence while LIVE.
 #   Those are node-local and mean something.
