@@ -597,9 +597,23 @@ if true; then
         info "sending ${FUND_QDN}qdn from treasury on chain $chainid"
         ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $addr ${amt}aqdn --keyring-backend test --chain-id $chainid --gas auto --gas-adjustment 1.5 --gas-prices 0.025aqdn --yes --output json" > /dev/null 2>&1 \
             || fail "funding transfer failed"
-        sleep 12
-        bal=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
-        [[ "${bal:-0}" -gt 0 ]] 2>/dev/null || fail "funding did not land"
+        # POLL FOR INCLUSION, DO NOT SLEEP A FIXED TWELVE SECONDS.  The broadcast above returns
+        # height=0 -- accepted at CheckTx, not yet in a block -- and --gas auto spends a simulation
+        # round trip before that.  On a chain seconds old, whose block cadence has not settled,
+        # twelve seconds is regularly short, and the run then dies with "funding did not land" for a
+        # transfer that lands moments later.
+        #
+        # This was masked for as long as this phase only ever ran against an established chain: a
+        # state-sync bringup waits for the primary to pass the snapshot interval first, which is
+        # tens of minutes.  --block-sync removes that wait and funds at height ~125, which is where
+        # it surfaced.  The transfer was never the problem; the budget was.
+        bal=0
+        for _ in {1..20}; do
+            sleep 6
+            bal=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
+            [[ "${bal:-0}" -gt 0 ]] 2>/dev/null && break
+        done
+        [[ "${bal:-0}" -gt 0 ]] 2>/dev/null || fail "funding did not land within 2 minutes.  The transfer was ACCEPTED (CheckTx passed), so this is inclusion or execution, not rejection: check 'q tx' for the hash on $PRIMARY, and that the chain is producing blocks."
         info "funded: $bal aqdn"
     fi
 fi
