@@ -74,6 +74,15 @@ var (
 	// always started the signer.
 	externalChainEnclave bool
 
+	// This node's advertised address, from config.toml's p2p.external_address.  Set once by the
+	// start command (which is the only place that has the parsed config) and read on the
+	// UpdateHeight path, so a node that moved can re-assert where it can be reached.
+	//
+	// Guarded because the writer is PreRunE and the readers are block execution; empty under every
+	// other command, which makes the field inert exactly as the init dispatch is.
+	nodeExternalAddress   string
+	nodeExternalAddressMu sync.RWMutex
+
 	// Derived from appOpts in ConfigureEnclaveSupervisor; consumed by prepareEnclaveProcesses.
 	supervisorHome     string
 	supervisorLogLevel string
@@ -97,6 +106,22 @@ func EnableEnclaveSpawn(mode string) { enclaveSpawnMode = mode }
 
 // SetExternalChainEnclave marks the chain enclave as externally managed (--external-enclave).
 func SetExternalChainEnclave(v bool) { externalChainEnclave = v }
+
+// SetNodeExternalAddress records this node's advertised address for the UpdateHeight path.  Called
+// from the start command with the value it already reads out of config.toml to fail-fast on.
+func SetNodeExternalAddress(v string) {
+	nodeExternalAddressMu.Lock()
+	defer nodeExternalAddressMu.Unlock()
+	nodeExternalAddress = v
+}
+
+// NodeExternalAddress returns it, or "" under any command that did not set it -- which the enclave
+// reads as "no opinion" and ignores.
+func NodeExternalAddress() string {
+	nodeExternalAddressMu.RLock()
+	defer nodeExternalAddressMu.RUnlock()
+	return nodeExternalAddress
+}
 
 // ConfigureEnclaveSupervisor derives everything a spawn needs from the app options, once, in
 // app.New, immediately before InitEnclave.  The values come from where they actually live --

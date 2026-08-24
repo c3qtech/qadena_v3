@@ -3469,6 +3469,12 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 		}
 	}
 
+	// WHERE THIS NODE SAYS IT LIVES.  Folded in before anything below reads the sealed value, and
+	// on EVERY node rather than only the proposer -- a node that moved must correct its own row
+	// whether or not it happens to be proposing.  Empty means "no opinion" (an older keeper, or any
+	// command other than start), and changes nothing.  See enclave_external_address.go.
+	addressChanged := s.noteExternalAddress(in.ExternalAddress)
+
 	if in.IsProposer {
 		if !s.getPrivateEnclaveParamsPioneerIsValidator() {
 			go func() {
@@ -3502,10 +3508,41 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 					if !s.updateSSIntervalKey(plan, rplan) {
 						c.LoggerError(logger, "failed updateSSIntervalKey()")
 					}
+					// Health report, not a decision: names the pioneers that did not answer, so an
+					// address that quietly stopped working is visible instead of merely
+					// deprioritised.  Runs AFTER the rotation so it never delays it, and it cannot
+					// affect the owner count -- see enclave_external_address.go.
+					s.reportUnreachablePioneers(plan)
 				}()
 			}
 		}
 
+	}
+
+	// SELF-HEAL THE PUBLISHED ADDRESS.
+	//
+	// Runs when the address just changed (so a restart onto a new IP is corrected promptly rather
+	// than at the next rotation, up to ~6105 blocks away) and otherwise on the rotation tick, which
+	// is the existing cadence for this node's periodic housekeeping and bounds the steady-state
+	// cost to one comparison every few hours.
+	//
+	// LIVE BLOCKS ONLY.  Replayed history restates addresses that were true at the time; acting on
+	// them would broadcast a correction derived from the past.  Same guard, same reason as the
+	// rotation above.
+	//
+	// THE PLAN IS BUILT HERE, ON THE EXECUTION THREAD, and only the broadcast detaches --
+	// planExternalAddressRepublish reads s.CacheCtx, and iterating that from a goroutine racing
+	// block execution is the exact bug ssRotationPlan was introduced to fix.
+	if addressChanged || in.Height%keyUpdateFrequency == 0 {
+		if err := s.refuseIfCatchingUp("an external address republish"); err == nil {
+			if addr := s.planExternalAddressRepublish(); addr != "" {
+				go func() {
+					if !s.publishPioneerIntervalPublicKeyID(addr) {
+						c.LoggerError(logger, extAddrTag+"failed to republish "+addr)
+					}
+				}()
+			}
+		}
 	}
 
 	unvalidatedEnclaveIdentitiesCheckCounter--
@@ -3616,49 +3653,11 @@ func (s *qadenaServer) updateIsValidator() bool {
 	c.LoggerDebug(logger, "is a proposer, but not yet a validator from the standpoint of the enclave")
 	// we need to update the interval public key with the external IP address
 	//
-	pwalletID, pwalletAddr, _, _, err := c.GetAddressByNameNoArmor(clientCtx, s.getPrivateEnclaveParamsPioneerID())
-	report, err := s.getRemoteReport(strings.Join([]string{
-		pwalletAddr.String(),
-		pwalletID,
-		s.getPrivateEnclaveParamsPioneerID(),
-		types.PioneerNodeType,
-		s.getPrivateEnclaveParamsPioneerExternalIPAddress(),
-	}, "|"))
-	if err != nil {
-		c.LoggerError(logger, "couldn't getRemoteReport "+err.Error())
-		return false
-	}
-	msg := types.NewMsgPioneerUpdateIntervalPublicKeyID(
-		pwalletAddr.String(),
-		pwalletID,
-		s.getPrivateEnclaveParamsPioneerID(),
-		types.PioneerNodeType,
-		s.getPrivateEnclaveParamsPioneerExternalIPAddress(),
-		report,
-	)
-
-	msgs := make([]sdk.Msg, 0)
-	msgs = append(msgs, msg)
-
-	flagSet := RootCmd.Flags()
-
-	/*
-		flagSet.Set(flags.FlagGas, "4000000")
-
-		flagSet.Set(flags.FlagGasPrices, "100000aqdn")
-	*/
-
-	if s.RealEnclave {
-		c.LoggerDebug(logger, "msgs (redacted)")
-	} else {
-		c.LoggerDebug(logger, "msgs "+c.PrettyPrint(msgs))
-	}
-
-	clientCtx = clientCtx.WithFrom(pwalletID).WithFromAddress(pwalletAddr).WithFromName(s.getPrivateEnclaveParamsPioneerID())
-	err, _ = qadenatx.GenerateOrBroadcastTxCLISync(clientCtx, flagSet, "external IP address of this pioneer", msgs...)
-
-	if err != nil {
-		c.LoggerError(logger, "failed to broadcast "+err.Error())
+	// The row and its attestation are built by publishPioneerIntervalPublicKeyID
+	// (enclave_external_address.go), shared with the republish path so the attested string and the
+	// message fields cannot drift apart -- the chain rebuilds that join and verifies the quote
+	// against it, so a mismatch is a silent rejection.
+	if !s.publishPioneerIntervalPublicKeyID(s.getPrivateEnclaveParamsPioneerExternalIPAddress()) {
 		return false
 	}
 
@@ -6909,7 +6908,33 @@ func (s *qadenaServer) getPrivKCache(pubKID string) (privK string, found bool) {
 		c.LoggerDebug(logger, "Couldn't find privk "+pubKID)
 		found = false
 	} else {
-		s.Cdc.MustUnmarshal(s.MustUnseal(b), &privKString)
+		// AN UNREADABLE ENTRY IS A CACHE MISS, NOT A CRASH.
+		//
+		// This was MustUnseal, which panics.  A cached SS interval private key is RECONSTRUCTIBLE
+		// -- that is what scheduleSSReconstruct, the re-share machinery and the who-has fallback
+		// all exist for -- so "I cannot read my copy" has a correct, already-implemented answer:
+		// report a miss and let the caller fetch it from peers.  Panicking instead abandons the
+		// whole gRPC call: the panic interceptor recovers, so the node survives, but everything
+		// after this point in UpdateHeight -- trust reconciliation, the rotation tick, the external
+		// address republish -- is skipped for that block.
+		//
+		// It is reachable whenever the PRODUCT sealing key changes, because entries are sealed with
+		// SealWithProductKey.  Observed on a debug enclave upgrade that moved signer051 ->
+		// signer052 (buildscripts/build_enclave.sh used to bump the signer id along with the unique
+		// id, now fixed): the handover reported success and then every UpdateHeight panicked with
+		// "Couldn't unseal, unrecognized prefix".  A deliberate signing-key rotation reaches the
+		// same state on real SGX, and that is exactly when a panic loop is least welcome.
+		//
+		// Logged at ERROR, not swallowed: an unreadable cache entry is still a real event worth
+		// explaining, and it names the key so the reconstruct that follows can be tied to it.
+		plain, uerr := s.Unseal(b)
+		if uerr != nil {
+			c.LoggerError(logger, "getPrivKCache: cached privk for "+pubKID+" cannot be unsealed ("+
+				uerr.Error()+") -- treating it as absent so it can be reconstructed from peers; "+
+				"this is expected if the enclave's product sealing key changed")
+			return "", false
+		}
+		s.Cdc.MustUnmarshal(plain, &privKString)
 
 		if s.RealEnclave {
 			c.LoggerDebug(logger, "privKString (redacted)")

@@ -541,6 +541,21 @@ message MsgUpdateHeight {
   // collateral that has long since moved on.  Trust changes therefore act on LIVE blocks only;
   // during replay the enclave keeps what the sync-enclave bootstrap gave it, which describes now.
   bool isLive = 3;
+
+  // This node's advertised address, read from config.toml's p2p.external_address on every start
+  // (cmd/qadenad/cmd/enclave_selfstart.go) and re-asserted here so a node that MOVES can correct
+  // the row other enclaves dial.  Before this, the address reached the enclave only through
+  // InitEnclave, whose dispatch gate shuts permanently once the JarRegulator row exists -- so an
+  // established node re-read the new address at every start and then threw it away.
+  //
+  // EMPTY MEANS "NO OPINION", NEVER "BLANK THE SEAL".  An older keeper does not set this field,
+  // and a new enclave must keep working when paired with one during a rolling upgrade.
+  //
+  // Trusting the host for this one value is deliberate and is safe only in this direction: a host
+  // that lies about its OWN address makes only itself unreachable, and the chain-side handler
+  // (msg_server_pioneer_update_interval_public_key_i_d.go) refuses to let any node rewrite another
+  // node's row.  Without that refusal this field would be an eclipse primitive.
+  string externalAddress = 4;
 }
 
 message MsgScanTransactions {

@@ -1110,10 +1110,17 @@ func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
 		// work out for itself -- it has no trusted clock and no view of the head.  Same predicate
 		// the enclave-init dispatch uses, and for the same reason: replayed history must not be
 		// mistaken for current state.  Trust changes act on live blocks only.
+		// ExternalAddress rides along so a node that MOVED can correct the row its peers dial.
+		// It reaches the enclave nowhere else on an established node: InitEnclave carries it, but
+		// that dispatch is gated on the JarRegulator row being absent, so it never fires again --
+		// the start command re-reads the new address from config.toml on every restart and, before
+		// this, had nowhere to put it.  Empty (any command that did not set it, or an older
+		// keeper) means "no opinion" and the enclave leaves its sealed value alone.
 		_, _ = EnclaveGRPCClient.UpdateHeight(ctx, &types.MsgUpdateHeight{
-			Height:     header.Height,
-			IsProposer: proposerAddress == validatorAddress,
-			IsLive:     time.Since(header.Time) <= enclaveLiveBlockWindow,
+			Height:          header.Height,
+			IsProposer:      proposerAddress == validatorAddress,
+			IsLive:          time.Since(header.Time) <= enclaveLiveBlockWindow,
+			ExternalAddress: NodeExternalAddress(),
 		})
 	}
 }
