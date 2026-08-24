@@ -108,10 +108,26 @@ rsh_build() {   # host, command...
 # Rotating before then mints a key that silently excludes the node just added, and the growth test
 # then measures the wrong fleet size while looking like it worked.  TESTING-BACKLOG item 107.
 wait_addressable() {   # host, expected-count
-    local host="$1" want="$2" i=0 n=""
+    local host="$1" want="$2" i=0 n="" blind=0
     while (( i < ADDRESSABLE_WAIT_MIN )); do
-        n=$(rsh_user "$host" 'qadenad --home $HOME/qadena q qadena list-interval-public-key-id -o json 2>/dev/null | jq "[.intervalPublicKeyID[]? | select(.nodeType==\"pioneer\" and .externalIPAddress!=\"\")] | length"' 2>/dev/null | tr -d "[:space:]")
-        [[ "$n" == <-> ]] && (( n >= want )) && { info "addressable pioneers: $n (>= $want)"; return 0 }
+        # FULL PATH, NOT A BARE `qadenad`.  rsh_user runs `zsh -lc`, and on these boxes the node's
+        # bin is not on a zsh login PATH -- `which qadenad` says NOT-ON-PATH.  A bare name therefore
+        # produced EMPTY output, which this loop read as "not addressable yet" and sat on for the
+        # full twenty minutes before failing, on a fleet where the count was already 2.  Same trap
+        # as the login-shell build path in fleet_lib.sh, one layer down.
+        n=$(rsh_user "$host" '$HOME/qadena/bin/qadenad --home $HOME/qadena q qadena list-interval-public-key-id --limit 5000 -o json 2>/dev/null | jq "[.intervalPublicKeyID[]? | select(.nodeType==\"pioneer\" and .externalIPAddress!=\"\")] | length"' 2>/dev/null | tr -d "[:space:]")
+        if [[ "$n" == <-> ]]; then
+            blind=0
+            (( n >= want )) && { info "addressable pioneers: $n (>= $want)"; return 0 }
+            (( i % 2 == 0 )) && info "addressable pioneers: $n, want $want -- waiting"
+        else
+            # A QUERY THAT WILL NOT ANSWER IS NOT A NODE THAT IS NOT READY.  Three unreadable polls
+            # in a row means the command is wrong or the RPC is down, and waiting out the remaining
+            # nineteen minutes teaches nothing -- which is exactly what happened when the path was
+            # wrong.  Fail on the real reason instead.
+            (( blind++ ))
+            (( blind >= 3 )) && fail "could not read the addressable-pioneer count on $host three times running (got \"${n}\"). The query is broken or the RPC is down -- this is not a node that is merely slow to bond."
+        fi
         sleep 60; (( i++ ))
     done
     fail "only ${n:-?} addressable pioneers after ${ADDRESSABLE_WAIT_MIN}m, expected $want. The audit cannot see a node that has not proposed a block since bonding, so a rotation now would mint a key that excludes it."
