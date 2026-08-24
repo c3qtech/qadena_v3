@@ -601,7 +601,32 @@ if true; then
         # REJECTED transfer was indistinguishable from a SLOW one, and the run always blamed the
         # slow case: it polled the balance, found nothing, and reported "funding did not land" for a
         # transfer the chain had refused outright and named its reason for.
-        fund_out=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $addr ${amt}aqdn --keyring-backend test --chain-id $chainid --gas auto --gas-adjustment 1.5 --gas-prices 0.025aqdn --yes --output json" 2>&1) \
+        # PRICE THE TRANSFER FROM THE CHAIN'S CURRENT BASE FEE, NOT FROM A CONSTANT.
+        #
+        # This used to pay a hardcoded 0.025aqdn, which is wrong on a young chain and had never been
+        # noticed.  Genesis sets base_fee = 1,000,000,000 aqdn and it decays 12.5% per empty block
+        # (base_fee_change_denominator = 8), crossing below 0.025 at about HEIGHT 190.  Measured on
+        # this fleet: h=125 -> 56.36, h=175 -> 0.071, h=200 -> 0.0025.
+        #
+        # Every path here used to go through a long wait first -- a state-sync bringup waits for the
+        # primary to pass the snapshot interval, thousands of blocks -- so funding always ran on a
+        # chain whose fee had decayed to ~1e-18 and the constant always worked.  --block-sync
+        # removes that wait and funds at ~125, where the offered price is 2000x too low and the
+        # chain rejects with code 13.  The constant was always wrong; the wait was hiding it.
+        #
+        # Twice the current fee, floored at the old constant: the fee is still falling while the
+        # transfer is built and broadcast, so pricing exactly at it can be stale by the time it is
+        # checked.
+        base_fee=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena q feemarket params --output json 2>/dev/null" \
+            | sed -n 's/.*"base_fee":"\([0-9.]*\)".*/\1/p' | head -1)
+        gas_price=$(python3 -c "
+from decimal import Decimal
+bf = Decimal('${base_fee:-0}' or '0')
+print(format(max(bf * 2, Decimal('0.025')), 'f'))
+" 2>/dev/null)
+        [[ -n "$gas_price" ]] || fail "could not read the chain's base fee to price the funding transfer"
+        info "base fee ${base_fee:-?}aqdn -- funding at ${gas_price}aqdn"
+        fund_out=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $addr ${amt}aqdn --keyring-backend test --chain-id $chainid --gas auto --gas-adjustment 1.5 --gas-prices ${gas_price}aqdn --yes --output json" 2>&1) \
             || fail "funding transfer failed to broadcast: $(print -r -- "$fund_out" | tail -3)"
         fund_code=$(print -r -- "$fund_out" | sed -n 's/.*"code":\([0-9]*\).*/\1/p' | head -1)
         if [[ -n "$fund_code" && "$fund_code" != "0" ]]; then
