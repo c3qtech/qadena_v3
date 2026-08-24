@@ -2251,3 +2251,50 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
      earlier in the session and produced a wrong owner-count report; assume every list query
      paginates until proven otherwise.
 
+109. **NOTHING HANDLES A NODE CHANGING ITS IP ADDRESS, and a stale one is indistinguishable from
+     a good one.**  Raised by Al 2026-08-24.  Not reproduced -- this is a code read, and the first
+     step is to confirm it on the fleet.
+
+     A pioneer's `externalIPAddress` reaches the chain exactly once.  `updateIsValidator` is the
+     only writer, and it is gated `if !s.getPrivateEnclaveParamsPioneerIsValidator()` inside
+     `if in.IsProposer` (enclave.go:3472) -- a LATCH.  It fires on the node's first proposed block
+     after bonding and never again.  The value it publishes comes from SEALED ENCLAVE PARAMS
+     (`PrivateEnclaveParams.PioneerExternalIPAddress`), written at init and restored from the seal
+     on every restart, so restarting the node does not refresh it either.
+
+     So after an IP change the chain still advertises the OLD address, and there appears to be no
+     path -- restart, re-bond, rotation, audit -- that republishes it.
+
+     WHY THAT IS WORSE THAN A DEAD PEER.  Consumers test the field for EMPTINESS, not reachability:
+
+         getAddressablePioneers          counts a pioneer whose externalIPAddress != ""
+         enclavePrivateStatePeers        dials every non-empty address (enclave_grpc_client.go:1057)
+
+     A stale address is non-empty.  The node therefore still COUNTS toward the owner target the
+     re-share audit is trying to reach, while being unreachable at the address everyone dials.  The
+     audit would report a key healed to N owners when one of those N cannot be contacted, and
+     `who-has` would ask an address nobody is listening on.  "Addressable" currently means "has
+     published something", not "answers".
+
+     WHAT TO ESTABLISH FIRST, none of which is known:
+       - Does anything republish?  Try it: change a joiner's advertised address, restart, and watch
+         whether the chain row moves.  Expected: it does not.
+       - Is there a supported way to correct the row at all?  `MsgPioneerUpdateIntervalPublicKeyID`
+         exists and carries a remote report, so a targeted re-publish may be possible -- but the
+         enclave gates the only caller behind the latch, and the field lives in sealed params, so
+         it may need `--upgrade-mode` or a re-init to change.
+       - What actually breaks, and how loudly?  Secret-share queries and private-state fetches to a
+         dead address should fail; the question is whether they fail LOUDLY (INSUFFICIENT, which
+         halts per item 90) or quietly degrade to a smaller effective owner set.
+       - Does a re-share to an unreachable owner still record that owner on the chain row?  If it
+         does, the row overstates custody, which is the same class of problem as item 72: the code
+         cannot tell a good seed from a silent failure.
+
+     WHY IT MATTERS BEYOND A LAB.  This fleet is static, so nobody has hit it.  A cloud deployment
+     is not: an instance restart can hand out a new public address, and `traxion-vm-01` /
+     `sec-pioneer1a` are exactly that shape.  A DHCP lease change on the M1-M4 boxes would do it
+     too.  The failure would look like re-share and private-state fetches degrading for reasons
+     that point at the enclave rather than at DNS.
+
+     Related: item 72 (a good seed is indistinguishable from a silent failure), item 90 (the
+     caller must halt rather than proceed on a key it could not gather).
