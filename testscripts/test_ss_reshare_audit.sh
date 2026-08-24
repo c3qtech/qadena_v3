@@ -24,10 +24,14 @@
 # Assertion 5 is the one that catches a no-op audit.  Without it, an audit that always returned
 # selected=0 would pass 1-4 on any healthy chain forever.
 #
+# enclave.go has maxSSResharesPerRotation, which is the number of keys the audit will re-share in a single run.
+# it is deliberately capped at 4, so a single audit run cannot guarantee to sweep the whole table.
+
+# CHECK THIS PART, IT MAY NOT BE CORRECT ANYMORE 
 # ONE AUDIT DOES NOT SEE THE WHOLE TABLE.  maxSSAuditScan caps a run at 256 keys, deliberately: the
 # audit runs on the block-execution thread and the owners table grows one entry per rotation
 # forever, so an uncapped scan is an unbounded and GROWING stall.  Coverage comes from a PERSISTENT
-# CURSOR -- ceil(N/256) runs sweep the table with a guarantee.  This sweeps ceil(N/256)+1 times so
+# CURSOR -- ceil(N/256) runs sweep the table with a guarantee.  This sweeps ceil(N/4)+1 times so
 # assertion 4 is entitled to demand zero.  (It used to be a random start offset, which gave fair but
 # not systematic coverage; a straggler survived k runs with probability (1-256/N)^k, and clearing
 # seven of them on M1-M4 took about twenty forced audits.  TESTING-BACKLOG item 106.)
@@ -137,9 +141,9 @@ print -r -- "$before" | awk '{print $2}' | sort -n | uniq -c \
 echo "========================="
 echo "2. sweep"
 echo "========================="
-# ceil(n_keys / 256) + 1: enough runs for the cursor to cover the table, plus one so a sweep that
+# ceil(n_keys / 4) + 1: enough runs for the cursor to cover the table, plus one so a sweep that
 # started mid-table still wraps past every entry.
-sweeps=$(( (n_keys + 255) / 256 + 1 ))
+sweeps=$(( (n_keys + 4) / 4 + 1 ))
 echo "running $sweeps audit(s) to guarantee a full sweep of $n_keys key(s)"
 sel_total=0
 for i in $(seq 1 $sweeps); do
