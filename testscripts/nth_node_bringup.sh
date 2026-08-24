@@ -595,8 +595,20 @@ if true; then
         chainid=$(ssh "$PRIMARY" 'curl -s localhost:26657/status | jq -r ".result.node_info.network"' | tr -d '\r')
         amt="${FUND_QDN}000000000000000000"
         info "sending ${FUND_QDN}qdn from treasury on chain $chainid"
-        ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $addr ${amt}aqdn --keyring-backend test --chain-id $chainid --gas auto --gas-adjustment 1.5 --gas-prices 0.025aqdn --yes --output json" > /dev/null 2>&1 \
-            || fail "funding transfer failed"
+        # KEEP THE BROADCAST REPLY AND READ ITS CODE.  This used to redirect the reply to /dev/null
+        # and trust the exit status, but the CLI EXITS 0 EVEN WHEN THE JSON CARRIES A NON-ZERO
+        # code -- a "gas prices too low" rejection (code 13) exits 0 just like a success does.  So a
+        # REJECTED transfer was indistinguishable from a SLOW one, and the run always blamed the
+        # slow case: it polled the balance, found nothing, and reported "funding did not land" for a
+        # transfer the chain had refused outright and named its reason for.
+        fund_out=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $addr ${amt}aqdn --keyring-backend test --chain-id $chainid --gas auto --gas-adjustment 1.5 --gas-prices 0.025aqdn --yes --output json" 2>&1) \
+            || fail "funding transfer failed to broadcast: $(print -r -- "$fund_out" | tail -3)"
+        fund_code=$(print -r -- "$fund_out" | sed -n 's/.*"code":\([0-9]*\).*/\1/p' | head -1)
+        if [[ -n "$fund_code" && "$fund_code" != "0" ]]; then
+            fail "the chain REFUSED the funding transfer (code $fund_code): $(print -r -- "$fund_out" | sed -n 's/.*"raw_log":"\([^"]*\)".*/\1/p' | head -1)"
+        fi
+        fund_tx=$(print -r -- "$fund_out" | sed -n 's/.*"txhash":"\([A-F0-9]*\)".*/\1/p' | head -1)
+        [[ -n "$fund_tx" ]] && info "funding tx $fund_tx broadcast; waiting for inclusion"
         # POLL FOR INCLUSION, DO NOT SLEEP A FIXED TWELVE SECONDS.  The broadcast above returns
         # height=0 -- accepted at CheckTx, not yet in a block -- and --gas auto spends a simulation
         # round trip before that.  On a chain seconds old, whose block cadence has not settled,
@@ -613,7 +625,16 @@ if true; then
             bal=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
             [[ "${bal:-0}" -gt 0 ]] 2>/dev/null && break
         done
-        [[ "${bal:-0}" -gt 0 ]] 2>/dev/null || fail "funding did not land within 2 minutes.  The transfer was ACCEPTED (CheckTx passed), so this is inclusion or execution, not rejection: check 'q tx' for the hash on $PRIMARY, and that the chain is producing blocks."
+        if [[ "${bal:-0}" -le 0 ]] 2>/dev/null; then
+            # ASK THE CHAIN WHAT BECAME OF IT rather than leaving the reader to.  CheckTx passed, so
+            # the interesting answer is in DeliverTx -- and if the hash is simply unknown, the tx
+            # never made it into a block at all, which is a different problem from one that ran and
+            # failed.
+            deliver=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena q tx ${fund_tx} --output json 2>&1" | tail -3)
+            fail "funding did not land within 2 minutes.  Broadcast was accepted (code 0), so this is
+         inclusion or execution.  The chain says of ${fund_tx:-the tx}:
+         $deliver"
+        fi
         info "funded: $bal aqdn"
     fi
 fi
