@@ -1011,7 +1011,7 @@ fi
 print ""
 print "======================================================================"
 if [[ $rc -eq 0 ]]; then
-    print "NTH-NODE BRING-UP COMPLETE ($JOINER) -- the nodes agree on the same app hash at the same height)"
+    print "NTH-NODE BRING-UP COMPLETE ($PIONEER_NAME) -- the nodes agree on the same app hash at the same height)"
     print ""
     # SAY WHICH PATH ACTUALLY RAN.  This used to print the block-sync caveat unconditionally, so a
     # --state-sync run ended by announcing that state-sync was not covered -- in the same output
