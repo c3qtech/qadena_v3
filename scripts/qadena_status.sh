@@ -354,14 +354,70 @@ except Exception:
         count=$(echo "$vals" | jq -r '.result.validators | length')
         info "$count active, total voting power $total"
 
+        # EVERY PIONEER, INCLUDING THOSE WITH NO PUBLISHED ADDRESS.  This filter used to carry
+        # `and .externalIPAddress!=""`, which silently DROPPED a pioneer that had not published
+        # yet -- so a freshly bonded validator counted toward "N active" above but had no row
+        # here, and the only hint was the two numbers disagreeing.  That is the state an operator
+        # most needs named: it is voting in consensus, yet invisible to the re-share audit, which
+        # filters on exactly this field (see getAddressablePioneers).  A missing row reads as
+        # "nothing to see"; the honest answer is "here, and here is what is wrong with it".
         peers=$(qadenad_alias q qadena list-interval-public-key-id -o json 2>/dev/null \
-            | jq -r '.intervalPublicKeyID[] | select(.nodeType=="pioneer" and .externalIPAddress!="") | .nodeID+"\t"+.externalIPAddress' 2>/dev/null)
+            | jq -r '.intervalPublicKeyID[] | select(.nodeType=="pioneer")
+                     | .nodeID+"\t"+(if .externalIPAddress=="" then "-" else .externalIPAddress end)+"\t"+.pubKID' 2>/dev/null)
+            # THE "-" IS LOad-BEARING, not cosmetic.  Tab is an IFS *whitespace* character, so
+            # `read` collapses a run of them into ONE separator: an empty middle field simply
+            # vanishes and every later field shifts left.  Emitting "" for an unpublished address
+            # therefore put the pubKID into $pip, and the row rendered as "unreachable at
+            # qadena1...".  A non-empty placeholder keeps the columns aligned.
+
+        # THE STAKING SET, so a pioneer with no published address is not a blank row.  A pioneer's
+        # registry pubKID and its validator operator address are THE SAME 20 BYTES in different
+        # bech32 clothing -- qadena1<data><csum> and qadenavaloper1<data><csum> share <data>
+        # exactly.  That gives a DERIVED, not guessed, link from a pioneer to its consensus
+        # identity, so power/share/priority can be filled in for a node we cannot dial.
+        stakejson=$(qadenad_alias q staking validators --output json 2>/dev/null)
 
         # Ask every peer where it is, then work out the furthest ahead so the rest can be shown
         # as a lag rather than as a bare number nobody can compare.
         rows=""; best=0
-        while IFS=$'\t' read -r pid pip; do
-            [ -z "$pip" ] && continue
+        while IFS=$'\t' read -r pid pip pubkid; do
+            [ -z "$pid" ] && continue
+            # Registered but never published.  Nothing to dial, so the columns that come from the
+            # node's own RPC -- height, catching-up, version, enclave measurement -- stay "-";
+            # those are genuinely unknown and inventing them would be worse than a blank.
+            #
+            # But power and the consensus address are NOT unknown: they are on chain, reachable
+            # through the pubKID -> valoper -> staking -> consensus_pubkey chain described above.
+            # Filling them is the difference between "this node is a mystery" and "this node is a
+            # bonded validator that has not published an address yet", which is the whole point.
+            if [ "$pip" = "-" ]; then
+                vpower="-"; vaddr="-"
+                if [ -n "$pubkid" ] && [ -n "$stakejson" ]; then
+                    # bech32: strip the "qadena1" HRP and the 6-char checksum to get the shared data
+                    data=${pubkid#qadena1}; data=${data%??????}
+                    tokens=$(echo "$stakejson" | jq -r --arg d "$data" \
+                        '.validators[] | select(.operator_address | startswith("qadenavaloper1"+$d)) | .tokens' 2>/dev/null | head -1)
+                    if [ -n "$tokens" ] && [ "$tokens" != "null" ]; then
+                        # tokens are aqdn, exactly 1e18 per unit of voting power -- so DROP 18
+                        # DIGITS rather than dividing.  awk (and jq) compute in doubles, which
+                        # carry ~15-16 significant digits; a stake of 1e23 aqdn divided by 1e18
+                        # came back as 99999 instead of 100000, and that off-by-one then failed
+                        # the voting_power match below and left the address as "?".  Integer
+                        # string surgery has no such rounding.
+                        if [ ${#tokens} -gt 18 ]; then
+                            vpower=${tokens%??????????????????}
+                        else
+                            vpower="0"
+                        fi
+                        # and the consensus address is whichever /validators row carries that power
+                        vaddr=$(echo "$vals" | jq -r --arg p "$vpower" \
+                            '[.result.validators[] | select(.voting_power==$p)] | if length==1 then .[0].address else "" end' 2>/dev/null)
+                        [ -z "$vaddr" ] && vaddr="?"
+                    fi
+                fi
+                rows="$rows$pid\t(unpublished)\t-\t-\t$vpower\t$vaddr\t-\t-\n"
+                continue
+            fi
             st=$(curl -s -m 3 "http://$pip:26657/status" 2>/dev/null)
             if [ -z "$st" ]; then
                 rows="$rows$pid\t$pip\t?\t?\t?\tNO RPC\t?\t?\n"
@@ -394,6 +450,26 @@ except Exception:
         printf "$rows" | while IFS=$'\t' read -r pid pip h cu pw ad ver uid; do
             [ -z "$pid" ] && continue
             mark="  "; [ -n "$ad" ] && [ "$ad" = "$myaddr" ] && mark="=>"
+            # NOT the same as unreachable, and the difference is the whole point of the row.
+            # Unreachable means "it should answer and does not"; this means "it has never told
+            # anyone where it is".  updateIsValidator publishes the address only under IsProposer
+            # -- on the node's FIRST PROPOSED BLOCK after bonding -- so a validator with a small
+            # stake can sit here for a while, voting normally, while the re-share audit cannot
+            # count it and every audit tick is a no-op.
+            if [ "$pip" = "(unpublished)" ]; then
+                # A REAL ROW, not a footnote.  Everything the chain knows is shown; only the
+                # columns that require dialling the node are "-".  A reader can then see at a
+                # glance that this is a bonded validator carrying real stake which the re-share
+                # audit still cannot count -- rather than an anomaly they have to go and explain.
+                ushare="-"; urest="-"
+                if [ "$pw" != "-" ] && [ "$pw" != "?" ] && [ -n "$total" ] && [ "$total" != "0" ]; then
+                    ushare=$(echo "$pw $total" | awk '{printf "%.1f", $1*100/$2}')
+                    urest=$(echo "$pw $total"  | awk '{printf "%.1f", ($2-$1)*100/$2}')
+                fi
+                uaddr="${ad:0:12}"; [ -z "$uaddr" ] && uaddr="-"
+                warn "$mark $(printf %-9s "$pid") $(printf %-17s "no address") $(printf %-13s "$uaddr") $(printf %-8s "-") $(printf %-10s "-") $(printf %-10s "-") $(printf %5s "-")  $(printf %-12s "$pw") $(printf %5s "$ushare")%  $(printf %6s "$urest")%   NOT PUBLISHED"
+                continue
+            fi
             if [ "$h" = "?" ]; then
                 bad "$mark $(printf %-10s "$pid") unreachable at $pip"
                 continue
@@ -425,6 +501,25 @@ except Exception:
         # not survive it.
         unsafe=$(echo "$vals" | jq -r --argjson t "$total" \
             '[.result.validators[] | select((($t - (.voting_power|tonumber)) / $t * 100) <= 66.67)] | length')
+        info ""
+
+        # RECONCILE THE TWO COUNTS OUT LOUD.  "N active" is CometBFT's consensus set; the table is
+        # the chain's pioneer list.  They measure different things and are ROUTINELY different --
+        # a bonded validator that has not published yet, or a stale pioneer row left by an aborted
+        # join, both make them diverge.  Left unstated, the reader either misses it or assumes a
+        # bug in the table.  The number that actually governs re-sharing is the third one: how many
+        # pioneers have an address, because that is what getAddressablePioneers counts and what the
+        # audit uses as its target.
+        pio_total=$(qadenad_alias q qadena list-interval-public-key-id -o json 2>/dev/null \
+            | jq -r '[.intervalPublicKeyID[] | select(.nodeType=="pioneer")] | length' 2>/dev/null)
+        pio_addr=$(qadenad_alias q qadena list-interval-public-key-id -o json 2>/dev/null \
+            | jq -r '[.intervalPublicKeyID[] | select(.nodeType=="pioneer" and .externalIPAddress!="")] | length' 2>/dev/null)
+        if [ -n "$pio_total" ] && [ -n "$pio_addr" ]; then
+            info "$count validator(s) in consensus; $pio_total pioneer(s) registered; $pio_addr with a published address"
+            if [ "$pio_addr" != "$pio_total" ]; then
+                info "  the re-share audit targets $pio_addr owners -- the unpublished ones above cannot be counted"
+            fi
+        fi
         info ""
         if [ "$unsafe" = "0" ]; then
             info "every validator can be stopped one at a time without halting the chain"
