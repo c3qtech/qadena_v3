@@ -84,6 +84,15 @@ func wireEnclaveSelfStart(cmd *cobra.Command) error {
 		return fmt.Errorf("config.toml's p2p.external_address is not set -- the enclave cannot register this pioneer without it; run init.sh or set it by hand")
 	}
 
+	// HAND IT TO THE KEEPER, NOT ONLY TO THE INIT CLOSURE BELOW.
+	//
+	// This value is re-read from config.toml on every start and was then reachable only through
+	// ArmInitEnclaveDispatch -- whose gate is "the JarRegulator row for this jar id is absent".
+	// On an established node that row exists, so the closure never runs and a CHANGED address was
+	// silently discarded at every restart, leaving peers dialling wherever the node used to be.
+	// The keeper re-asserts it on the UpdateHeight it already sends every 11 blocks.
+	keeper.SetNodeExternalAddress(extAddr)
+
 	jarID, _ := cmd.Flags().GetString(flagEnclaveJarID)
 	regulatorID, _ := cmd.Flags().GetString(flagEnclaveRegulatorID)
 

@@ -109,13 +109,33 @@ if [[ $build_sgx == 1 ]] ; then
   fi
 else
   if [[ $update_test_unique_id == 1 ]] ; then
-      # Files to update
-      signer_file="cmd/qadenad_enclave/test_signer_id.txt"
+      # THE SIGNER ID IS DELIBERATELY NOT INCREMENTED HERE.  It used to be, and that quietly
+      # destroyed sealed state on every debug enclave upgrade.
+      #
+      # In a debug build these two ids ARE the sealing keys: SealWithProductKey prefixes the
+      # plaintext with signerID and SealWithUniqueKey with uniqueID (enclave.go), and Unseal
+      # accepts a blob only if it carries the CURRENT one of those as its prefix.  That models real
+      # SGX faithfully -- product-key sealing is designed to survive a MRENCLAVE change, which is
+      # precisely what lets an upgraded enclave still read data the previous measurement sealed.
+      #
+      # On SGX a rebuild changes MRENCLAVE (the uniqueID) and NOTHING ELSE: the signer id is the
+      # hash of the signing key in public.pem, which a rebuild does not touch.  Incrementing it
+      # here simulated re-signing with a DIFFERENT KEY on every ordinary rebuild -- something SGX
+      # would never do -- so every product-key-sealed value became unreadable the moment the new
+      # enclave started.
+      #
+      # Observed: upgrading unique055 -> unique057 also moved signer051 -> signer052, and the
+      # upgraded enclave panicked in getPrivKCache with "Couldn't unseal, unrecognized prefix" --
+      # the SS interval private key cache, sealed under signer051, was no longer readable by
+      # anything.  The handover itself reported success, which is what made it confusing.
+      #
+      # Rotating the signer id is a real operation, but it is a deliberate one (a new signing key),
+      # and it invalidates product-key-sealed state by design.  It does not belong on the path that
+      # every routine rebuild takes.  Do it by editing test_signer_id.txt by hand, knowing that the
+      # node's sealed state goes with it.
       unique_file="cmd/qadenad_enclave/test_unique_id.txt"
       version_file="cmd/qadenad_enclave/version.txt"
 
-      # Increment both files
-      signer_id=$(increment_id "$signer_file")
       unique_id=$(increment_id "$unique_file")
       version=$(increment_version "$version_file")
 

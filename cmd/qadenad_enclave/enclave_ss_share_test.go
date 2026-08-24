@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,6 +34,26 @@ const fakeShare130 = "ab" // repeated below
 func aShare() string { return strings.Repeat(fakeShare130, 65) }
 func aKey() string   { return strings.Repeat("cd", 32) }
 
+// keyHex is ecies (*PrivateKey).Hex() WITHOUT the leading-zero truncation.
+//
+// Hex() is hex.EncodeToString(k.D.Bytes()), and big.Int.Bytes() emits the minimal big-endian
+// encoding -- so a scalar whose top byte is zero comes back as 62 hex characters, and two zero
+// bytes as 60.  Measured over 200,000 draws: 774 short (0.387%), 771 of them 62 and 3 of them 60.
+//
+// Everything downstream requires exactly 32 bytes: derivePubKBase64 rejects anything else with
+// "not a 32-byte hex scalar", which surfaced as unrelated tests failing at random in roughly one
+// run in twenty and reading as harness flakiness.  It is the SAME big.Int truncation, in the same
+// library, that GenerateSharedSecret was fixed for in x/qadena/common/vshare.go -- reached through
+// a different accessor, so the earlier fix did not cover it.
+//
+// FillBytes left-pads into a fixed 32-byte buffer, so for every key that already works the bytes
+// are identical.  Production is NOT affected: it mints interval keys through the cosmos keyring
+// (unsafeExportPrivKeyHex -> hex.EncodeToString(priv.Bytes())), whose secp256k1 Key is a
+// fixed-length array with no big.Int in the path.
+func keyHex(k *ecies.PrivateKey) string {
+	return hex.EncodeToString(k.D.FillBytes(make([]byte, 32)))
+}
+
 // newSSTestServer returns a server that believes it is pioneerID and can decrypt shares addressed
 // to it, plus the enclave public key to encrypt those shares with.
 func newSSTestServer(t *testing.T, pioneerID string) (*qadenaServer, string) {
@@ -43,7 +64,7 @@ func newSSTestServer(t *testing.T, pioneerID string) (*qadenaServer, string) {
 	require.NoError(t, err)
 	enclavePubK := base64.StdEncoding.EncodeToString(k.PublicKey.Bytes(true))
 
-	s.setPrivateEnclaveParamsEnclaveInfo("", k.Hex(), enclavePubK)
+	s.setPrivateEnclaveParamsEnclaveInfo("", keyHex(k), enclavePubK)
 	s.setPrivateEnclaveParamsPioneerInfo(pioneerID, "wallet-"+pioneerID, "", "", "")
 	return s, enclavePubK
 }

@@ -75,9 +75,29 @@ if [ -n "$current" ] && [ ! -x "$qadenabin/qadenad_enclave.$current" ]; then
       && echo "  preserved the outgoing binary as qadenad_enclave.$current"
 fi
 
+# count_procs <exact-process-name> -- how many are running, printed as a bare integer, always.
+#
+# NOT `pgrep -c`.  That is a Linux-only (procps) flag: BSD pgrep on macOS rejects it, prints its
+# usage to stderr and NOTHING to stdout, so the arithmetic below became `$(( + + ))` and the shell
+# died with "bad math expression" -- after stop_qadena.sh had already taken the node DOWN, leaving
+# a stopped node and an un-swapped binary.  This is the same trap already fixed in
+# buildscripts/install.sh; it was never fixed here.
+#
+# `pgrep -x <name> | wc -l` is the portable spelling.  pgrep exits 1 when there are no matches,
+# which is the outcome we WANT, hence the `|| true`.  `-x` (exact COMM match) exists on both
+# platforms and keeps this from matching the ssh/shell command line that mentions the name.
+count_procs() {
+    local n
+    n=$( { pgrep -x "$1" 2>/dev/null || true; } | wc -l | tr -d '[:space:]' )
+    printf "%s" "${n:-0}"
+}
+
 echo "  stopping the node (a running binary cannot be replaced)"
 "$qadenascripts/stop_qadena.sh" --all > /dev/null 2>&1
-alive=$(( $(pgrep -cx qadenad) + $(pgrep -cx qadenad_enclave) + $(pgrep -cx signer_enclave) ))
+# ego-host counted too: on SGX the enclave runs as `ego run`, so its COMM is ego-host and a live
+# enclave would otherwise be invisible to this check.
+alive=$(( $(count_procs qadenad) + $(count_procs qadenad_enclave) \
+          + $(count_procs signer_enclave) + $(count_procs ego-host) ))
 [ "$alive" -ne 0 ] && { echo "  $alive process(es) still running -- refusing to swap"; exit 1 }
 
 cp "$staged" "$qadenabin/qadenad_enclave" || { echo "  copy failed"; exit 1 }

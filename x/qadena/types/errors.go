@@ -145,4 +145,16 @@ var (
 	// that holds the interval private key may re-share it; attestation alone proves the sender runs
 	// trusted code, not that it holds this particular key.
 	ErrPossessionProofInvalid = sdkerrors.Register(ModuleName, 1165, "re-share possession proof does not verify against the stored public key")
+
+	// A pioneer tried to rewrite an interval-public-key row belonging to a DIFFERENT node.
+	//
+	// Attestation proves the sender runs trusted code; it does not say which node it is, because
+	// the attested string is chosen by the sender.  Without this, any node holding an Active
+	// measurement could repoint any other pioneer's externalIPAddress -- an eclipse primitive
+	// against share fetch and who-has traffic -- or its PubKID.
+	ErrNotRowOwner = sdkerrors.Register(ModuleName, 1166, "an interval public key row may only be updated by the node that owns it")
+
+	// The shared rows (SS, Jar, Regulator) have no per-node owner to compare against, so the
+	// weaker-but-real check is that the sender is a registered pioneer at all.
+	ErrCreatorNotPioneer = sdkerrors.Register(ModuleName, 1167, "creator is not a registered pioneer")
 )
