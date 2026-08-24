@@ -24,17 +24,32 @@
 # Assertion 5 is the one that catches a no-op audit.  Without it, an audit that always returned
 # selected=0 would pass 1-4 on any healthy chain forever.
 #
-# enclave.go has maxSSResharesPerRotation, which is the number of keys the audit will re-share in a single run.
-# it is deliberately capped at 4, so a single audit run cannot guarantee to sweep the whole table.
-
-# CHECK THIS PART, IT MAY NOT BE CORRECT ANYMORE 
-# ONE AUDIT DOES NOT SEE THE WHOLE TABLE.  maxSSAuditScan caps a run at 256 keys, deliberately: the
-# audit runs on the block-execution thread and the owners table grows one entry per rotation
-# forever, so an uncapped scan is an unbounded and GROWING stall.  Coverage comes from a PERSISTENT
-# CURSOR -- ceil(N/256) runs sweep the table with a guarantee.  This sweeps ceil(N/4)+1 times so
-# assertion 4 is entitled to demand zero.  (It used to be a random start offset, which gave fair but
-# not systematic coverage; a straggler survived k runs with probability (1-256/N)^k, and clearing
-# seven of them on M1-M4 took about twenty forced audits.  TESTING-BACKLOG item 106.)
+# ONE AUDIT DOES NOT HEAL THE WHOLE TABLE, and the binding limit is not the one you would guess.
+# enclave.go bounds a tick THREE ways, and which one bites depends on how much work there is:
+#
+#   maxSSResharesPerRotation = 4    keys RE-SHARED per tick.  A fleet growth makes EVERY historical
+#                                   key deficient at once, and without this the tick after "node 5
+#                                   became addressable" would emit one message per key in the
+#                                   chain's history, in a single transaction.
+#   early exit at 4 deficient       the scan STOPS as soon as it has that many candidates.
+#   maxSSAuditScan = 256            keys EXAMINED per tick, so a QUIESCENT chain -- nothing
+#                                   deficient, and it would otherwise walk the whole table to
+#                                   discover that -- cannot stall block execution.
+#
+# WITH A BACKLOG THE 256 NEVER BINDS.  The early exit fires first: every key is deficient, so the
+# fourth key examined is the fourth candidate and the tick stops there.  That is why a run against
+# eleven deficient keys reports `audited=4 selected=4 emitted=4` rather than audited=11 -- measured
+# on M1-M4 after pioneer3 joined.
+#
+# So the sweep is sized by the RE-SHARE cap, not the scan cap: ceil(N/4)+1, not ceil(N/256)+1.  The
+# earlier figure was wrong and made assertion 4 demand zero after two runs when eleven keys needed
+# three, which read as a straggler bug in the audit and was arithmetic here.
+#
+# Coverage is a GUARANTEE rather than a probability because the cursor is persistent: each tick
+# resumes where the last stopped and wraps at the end.  It used to be a random start offset, which
+# gave fair but not systematic coverage -- a straggler survived k runs with probability
+# (1-256/N)^k, and clearing seven of them on M1-M4 took about twenty forced audits.  That is
+# TESTING-BACKLOG item 106, and the cursor is its fix.
 #
 # DEBUG ENCLAVES ONLY.  `enclave audit-ss-keys` is a debug affordance and is refused under
 # --realenclave, so on SGX this suite cannot run at all.  It SKIPS LOUDLY: a silent pass would read
