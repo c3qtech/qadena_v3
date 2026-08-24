@@ -101,6 +101,7 @@ STAGE_ORDER=(A0 A B C D E F G H)
 
 # Helpers, and the traps they encode, live in ONE place -- fleet_bringup_with_tests.sh drives the
 # same machines the same way and must not carry a second copy that can drift.  See fleet_lib.sh.
+FLEET_NAME="${0:t:r}"
 source "$SCRIPT_DIR/fleet_lib.sh"
 
 while [[ $# -gt 0 ]]; do

@@ -17,7 +17,10 @@
 # NO SIDE EFFECTS AT LOAD.  Only definitions, so sourcing is safe at any point and the caller keeps
 # control of ordering (RUN_DIR has to exist before the first sync_log, not before the source).
 
-fail()  { print -u2 "FAIL($(basename ${(%):-%x})): $*"; note "FAILED: $*"; exit 1 }
+# NAMES THE CALLING SCRIPT, not this file.  ${(%):-%x} resolves to fleet_lib.sh once the
+# helpers live here, so every failure started reporting the library as the thing that failed.
+# Each script sets FLEET_NAME from its own $0 before sourcing.
+fail()  { print -u2 "FAIL(${FLEET_NAME:-fleet}): $*"; note "FAILED: $*"; exit 1 }
 info()  { print "  $*" }
 # Tolerates STATUS being unset: these helpers are defined before the run directory exists, and a
 # fail() during argument parsing must print its reason rather than die on an unbound variable.

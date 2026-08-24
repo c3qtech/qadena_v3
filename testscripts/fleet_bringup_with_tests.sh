@@ -90,6 +90,7 @@ STAGE_ORDER=(A0 A B C D E F G)
 
 # Helpers, and the traps they encode, live in ONE place -- fleet_bringup_with_tests.sh drives the
 # same machines the same way and must not carry a second copy that can drift.  See fleet_lib.sh.
+FLEET_NAME="${0:t:r}"
 source "$SCRIPT_DIR/fleet_lib.sh"
 
 # SYNCHRONOUS, because the exit status IS the verdict.  rsh_build_detached exists for things that
@@ -593,7 +594,6 @@ while (( i < SNAP_WAIT_MIN )); do
     [[ -n "$h" && "$h" -gt $(( SNAP_INTERVAL + 5 )) && "$s" -ge 1 ]] && { info "ready: height=$h snapshots=$s"; break }
     (( i % 5 == 0 )) && info "height ${h:-?}, snapshots ${s:-0} -- waiting"
     sleep 60; (( i++ ))
-    (( NO_LOOP )) || sync_log "$PRIMARY" "$LOOP_LOG" "stage-F-continuous.log"
 done
 (( i < SNAP_WAIT_MIN )) || fail "no snapshot after $SNAP_WAIT_MIN minutes (height=${h:-?} snapshots=${s:-?})"
 fi
@@ -649,10 +649,19 @@ fi
         sync_arg=()
         sync_kind="block-sync"
     fi
-    info "joining $j as $pioneer by $sync_kind"
+    # THROUGH PHASE 7, NOT 5 -- the difference is the whole growth test.  full_fleet_bringup stops
+    # at 5 deliberately ("stops short of converting it to a validator"), because converting re-splits
+    # stake and is worth watching.  But a node that is not a VALIDATOR never proposes a block, and
+    # updateIsValidator publishes a pioneer's external address ONLY under IsProposer -- so an
+    # unbonded joiner never becomes addressable, never becomes an SS key owner, and the audit below
+    # would sit at target=1 healing nothing while reporting success.  Phase 6 converts AND carries
+    # the guard that matters here: it verifies neither node reaches 2/3, which is exactly the check
+    # a hand-written loop skipped when it halted this fleet (TESTING-BACKLOG item 108).  Phase 7 is
+    # test_peer_agreement.sh -- the first thing in the sequence that compares two nodes at all.
+    info "joining $j as $pioneer by $sync_kind (through phase 7: join, bond, agree)"
     print "$j joined by: $sync_kind (as $pioneer)" >> "$RUN_DIR/fleet.txt"
     "$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" \
-        --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" --from 1 --until 5 \
+        --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" --from 1 --until 7 \
         2>&1 | tee "$RUN_DIR/stage-G-join-${j##*@}.log"
     [[ ${pipestatus[1]} -eq 0 ]] || fail "join failed for $j; nth_node_bringup is phase-resumable (--from N). See $RUN_DIR/stage-G-join-${j##*@}.log"
     JOINED+=("$j")
