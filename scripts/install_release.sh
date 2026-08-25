@@ -210,9 +210,21 @@ echo "  every path is installable"
 #
 # Packages built before this key existed are SGX by construction: the debug path could not be
 # packaged at all, because packaging refused to run without ego.
-identity_mode=$(mval qadenad_enclave.identity_mode)
-[[ -n "$identity_mode" ]] || identity_mode=sgx
-echo "  enclave identity: $identity_mode"
+# A PACKAGE WITH NO ENCLAVE HAS NO IDENTITY TO CHECK, and that is now a real case: an
+# enclave-unchanged release packaged with --only chain,... carries qadenad and nothing else.  The
+# absent-key default below reads "old package, therefore SGX", which was sound when the only way to
+# lack the key was to predate it -- but a chain-only package lacks it because there is no enclave,
+# and defaulting it to SGX then demands ego on a debug fleet and refuses an install that would have
+# been perfectly correct.  Distinguish the two before defaulting: no qadenad_enclave.* keys at all
+# means no enclave, not an old package.
+if ! grep -q '^qadenad_enclave\.' "$stage/manifest.txt" 2>/dev/null; then
+    identity_mode=none
+    echo "  enclave identity: n/a -- this package carries no enclave (chain-only release)"
+else
+    identity_mode=$(mval qadenad_enclave.identity_mode)
+    [[ -n "$identity_mode" ]] || identity_mode=sgx
+    echo "  enclave identity: $identity_mode"
+fi
 
 if [[ "$identity_mode" == "sgx" ]]; then
     command -v ego > /dev/null 2>&1 || fail "this package carries an ego-signed (SGX) enclave, and ego
