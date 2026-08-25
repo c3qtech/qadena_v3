@@ -73,6 +73,7 @@ ARCHIVE=""
 PHASE="both"
 WAIT_SECS=3600
 DRY=0
+QUIESCE=0; QUIESCE_NOW=0
 
 while (( $# )); do
     case "$1" in
@@ -81,6 +82,8 @@ while (( $# )); do
         --phase)     PHASE="$2"; shift 2 ;;     # 1 | 2 | both
         --wait-secs) WAIT_SECS="$2"; shift 2 ;;
         --dry-run)   DRY=1; shift ;;
+        --quiesce)           QUIESCE=1; shift ;;
+        --quiesce-immediate) QUIESCE=1; QUIESCE_NOW=1; shift ;;
         --help|-h)
             sed -n '2,50p' "$0"
             exit 0 ;;
@@ -139,11 +142,96 @@ chain_version_of() {
     rsh "$1" 'qadenad version 2>/dev/null' 2>/dev/null | head -1
 }
 
+# quiesce_node <host> -- stop the continuous-regression loop, and any run in flight.
+#
+# A SPLIT ROLL NEEDS THIS MORE THAN A SIMPLE ONE, not less.  Phase one deliberately leaves every
+# node on a NEW chain binary with an OLD enclave, and phase two activates the enclaves one at a
+# time; the whole shape exists to keep the fleet decodable at every instant.  The regression's
+# enclave-rollback, enclave-crash and enclave-upgrade suites STOP AND RESTART the node they run on,
+# and enclave-crash additionally leaves it wedged roughly one time in twelve (2026-08-25: M1 stuck
+# on one block for 4h11m).  Either is a second node down while this script already has one down.
+#
+# TWO MODES, and the difference is what happens to a run ALREADY in flight:
+#
+#   --quiesce            kill the LOOP, then WAIT for the current run to finish on its own.  Slow
+#                        (up to a full run, ~15 min) and safe.
+#   --quiesce-immediate  kill the loop AND the current run now.  Fast, and it needs the SIGCONT
+#                        below to be safe -- see there.
+quiesce_node() {
+    local h="$1" pids p n i stopped
+    pids=$(rsh "$h" 'pgrep -f "[r]un_regression_continually" 2>/dev/null; true' | tr -d '\r' | tr '\n' ' ') || true
+
+    if (( DRY )); then
+        print -- "    [dry-run] $h: would stop regression${pids:+ (loop pids: ${pids% })}$( (( QUIESCE_NOW )) && print -n ' IMMEDIATELY' )"
+        return 0
+    fi
+
+    if [[ -n "${pids// /}" ]]; then
+        say "  $h: stopping the continuous-regression loop (pids: ${pids% })"
+        for p in ${=pids}; do rsh "$h" "kill $p" >/dev/null 2>&1 || true; done
+        sleep 2
+    fi
+
+    if (( ! QUIESCE_NOW )); then
+        # `pgrep -c` PRINTS the count AND EXITS NON-ZERO at zero, so `|| echo 0` yields "0\n0".
+        for i in $(seq 1 120); do
+            n=$(rsh "$h" 'pgrep -cf "[r]egression.sh" 2>/dev/null; true' 2>/dev/null | tr -d '\r' | head -1)
+            [[ "${n:-0}" -eq 0 ]] && break
+            (( i == 1 )) && say "  $h: waiting for the in-flight regression run to finish"
+            sleep 30
+        done
+        [[ "${n:-0}" -eq 0 ]] || die "$h: regression still running after an hour -- stop it before rolling"
+        return 0
+    fi
+
+    # --- immediate ---
+    # SIGTERM FIRST, AND THE REASON IS NOT POLITENESS.  test_enclave_crash_recovery.sh SIGSTOPs the
+    # enclave and resumes it from a `trap ... EXIT INT TERM`.  SIGTERM lets that trap run, so the
+    # enclave is resumed by the test itself.  SIGKILL would skip it and strand a STOPPED enclave
+    # with the node frozen behind it -- manufacturing the exact wedge this option is meant to avoid.
+    say "  $h: killing any in-flight regression run now (SIGTERM, then SIGKILL)"
+    rsh "$h" 'pkill -TERM -f "[r]egression.sh" 2>/dev/null; true' >/dev/null 2>&1 || true
+    for i in $(seq 1 10); do
+        n=$(rsh "$h" 'pgrep -cf "[r]egression.sh" 2>/dev/null; true' 2>/dev/null | tr -d '\r' | head -1)
+        [[ "${n:-0}" -eq 0 ]] && break
+        sleep 2
+    done
+    if [[ "${n:-0}" -ne 0 ]]; then
+        say "  $h: it did not exit on SIGTERM; SIGKILL"
+        rsh "$h" 'pkill -KILL -f "[r]egression.sh" 2>/dev/null; true' >/dev/null 2>&1 || true
+        sleep 2
+    fi
+
+    # THE BACKSTOP, and the whole reason --quiesce-immediate is safe to offer.  If the trap did not
+    # run -- SIGKILL, or a test that never installed one -- the enclave is still SIGSTOPped and the
+    # node is frozen with a healthy-looking process table.  Resume anything stopped, unconditionally:
+    # a SIGCONT to a process that was never stopped costs nothing.
+    stopped=$(rsh "$h" 'ps -eo stat=,pid=,comm= 2>/dev/null | awk "\$1 ~ /^T/ && \$3 ~ /qadenad|enclave/ {print \$2}" | tr "\n" " "; true' 2>/dev/null | tr -d '\r')
+    if [[ -n "${stopped// /}" ]]; then
+        say "  $h: resuming STOPPED enclave process(es): ${stopped% }  (a killed test left them halted)"
+        rsh "$h" "kill -CONT ${stopped}" >/dev/null 2>&1 || true
+    fi
+}
+
 step "0. preflight -- every host, BEFORE anything is touched"
 for n in "${NODES[@]}"; do
     rsh "$n" 'true' || die "$n unreachable over ssh (BatchMode: is the key loaded?)"
     say "$n  chain=$(chain_version_of $n)  enclave=$(enclave_measurement_of $n)"
 done
+# BEFORE require_advancing, not after: a node the regression has just stopped would otherwise fail
+# the advancing check and abort the roll for a reason about the test suite rather than the fleet.
+if (( QUIESCE )); then
+    say ""
+    say "--quiesce$( (( QUIESCE_NOW )) && print -n '-immediate' ): stopping regression on ${#NODES} node(s)"
+    for n in "${NODES[@]}"; do quiesce_node "$n"; done
+    say "  quiescent"
+else
+    for n in "${NODES[@]}"; do
+        rn=$(rsh "$n" 'pgrep -cf "[r]egression" 2>/dev/null; true' 2>/dev/null | tr -d '\r' | head -1)
+        [[ "${rn:-0}" -ne 0 ]] && say "  WARNING: $n is running regression ($rn proc) -- it restarts the node it runs on.  Use --quiesce or --quiesce-immediate."
+    done
+fi
+
 for n in "${NODES[@]}"; do require_advancing "$n"; done
 
 # ONE ARTIFACT, VERIFIED BY CONTENT.  The build is not reproducible and a debug enclave reads its

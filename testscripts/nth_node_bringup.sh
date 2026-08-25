@@ -68,7 +68,7 @@ ONLY=""
 # Off by default: phase 2 only LOOKS at the primary.  --quiesce opts into stopping its continuous
 # regression loop and waiting out the in-flight run, which is authority over a machine the operator
 # did not necessarily ask us to change.
-QUIESCE=0
+QUIESCE=0; QUIESCE_NOW=0
 VALIDATOR_STAKE="110000"
 FUND_QDN="200000"
 PIONEER_NAME="pioneer2"
@@ -84,6 +84,7 @@ while [[ $# -gt 0 ]]; do
         --primary) PRIMARY="$2"; shift 2 ;;
         --joiner)  JOINER="$2";  shift 2 ;;
         --quiesce) QUIESCE=1; shift ;;
+        --quiesce-immediate) QUIESCE=1; QUIESCE_NOW=1; shift ;;
         --from)    FROM="$2";    shift 2 ;;
         --until)   UNTIL="$2";   shift 2 ;;
         --only)    ONLY="$2";    shift 2 ;;
@@ -96,6 +97,10 @@ while [[ $# -gt 0 ]]; do
             print "                          [--stake qdn] [--quiesce]"
             print "                          [--pioneer <name>] [--state-sync] [--seed2 <ip>]"
             print ""
+            print "  --quiesce-immediate  as --quiesce, but END the in-flight run NOW instead of"
+            print "                waiting it out.  SIGTERM first so test traps run, then SIGKILL,"
+            print "                then SIGCONT anything left STOPPED -- a killed enclave-crash test"
+            print "                otherwise leaves the enclave halted and the node frozen."
             print "  --quiesce     stop the primary's continuous-regression loop and WAIT for the"
             print "                in-flight run to finish before joining.  OFF by default: phase 2"
             print "                only looks and warns.  Worth passing when the primary is running"
@@ -460,6 +465,36 @@ if [[ $QUIESCE -eq 1 ]]; then
         info "continuous regression not running"
     fi
 
+    if [[ $QUIESCE_NOW -eq 1 ]]; then
+        # --quiesce-immediate: do not wait out the run in flight, end it now.
+        #
+        # SIGTERM FIRST, AND NOT OUT OF POLITENESS.  test_enclave_crash_recovery.sh SIGSTOPs the
+        # enclave and resumes it from a `trap ... EXIT INT TERM`.  SIGTERM lets that trap run, so
+        # the test resumes the enclave itself.  SIGKILL skips it and strands a STOPPED enclave with
+        # the node frozen behind it -- manufacturing the very wedge this option exists to avoid.
+        info "killing the in-flight regression run now (SIGTERM, then SIGKILL)"
+        ssh "$PRIMARY" "${SUDO_P}pkill -TERM -f '[r]egression.sh' 2>/dev/null; true" >/dev/null 2>&1 || true
+        for i in {1..10}; do
+            n=$(ssh "$PRIMARY" 'pgrep -cf "[r]egression.sh" 2>/dev/null; true' | tr -d '\r' | head -1)
+            [[ "${n:-0}" -eq 0 ]] && break
+            sleep 2
+        done
+        if [[ "${n:-0}" -ne 0 ]]; then
+            info "it did not exit on SIGTERM; SIGKILL"
+            ssh "$PRIMARY" "${SUDO_P}pkill -KILL -f '[r]egression.sh' 2>/dev/null; true" >/dev/null 2>&1 || true
+            sleep 2
+        fi
+        # THE BACKSTOP that makes this option safe to offer.  If the trap did not run -- SIGKILL, or
+        # a suite that never installed one -- the enclave is still SIGSTOPped and the node is frozen
+        # behind a healthy-looking process table.  Resume anything stopped; a SIGCONT to a process
+        # that was never stopped costs nothing.
+        stopped=$(ssh "$PRIMARY" 'ps -eo stat=,pid=,comm= 2>/dev/null | awk "\$1 ~ /^T/ && \$3 ~ /qadenad|enclave/ {print \$2}" | tr "\n" " "; true' 2>/dev/null | tr -d '\r')
+        if [[ -n "${stopped// /}" ]]; then
+            info "resuming STOPPED enclave process(es): ${stopped% }  (a killed test left them halted)"
+            ssh "$PRIMARY" "${SUDO_P}kill -CONT ${stopped}" >/dev/null 2>&1 || true
+        fi
+        n=0
+    else
     info "waiting for any in-flight regression run to finish (it restarts the chain; a joiner cannot survive that)"
     for i in {1..120}; do
         # `pgrep -c` PRINTS the count and EXITS NON-ZERO when it is zero, so `|| echo 0` appended a
@@ -470,6 +505,7 @@ if [[ $QUIESCE -eq 1 ]]; then
         [[ "${n:-0}" -eq 0 ]] && break
         sleep 30
     done
+    fi
     [[ "${n:-0}" -eq 0 ]] || fail "regression still running after an hour; stop it before joining"
 
     for i in {1..40}; do

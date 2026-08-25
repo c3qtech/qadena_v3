@@ -548,6 +548,25 @@ if [[ -n "$BUILD_FROM" ]]; then
         sgx)   sgxflag=" --build-sgx" ;;
         nosgx) sgxflag=" --no-sgx" ;;
     esac
+    # CHAIN-ONLY MUST NOT BUILD THE ENCLAVE.  Two independent reasons, and either alone is enough:
+    #
+    #   1. Nothing consumes it.  --chain-only packages --only chain,libs,scripts,config, so the
+    #      enclave that gets built is discarded.  It is the largest compile-and-link in the build
+    #      and its entire contribution to this roll is delay.
+    #
+    #   2. It is the step that keeps killing the node.  Both SEGVs this fleet has recorded -- 2 out
+    #      of 62 node exits, 2026-08-24 20:27 and 2026-08-25 20:41 -- happened during a build, and
+    #      both times the enclave build was the part that failed (silently, with no compiler output)
+    #      while qadenad died with rc 139.  The other 60 exits were ordinary rc 1 stops.  This box
+    #      has 2 cores and 3.9GB; the enclave link is the memory peak, and dropping it removes the
+    #      largest contributor to whatever that interaction is.
+    #
+    # --hold does NOT do this: it is a staging flag, not a skip flag.  It is threaded THROUGH to
+    # build_enclave.sh, whose `go build` is unconditional -- --hold only decides whether the result
+    # replaces the live binary or is staged beside it.  --skip-enclave gates both build_enclave.sh
+    # and build_signer_enclave.sh, while the chain install above that gate still runs.
+    (( CHAIN_ONLY )) && sgxflag="$sgxflag --skip-enclave"
+
     LOCAL_PKG="${TMPDIR:-/tmp}/rolling_upgrade_pkg"
     mkdir -p "$LOCAL_PKG"
     BLOG="$LOCAL_PKG/build.log"

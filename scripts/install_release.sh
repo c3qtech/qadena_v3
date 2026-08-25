@@ -69,6 +69,38 @@
 # infer anything from -- which is the whole point of distributing a package.  It therefore derives
 # everything it needs itself and sources nothing.
 
+# SELF-REPLACEMENT GUARD -- deliberately the first thing this script does.
+#
+# This script installs the package's scripts/ directory, and that directory CONTAINS THIS SCRIPT.
+# So it overwrites its own file while zsh is still reading it.  zsh does not load a script into
+# memory: it reads incrementally, keeping a byte offset and refilling as it goes.  Replace the file
+# mid-run and the next read comes from the NEW file at the OLD offset.
+#
+# That was harmless for this script's entire life only because the installed copy had always been
+# byte-identical to the packaged one -- the offset then lands on the same code and nothing is
+# observable.  The first time the two differed IN LENGTH, the read landed mid-statement and zsh
+# died with "parse error near", half-way through an install that had ALREADY STOPPED THE NODE.
+# Observed 2026-08-25 on M1: qadenad installed, scripts/ installed, then the parse error, and the
+# node was left down because the restart is further down this file.
+#
+# The hazard was already known here for a DIFFERENT file -- see the "run.sh re-reads its own script
+# by byte offset" branch further down -- it had simply never been applied to this script itself.
+#
+# Re-exec from a private copy; the original may then be replaced freely.  $0 is restored to the real
+# path afterwards so --help (which prints this script's own comments) and the invocation hints near
+# the end keep naming the file the operator actually ran, not a temp copy.
+if [[ -z "$QADENA_INSTALL_REEXEC" ]]; then
+    _self=$(mktemp "${TMPDIR:-/tmp}/install_release.XXXXXX") \
+        && cp "$0" "$_self" \
+        && chmod +x "$_self" \
+        || { echo "install: cannot make a private copy of $0 to re-exec from" >&2; exit 1; }
+    QADENA_INSTALL_REEXEC="${0:A}" exec "$_self" "$@"
+fi
+_self_copy="$0"                   # the temp copy we are running from; removed by the traps
+0="$QADENA_INSTALL_REEXEC"        # zsh permits this, and it keeps every $0 below meaningful
+unset QADENA_INSTALL_REEXEC       # do not leak the marker into start_qadena.sh and friends
+trap 'rm -f "$_self_copy"' EXIT INT TERM
+
 SCRIPT_DIR="${0:A:h}"
 
 set -e
@@ -162,7 +194,9 @@ else
     [[ -f "$archive" ]] || fail "no such archive: $archive"
     archive="${archive:A}"
     stage=$(mktemp -d) || fail "could not create a staging directory"
-    trap 'rm -rf "$stage"' EXIT INT TERM
+    # Replaces the self-copy trap set at the top -- zsh traps are NOT additive, so this one has to
+    # take over both jobs or the private copy leaks into /tmp on every run.
+    trap 'rm -rf "$stage"; rm -f "$_self_copy"' EXIT INT TERM
     tar -xzf "$archive" --strip-components=1 -C "$stage" \
         || fail "could not extract $archive"
     [[ -f "$stage/manifest.txt" ]] || fail "$archive has no manifest -- is it a qadena release package?"

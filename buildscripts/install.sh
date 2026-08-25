@@ -209,7 +209,38 @@ if [[ $install_chain -eq 1 ]]; then
     else
         install_binary "$chain_path/qadenad" "$qadenabin/qadenad"
     fi
-    cp $qadenabuild/vendor/github.com/CosmWasm/wasmvm/v2/internal/api/*.so $qadenabin/
+
+    # THE LIBRARIES ARE PART OF "THE LIVE BINARY", and this cp used to sit OUTSIDE the --hold guard
+    # above -- so a --hold build, whose entire promise is that it touches nothing the running node
+    # is using, overwrote libwasmvm underneath it.
+    #
+    # WHY THAT IS FATAL RATHER THAN UNTIDY.  qadenad links libwasmvm at LOAD time, so a running node
+    # has it mapped r-xp for the life of the process.  install_binary is a plain `cp`: it writes new
+    # bytes into the SAME INODE, and those page-cache pages back the live mapping.  Any page the
+    # process has not faulted in yet then arrives from the NEW build, and the node executes
+    # instructions from a different binary at addresses computed for the old one.  The result is a
+    # SIGSEGV with no Go stack trace (the fault is in native code) and no OOM record (nothing was
+    # ever out of memory) -- which is exactly what made it so hard to place.
+    #
+    # M1 died this way twice: 2026-08-24 20:27 and 2026-08-25 20:41, rc 139 both times, both during
+    # a build, while all 60 other node exits in those logs were ordinary rc 1 stops.  Confirmed by
+    # /proc/<pid>/maps showing the running qadenad mapped r-xp to the overwritten inode with no
+    # "(deleted)" marker -- i.e. to the file the build had just rewritten under it.
+    #
+    # So under --hold the libraries are STAGED beside the versioned binary they belong to, never
+    # written over the live ones.  The cutover installs them with the node stopped:
+    # install_release.sh ships libwasmvm in the package and calls ensure_stopped_for_binaries first,
+    # which is the only safe moment to replace a mapped library.
+    if [[ $hold -eq 1 ]]; then
+        for so in $qadenabuild/vendor/github.com/CosmWasm/wasmvm/v2/internal/api/*.so; do
+            [[ -e "$so" ]] || continue
+            cp "$so" "$qadenabin/$(basename $so).$VERSION" || {
+                echo "Error: failed to stage $(basename $so).$VERSION"; exit 1; }
+        done
+        echo "  held back: libwasmvm staged as *.so.$VERSION; the live libraries are unchanged"
+    else
+        cp $qadenabuild/vendor/github.com/CosmWasm/wasmvm/v2/internal/api/*.so $qadenabin/
+    fi
 fi
 
 if [[ $install_scripts -eq 1 ]]; then
