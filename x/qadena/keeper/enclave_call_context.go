@@ -66,6 +66,7 @@ func init() { resetEnclaveAliveForTesting() }
 // cancellation.
 func resetEnclaveAliveForTesting() {
 	enclaveAlive, enclaveAliveCancel = context.WithCancelCause(context.Background())
+	enclaveHaltAnnounced.Store(false)
 }
 
 // EnclaveAliveContext exposes the root for the dsvs keeper, whose enclave_call_context.go is a
@@ -235,7 +236,22 @@ func enclaveQueryContext() (context.Context, context.CancelFunc) {
 var (
 	enclaveHealthInterval = 5 * time.Second // how often we ask
 	enclaveHealthTimeout  = 3 * time.Second // SayHello does no work; this is generous already
+
+	// How long the watchdog waits, after cancelling the root, for the halt it just triggered to
+	// actually announce itself.  Only reached when the halt did NOT happen -- see the backstop at
+	// the end of watchEnclaveLiveness.  Generous on purpose: when the halt works it lands within
+	// milliseconds, so this never races a healthy halt.
+	enclaveHaltBackstop = 5 * time.Second
 )
+
+// enclaveHaltAnnounced records that haltOnEnclaveFailure actually ran.  It is the difference
+// between "the cancellation reached a blocked call" and "the cancellation reached nothing", which
+// is invisible from inside the watchdog otherwise.
+var enclaveHaltAnnounced atomic.Bool
+
+// enclaveExitProcess is os.Exit, indirected so the watchdog tests can drive the backstop without
+// killing the test binary.  Nothing but a test may replace it.
+var enclaveExitProcess = os.Exit
 
 // TWO THRESHOLDS, because "tell me what is wrong" and "give up" are different decisions.
 //
@@ -346,9 +362,40 @@ func watchEnclaveLiveness(logger log.Logger, greeter types.GreeterClient) {
 
 		// One-way door: unblock every in-flight execution call so the halt path runs.  The
 		// cause is what haltOnEnclaveFailure reports instead of a bare "context canceled".
-		enclaveAliveCancel(fmt.Errorf(
+		cause := fmt.Errorf(
 			"enclave stopped responding: silent for %s across %d health checks (last: %w)",
-			silent.Round(time.Second), misses, err))
+			silent.Round(time.Second), misses, err)
+		enclaveAliveCancel(cause)
+
+		// THE BACKSTOP.  Cancelling the root is not the same as halting, and the difference is not
+		// theoretical: on 2026-08-25 this node sat wedged for 4h11m on ONE block after the cancel
+		// fired, with a healthy enclave and nothing in the log.  Three of thirty-six stalls in that
+		// log ended that way -- roughly one in twelve.
+		//
+		// The halt is REACTIVE: haltOnEnclaveFailure returns early on err == nil, so it only runs
+		// if a blocked call actually unblocks with an error.  That requires the goroutine to be
+		// sitting on a context descended from enclaveAlive.  Every exec path is supposed to be --
+		// enclaveExecContext derives from it, and EnclaveAliveContext exists so dsvs's duplicate
+		// tier does too -- but "supposed to be" is an invariant across many call sites, and a single
+		// path that missed it turns a declared-dead enclave into a silent hang forever.
+		//
+		// So: having declared the enclave dead, verify the consequence rather than assume it.  The
+		// cancel is irreversible (context.WithCancelCause cannot be un-cancelled), so every future
+		// enclaveExecContext is born cancelled and this node can never execute another block.  It is
+		// already unrecoverable at this point; the only question is whether it says so.  Exiting
+		// non-zero lets the supervisor restart it and startup reconciliation recover -- exactly what
+		// monitorChild already does for a crashed enclave.  The asymmetry between those two paths
+		// was the bug.
+		time.Sleep(enclaveHaltBackstop)
+		if enclaveHaltAnnounced.Load() {
+			return // the halt ran; the node is stopped for the right reason and says so
+		}
+		c.LoggerError(logger, fmt.Sprintf(
+			"enclave declared dead %s ago but haltOnEnclaveFailure never ran -- the cancellation "+
+				"reached no in-flight call, so this node is wedged rather than halted (%v). "+
+				"Exiting so the supervisor can restart it; startup reconciliation will recover.",
+			enclaveHaltBackstop, cause))
+		enclaveExitProcess(1)
 		return
 	}
 }

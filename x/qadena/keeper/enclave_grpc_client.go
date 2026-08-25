@@ -1933,6 +1933,11 @@ func haltOnEnclaveFailure(sdkctx sdk.Context, step string, err error) {
 		err = cause
 	}
 
+	// Tell the watchdog its cancellation actually landed.  Set BEFORE the panic, because the
+	// panic does not return here -- and the watchdog's backstop exits the process if this never
+	// gets set.  See watchEnclaveLiveness.
+	enclaveHaltAnnounced.Store(true)
+
 	c.ContextError(sdkctx, "enclave "+step+" failed during EndBlock: "+err.Error())
 	panic("qadena: enclave " + step + " failed during EndBlock at height " +
 		strconv.FormatInt(sdkctx.BlockHeight(), 10) + ": " + err.Error() +

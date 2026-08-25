@@ -31,6 +31,19 @@
 #   --allow-dirty      permit a build from a tree with uncommitted changes.  Off by default:
 #                      the artefact would match no commit, and nobody could later say what was
 #                      deployed.
+#   --quiesce          stop the continuous-regression loop on every node (and on the build host)
+#                      and WAIT for any in-flight run to finish, before anything else happens.
+#                      Without it the roll only WARNS.  Worth using: the regression restarts the
+#                      node it runs on, which during a roll is a second node down.
+#   --chain-only       roll a CHAIN-ONLY change: qadenad moved, the enclave did not.  Implies
+#                      --skip-governance (an unchanged measurement is already registered).
+#                      Packages --only chain,libs,scripts,config, so the unchanged enclave is
+#                      not re-staged -- the build is not reproducible, so re-packaging an
+#                      identical-in-name enclave would collide with the one already installed.
+#                      Requires cmd/qadenad/version.txt to have moved, for the same reason.
+#                      The enclave preconditions (strictly-greater version, measurement not
+#                      already running) are SKIPPED, not because they are inconvenient but
+#                      because they assert a handover this roll deliberately does not perform.
 #   --unique ID        The NEW enclave measurement (unique052, or an SGX MRENCLAVE).  Required
 #                      unless --skip-governance.  See WHERE --unique AND --signer COME FROM.
 #   --signer ID        The enclave signer id.  Same condition.
@@ -226,6 +239,7 @@ setopt ERR_EXIT PIPE_FAIL
 
 NODES=(); ARCHIVE=""; NEW_UNIQUE=""; NEW_SIGNER=""; WAIT_SECS=1800; DRY=0; SKIP_GOV=0
 BUILD_FROM=""; REPO_DIR="qv3"; SGX_MODE="auto"; PKG_OUT="/tmp/pkg"; BUILD_WAIT=3600; ALLOW_DIRTY=0
+CHAIN_ONLY=0; QUIESCE=0
 BUILD_PATH='export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH;'
 
 while (( $# )); do
@@ -243,6 +257,8 @@ while (( $# )); do
         --package-out) PKG_OUT="$2"; shift 2 ;;
         --build-wait) BUILD_WAIT="$2"; shift 2 ;;
         --allow-dirty) ALLOW_DIRTY=1; shift ;;
+        --chain-only)  CHAIN_ONLY=1; SKIP_GOV=1; shift ;;
+        --quiesce)     QUIESCE=1; shift ;;
         --dry-run)    DRY=1; shift ;;
         # Print the whole leading comment block, however long it grows -- start at line 2 and
         # quit at the first line that is not a comment.  A fixed range silently truncates the
@@ -333,6 +349,51 @@ restart_node() {
     die "$h did not come back after a restart -- check /tmp/rolling_start.log on it"
 }
 
+# quiesce_node stops a node's continuous-regression loop and waits for any in-flight run to end.
+#
+# Copied from nth_node_bringup.sh's --quiesce, for a reason that applies MORE here than there: the
+# regression's enclave-rollback, enclave-crash and enclave-upgrade suites STOP AND RESTART the node
+# they run on.  During a roll that is a second node down while this script already has one down --
+# on five validators that can cross the 1/3 line and halt the chain, which is backlog 108.
+#
+# And enclave-crash is worse than merely disruptive right now: it leaves the node WEDGED roughly one
+# time in twelve (2026-08-25, M1 stuck on one block for 4h11m).  A wedged node mid-roll fails
+# require_advancing and aborts the run with the fleet half-upgraded.
+#
+# TWO STEPS, IN THIS ORDER.  Kill the LOOP first so it cannot start another run, then wait for the
+# run already in flight -- killing that one mid-suite is what leaves an enclave SIGSTOPped with
+# nothing left alive to SIGCONT it.
+quiesce_node() {
+    local h="$1" pids p n i
+    pids=$(rsh "$h" 'pgrep -f "[r]un_regression_continually" 2>/dev/null; true' | tr -d '\r' | tr '\n' ' ') || true
+    # --dry-run MUST NOT KILL ANYTHING.  Preflight's read-only checks run for real under --dry-run
+    # because looking costs nothing, but stopping an operator's regression loop is a change to the
+    # fleet -- and a dry run that has side effects is not a dry run.  Say what would happen instead.
+    if (( DRY )); then
+        if [[ -n "${pids// /}" ]]; then
+            print -- "    [dry-run] $h: would stop the regression loop (pids: ${pids% }) and wait for the in-flight run"
+        else
+            print -- "    [dry-run] $h: no regression loop running"
+        fi
+        return 0
+    fi
+    if [[ -n "${pids// /}" ]]; then
+        say "  $h: stopping the continuous-regression loop (pids: ${pids% })"
+        for p in ${=pids}; do rsh "$h" "kill $p" >/dev/null 2>&1 || true; done
+        sleep 3
+    fi
+    # `pgrep -c` PRINTS the count AND EXITS NON-ZERO when it is zero, so the obvious `|| echo 0`
+    # appends a SECOND line and the arithmetic below sees "0\n0".  Same trap this repo has now
+    # recorded three times; `; true` plus head -1 is the fix.
+    for i in $(seq 1 120); do
+        n=$(rsh "$h" 'pgrep -cf "[r]egression.sh" 2>/dev/null; true' 2>/dev/null | tr -d '\r' | head -1)
+        [[ "${n:-0}" -eq 0 ]] && break
+        (( i == 1 )) && say "  $h: waiting for the in-flight regression run to finish"
+        sleep 30
+    done
+    [[ "${n:-0}" -eq 0 ]] || die "$h: regression still running after an hour -- stop it before rolling"
+}
+
 require_advancing() {
     local h1 h2 cu
     h1=$(height_of "$1") || true; [[ -n "$h1" ]] || die "$1: no height -- is qadenad running?"
@@ -360,6 +421,35 @@ for n in "${NODES[@]}"; do
     rsh "$n" 'true' || die "$n unreachable"
     say "$n  enclave=$(measure_of $n)  height=$(height_of $n)"
 done
+# QUIESCE BEFORE ASSERTING HEALTH, not after: a node that regression has just stopped would fail
+# require_advancing below and abort the roll for a reason that is about the test suite rather than
+# the fleet.  The build host is included even when it is not being rolled -- it is where the build
+# runs, and a regression restarting it mid-build is its own failure.
+quiesce_targets=("${NODES[@]}")
+if [[ -n "$BUILD_FROM" ]] && ! (( ${NODES[(Ie)$BUILD_FROM]} )); then
+    quiesce_targets+=("$BUILD_FROM")
+fi
+if (( QUIESCE )); then
+    say ""
+    say "--quiesce: stopping continuous regression on ${#quiesce_targets} node(s)"
+    for n in "${quiesce_targets[@]}"; do quiesce_node "$n"; done
+    say "  quiescent"
+else
+    # REPORT, do not refuse.  The operator may know something this script does not -- a --skip list
+    # that drops the chain-restarting suites, or a run that is nearly done.  Refusing outright would
+    # be wrong; staying quiet about it is how last night's roll needed a manual step nobody recorded.
+    for n in "${quiesce_targets[@]}"; do
+        rn=$(rsh "$n" 'pgrep -cf "[r]egression" 2>/dev/null; true' 2>/dev/null | tr -d '\r' | head -1)
+        if [[ "${rn:-0}" -ne 0 ]]; then
+            say "  WARNING: $n is running regression ($rn process(es))"
+            say "           enclave-rollback, enclave-crash and enclave-upgrade STOP AND RESTART the"
+            say "           node they run on.  A second node down while this roll has one down can"
+            say "           halt the chain (backlog 108), and enclave-crash leaves it wedged about"
+            say "           one time in twelve.  Re-run with --quiesce, or --skip those suites."
+        fi
+    done
+fi
+
 for n in "${NODES[@]}"; do require_advancing "$n"; done
 
 # With --build-from there is no archive yet -- 0b creates it and sets ARCHIVE.  Checked there.
@@ -408,7 +498,22 @@ if [[ -n "$BUILD_FROM" ]]; then
     # -- on the FIRST node, after governance has already passed, which is the expensive half to
     # redo.  Checked here, before anything is built or proposed.
     LIVE_VER=$(rsh "$BUILD_FROM" '~/qadena/bin/qadenad_enclave -version 2>/dev/null' | tr -d '\r' | head -1) || true
-    if [[ -n "$LIVE_VER" && -n "$SRC_VER" ]]; then
+    if (( CHAIN_ONLY )); then
+        # --chain-only: THE ENCLAVE IS DELIBERATELY UNCHANGED, so the two checks below are not
+        # merely skippable, they are WRONG here.  Both exist to protect the enclave HANDOVER --
+        # an unchanged measurement means no handover happens at all, so "the version must be
+        # strictly greater" and "the measurement must differ from the running one" are asserting
+        # a transition that this roll is specifically not making.  What must still be true is that
+        # the CHAIN version moved, because install_release.sh refuses to overwrite a versioned
+        # binary whose bytes differ, and a non-reproducible rebuild always differs.
+        SRC_CHAIN=$(rsh "$BUILD_FROM" "cat $RD/cmd/qadenad/version.txt 2>/dev/null" | tr -d '\r' | head -1) || true
+        LIVE_CHAIN=$(rsh "$BUILD_FROM" '~/qadena/bin/qadenad version 2>/dev/null' | tr -d '\r' | head -1) || true
+        say "chain-only: enclave stays $SRC_VER/$SRC_UNIQ; chain $LIVE_CHAIN -> $SRC_CHAIN"
+        [[ -n "$SRC_CHAIN" ]] || die "$BUILD_FROM: cannot read $RD/cmd/qadenad/version.txt"
+        if [[ -n "$LIVE_CHAIN" && "$SRC_CHAIN" == "$LIVE_CHAIN" ]]; then
+            die "cmd/qadenad/version.txt is $SRC_CHAIN and $BUILD_FROM already runs $SRC_CHAIN -- install_release.sh will refuse to overwrite qadenad.$SRC_CHAIN with bytes that differ (the build is not reproducible).  Bump cmd/qadenad/version.txt in the checkout and COMMIT it."
+        fi
+    elif [[ -n "$LIVE_VER" && -n "$SRC_VER" ]]; then
         say "running:  version=$LIVE_VER"
         if [[ "$SRC_VER" == "$LIVE_VER" ]]; then
             die "version.txt is $SRC_VER and $BUILD_FROM already runs $SRC_VER -- the handover needs a STRICTLY GREATER version and will not run.  Bump cmd/qadenad_enclave/version.txt in the checkout and COMMIT it."
@@ -420,7 +525,7 @@ if [[ -n "$BUILD_FROM" ]]; then
 
     # A MEASUREMENT THE CHAIN HAS RETIRED IS RETIRED PERMANENTLY -- governance cannot move an
     # inactive row back.  Cheaper to learn now than after a proposal.
-    if [[ -n "$SRC_UNIQ" ]]; then
+    if [[ -n "$SRC_UNIQ" ]] && (( ! CHAIN_ONLY )); then
         st=$(identity_status "$SRC_UNIQ") || true
         [[ "$st" == "inactive" ]] \
             && die "$SRC_UNIQ is INACTIVE on chain and that is PERMANENT -- pick a NEW measurement in the checkout (cmd/qadenad_enclave/test_unique_id.txt) and commit it"
@@ -494,7 +599,14 @@ if [[ -n "$BUILD_FROM" ]]; then
 
         step "0c. package on $BUILD_FROM and fetch the artifact"
         rsh "$BUILD_FROM" "rm -rf $PKG_OUT && mkdir -p $PKG_OUT" || die "could not prepare $PKG_OUT on $BUILD_FROM"
-        out=$(rsh "$BUILD_FROM" "cd $RD && $BUILD_PATH ./buildscripts/package_release.sh --out $PKG_OUT 2>&1 | tail -25") \
+        # PACKAGE ONLY WHAT CHANGED.  A full package re-stages qadenad_enclave.<unique> and
+        # signer_enclave.<unique>; the build is not reproducible, so those bytes differ from the
+        # ones already on every node, and install_release.sh refuses to overwrite a versioned
+        # binary whose contents differ.  A chain-only roll would fail at the first install for a
+        # component it never meant to touch.
+        only_arg=""
+        (( CHAIN_ONLY )) && only_arg=" --only chain,libs,scripts,config"
+        out=$(rsh "$BUILD_FROM" "cd $RD && $BUILD_PATH ./buildscripts/package_release.sh --out $PKG_OUT$only_arg 2>&1 | tail -25") \
             || { print "$out" | while read -r l; do say "    $l"; done; die "package_release.sh failed on $BUILD_FROM" }
         print "$out" | while read -r l; do say "    $l"; done
 
@@ -513,14 +625,18 @@ if [[ -n "$BUILD_FROM" ]]; then
         # waiting out the full --wait-secs for an identity that was never registered.
         man=$(tar xzOf "$ARCHIVE" '*/manifest.txt' 2>/dev/null) || true
         [[ -n "$man" ]] || die "the package has no manifest.txt -- cannot read the measurement out of it"
-        if [[ -z "$NEW_UNIQUE" ]]; then
+        # A chain-only package carries no enclave, so it carries no measurement -- and needs none:
+        # --chain-only implies --skip-governance, because there is no new identity to register.
+        if (( CHAIN_ONLY )); then
+            say "  chain-only package: no enclave component, nothing to register"
+        elif [[ -z "$NEW_UNIQUE" ]]; then
             NEW_UNIQUE=$(print -r -- "$man" | grep '^qadenad_enclave.unique_id:' | awk '{print $2}') || true
             [[ -n "$NEW_UNIQUE" ]] || die "manifest.txt carries no qadenad_enclave.unique_id"
             say "  measurement (from the manifest): $NEW_UNIQUE"
         else
             say "  measurement: $NEW_UNIQUE (given on the command line, overriding the manifest)"
         fi
-        if [[ -z "$NEW_SIGNER" ]]; then
+        if [[ -z "$NEW_SIGNER" ]] && (( ! CHAIN_ONLY )); then
             NEW_SIGNER=$(print -r -- "$man" | grep '^qadenad_enclave.signer:' | awk '{print $2}') || true
             [[ -n "$NEW_SIGNER" ]] || die "manifest.txt carries no qadenad_enclave.signer"
             say "  signer      (from the manifest): $NEW_SIGNER"

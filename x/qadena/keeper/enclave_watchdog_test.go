@@ -41,9 +41,17 @@ func compressWatchdogTime(t *testing.T, grace time.Duration) {
 	t.Helper()
 	prevInterval, prevTimeout, prevGrace := enclaveHealthInterval, enclaveHealthTimeout, enclaveHealthGrace
 	enclaveHealthInterval, enclaveHealthTimeout, enclaveHealthGrace = 10*time.Millisecond, 20*time.Millisecond, grace
+	// The backstop must be compressed too, or every test that reaches the grace pays the
+	// production wait.  And enclaveExitProcess is neutered by default: a test that reaches the
+	// backstop without meaning to must not take the test binary down with it.  A test that IS
+	// about the backstop replaces it again after calling this.
+	prevBackstop, prevExit := enclaveHaltBackstop, enclaveExitProcess
+	enclaveHaltBackstop = 200 * time.Millisecond
+	enclaveExitProcess = func(int) {}
 	resetEnclaveAliveForTesting()
 	t.Cleanup(func() {
 		enclaveHealthInterval, enclaveHealthTimeout, enclaveHealthGrace = prevInterval, prevTimeout, prevGrace
+		enclaveHaltBackstop, enclaveExitProcess = prevBackstop, prevExit
 		resetEnclaveAliveForTesting()
 	})
 }
@@ -222,6 +230,68 @@ func TestWatchdog_TransientStallRecoversWithoutHalting(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "missed health check") {
 		t.Fatal("the misses themselves must be logged from the FIRST one -- that line is the 'why' an operator sees")
+	}
+}
+
+// Property 4: the cancellation is not the halt.  If it reaches no in-flight call, nothing panics
+// and haltOnEnclaveFailure never runs -- the alive-root is then cancelled forever, so the node can
+// never execute another block, yet it keeps running and says nothing.
+//
+// That is not hypothetical.  On 2026-08-25 a node sat wedged on ONE block for 4h11m in exactly this
+// state, with a healthy enclave logging memstats throughout; three of thirty-six stalls in that log
+// ended the same way.  The watchdog declared the enclave dead and then simply returned.
+//
+// So the property is: having declared it dead, the watchdog must ensure the node actually stops.
+func TestWatchdog_WedgedNodeExitsWhenTheHaltNeverRuns(t *testing.T) {
+	compressWatchdogTime(t, 50*time.Millisecond)
+
+	// No EndBlock in flight, so the cancellation has nothing to unblock and the halt cannot run.
+	exited := make(chan int, 1)
+	enclaveExitProcess = func(code int) { exited <- code }
+
+	go watchEnclaveLiveness(log.NewNopLogger(), &fakeGreeter{healthy: false})
+
+	select {
+	case code := <-exited:
+		if code != 1 {
+			t.Fatalf("the backstop must exit non-zero so the supervisor restarts the node; got %d", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the watchdog cancelled the alive-root and returned, leaving the node unable to " +
+			"execute a block while still running and silent -- the backstop did not fire")
+	}
+}
+
+// And the converse: when the halt DOES run, the backstop must stay out of the way.  Exiting there
+// would turn a correct, named halt into a process death the operator did not ask for.
+func TestWatchdog_BackstopStaysQuietWhenTheHaltRuns(t *testing.T) {
+	compressWatchdogTime(t, 50*time.Millisecond)
+	withEnclaveClient(t, &blockingEnclaveClient{})
+
+	exited := make(chan int, 1)
+	enclaveExitProcess = func(code int) { exited <- code }
+
+	go watchEnclaveLiveness(log.NewNopLogger(), &fakeGreeter{healthy: false})
+
+	done := make(chan any, 1)
+	go func() {
+		defer func() { done <- recover() }()
+		Keeper{}.EnclaveInvokeEndBlock(testSDKContext())
+	}()
+
+	select {
+	case r := <-done:
+		if r == nil {
+			t.Fatal("a dead enclave must halt the node")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("EnclaveInvokeEndBlock never unblocked")
+	}
+
+	select {
+	case code := <-exited:
+		t.Fatalf("the halt ran, so the backstop must not exit; it exited %d", code)
+	case <-time.After(time.Second): // comfortably past the compressed backstop
 	}
 }
 
