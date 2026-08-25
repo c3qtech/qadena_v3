@@ -31,6 +31,10 @@
 #   --allow-dirty      permit a build from a tree with uncommitted changes.  Off by default:
 #                      the artefact would match no commit, and nobody could later say what was
 #                      deployed.
+#   --quiesce-immediate  as --quiesce, but END the in-flight run NOW rather than waiting it out.
+#                      SIGTERM first so a test's trap can resume an enclave it SIGSTOPped, then
+#                      SIGKILL, then SIGCONT anything still stopped -- without that last step this
+#                      option would manufacture the wedge it exists to prevent.
 #   --quiesce          stop the continuous-regression loop on every node (and on the build host)
 #                      and WAIT for any in-flight run to finish, before anything else happens.
 #                      Without it the roll only WARNS.  Worth using: the regression restarts the
@@ -239,7 +243,7 @@ setopt ERR_EXIT PIPE_FAIL
 
 NODES=(); ARCHIVE=""; NEW_UNIQUE=""; NEW_SIGNER=""; WAIT_SECS=1800; DRY=0; SKIP_GOV=0
 BUILD_FROM=""; REPO_DIR="qv3"; SGX_MODE="auto"; PKG_OUT="/tmp/pkg"; BUILD_WAIT=3600; ALLOW_DIRTY=0
-CHAIN_ONLY=0; QUIESCE=0
+CHAIN_ONLY=0; QUIESCE=0; QUIESCE_NOW=0
 BUILD_PATH='export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH;'
 
 while (( $# )); do
@@ -259,6 +263,7 @@ while (( $# )); do
         --allow-dirty) ALLOW_DIRTY=1; shift ;;
         --chain-only)  CHAIN_ONLY=1; SKIP_GOV=1; shift ;;
         --quiesce)     QUIESCE=1; shift ;;
+        --quiesce-immediate) QUIESCE=1; QUIESCE_NOW=1; shift ;;
         --dry-run)    DRY=1; shift ;;
         # Print the whole leading comment block, however long it grows -- start at line 2 and
         # quit at the first line that is not a comment.  A fixed range silently truncates the
@@ -364,14 +369,14 @@ restart_node() {
 # run already in flight -- killing that one mid-suite is what leaves an enclave SIGSTOPped with
 # nothing left alive to SIGCONT it.
 quiesce_node() {
-    local h="$1" pids p n i
+    local h="$1" pids p n i stopped
     pids=$(rsh "$h" 'pgrep -f "[r]un_regression_continually" 2>/dev/null; true' | tr -d '\r' | tr '\n' ' ') || true
     # --dry-run MUST NOT KILL ANYTHING.  Preflight's read-only checks run for real under --dry-run
     # because looking costs nothing, but stopping an operator's regression loop is a change to the
     # fleet -- and a dry run that has side effects is not a dry run.  Say what would happen instead.
     if (( DRY )); then
         if [[ -n "${pids// /}" ]]; then
-            print -- "    [dry-run] $h: would stop the regression loop (pids: ${pids% }) and wait for the in-flight run"
+            print -- "    [dry-run] $h: would stop the regression loop (pids: ${pids% })$( (( QUIESCE_NOW )) && print -n ' and END the in-flight run immediately' || print -n ' and wait for the in-flight run')"
         else
             print -- "    [dry-run] $h: no regression loop running"
         fi
@@ -382,6 +387,37 @@ quiesce_node() {
         for p in ${=pids}; do rsh "$h" "kill $p" >/dev/null 2>&1 || true; done
         sleep 3
     fi
+    if (( QUIESCE_NOW )); then
+        # --quiesce-immediate: end the run in flight rather than waiting it out.
+        #
+        # SIGTERM FIRST, AND NOT OUT OF POLITENESS.  test_enclave_crash_recovery.sh SIGSTOPs the
+        # enclave and resumes it from a `trap ... EXIT INT TERM`.  SIGTERM lets that trap run, so
+        # the test resumes the enclave itself.  SIGKILL skips it and strands a STOPPED enclave with
+        # the node frozen behind it -- manufacturing the very wedge this option exists to avoid.
+        say "  $h: ending the in-flight regression run now (SIGTERM, then SIGKILL)"
+        rsh "$h" 'pkill -TERM -f "[r]egression.sh" 2>/dev/null; true' >/dev/null 2>&1 || true
+        for i in $(seq 1 10); do
+            n=$(rsh "$h" 'pgrep -cf "[r]egression.sh" 2>/dev/null; true' 2>/dev/null | tr -d '\r' | head -1)
+            [[ "${n:-0}" -eq 0 ]] && break
+            sleep 2
+        done
+        if [[ "${n:-0}" -ne 0 ]]; then
+            say "  $h: did not exit on SIGTERM; SIGKILL"
+            rsh "$h" 'pkill -KILL -f "[r]egression.sh" 2>/dev/null; true' >/dev/null 2>&1 || true
+            sleep 2
+        fi
+        # THE BACKSTOP that makes this option safe to offer at all.  If the trap did not run --
+        # SIGKILL, or a suite that never installed one -- the enclave is still SIGSTOPped and the
+        # node is frozen behind a healthy-looking process table.  Resume anything stopped; a
+        # SIGCONT to a process that was never stopped costs nothing.
+        stopped=$(rsh "$h" 'ps -eo stat=,pid=,comm= 2>/dev/null | awk "\$1 ~ /^T/ && \$3 ~ /qadenad|enclave/ {print \$2}" | tr "\n" " "; true' 2>/dev/null | tr -d '\r')
+        if [[ -n "${stopped// /}" ]]; then
+            say "  $h: resuming STOPPED enclave process(es): ${stopped% }  (a killed test left them halted)"
+            rsh "$h" "kill -CONT ${stopped}" >/dev/null 2>&1 || true
+        fi
+        return 0
+    fi
+
     # `pgrep -c` PRINTS the count AND EXITS NON-ZERO when it is zero, so the obvious `|| echo 0`
     # appends a SECOND line and the arithmetic below sees "0\n0".  Same trap this repo has now
     # recorded three times; `; true` plus head -1 is the fix.
