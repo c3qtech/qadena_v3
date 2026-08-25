@@ -1433,6 +1433,39 @@ func (s *qadenaServer) scheduleSSReconstruct(pubKID string) {
 
 // runSSReconstruct performs the gather-and-combine.  Safe on any goroutine: it touches no block
 // store, only the mutex-guarded secrets store and params.
+// privKPassesIntegrity reports whether sPrivK is usable as the interval private key for pubKID.
+//
+// TWO CHECKS, AND THE SECOND IS THE REAL ONE.  isPrivKHex only vouches for LENGTH: 32 bytes of
+// garbage -- a mixed-generation combine after a re-share, or any threshold-sized set of unrelated
+// shares -- sails through it.  The chain already binds pubKID to a public key, so requiring the
+// scalar to derive to exactly that key is the integrity check Shamir itself cannot do.
+//
+// SHARED BY BOTH RECONSTRUCTION PATHS DELIBERATELY.  The combine path has had these checks since
+// the mixed-generation bug; the threshold-1 fast path had NEITHER, which is how a 65-byte Shamir
+// share reached ScalarMult and panicked a whole transaction.
+func (s *qadenaServer) privKPassesIntegrity(pubKID, sPrivK, via, origin string) bool {
+	if !isPrivKHex(sPrivK) {
+		c.LoggerError(logger, ssTag+"privk for "+pubKID+" from "+origin+" is not a 32-byte key ("+
+			strconv.Itoa(len(sPrivK))+" chars) -- refusing to cache it")
+		return false
+	}
+	wantPubK, found := s.getPubKCache(pubKID)
+	if !found || wantPubK == "" {
+		// SetPublicKey seeds the pubK cache before shares can arrive, so an absent entry is
+		// unexpected -- accept (the length check passed) but say so loudly.
+		c.LoggerError(logger, ssTag+"pubKID="+pubKID+" has no cached pubK to verify the reconstruction against -- caching UNVERIFIED")
+		return true
+	}
+	gotPubK, derr := derivePubKBase64(sPrivK)
+	if derr != nil || gotPubK != wantPubK {
+		c.LoggerError(logger, ssTag+"INTEGRITY pubKID="+pubKID+" via="+via+" origin="+origin+
+			" -- scalar does not derive to the chain's pubK (mixed-generation shares, or an owners "+
+			"record rewound by replay?) -- refusing to cache it")
+		return false
+	}
+	return true
+}
+
 func (s *qadenaServer) runSSReconstruct(job *ssReconstructJob, via string) string {
 	start := time.Now()
 	shares := make([]string, 0, job.threshold)
@@ -1515,9 +1548,33 @@ func (s *qadenaServer) runSSReconstruct(job *ssReconstructJob, via string) strin
 
 	// At threshold 1 nothing was split: addSSShare handed every owner the WHOLE key, so the single
 	// "share" IS the private key and there is nothing to combine.
+	//
+	// THAT PREMISE CAN BE FALSE, AND IT IS NOT VISIBLE FROM HERE.  job.threshold is
+	// getThreshold(len(job.owners)) taken from the owners record as it stands NOW, but what a share
+	// IS was fixed by addSSShare when the key was MINTED.  A replaying node rewinds that record --
+	// SetPublicKey applies the owner list carried by whatever historical block it is executing --
+	// so a key genuinely split five ways at threshold 2 reads back here as "threshold 1", and the
+	// 65-byte Shamir share fetched from a live peer is returned as if it were a 32-byte key.  It
+	// then reaches ScalarMult, which panics on any scalar over 256 bits, and takes the transaction
+	// with it.  Observed on a block-syncing joiner at height 2117.
+	//
+	// So the fast path now runs the SAME integrity checks the combine path has always had -- and it
+	// runs them BEFORE caching.  Writing first is what poisoned the privK cache: every later read
+	// discarded the bad value, re-fetched the same share, and poisoned it again.
 	if job.threshold == 1 {
-		s.setPrivKCache(job.pubKID, shares[0])
-		return shares[0]
+		if s.privKPassesIntegrity(job.pubKID, shares[0], via, "threshold-1 share") {
+			s.setPrivKCache(job.pubKID, shares[0])
+			return shares[0]
+		}
+		// The SHARE is real; our idea of how the key was split is not.  Some peer may still hold the
+		// whole key cached, which is exactly what WHO-HAS is for -- and it is reached here for the
+		// first time, because the insufficient-shares branch above only fires when we have FEWER
+		// shares than the threshold, never when we have enough but they mean something else.
+		c.LoggerError(logger, ssTag+"threshold-1 share for "+job.pubKID+" via="+via+
+			" failed integrity -- the owners record claims "+strconv.Itoa(len(job.owners))+
+			" owner(s) so the share should BE the key, and it is not; falling back to WHO-HAS")
+		privK, _ := s.runSSWhoHas(job, via)
+		return privK
 	}
 
 	bshares := make([][]byte, 0, len(shares))
@@ -1540,27 +1597,13 @@ func (s *qadenaServer) runSSReconstruct(job *ssReconstructJob, via string) strin
 		return ""
 	}
 	sPrivK := string(combined)
-	if !isPrivKHex(sPrivK) {
+	if !s.privKPassesIntegrity(job.pubKID, sPrivK, via, "combined shares") {
 		// Combining shares that belong to DIFFERENT secrets yields garbage with no error -- Shamir
-		// has no integrity check.  Refuse to cache it rather than hand ScalarMult a bad scalar.
-		c.LoggerError(logger, "reconstructed privk for "+job.pubKID+" is not a 32-byte key -- refusing to cache it")
-		return ""
-	}
-	// THE REAL INTEGRITY CHECK.  isPrivKHex only vouches for length: 32 bytes of garbage -- a
-	// mixed-generation combine after a re-share, or any threshold-sized set of unrelated shares --
-	// sails through it.  The chain already binds pubKID to a public key; requiring the
-	// reconstructed scalar to derive to exactly that key is the check Shamir itself cannot do.
-	if wantPubK, found := s.getPubKCache(job.pubKID); found && wantPubK != "" {
-		gotPubK, derr := derivePubKBase64(sPrivK)
-		if derr != nil || gotPubK != wantPubK {
-			c.LoggerError(logger, ssTag+"INTEGRITY pubKID="+job.pubKID+" via="+via+
-				" -- combined scalar does not derive to the chain's pubK (mixed-generation shares?) -- refusing to cache it")
-			return ""
-		}
-	} else {
-		// SetPublicKey seeds the pubK cache before shares can arrive, so an absent entry is
-		// unexpected -- accept (the length check passed) but say so loudly.
-		c.LoggerError(logger, ssTag+"pubKID="+job.pubKID+" has no cached pubK to verify the reconstruction against -- caching UNVERIFIED")
+		// has no integrity check of its own.  This used to return "" here, which the caller reads
+		// as "no key" and quietly changes its verdict on; try the whole-key rescue first, for the
+		// same reason the threshold-1 path above does.
+		privK, _ := s.runSSWhoHas(job, via)
+		return privK
 	}
 	s.setPrivKCache(job.pubKID, sPrivK)
 	c.LoggerInfo(logger, ssTag+"RECONSTRUCTED pubKID="+job.pubKID+" via="+via+
@@ -1996,6 +2039,9 @@ func (s *qadenaServer) loadEnclaveParams() bool {
 		ep.SharedEnclaveParams.ActiveEnclaveIdentities)
 	c.LoggerInfo(logger, "loaded trusted set: "+strconv.Itoa(len(ep.SharedEnclaveParams.ActiveEnclaveIdentities))+
 		" enclave identities (0 means this node can only trust itself until a sync-enclave bootstrap)")
+
+	// Before any block executes, so a replay starting immediately cannot beat it to the records.
+	s.backfillOwnerGenerations()
 
 	// populate our keyring
 
@@ -3450,6 +3496,7 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 	if setChainPosition(in.Height, in.IsLive) {
 		if in.IsLive {
 			c.LoggerInfo(logger, "chain is LIVE at height "+strconv.FormatInt(in.Height, 10)+" -- trust changes now apply")
+			reportStaleOwnerWrites(in.Height)
 			// Catching up is over, so settle what catching up deferred: honour deactivations we
 			// skipped, and queue for validation anything the chain considers active that we do not
 			// trust.  Runs on the transition only, not per block.
@@ -3918,6 +3965,11 @@ func (s *qadenaServer) QueryEnclaveSyncEnclave(goCtx context.Context, in *types.
 		SSIntervalOwners: owners,
 		NextCursor:       []byte(nextCursor),
 		Done:             done,
+		// CONFIRMED height, not the current block: it is a raw MetaDB key outside the IAVL tree,
+		// so a rollback cannot rewind it, and it is the record of what the network has rather than
+		// what this node is presently executing.  The joiner stamps it onto every owner record, so
+		// it must be a height the seed can still stand behind after any local unwind.
+		SeedHeight: s.getConfirmedHeight(),
 	}
 	if len(in.Cursor) == 0 {
 		// First page only.  SSIntervalOwners is left nil inside params -- the owners travel in the
@@ -4734,6 +4786,9 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 	// binding the chain records against the one this seed handed us, during the first BeginBlock.
 	var fromRemoteEnclaveParams types.EncryptableSharedEnclaveParams
 	allOwners := &types.EncryptableEnclaveSSOwnerMap{Pioneers: make(map[string]*types.EncryptablePioneerIDs)}
+	// The generation stamped onto every record we install; see setAllOwners.  Zero means the seed
+	// predates the field, which is no worse than before it existed.
+	var seedHeight int64
 
 	if len(res.GetEncSyncEnclavePagePubK()) == 0 {
 		// An older seed that does not page.  Everything arrives at once, as it always did.
@@ -4745,6 +4800,8 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 			c.LoggerError(logger, "couldn't decrypt")
 			return nil, err
 		}
+		// OLD SEED, no paging and no seed height.  These records land at generation 0, exactly as
+		// they did before the field existed; the first live write stamps them properly.
 		allOwners = fromRemoteEnclaveParams.SSIntervalOwners
 	} else {
 		// Paged.  Accumulate every page before installing anything: a half-applied owners map is
@@ -4767,6 +4824,11 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 			if page.Params != nil {
 				fromRemoteEnclaveParams = *page.Params
 				gotParams = true
+			}
+			// Every page carries it and every page agrees; take the highest so a seed that
+			// advanced mid-transfer cannot leave us stamped behind it.
+			if page.SeedHeight > seedHeight {
+				seedHeight = page.SeedHeight
 			}
 			for k, v := range page.SSIntervalOwners {
 				allOwners.Pioneers[k] = v
@@ -4830,7 +4892,7 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 	c.LoggerInfo(logger, "sync-enclave: trusted set bootstrapped with "+strconv.Itoa(len(fromRemoteEnclaveParams.ActiveEnclaveIdentities))+" identities from the seed")
 
 	// store the owners -- accumulated across every page, installed once
-	s.setAllOwners(allOwners)
+	s.setAllOwners(allOwners, seedHeight)
 
 	// intentionally don't store the shares, they're private to a specific enclave
 	// do not store the SSIntervalPrivKCache
@@ -6455,6 +6517,52 @@ func (s *qadenaServer) getAllOwners() (ownersMap *types.EncryptableEnclaveSSOwne
 	return
 }
 
+// backfillOwnerGenerations stamps records written before the generation field existed.
+//
+// WHY IT IS NEEDED AT ALL.  An unstamped record decodes as generation 0, and 0 loses to nothing --
+// so on a node that later REPLAYS, the first old block naming that key wins and rewinds the owner
+// set, which is precisely the failure the generation exists to prevent.  Records a live write
+// happens to touch get stamped for free; the ones nothing touches would stay vulnerable forever.
+//
+// WHY CONFIRMEDHEIGHT IS THE RIGHT STAMP, and why this needs no "am I live?" test.  confirmedHeight
+// is a raw MetaDB key OUTSIDE the IAVL tree (see enclave_height.go), so a rollback cannot rewind it
+// -- it is "the record of what the network has, which a historical read must not be able to
+// un-say".  Whatever this node is about to execute, these records describe what it knew as of that
+// height, which is true and is higher than anything a replay can present.  A wall clock would be a
+// second, fuzzier predicate for a question this answers exactly.
+//
+// Idempotent, and a no-op on every start after the first: only generation 0 is rewritten.
+func (s *qadenaServer) backfillOwnerGenerations() {
+	height := s.getConfirmedHeight()
+	if height == 0 {
+		// Nothing confirmed yet -- a fresh enclave, whose records are equally fresh.  Stamping them
+		// 0 changes nothing, and there is no better number available.
+		c.LoggerDebug(logger, ssTag+"back-fill: confirmedHeight is 0, nothing to stamp with")
+		return
+	}
+	store := s.secrets(EnclaveSSIntervalOwnersKeyPrefix)
+	stamped := 0
+	for _, key := range store.Keys() {
+		pubKID := string(key[:len(key)-1])
+		owners, found := s.getOwners(pubKID)
+		if !found || owners.Generation != 0 {
+			continue
+		}
+		owners.Generation = height
+		b := s.Cdc.MustMarshal(&owners)
+		store.Set(EnclaveKeyKey(pubKID), b)
+		stamped++
+	}
+	if stamped == 0 {
+		c.LoggerDebug(logger, ssTag+"back-fill: no unstamped owner records at confirmedHeight "+strconv.FormatInt(height, 10))
+	}
+	if stamped > 0 {
+		c.LoggerInfo(logger, "ss-reshare: stamped "+strconv.Itoa(stamped)+
+			" owner record(s) that predate the generation field with confirmedHeight "+
+			strconv.FormatInt(height, 10)+" -- they can no longer be rewound by replayed blocks")
+	}
+}
+
 func (s *qadenaServer) getShare(pubKID string) (share string, found bool) {
 	store := s.secrets(EnclaveSSIntervalSharesKeyPrefix)
 
@@ -6479,13 +6587,31 @@ func (s *qadenaServer) getShare(pubKID string) (share string, found bool) {
 	return
 }
 
-func (s *qadenaServer) setAllOwners(ownersMap *types.EncryptableEnclaveSSOwnerMap) {
+// setAllOwners installs a whole owners map, as sync-enclave delivers it.
+//
+// SEEDHEIGHT STAMPS EVERY RECORD, and it is the point of the parameter.  The joiner is about to
+// replay history from genesis, and every owner list in that history is older than the moment the
+// seed served this page -- so one number, taken once from a node that is demonstrably live,
+// immunises the entire map against the replay that follows.  Left at 0 these records would lose to
+// the first old block that names them, which is exactly the bug this exists to close.
+//
+// A seed too old to send one gives 0; the records are then no worse off than before this field
+// existed, and the first live write stamps them properly.
+func (s *qadenaServer) setAllOwners(ownersMap *types.EncryptableEnclaveSSOwnerMap, seedHeight int64) {
 	store := s.secrets(EnclaveSSIntervalOwnersKeyPrefix)
 	for key, value := range ownersMap.Pioneers {
-		ownerArray := value
-		b := s.Cdc.MustMarshal(ownerArray)
+		ownerArray := *value
+		ownerArray.Generation = seedHeight
+		b := s.Cdc.MustMarshal(&ownerArray)
 		store.Set(EnclaveKeyKey(key), b)
 	}
+	// THE LINE THAT SAYS WHETHER A JOINER IS SAFE.  Everything this node is about to replay is
+	// older than seedHeight, so these two numbers are the whole story: how much of the map is
+	// protected, and against what.  A seedHeight of 0 means the seed predates the field and the
+	// map will be rewound by replay exactly as it was before.
+	c.LoggerInfo(logger, ssTag+"installed "+strconv.Itoa(len(ownersMap.Pioneers))+
+		" owner record(s) from the seed at generation "+strconv.FormatInt(seedHeight, 10)+
+		map[bool]string{true: " -- ZERO: this seed predates the generation field, replay CAN still rewind these", false: ""}[seedHeight == 0])
 }
 
 // getSSAuditCursor / setSSAuditCursor remember where the re-share audit stopped scanning.
@@ -6513,9 +6639,74 @@ func (s *qadenaServer) setSSAuditCursor(cursor string) {
 	store.Set(s.MustSealStable(EnclaveKeyKey("cursor")), s.MustSeal(s.Cdc.MustMarshal(&v)))
 }
 
-func (s *qadenaServer) setOwnersAndShare(pubKID string, owners []string, share string) {
+// staleOwnerWrites tallies owner-record writes refused for being older than the record already
+// holds.
+//
+// NOT AN ERROR PER OCCURRENCE, DELIBERATELY.  A replaying joiner refuses one of these per
+// historical re-share, and store_accumulator.go already records what that costs: "1,806 ERR lines
+// over heights 1-903 on a block-sync join ... an error that fires 1,800 times and always means
+// 'ignore me' trains every reader and every log grep to ignore the one time it does not."
+//
+// So the FIRST refusal is loud -- it is the evidence the guard engaged at all, and a node that
+// never reaches live would otherwise show nothing -- every one after it is debug, and the tally is
+// reported once at the replay->live transition.
+var staleOwnerWrites struct {
+	mu    sync.Mutex
+	count int
+}
+
+// noteStaleOwnerWrite records one refusal and reports whether it was the first.
+func noteStaleOwnerWrite() (first bool) {
+	staleOwnerWrites.mu.Lock()
+	defer staleOwnerWrites.mu.Unlock()
+	staleOwnerWrites.count++
+	return staleOwnerWrites.count == 1
+}
+
+// reportStaleOwnerWrites empties the tally, saying in one line what the per-block lines did not.
+// Zero is worth saying too on a joiner: it means either nothing tried to rewind the map, or the
+// records were unstamped and the guard had nothing to compare against.
+func reportStaleOwnerWrites(height int64) {
+	staleOwnerWrites.mu.Lock()
+	n := staleOwnerWrites.count
+	staleOwnerWrites.count = 0
+	staleOwnerWrites.mu.Unlock()
+	c.LoggerInfo(logger, ssTag+"going live at height "+strconv.FormatInt(height, 10)+
+		": refused "+strconv.Itoa(n)+" stale owner-record write(s) while catching up"+
+		map[bool]string{true: " (none -- nothing tried to rewind the map)", false: ""}[n == 0])
+}
+
+// setOwnersAndShare records who holds shares of pubKID, and our own share of it.
+//
+// THE GENERATION CHECK LIVES HERE, at the one place every writer passes through, rather than at
+// each caller.  The record is reconstruction metadata about NOW -- who holds shares today, and so
+// via getThreshold what those shares ARE -- but its writers include SetPublicKey, which is driven
+// by block execution.  A replaying node therefore calls it with the owner list carried by whatever
+// old block it is executing, and with no ordering the last writer won: on a replaying node, the
+// OLDEST block.  That is how a joiner rewound seven keys from five owners to one, read back
+// "threshold 1", and handed a 65-byte Shamir share to ScalarMult.
+//
+// The stamp is where THIS NODE is, from currentChainPosition, never the height named by the
+// message -- the message may be history.  An unknown position stamps 0, which loses to every real
+// generation, so "cannot tell" fails safe instead of dangerous.
+//
+// Returns whether it wrote, so a caller can skip the follow-up work a refused write does not earn.
+func (s *qadenaServer) setOwnersAndShare(pubKID string, owners []string, share string) bool {
 	c.LoggerDebug(logger, "setOwnersAndShare", pubKID)
-	ownerArray := types.EnclaveStoreStringArray{A: owners}
+	generation, _, _ := currentChainPosition()
+	if prev, had := s.getOwners(pubKID); had && generation < prev.Generation {
+		msg := "ss-reshare: STALE pubKID=" + pubKID +
+			" generation=" + strconv.FormatInt(generation, 10) + " < stored=" + strconv.FormatInt(prev.Generation, 10) +
+			" owners " + strconv.Itoa(len(prev.PioneerIDs)) + "->" + strconv.Itoa(len(owners)) +
+			" -- IGNORING; this is older news than the record already holds"
+		if noteStaleOwnerWrite() {
+			c.LoggerInfo(logger, msg+" (FIRST refusal; further ones are debug and the total is reported on going live)")
+		} else {
+			c.LoggerDebug(logger, msg)
+		}
+		return false
+	}
+	ownerArray := types.EncryptablePioneerIDs{PioneerIDs: owners, Generation: generation}
 	shareString := types.EnclaveStoreString{S: share}
 	// SHARE FIRST, OWNERS SECOND -- the order matters now that re-shares mutate existing records.
 	// These are two independent SetSyncs; a crash between them leaves one old and one new.  With
@@ -6529,6 +6720,7 @@ func (s *qadenaServer) setOwnersAndShare(pubKID string, owners []string, share s
 	store = s.secrets(EnclaveSSIntervalOwnersKeyPrefix)
 	b = s.Cdc.MustMarshal(&ownerArray)
 	store.Set(EnclaveKeyKey(pubKID), b)
+	return true
 }
 
 func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*types.SetPublicKeyReply, error) {
@@ -6592,8 +6784,12 @@ func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*
 				" owners "+strconv.Itoa(len(prev.PioneerIDs))+"->"+strconv.Itoa(len(owners))+
 				" myShare="+map[bool]string{true: "held", false: "absent"}[myShare != ""])
 		}
-		s.setOwnersAndShare(in.PubKID, owners, myShare)
-		if ownersChanged {
+		// A REFUSED WRITE EARNS NO FOLLOW-UP.  setOwnersAndShare declines anything older than the
+		// record already holds -- a replaying node reaching this with a historical owner list is
+		// the case it exists for -- and bumping the in-flight gather for a record that did not
+		// change would invalidate a gather that is still correct.
+		wrote := s.setOwnersAndShare(in.PubKID, owners, myShare)
+		if ownersChanged && wrote {
 			// A gather started against the OLD owner record is now fetching from a stale plan.
 			// Invalidate its claim so the reschedule below (or the next trigger) can run against
 			// the new record; if the stale gather still completes with the TRUE key, the
@@ -6615,8 +6811,26 @@ func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*
 			oldPrivK, found := s.getPrivKCache(in.PubKID)
 			switch {
 			case !found:
+				// THE SAME REFEREE THE ARBITRATION BRANCH BELOW ALREADY USES.  An EMPTY cache is
+				// not a reason to skip the check a non-empty one gets: reaching here means
+				// getThreshold(len(owners)) == 1, i.e. "nothing was split, so myShare IS the key"
+				// -- but len(owners) comes from a record a REPLAYING node rewinds, because this
+				// very function applies the owner list carried by whatever historical block it is
+				// executing.  Read back at threshold 1 when the key was really split at 2 or more,
+				// myShare is a 65-byte Shamir share, and caching it poisons exactly as it did at
+				// height 30755.
+				//
+				// Declining to cache is node-local: the privK cache lives in the unversioned
+				// secrets DB and is hashed into nothing, so this cannot change what the block
+				// computes.
 				if myShare != "" {
-					s.setPrivKCache(in.PubKID, myShare)
+					if isPrivKHex(myShare) {
+						s.setPrivKCache(in.PubKID, myShare)
+					} else {
+						c.LoggerError(logger, "distributed key for "+in.PubKID+" is not a 32-byte key ("+
+							strconv.Itoa(len(myShare))+" chars) -- NOT caching it (a Shamir share read as "+
+							"a whole key, from an owners record rewound by replay?)")
+					}
 				}
 			case oldPrivK != myShare && myShare != "":
 				// ARBITRATE, DO NOT JUST LOG.  The old behavior kept the stale cached value and
@@ -6870,7 +7084,29 @@ func (s *qadenaServer) SetSecretSharePrivateKey(ctx context.Context, in *types.S
 		c.LoggerDebug(logger, "SetSecretSharePrivateKey ssIDAndPrivK "+c.PrettyPrint(ssIDAndPrivK))
 	}
 
-	s.setPrivKCache(ssIDAndPrivK.PubKID, ssIDAndPrivK.PrivK)
+	// THE MESSAGE CARRIES ITS OWN REFEREE, so check before caching -- this privK arrives off the
+	// wire and otherwise lands in the cache unexamined, and a value that is not a 32-byte scalar
+	// panics ScalarMult inside block execution, which is a fork rather than an error.
+	//
+	// REFUSING THE CACHE WRITE, NOT THE MESSAGE.  This handler is REPLAY-ONLY (see the doc comment
+	// above) and must "apply it exactly as it did the first time or it diverges" -- so returning an
+	// error here would fail a message that originally succeeded and fork the very node it is meant
+	// to protect.  The cache is node-local and hashed into nothing, so skipping the write is free;
+	// changing the reply is not.
+	badLength := !isPrivKHex(ssIDAndPrivK.PrivK)
+	badIdentity := false
+	if !badLength && ssIDAndPrivK.PubK != "" {
+		got, derr := derivePubKBase64(ssIDAndPrivK.PrivK)
+		badIdentity = derr != nil || got != ssIDAndPrivK.PubK
+	}
+	if badLength || badIdentity {
+		c.LoggerError(logger, "SetSecretSharePrivateKey: privK for "+ssIDAndPrivK.PubKID+
+			" is not a 32-byte key or does not derive to the pubK it arrived with -- NOT caching it "+
+			"(the message is still "+
+			"applied: this path is replay-only and its outcome must not change)")
+	} else {
+		s.setPrivKCache(ssIDAndPrivK.PubKID, ssIDAndPrivK.PrivK)
+	}
 	s.setPubKCache(ssIDAndPrivK.PubKID, ssIDAndPrivK.PubK)
 
 	return &types.SetSecretSharePrivateKeyReply{Status: true}, nil

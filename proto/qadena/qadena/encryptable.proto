@@ -283,6 +283,24 @@ message EncryptableSSIDAndPrivK {
 
 message EncryptablePioneerIDs {
 	repeated string PioneerIDs = 1;
+
+	// GENERATION: the chain height at which this node LEARNED this owner set from a live view of
+	// the chain.  Not the height the split was established at, and deliberately not taken from the
+	// message that carries the owner list -- that message may be history being replayed.
+	//
+	// The owners record is reconstruction METADATA ABOUT NOW: which pioneers hold shares today and
+	// therefore, via getThreshold, what those shares ARE.  It has several writers and no ordering,
+	// so the last one won -- and on a replaying node the last writer is the OLDEST block.  That is
+	// how a joiner rewound seven keys from five owners to one, read back "threshold 1", and handed
+	// a 65-byte Shamir share to ScalarMult.
+	//
+	// A write now wins only if its generation is >= the stored one.  ">=" not ">": two re-shares
+	// can land in the same block and must apply in order.  Absent (0) loses to everything real,
+	// which is what makes an unknown chain position safe rather than dangerous.
+	//
+	// NOT CONSENSUS STATE.  This record lives in the unversioned secrets DB and is hashed into
+	// nothing, so two nodes disagreeing about a generation changes no block outcome.
+	int64 Generation = 2;
 }
 
 message EncryptableEnclaveSSOwnerMap {
@@ -355,5 +373,12 @@ message EncryptableSyncEnclavePage {
 	// already public on chain as an IntervalPublicKeyID.
 	bytes nextCursor = 3;
 	bool  done = 4;
+
+	// The SEED's height when it served this page, stamped onto every owner record the joiner
+	// installs.  The joiner is about to replay history from genesis, and every owner list in that
+	// history is older than this -- so one number, taken once from a node that is demonstrably
+	// live, immunises the whole map against the replay that follows.  Without it a fresh joiner's
+	// records would sit at generation 0 and lose to the first old block that names them.
+	int64 seedHeight = 5;
 }
 

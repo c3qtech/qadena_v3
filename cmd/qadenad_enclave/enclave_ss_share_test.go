@@ -303,3 +303,128 @@ func TestSSInFlightGenerations(t *testing.T) {
 	gen3 := mustClaim(t, "gen", "the rightful release frees the key")
 	ssInFlightRelease("gen", gen3)
 }
+
+// THE OWNERS RECORD DESCRIBES NOW, NOT THE BLOCK BEING EXECUTED.
+//
+// SetPublicKey is driven by block execution, so a replaying node calls it with the owner list
+// carried by whatever old block it is replaying.  Applying that list leaves the record describing a
+// split whose shares no longer exist: re-sharing changes how a secret is divided, not the secret,
+// and the shares a node can actually fetch come from live peers holding today's generation.
+//
+// Observed for real on a block-syncing joiner -- sync-enclave installed 1033 keys at five owners
+// each, replay rewound seven of them to one, and runSSReconstruct then read "threshold 1", took the
+// "the share IS the key" fast path, and handed a 65-byte Shamir share to ScalarMult.  The panic
+// forked the node at height 2117.
+func TestSetPublicKeyDoesNotRewindOwnersWithAnOlderGeneration(t *testing.T) {
+	s, pub := newSSTestServer(t, "pioneer1")
+
+	current := []string{"pioneer1", "pioneer2", "pioneer3", "pioneer4", "pioneer7"}
+	require.Equal(t, 2, getThreshold(len(current)), "premise: five owners must be a SPLIT key")
+
+	withChainPosition(t, 53000, true)
+	s.setOwnersAndShare("rotated-key", current, aShare())
+
+	// Now replay an old block, back when the key had a single owner.
+	withChainPosition(t, 2117, false)
+	_, err := s.SetPublicKey(context.Background(),
+		broadcastFor("rotated-key", []string{"pioneer1"}, "pioneer1", aKey(), pub))
+	require.NoError(t, err, "the message must still be applied -- refusing it would fail a block that originally succeeded")
+
+	got, found := s.getOwners("rotated-key")
+	require.True(t, found)
+	require.Equal(t, current, got.PioneerIDs,
+		"replay rewound the owners record; reconstruction would read threshold 1 and return a share as a key")
+	require.Equal(t, int64(53000), got.Generation, "the stored generation must survive the stale write")
+}
+
+// A genuinely newer re-share must still land, or the guard would be worse than the bug.
+func TestSetPublicKeyAppliesANewerGeneration(t *testing.T) {
+	s, pub := newSSTestServer(t, "pioneer1")
+
+	withChainPosition(t, 53000, true)
+	s.setOwnersAndShare("rotated-key", []string{"pioneer1", "pioneer2", "pioneer3", "pioneer4", "pioneer7"}, aShare())
+
+	withChainPosition(t, 54000, true)
+	_, err := s.SetPublicKey(context.Background(),
+		broadcastFor("rotated-key", []string{"pioneer1"}, "pioneer1", aKey(), pub))
+	require.NoError(t, err)
+
+	got, found := s.getOwners("rotated-key")
+	require.True(t, found)
+	require.Equal(t, []string{"pioneer1"}, got.PioneerIDs, "a newer re-share must update the record")
+	require.Equal(t, int64(54000), got.Generation)
+}
+
+// ">=", NOT ">".  Two re-shares can land in the SAME block and must apply in message order; a
+// strict comparison would silently drop the second.
+func TestSetPublicKeyAppliesAnEqualGeneration(t *testing.T) {
+	s, pub := newSSTestServer(t, "pioneer1")
+
+	withChainPosition(t, 54000, true)
+	s.setOwnersAndShare("rotated-key", []string{"pioneer1", "pioneer2", "pioneer3", "pioneer4", "pioneer7"}, aShare())
+
+	_, err := s.SetPublicKey(context.Background(),
+		broadcastFor("rotated-key", []string{"pioneer1"}, "pioneer1", aKey(), pub))
+	require.NoError(t, err)
+
+	got, _ := s.getOwners("rotated-key")
+	require.Equal(t, []string{"pioneer1"}, got.PioneerIDs, "a same-block re-share must still apply")
+}
+
+// ABSENT IS STILL POPULATED.  Only a STALE write is refused: a node that never ran sync-enclave has
+// no other source for the map, and for it the block store is the best answer available.
+func TestSetPublicKeyPopulatesAnAbsentOwnersRecord(t *testing.T) {
+	s, pub := newSSTestServer(t, "pioneer1")
+
+	_, found := s.getOwners("fresh-key")
+	require.False(t, found, "premise: no record yet")
+
+	withChainPosition(t, 2117, false)
+	_, err := s.SetPublicKey(context.Background(),
+		broadcastFor("fresh-key", []string{"pioneer1"}, "pioneer1", aKey(), pub))
+	require.NoError(t, err)
+
+	got, found := s.getOwners("fresh-key")
+	require.True(t, found, "an absent record must still be populated from history")
+	require.Equal(t, []string{"pioneer1"}, got.PioneerIDs)
+}
+
+// sync-enclave is what makes a fresh joiner safe: it stamps the seed's height onto every record, so
+// the whole map outranks the history the joiner is about to replay.
+func TestSetAllOwnersStampsTheSeedHeight(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	m := &types.EncryptableEnclaveSSOwnerMap{Pioneers: map[string]*types.EncryptablePioneerIDs{
+		"k1": {PioneerIDs: []string{"pioneer1", "pioneer2", "pioneer3", "pioneer4", "pioneer7"}},
+	}}
+
+	s.setAllOwners(m, 53000)
+
+	got, found := s.getOwners("k1")
+	require.True(t, found)
+	require.Equal(t, int64(53000), got.Generation, "records installed by sync-enclave must carry the seed's height")
+}
+
+// Records written before the field existed decode as 0 and would lose to nothing, so a node that
+// later replays would rewind them.  confirmedHeight is the stamp because a rollback cannot rewind
+// it -- no wall clock is involved.
+func TestBackfillStampsPreGenerationRecords(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	s.setAllOwners(&types.EncryptableEnclaveSSOwnerMap{Pioneers: map[string]*types.EncryptablePioneerIDs{
+		"old-key": {PioneerIDs: []string{"pioneer1", "pioneer2", "pioneer3", "pioneer4", "pioneer7"}},
+	}}, 0)
+
+	pre, _ := s.getOwners("old-key")
+	require.Equal(t, int64(0), pre.Generation, "premise: unstamped")
+
+	s.setConfirmedHeight(53000)
+	s.backfillOwnerGenerations()
+
+	got, _ := s.getOwners("old-key")
+	require.Equal(t, int64(53000), got.Generation, "an unstamped record must be back-filled from confirmedHeight")
+
+	// Idempotent: a second pass must not move an already-stamped record.
+	s.setConfirmedHeight(60000)
+	s.backfillOwnerGenerations()
+	got, _ = s.getOwners("old-key")
+	require.Equal(t, int64(53000), got.Generation, "back-fill must only ever touch generation 0")
+}

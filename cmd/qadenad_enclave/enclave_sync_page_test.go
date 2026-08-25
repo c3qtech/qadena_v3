@@ -31,7 +31,7 @@ func seedOwners(t *testing.T, s *qadenaServer, n int) map[string][]string {
 		m.Pioneers[key] = &types.EncryptablePioneerIDs{PioneerIDs: ids}
 		want[key] = ids
 	}
-	s.setAllOwners(m)
+	s.setAllOwners(m, 0)
 	return want
 }
 
