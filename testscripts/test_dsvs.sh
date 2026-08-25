@@ -53,7 +53,7 @@ doc_removable="$workdir/doc_removable.txt"
 
 # Signatories read from the same file setup.sh seeded from, so they cannot drift.
 #
-# DELIBERATELY victor / kelvin / alexis rather than al and ann: update_credentials.sh mutates al's
+# DELIBERATELY victor / kelvin / alexis rather than al and ann: test_credentials.sh mutates al's
 # contacts -- case 12 changes his email and case 14 REMOVES the email credential outright -- so a
 # suite that ran that first would leave al with no email credential and signing would fail with
 # "Credential does not exist".  These three are untouched by it, which keeps this test independent

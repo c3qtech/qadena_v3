@@ -48,7 +48,48 @@ function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 # with what is being tested -- and the suite reported a failure that looked like a chain problem.
 # A fixed name in a shared directory is also the classic shape of a symlink attack.
 proposal_file=$(mktemp -t qadena-params-proposal.XXXXXX) || { echo "could not create a temp file"; exit 1; }
-trap 'rm -f "$proposal_file"' EXIT INT TERM
+
+# THE EXIT PATH HAS TO SAY WHEN IT LEFT A PARAM RAISED, or this suite stops being idempotent in the
+# one way that matters.
+#
+# Case 4 walks sign_recover_key_guardian_assertion_mode through 0, 1 and 2 and restores the original
+# at the end.  That is fine when it completes.  But `set -e` is on, so a failed submit -- or a
+# Ctrl-C, or the suite being killed by a runner -- can exit BETWEEN raising the mode and restoring
+# it, leaving the chain at whatever the loop last set.  Observed for real: killing this suite
+# mid-loop left a devnet at 2 (enforce).
+#
+# The second-order effect is what makes it dangerous rather than untidy.  The next run reads
+# original_params FROM THE LIVE CHAIN, so it would take the stranded 2 as "original" and faithfully
+# restore to it -- permanently enforcing, with test_credentials.sh silently skipping its recovery
+# cases and the whole thing looking like a deliberate configuration.
+#
+# Restoring it from here is NOT the right answer: a governance round trip takes a voting period,
+# and this trap may well be firing BECAUSE governance just failed.  So it detects and reports,
+# loudly, with the command that fixes it -- turning a silent permanent config change into a visible
+# one.  (The in-flight restore proposal often lands on its own after the script dies, which is luck,
+# not a mechanism, and is exactly why the warning has to be printed either way.)
+cleanup_params_suite() {
+    local rc=$?
+    rm -f "$proposal_file"
+    if [ -n "${original_assertion_mode:-}" ]; then
+        local now
+        now=$(live_params 2>/dev/null | jq -r '.sign_recover_key_guardian_assertion_mode // 0' 2>/dev/null)
+        if [ -n "$now" ] && [ "$now" != "$original_assertion_mode" ]; then
+            echo "" >&2
+            echo "WARNING: this suite is exiting with sign_recover_key_guardian_assertion_mode left at $now" >&2
+            echo "         (it was $original_assertion_mode when the suite started)." >&2
+            echo "" >&2
+            echo "  A restore proposal may still be in flight and land on its own -- check with:" >&2
+            echo "      qadenad query qadena params --output json | jq .params.sign_recover_key_guardian_assertion_mode" >&2
+            echo "" >&2
+            echo "  If it stays at $now, put it back BEFORE running this suite again: a later run reads" >&2
+            echo "  the live params as its baseline and would restore to $now rather than $original_assertion_mode." >&2
+            echo "  At 2 (enforce), test_credentials.sh skips its key-recovery cases." >&2
+        fi
+    fi
+    exit $rc
+}
+trap cleanup_params_suite EXIT INT TERM
 
 fail() {
     echo "FAILED: $1" >&2
@@ -178,6 +219,10 @@ authority=$(qadenad_alias query auth module-account gov --output json 2>/dev/nul
 
 original_params=$(live_params)
 [ -n "$original_params" ] && [ "$original_params" != "null" ] || fail "could not read the module params"
+# Recorded for the exit trap above, which cannot read original_params reliably (it is a large JSON
+# blob and the trap may fire before it is set).
+original_assertion_mode=$(echo "$original_params" | jq -r '.sign_recover_key_guardian_assertion_mode // 0')
+echo "guardian assertion mode at start: $original_assertion_mode"
 echo "params read; cool-down is currently $(echo "$original_params" | jq -r '.update_credential_min_blocks_between_updates // "unset"')"
 
 echo "========================="
@@ -221,7 +266,50 @@ echo "refused at submission, naming the offending param"
 echo "params unchanged"
 
 echo "========================="
-echo "3. a VALID params update still passes"
+echo "3. an out-of-range guardian assertion mode is REFUSED"
+echo "========================="
+# A THIRD SHAPE, and the reason this one is worth a case of its own: it is the only ENUM in the
+# struct.  Every other gate here is a bool, which cannot hold an invalid value, so nothing else in
+# Params needs range-checking and it is easy to assume this does not either.
+#
+# The failure is silent in the dangerous direction.  SignRecoverKeyAssertionModeFromParams maps
+# anything it does not recognise to OFF -- deliberately, so a param written by a newer binary can
+# never make an older one start rejecting signatures.  So a fat-fingered 3 in a proposal meant to
+# switch enforcement ON would instead leave institutional guardians entirely unverified, while the
+# proposal itself read as a success.  Refusing it at submission is what makes that impossible.
+bad_params=$(echo "$original_params" | jq '.sign_recover_key_guardian_assertion_mode = 3')
+
+submit_expecting_rejection "$bad_params" \
+    "regression test: out-of-range guardian assertion mode" \
+    "sign_recover_key_guardian_assertion_mode"
+echo "refused at submission, naming the offending param"
+
+[ "$(live_params)" = "$original_params" ] || fail "the refused proposal still changed the params"
+echo "params unchanged"
+
+echo "========================="
+echo "4. every VALID guardian assertion mode is accepted"
+echo "========================="
+# The other half of case 3: over-strict validation here would make the gate unraisable, which is
+# worse than not having it -- the whole point of the audit state is that an operator can move to it
+# and back while measuring.  Each mode is submitted and then the original restored, so the suite
+# stays idempotent and the chain is left exactly as it was found.
+for mode in 0 1 2; do
+    mode_params=$(echo "$original_params" | jq ".sign_recover_key_guardian_assertion_mode = $mode")
+    submit_expecting_pass "$mode_params" "regression test: guardian assertion mode $mode"
+    actual=$(live_params | jq -r '.sign_recover_key_guardian_assertion_mode // 0')
+    [ "$actual" = "$mode" ] \
+        || fail "submitted assertion mode $mode but the chain reports $actual"
+    echo "mode $mode accepted and stored"
+done
+
+# Put it back the way it was found, whatever that was.  Not assumed to be 0: a chain already
+# running in audit must not be silently switched off by running this suite.
+submit_expecting_pass "$original_params" "regression test: restore original assertion mode"
+echo "original assertion mode restored"
+
+echo "========================="
+echo "5. a VALID params update still passes"
 echo "========================="
 # The other half, and the one that catches over-strict validation.  Cases 1 and 2 would both pass
 # just as well if Validate() rejected everything -- which would brick governance's ability to change

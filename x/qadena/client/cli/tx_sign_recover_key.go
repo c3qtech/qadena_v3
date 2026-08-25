@@ -23,6 +23,7 @@ var _ = strconv.Itoa(0)
 func CmdSignRecoverKey() *cobra.Command {
 	var argIsUser bool
 	var argIsServiceProvider bool
+	var argGuardianCredentialHash string
 
 	cmd := &cobra.Command{
 		Use:   "sign-recover-key [wallet-id]",
@@ -187,11 +188,32 @@ func CmdSignRecoverKey() *cobra.Command {
 
 			encDstEWalletIDVShare, dstEWalletIDVShareBind := c.ProtoMarshalAndVShareBEncrypt(ccPubK, &dstEWalletID)
 
+			// THE IDENTITY THIS GUARDIAN VERIFIED, when it has one.
+			//
+			// Institutional guardians in production get this from their app server, which computes
+			// it from the user it actually authenticated.  Here it is a flag, because this CLI is
+			// an operator and test tool: it is what lets a test drive the matching case, the
+			// mismatched case (someone else's hash) and the absent case against each mode.
+			//
+			// Sent bound to the SAME ccPubK as the destination wallet id, so the SS node can read
+			// it -- without that the enclave's getSSPrivK returns "" and the assertion is
+			// unreadable, which the enclave treats as a mismatch.
+			var encGuardianHashVShare []byte
+			var guardianHashVShareBind *types.VShareBindData
+			if argGuardianCredentialHash != "" {
+				encHash, hashBind := c.ProtoMarshalAndVShareBEncrypt(ccPubK,
+					&types.EncryptableString{Value: argGuardianCredentialHash})
+				encGuardianHashVShare = encHash
+				guardianHashVShareBind = c.ProtoizeVShareBindData(hashBind)
+			}
+
 			msg := types.NewMsgSignRecoverPrivateKey(
 				ctx.GetFromAddress().String(),
 				encDstEWalletIDVShare,
 				c.ProtoizeVShareBindData(dstEWalletIDVShareBind),
 				&recoverShare,
+				encGuardianHashVShare,
+				guardianHashVShareBind,
 			)
 			if err := msg.ValidateBasic(); err != nil {
 				return err
@@ -205,6 +227,10 @@ func CmdSignRecoverKey() *cobra.Command {
 	flags.AddTxFlagsToCmd(cmd)
 	cmd.Flags().BoolVar(&argIsUser, "is-user", false, "Is a user, send recoverShare")
 	cmd.Flags().BoolVar(&argIsServiceProvider, "is-service-provider", false, "Is a service provider, send recoverShare")
+	cmd.Flags().StringVar(&argGuardianCredentialHash, "guardian-credential-hash", "",
+		"Hex CreateCredentialHash of the identity this guardian verified.  Institutional guardians "+
+			"are required to send it once sign_recover_key_guardian_assertion_mode is 2 (enforce); "+
+			"individual guardians are exempt in every mode.")
 
 	return cmd
 }

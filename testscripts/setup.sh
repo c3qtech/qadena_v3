@@ -324,7 +324,7 @@ else
         # --specific-user FILTERS this loop; it used to skip the whole section with `exit 0`.
         #
         # That skip is why a prefixed user could be provisioned but never got a protect-key, and so
-        # why update_credentials.sh had to run its key-recovery cases against the shared users --
+        # why test_credentials.sh had to run its key-recovery cases against the shared users --
         # which in turn is how the marriage in case 2 (per-run jill) and the recovery in case 6b
         # (shared jill) drifted onto two different people, leaving 6b asking for an identity nobody
         # had ever married.

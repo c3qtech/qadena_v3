@@ -707,7 +707,10 @@ func (k Keeper) EnclaveClientRecoverKeyByCredential(sdkctx sdk.Context, credenti
 	return nil
 }
 
-func (k Keeper) EnclaveClientSignRecoverKey(sdkctx sdk.Context, signRecoverKey types.MsgSignRecoverPrivateKey) error {
+// EnclaveClientSignRecoverKey forwards a guardian's signature, with the module params the enclave
+// evaluates the identity-assertion gate against.  Params are an ARGUMENT rather than read here, so
+// the value is the one the msg server saw for this block and every validator judges the same mode.
+func (k Keeper) EnclaveClientSignRecoverKey(sdkctx sdk.Context, signRecoverKey types.MsgSignRecoverPrivateKey, moduleParams types.Params) error {
 	if sdkctx.IsCheckTx() {
 		c.ContextDebug(sdkctx, "SignRecoverKey not called in checktx")
 		return nil
@@ -716,7 +719,10 @@ func (k Keeper) EnclaveClientSignRecoverKey(sdkctx sdk.Context, signRecoverKey t
 	ctx, cancel := enclaveExecContext()
 	defer cancel()
 
-	r, err := EnclaveGRPCClient.SignRecoverKey(ctx, &signRecoverKey)
+	r, err := EnclaveGRPCClient.SignRecoverKey(ctx, &types.EnclaveSignRecoverKeyRequest{
+		Msg:    &signRecoverKey,
+		Params: moduleParams,
+	})
 	if err != nil {
 		c.ContextError(sdkctx, "error returned by SignRecoverKey on enclave "+err.Error())
 		return err

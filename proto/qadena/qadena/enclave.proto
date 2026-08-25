@@ -149,7 +149,7 @@ service QadenaEnclave {
   rpc ClaimCredential(MsgClaimCredential) returns (MsgClaimCredentialResponse) {}
   rpc UpdateCredential(EnclaveUpdateCredentialRequest) returns (MsgUpdateCredentialResponse) {}
   rpc ClaimUpdatedCredential(MsgClaimUpdatedCredential) returns (MsgClaimUpdatedCredentialResponse) {}
-  rpc SignRecoverKey(MsgSignRecoverPrivateKey) returns (SignRecoverKeyReply) {}
+  rpc SignRecoverKey(EnclaveSignRecoverKeyRequest) returns (SignRecoverKeyReply) {}
   rpc QueryGetRecoverKey(QueryGetRecoverKeyRequest) returns (QueryGetRecoverKeyResponse) {}
   rpc QueryFindCredential(QueryFindCredentialRequest) returns (QueryFindCredentialResponse) {}
   rpc QueryGetSubWalletIDByOriginalWalletID(Credential) returns (QueryGetSubWalletIDByOriginalWalletIDResponse) {}
@@ -748,6 +748,18 @@ message EnclaveRemoveCredentialRequest {
 // determine for itself and must not take from the client: the block height, and the module
 // params the change policy is evaluated against.  Both are stamped by the keeper, so they are
 // identical across validators and the verdict stays deterministic.
+// EnclaveSignRecoverKeyRequest wraps the guardian's message with the module params, for the same
+// reason EnclaveUpdateCredentialRequest below does: the enclave holds no cached copy of Params and
+// must not take a policy decision from the client.  The keeper stamps it, so every validator
+// evaluates the same mode and the verdict stays deterministic.
+//
+// Per-call rather than at startup is also what lets a governance change take effect without
+// restarting any node.
+message EnclaveSignRecoverKeyRequest {
+  MsgSignRecoverPrivateKey msg = 1;
+  Params params = 2 [(gogoproto.nullable) = false];
+}
+
 message EnclaveUpdateCredentialRequest {
   MsgUpdateCredential msg = 1;
   int64 blockHeight = 2;

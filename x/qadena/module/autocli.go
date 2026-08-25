@@ -295,12 +295,22 @@ func (am AppModule) AutoCLIOptions() *autocliv1.ModuleOptions {
 					Short:          "Send a ProtectPrivateKey tx",
 					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "threshold"}, {ProtoField: "recoverShare"}},
 				},
-				{
-					RpcMethod:      "SignRecoverPrivateKey",
-					Use:            "sign-recover-private-key [ss-interval-pub-k-i-d] [enc-destination-e-wallet-i-d-s-s-interval-pub-k-i-d] [recover-share]",
-					Short:          "Send a SignRecoverPrivateKey tx",
-					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "sSIntervalPubKID"}, {ProtoField: "encDestinationEWalletIDSSIntervalPubKID"}, {ProtoField: "recoverShare"}},
-				},
+				// SignRecoverPrivateKey is SKIPPED here, not described.
+				//
+				// This entry named sSIntervalPubKID and encDestinationEWalletIDSSIntervalPubKID,
+				// fields the message has not had since it moved to VShare binding -- so the
+				// generated command could not have worked.  The command that actually runs is the
+				// hand-written CmdSignRecoverKey in x/qadena/client/cli/tx_sign_recover_key.go,
+				// which builds the VShare payloads (and now the guardian identity assertion) that
+				// no positional-arg description can express.
+				//
+				// Left commented rather than corrected: autocli cannot construct an encrypted,
+				// bound VShare from a string argument, so any description here would be a command
+				// that parses and then fails at the enclave.
+				// {
+				// 	RpcMethod: "SignRecoverPrivateKey",
+				// 	...
+				// },
 				{
 					RpcMethod:      "ClaimCredential",
 					Use:            "claim-credential [credential-i-d] [credential-type] [recover-key] [ss-interval-pub-k-i-d] [enc-claim-credential-extra-parms-s-s-interval-pub-k]",

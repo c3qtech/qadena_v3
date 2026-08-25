@@ -1,4 +1,13 @@
 #!/bin/zsh
+#
+# A hand-run helper, NOT part of the regression suite -- regression.sh:752 says so explicitly, and
+# the recovery cases it does run live in test_credentials.sh.
+#
+# These signatures carry no guardian identity assertion, which is fine at
+# sign_recover_key_guardian_assertion_mode 0 or 1 and REFUSED at 2 for the institutional signers
+# below (`--from pioneer1` is institutional too, not just the --is-service-provider lines; only the
+# --is-user ones are exempt).  Pass --guardian-credential-hash <hex> to sign under an enforcing
+# chain.  test_credentials.sh explains the classification and what has to ship first.
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"

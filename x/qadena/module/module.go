@@ -190,12 +190,25 @@ func (am AppModule) ExportGenesis(ctx sdk.Context, cdc codec.JSONCodec) json.Raw
 // and enclave binaries have to move together.  Again no state rewrite: an existing row reads
 // previousPubKID as "", meaning no grace yet, and the first rotation after the upgrade fills it in.
 //
+// 4: MsgSignRecoverPrivateKey.encGuardianCredentialHashVShare / guardianCredentialHashVShareBind,
+// and Params.sign_recover_key_guardian_assertion_mode -- an institutional guardian now states the
+// identity it verified, and the enclave resolves that identity to a wallet itself instead of
+// trusting the wallet id the guardian's server picked.  Consensus-breaking because it changes
+// which transactions validate once the gate is raised, and because the enclave reads the new param
+// per call, so chain and enclave binaries have to move together.
+//
+// No state rewrite, and none is possible to need: both message fields are absent on every existing
+// transaction, and the param reads as 0 on params that predate it -- which is defined as "behave
+// exactly as before".  The gate SHIPS AT 0, so this step is inert until a governance proposal
+// raises it; that is deliberate, because the scheme rests on an invariant (a guardian's hash
+// equalling the one issuance produced) that has never been measured against real traffic.
+//
 // No RegisterMigration handler accompanies this, matching the v1->v2 step.  Chains are stood up
 // from genesis rather than upgraded in place, so RunMigrations is never asked to bridge these
 // versions.  Whoever first runs a real in-place upgrade will need to register handlers for every
 // step at that point -- RunMigrations refuses outright when a module's version has moved and it has
 // registered none.
-func (AppModule) ConsensusVersion() uint64 { return 3 }
+func (AppModule) ConsensusVersion() uint64 { return 4 }
 
 // BeginBlock contains the logic that is automatically triggered at the beginning of each block.
 // The begin block implementation is optional.

@@ -293,7 +293,7 @@ echo "-------------------------"
 # exercising rather than reasoning about.
 if qadenad_alias keys show "$dsvsprovider" -a --keyring-backend test > /dev/null 2>&1; then
     # Signatories come from the same seed file test_dsvs.sh reads, so they cannot drift apart.
-    # victor and kelvin specifically: update_credentials.sh mutates al's contacts and removes his
+    # victor and kelvin specifically: test_credentials.sh mutates al's contacts and removes his
     # email credential outright, which would make signing fail here for a reason that has nothing to
     # do with key rotation.
     sig1_email=$(jq -r '.[] | select(.name=="victor") | .email' "$qadenatestdata/users.json")
