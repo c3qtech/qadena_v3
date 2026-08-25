@@ -129,3 +129,67 @@ func TestParamsValidateAcceptsRealisticParams(t *testing.T) {
 		t.Fatalf("a realistic param set must validate, got %v", err)
 	}
 }
+
+// The assertion mode is an ENUM IN A uint32, so unlike every bool in this struct it has values
+// that are simply wrong.  Nothing else here needs this check, which is exactly why it is easy to
+// forget: a fat-fingered 3 in a governance proposal reads as "off" at the decision site, leaving
+// institutional guardians unverified while the proposal appears to have switched enforcement on.
+func TestParamsValidateRejectsUnknownAssertionMode(t *testing.T) {
+	for _, mode := range []uint32{3, 4, 255} {
+		err := (types.Params{SignRecoverKeyGuardianAssertionMode: mode}).Validate()
+		if err == nil {
+			t.Fatalf("assertion mode %d must be rejected: it is neither off, audit nor enforce", mode)
+		}
+		if !strings.Contains(err.Error(), "sign_recover_key_guardian_assertion_mode") {
+			t.Fatalf("the error must name the field, got %v", err)
+		}
+	}
+}
+
+func TestParamsValidateAcceptsEveryAssertionMode(t *testing.T) {
+	for _, mode := range []uint32{
+		types.SignRecoverKeyAssertionOff,
+		types.SignRecoverKeyAssertionAudit,
+		types.SignRecoverKeyAssertionEnforce,
+	} {
+		if err := (types.Params{SignRecoverKeyGuardianAssertionMode: mode}).Validate(); err != nil {
+			t.Fatalf("mode %d must be valid, got %v", mode, err)
+		}
+	}
+}
+
+// THE NO-MIGRATION CLAIM, ASSERTED RATHER THAN ASSUMED.
+//
+// ConsensusVersion moves 3 -> 4 for this field with no RegisterMigration handler, on the grounds
+// that an absent field reads as 0 and 0 is defined as "behave exactly as before".  That is only
+// true if gogoproto genuinely leaves it zero when it is missing from stored bytes -- so unmarshal
+// params that predate the field and check.  If this ever fails, the upgrade silently changes
+// behaviour on every existing chain.
+func TestParamsWithoutAssertionModeReadsAsOff(t *testing.T) {
+	// Params as an older binary would have written them: the field simply is not present.
+	old := types.Params{UpdateCredentialMaxChangedIdentityFields: 1}
+	b, err := old.Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var got types.Params
+	if err := got.Unmarshal(b); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.SignRecoverKeyGuardianAssertionMode != types.SignRecoverKeyAssertionOff {
+		t.Fatalf("params predating this field must read as off (0), got %d",
+			got.SignRecoverKeyGuardianAssertionMode)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("params predating this field must still validate, got %v", err)
+	}
+}
+
+// DefaultParams() is what a chain starts from, and it must leave the gate OFF -- shipping it on
+// would enforce an invariant that has never been measured against real traffic.
+func TestDefaultParamsLeavesAssertionGateOff(t *testing.T) {
+	if got := types.DefaultParams().SignRecoverKeyGuardianAssertionMode; got != types.SignRecoverKeyAssertionOff {
+		t.Fatalf("the gate must ship off, got %d", got)
+	}
+}

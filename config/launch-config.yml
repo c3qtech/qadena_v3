@@ -355,6 +355,17 @@ genesis:
         # Leave false unless the chain deliberately permits un-KYC'd wallets to send.  False is the
         # enforcing state, and is also what an un-upgraded chain reports, so it fails safe.
         allow_transfer_without_ekyc: false
+        # Institutional guardians stating the identity they verified on a social-recovery
+        # signature: 0 = off, 1 = audit (compare and log, still accept), 2 = enforce.
+        #
+        # SHIPS AT 0, and this deliberately DIFFERS from config/config.yml, which runs the devnet
+        # at 1 (audit) so the invariant gets measured somewhere before it is enforced anywhere.
+        #
+        # Raising this to 2 before a devnet at 1 has shown real traffic matching would fail every
+        # institutional signature closed -- the gate rests on a guardian's hash equalling the one
+        # issuance produced, which is unproven until those logs are clean.  Individual guardians
+        # are exempt in every mode.  Raised by governance, not by a deploy.
+        sign_recover_key_guardian_assertion_mode: 0
 
       # Accounts allowed to move coins with a direct bank send WITHOUT being AML-scanned.  Every
       # other account-to-account transfer, by any module, goes through the same enclave scan as

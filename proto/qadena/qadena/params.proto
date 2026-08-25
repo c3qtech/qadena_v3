@@ -96,6 +96,34 @@ message Params {
   // allows a life event AND another edit in one update has given up that anchor.
   uint32 update_credential_max_changed_identity_fields = 25;
 
+  // Whether an INSTITUTIONAL guardian must state, in MsgSignRecoverPrivateKey, the identity it
+  // verified -- so the enclave can resolve that identity to a wallet itself and refuse to sign
+  // anything else.
+  //
+  //   0 = off      do not look at the assertion at all (pre-upgrade behaviour)
+  //   1 = audit    resolve and compare, LOG a mismatch, still accept
+  //   2 = enforce  resolve and compare, log, and REJECT a mismatch
+  //
+  // Guardians matched as a raw bech32 address (family and friends) are exempt in every mode: the
+  // hole this closes is specific to a SERVER resolving identity->wallet on its own side, which an
+  // individual signing from their own app does not do, and CreateCredentialHash needs all five
+  // identity fields byte-exact after canonicalization, so a human could not comply reliably.
+  //
+  // AN ENUM IN A uint32, NOT A bool, because "verify but do not reject yet" is the state this
+  // whole change is built around.  The scheme rests on one unproven invariant -- that the hash a
+  // guardian computes at signing time equals the one issuance produced -- and if that is wrong,
+  // enforcing it fails every institutional signature closed.  Mode 1 proves it against real
+  // traffic first.  Validate() rejects anything above 2.
+  //
+  // THE DIRECTION IS THE OPPOSITE OF allow_transfer_without_ekyc (24), deliberately.  That flag is
+  // named so proto3's zero is the ENFORCING state, because an unset param must never silently
+  // switch an AML control off.  That reasoning does not carry here: this control does not exist
+  // before the upgrade, and no guardian has ever sent an assertion, so a zero that meant "enforce"
+  // would break every institutional signature on an un-upgraded chain the moment it upgraded.
+  // Zero therefore means "behave exactly as before", which is the same exception
+  // block_transfer_without_opt_in_reason (26) documents for itself.
+  uint32 sign_recover_key_guardian_assertion_mode = 27;
+
   // NOTE: the bank-send whitelist is deliberately NOT a param.  Params are replaced wholesale by
   // MsgUpdateParams, so adding one address would mean restating every other one, and a mistake
   // there silently drops exemptions.  It lives in its own keyed state with add/remove messages --

@@ -221,7 +221,50 @@ echo "refused at submission, naming the offending param"
 echo "params unchanged"
 
 echo "========================="
-echo "3. a VALID params update still passes"
+echo "3. an out-of-range guardian assertion mode is REFUSED"
+echo "========================="
+# A THIRD SHAPE, and the reason this one is worth a case of its own: it is the only ENUM in the
+# struct.  Every other gate here is a bool, which cannot hold an invalid value, so nothing else in
+# Params needs range-checking and it is easy to assume this does not either.
+#
+# The failure is silent in the dangerous direction.  SignRecoverKeyAssertionModeFromParams maps
+# anything it does not recognise to OFF -- deliberately, so a param written by a newer binary can
+# never make an older one start rejecting signatures.  So a fat-fingered 3 in a proposal meant to
+# switch enforcement ON would instead leave institutional guardians entirely unverified, while the
+# proposal itself read as a success.  Refusing it at submission is what makes that impossible.
+bad_params=$(echo "$original_params" | jq '.sign_recover_key_guardian_assertion_mode = 3')
+
+submit_expecting_rejection "$bad_params" \
+    "regression test: out-of-range guardian assertion mode" \
+    "sign_recover_key_guardian_assertion_mode"
+echo "refused at submission, naming the offending param"
+
+[ "$(live_params)" = "$original_params" ] || fail "the refused proposal still changed the params"
+echo "params unchanged"
+
+echo "========================="
+echo "4. every VALID guardian assertion mode is accepted"
+echo "========================="
+# The other half of case 3: over-strict validation here would make the gate unraisable, which is
+# worse than not having it -- the whole point of the audit state is that an operator can move to it
+# and back while measuring.  Each mode is submitted and then the original restored, so the suite
+# stays idempotent and the chain is left exactly as it was found.
+for mode in 0 1 2; do
+    mode_params=$(echo "$original_params" | jq ".sign_recover_key_guardian_assertion_mode = $mode")
+    submit_expecting_pass "$mode_params" "regression test: guardian assertion mode $mode"
+    actual=$(live_params | jq -r '.sign_recover_key_guardian_assertion_mode // 0')
+    [ "$actual" = "$mode" ] \
+        || fail "submitted assertion mode $mode but the chain reports $actual"
+    echo "mode $mode accepted and stored"
+done
+
+# Put it back the way it was found, whatever that was.  Not assumed to be 0: a chain already
+# running in audit must not be silently switched off by running this suite.
+submit_expecting_pass "$original_params" "regression test: restore original assertion mode"
+echo "original assertion mode restored"
+
+echo "========================="
+echo "5. a VALID params update still passes"
 echo "========================="
 # The other half, and the one that catches over-strict validation.  Cases 1 and 2 would both pass
 # just as well if Validate() rejected everything -- which would brick governance's ability to change

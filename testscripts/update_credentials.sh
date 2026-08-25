@@ -279,6 +279,55 @@ echo "========================="
 expect_ok qadenad_alias tx qadena create-credential $swap_a $swap_bf personal-info "Rhodora Roxas$suffix" "Roxas$suffix" "Villarica$suffix" "1970-Mar-02" "PH" "PH" "F" --from $identityprovider --yes
 expect_ok qadenad_alias tx qadena update-credential $swap_a $swap_bf personal-info --from $u_dory --yes
 
+# WHAT THE GUARDIAN IDENTITY-ASSERTION GATE DOES TO THESE CASES.
+#
+# The recovery cases below are signed by three partners, and TWO of them are INSTITUTIONAL:
+# $identityprovider (resolved as a service provider) and pioneer1 (resolved as a pioneer).  Only
+# victor-eph1, matched as a raw bech32 address, is an individual.  That classification is what
+# sign_recover_key_guardian_assertion_mode acts on, so this suite's behaviour depends on the param
+# and the cases have to be chosen from it rather than assumed:
+#
+#   0 off      nothing looks at the assertion; these cases run exactly as they always did.
+#   1 audit    the enclave resolves and compares, LOGS a mismatch, and still accepts.  These
+#              signatures carry no assertion, so each institutional one logs
+#              "guardian-assertion: MISMATCH" and is accepted.  The suite must still pass --
+#              that is the whole point of the state, and it is the value config/config.yml
+#              currently ships for the devnet.
+#   2 enforce  an institutional signature with no assertion is REFUSED.  Two of the three
+#              partners cannot sign, the threshold is never met, and no seed phrase is released.
+#
+# AT ENFORCE THESE CASES ARE SKIPPED, NOT FAILED, and not quietly.  Completing them needs the
+# guardian to send the identity hash it verified, which is produced by the app-server half of this
+# change -- and computing it here is not a shortcut worth taking: the hash must be byte-identical to
+# the one issuance produced, and a test that derives it independently would prove only that the test
+# agrees with itself.  `sign-recover-key --guardian-credential-hash <hex>` is the flag to use once a
+# real producer exists.
+#
+# The gate's own behaviour in all three modes is covered where it can be asserted precisely:
+# cmd/qadenad_enclave/enclave_guardian_assertion_test.go drives the real SignRecoverKey handler
+# across every param state, both guardian classes, and matching/mismatched/absent assertions.
+guardian_assertion_mode=$(qadenad_alias query qadena params --output json 2>/dev/null \
+    | jq -r '.params.sign_recover_key_guardian_assertion_mode // 0')
+[[ -n "$guardian_assertion_mode" ]] || guardian_assertion_mode=0
+echo "guardian identity-assertion mode: $guardian_assertion_mode"
+
+if [[ "$guardian_assertion_mode" -ge 2 && -z "$UPDATE_CREDENTIALS_SKIP_RECOVERY" ]]; then
+    echo "========================="
+    echo "SKIPPING key recovery cases: guardian assertion mode is $guardian_assertion_mode (enforce)"
+    echo "========================="
+    echo "  Two of jill's three recovery partners are institutional ($identityprovider as a service"
+    echo "  provider, pioneer1 as a pioneer), and at enforce an institutional signature without an"
+    echo "  identity assertion is refused -- so the 3-of-3 threshold can never be met here."
+    echo ""
+    echo "  This is the gate working, not a regression.  Running these cases needs a producer that"
+    echo "  sends the identity hash it verified (the app-server half); pass it with"
+    echo "  sign-recover-key --guardian-credential-hash <hex>."
+    echo ""
+    echo "  The gate itself IS tested, in all three modes and both guardian classes, by"
+    echo "  cmd/qadenad_enclave/enclave_guardian_assertion_test.go."
+    UPDATE_CREDENTIALS_SKIP_RECOVERY=1
+fi
+
 if [[ -z "$UPDATE_CREDENTIALS_SKIP_RECOVERY" ]]; then
 
 # ON BY DEFAULT, and against THIS RUN'S jill -- see the header for why these used to use the shared

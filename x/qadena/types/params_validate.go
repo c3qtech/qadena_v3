@@ -65,6 +65,18 @@ func (p Params) Validate() error {
 			maxIdentityFieldCount, p.UpdateCredentialMaxChangedIdentityFields)
 	}
 
+	// AN ENUM LIVING IN A uint32, so unlike every bool here it HAS an invalid value.  No bool in
+	// this struct is validated because there is nothing a bool can be that is wrong; this field
+	// needs the check precisely because the type is wider than the meaning.
+	//
+	// Getting it wrong is not loud: SignRecoverKeyAssertionModeFromParams treats any unrecognised
+	// value as off, so a fat-fingered 3 in a gov proposal would silently leave institutional
+	// guardians unverified while the proposal read as though it had switched enforcement on.
+	if p.SignRecoverKeyGuardianAssertionMode > SignRecoverKeyAssertionEnforce {
+		return fmt.Errorf("sign_recover_key_guardian_assertion_mode must be 0 (off), 1 (audit) or 2 (enforce), got %d",
+			p.SignRecoverKeyGuardianAssertionMode)
+	}
+
 	// Coin-shaped strings.  Empty means "unset" for all of these and the loaders supply a default,
 	// so only a non-empty value is checked.
 	for _, f := range []struct {
@@ -127,3 +139,21 @@ func validatePositiveCoin(name, value string) error {
 	}
 	return nil
 }
+
+// The three states of sign_recover_key_guardian_assertion_mode.
+//
+// Declared in types/ rather than common/ because Validate() above is the one place that must
+// reject an out-of-range value, and common/ imports this package rather than the other way round.
+const (
+	// SignRecoverKeyAssertionOff is the proto3 zero, and therefore what an un-upgraded chain and
+	// any params predating this field read as: do not look at the assertion at all.
+	SignRecoverKeyAssertionOff uint32 = 0
+	// SignRecoverKeyAssertionAudit resolves the assertion and LOGS a mismatch, but still accepts
+	// the signature.  This is the state the whole design exists to make possible: the scheme rests
+	// on the guardian's hash matching the one issuance produced, and enforcing an unproven
+	// invariant would fail every institutional signature closed.
+	SignRecoverKeyAssertionAudit uint32 = 1
+	// SignRecoverKeyAssertionEnforce rejects a mismatch.  Only safe once audit has shown real
+	// traffic matching.
+	SignRecoverKeyAssertionEnforce uint32 = 2
+)

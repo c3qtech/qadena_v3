@@ -457,6 +457,26 @@ message MsgSignRecoverPrivateKey {
   bytes       encDestinationEWalletIDVShare = 2; // formerly encDestinationEWalletIDSSIntervalPubK
   VShareBindData       destinationEWalletIDVShareBind = 3;
   RecoverShare recoverShare                            = 4;
+  // WHO THE GUARDIAN ACTUALLY VERIFIED.
+  //
+  // An institutional guardian's app server resolves identity -> wallet entirely on its own side
+  // (an authenticated email, then a NameBinding lookup) and used to put only the encrypted
+  // DESTINATION wallet id in this message.  So the enclave could not check that the human who
+  // authenticated had anything to do with the wallet being signed: if the server resolved the
+  // wrong user, every enclave check still passed, and the signature landed on a stranger's
+  // recovery -- consuming the guardian's one signature there and stranding the real user, since
+  // the per-record dedup allows a guardian to sign only once.
+  //
+  // These carry the identity hash the guardian verified, so the enclave can resolve it to a wallet
+  // through its OWN indexes (getCredentialByHash -> getProtectSubWalletIDByOriginalWalletID) and
+  // compare.  The enclave never takes a wallet id from the guardian -- same discipline as the
+  // client-supplied hash that is checked against an enclave-derived value elsewhere.
+  //
+  // Payload is an EncryptableString whose Value is the hex of common.CreateCredentialHash.
+  // OPTIONAL on the wire: whether it is required depends on the guardian's class and on
+  // Params.sign_recover_key_guardian_assertion_mode, neither of which ValidateBasic can see.
+  bytes          encGuardianCredentialHashVShare  = 5;
+  VShareBindData guardianCredentialHashVShareBind = 6;
 }
 
 message MsgSignRecoverPrivateKeyResponse {}

@@ -317,6 +317,32 @@ genesis:
         # the threshold is chosen from the sender's residency and citizenship, so a sender with
         # neither has no limit to be held to.  Set true only for a chain that does not require eKYC.
         allow_transfer_without_ekyc: false
+        # Whether an INSTITUTIONAL guardian must state, in its social-recovery signature, the
+        # identity it verified -- so the enclave resolves that identity to a wallet itself instead
+        # of trusting the wallet id the guardian's server picked.
+        #
+        #   0 = off, 1 = audit (compare and log, still accept), 2 = enforce (reject a mismatch)
+        #
+        # AUDIT HERE, OFF AT LAUNCH.  This is the DEVNET genesis, and 1 is deliberately not the
+        # same value config/launch-config.yml ships -- the two are meant to differ.
+        #
+        # The whole scheme rests on one unmeasured invariant: that the hash a guardian computes at
+        # signing time equals the one issuance produced and the enclave stores.  If that is wrong,
+        # enforcing it fails every institutional signature CLOSED and recovery stops for everyone.
+        # Audit resolves and compares and LOGS, while still accepting, so running the devnet here
+        # is what actually measures the invariant instead of assuming it.  Grep the enclave log for
+        #
+        #     guardian-assertion: MISMATCH
+        #
+        # A clean devnet run at 1 is the evidence needed before anyone proposes 2 anywhere.
+        # Mismatches are expected until the app server side ships the assertion (Plan B) -- an
+        # absent assertion counts as a mismatch, so before then every institutional signature logs
+        # one and is still accepted.  That is the point; it is not a regression.
+        #
+        # Individual (family/friend) guardians are exempt in every mode.  "Institutional" means any
+        # guardian whose name resolves via PioneerNodeType or ServiceProviderNodeType -- pioneer1
+        # included, not just the --is-service-provider signers.
+        sign_recover_key_guardian_assertion_mode: 1
       # Non-wallet parties allowed to take part in a direct bank send.  They are STILL AML-scanned --
       # nothing on this chain moves account-to-account without being scanned.  Listing an address
       # here says only that it may participate while holding no credential, and that reports naming

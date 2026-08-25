@@ -6273,7 +6273,19 @@ func (s *qadenaServer) RemoveCredential(ctx context.Context, in *types.EnclaveRe
 	return &types.RemoveCredentialReply{Status: true}, nil
 }
 
-func (s *qadenaServer) SignRecoverKey(ctx context.Context, in *types.MsgSignRecoverPrivateKey) (*types.SignRecoverKeyReply, error) {
+func (s *qadenaServer) SignRecoverKey(ctx context.Context, req *types.EnclaveSignRecoverKeyRequest) (*types.SignRecoverKeyReply, error) {
+	// Same guard EnclaveUpdateCredentialRequest's handler applies: the wrapper's inner message is a
+	// pointer, and every dereference below assumes it is there.
+	if req.Msg == nil {
+		return nil, types.ErrInvalidSignRecoverKey
+	}
+	in := req.Msg
+
+	// THE MODE COMES FROM KEEPER PARAMS, NEVER FROM THE MESSAGE.  The keeper stamps them per call
+	// (see EnclaveSignRecoverKeyRequest), so every validator evaluates the same gate and a
+	// governance change takes effect without restarting any node.
+	assertionMode := c.SignRecoverKeyAssertionModeFromParams(req.Params)
+
 	if s.RealEnclave {
 		c.LoggerDebug(logger, "SignRecoverKey")
 	} else {
@@ -6322,7 +6334,13 @@ func (s *qadenaServer) SignRecoverKey(ctx context.Context, in *types.MsgSignReco
 		}
 
 		// find the canonical name of the signer
+		//
+		// signerIsServiceProvider records the CLASS while we are here, because the two facts are
+		// established by the same walk and cannot be re-derived afterwards from signerName alone --
+		// a canonical name resolved via Pioneer/ServiceProvider looks like any other string once
+		// the loop has exited.  Only this class is held to the identity assertion below.
 		var signerName string
+		var signerIsServiceProvider bool
 		for _, recoverShare := range protectKey.RecoverShare {
 			// check if recoverShare.WalletID is a bech32 address
 			if !c.IsBech32Address(recoverShare.WalletID) {
@@ -6331,6 +6349,7 @@ func (s *qadenaServer) SignRecoverKey(ctx context.Context, in *types.MsgSignReco
 					// it's a canonical name
 					if walletID == in.Creator {
 						signerName = recoverShare.WalletID
+						signerIsServiceProvider = true
 						break
 					}
 				} else {
@@ -6340,6 +6359,7 @@ func (s *qadenaServer) SignRecoverKey(ctx context.Context, in *types.MsgSignReco
 						// it's a canonical name
 						if walletID == in.Creator {
 							signerName = recoverShare.WalletID
+							signerIsServiceProvider = true
 							break
 						}
 					}
@@ -6358,6 +6378,24 @@ func (s *qadenaServer) SignRecoverKey(ctx context.Context, in *types.MsgSignReco
 		}
 
 		c.LoggerDebug(logger, "SignRecoverKey: signerName "+signerName)
+
+		// THE GUARDIAN MUST HAVE VERIFIED THE PERSON WHOSE WALLET THIS IS.
+		//
+		// Everything above establishes only that a named guardian's key signed for wallet X.  An
+		// institutional guardian resolves identity -> wallet on its own server, so if it resolved
+		// the WRONG user, every check so far still passes: the record exists and the guardian
+		// really is a guardian of it.  The signature then lands on a stranger's recovery, and the
+		// dedup immediately below consumes the guardian's one signature there -- stranding the
+		// real user permanently, since a guardian may sign each record only once.
+		//
+		// So resolve the asserted identity to a wallet HERE, using the enclave's own indexes, and
+		// compare.  A wallet id is never taken from the guardian.
+		//
+		// Placed after the signerName check because it needs the class, and BEFORE the dedup so a
+		// rejected signature does not burn the guardian's slot on the way out.
+		if err := s.checkGuardianIdentityAssertion(in, assertionMode, signerName, signerIsServiceProvider, dstEWalletID.WalletID); err != nil {
+			return nil, err
+		}
 
 		for _, signature := range recoverKey.Signatory {
 			if signature == signerName {
