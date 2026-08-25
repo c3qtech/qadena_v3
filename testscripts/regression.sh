@@ -24,7 +24,7 @@
 #   enf           enf-smart-contracts: the ENF notarial book (ENP registry + entries)
 #   enclave-rollback  send a tx, roll chain+enclave back past it, prove the state reverted
 #   enclave-crash     stall the enclave: the node must HALT, not fork, then recover
-#   credentials   update_credentials.sh -- corrections, rejections, contacts, anti-squat,
+#   credentials   test_credentials.sh -- corrections, rejections, contacts, anti-squat,
 #                 and key recovery (--skip recovery drops just the recovery cases)
 #   replenish     al's ENCRYPTED balance is topped back up before anything spends it
 #   peer-agreement   every peer computed the SAME app hash -- i.e. no fork
@@ -1284,7 +1284,7 @@ run_test "uniqueness"  "$qadenatestscripts/test_credential_uniqueness.sh"
 # Skippable ON ITS OWN, without losing the rest of the suite: --skip recovery.  That is one --skip
 # vocabulary for both, and run_regression_continually.sh already forwards --skip verbatim.
 if is_skipped "recovery"; then
-    export UPDATE_CREDENTIALS_SKIP_RECOVERY=1
+    export TEST_CREDENTIALS_SKIP_RECOVERY=1
     # Only worth saying when credentials is actually going to run -- "credentials will run without
     # its recovery cases" is a confusing thing to print immediately above `credentials  SKIP`.
     if ! is_skipped "credentials"; then
@@ -1292,9 +1292,9 @@ if is_skipped "recovery"; then
         echo "note: --skip recovery -- credentials will run WITHOUT its key-recovery cases (6, 6a, 6b)"
     fi
 else
-    unset UPDATE_CREDENTIALS_SKIP_RECOVERY
+    unset TEST_CREDENTIALS_SKIP_RECOVERY
 fi
-run_test "credentials" "$qadenatestscripts/update_credentials.sh"
+run_test "credentials" "$qadenatestscripts/test_credentials.sh"
 # Immediately after uniqueness because that is the suite the rotation race kept breaking: a VShare
 # bound just before the SS interval key rotated was rejected as invalid (qadena code 1142).  This
 # forces rotations rather than waiting 555 blocks for one.  Skips loudly on real SGX, where the

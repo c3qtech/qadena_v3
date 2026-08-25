@@ -550,12 +550,12 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
 
         CLAIMED      every cycle
         UPDATED      only under --with-credentials, which the loop never passes
-        RECOVERKEY   only under --with-credentials as well -- update_credentials.sh
+        RECOVERKEY   only under --with-credentials as well -- test_credentials.sh
                      carries its own recovery flow (recover-jill / recover-jill2, claimed
                      with --recover-key).  The standalone test_key_recovery.sh is wired
                      into no harness at all, but the sentinel itself is not uncovered.
 
-    update_credentials.sh is excluded for a STATED and good reason (regression.sh:59):
+    test_credentials.sh is excluded for a STATED and good reason (regression.sh:59):
     single-use claim codes and consumed rate-limit windows mean it cannot run twice
     against one chain.  test_key_recovery.sh is excluded for NO stated reason anywhere;
     its absence is merely observed in passing at regression.sh:571, where it is relied on
@@ -579,7 +579,7 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
       it needs to be run on a chain that is then joined.
     - Make the single-shot suites parameterised by a per-run id, the way
       test_credential_uniqueness.sh already is, so they become repeatable.  That is a
-      real piece of work for update_credentials.sh (its claim codes are baked in at the
+      real piece of work for test_credentials.sh (its claim codes are baked in at the
       top) but it converts an opt-in into a default.
     - Failing both, assert the invariant directly and cheaply on every joiner:
       |CredentialPCXY| == |credentials with a findCredentialPedersenCommit|.  It is one
@@ -589,7 +589,7 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     The third is worth doing even if the first two happen, because it is the only one
     that keeps working on a chain whose history nobody replayed.
 
-    PARTLY RESOLVED 2026-08-17 -- the second bullet, for update_credentials.sh.  It now
+    PARTLY RESOLVED 2026-08-17 -- the second bullet, for test_credentials.sh.  It now
     provisions its own four identities per run (setup.sh --prefix) AND its key-recovery
     cases run against the per-run jill with per-run recovery wallets, mnemonics and claim
     codes.  Nothing is consumed irreversibly, so the whole suite repeats, and the
@@ -605,7 +605,7 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
 
 41. **setup.sh --prefix silently produces unclaimable credentials unless the prefix is
     NUMERIC, because the CLI throws away a parse error.**  Found 2026-08-15 while making
-    update_credentials.sh repeatable.
+    test_credentials.sh repeatable.
 
     --prefix suffixes the blinding factor along with the names (bf "5678" -> "5678ZZTEST"),
     and the CLI parses it as a base-10 integer with the error DISCARDED:
@@ -654,7 +654,7 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     error -- the same shape as "the bring-up harness reported success while testing
     nothing" (commit 31616f51), which this repo has already been bitten by once.
 
-    IT IS ALSO REDUNDANT.  update_credentials.sh cases 6/6a/6b cover the same flow and
+    IT IS ALSO REDUNDANT.  test_credentials.sh cases 6/6a/6b cover the same flow and
     actually check it: the seed is withheld at 2-of-3 signatories and released at 3, the
     released phrase equals jill's real mnemonic, a second recovery returns the same
     phrase, and -- the part nothing else covers -- recovery still works when the user
@@ -667,7 +667,7 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
     evidence to whoever reads the summary.
 
     SO: add assertions to it FIRST, then wire it in.  Until then the recovery coverage
-    that means anything is the one inside update_credentials.sh.
+    that means anything is the one inside test_credentials.sh.
 
 43. **SetCredential refuses to re-store a credential it has already indexed, so a partial
     re-sync loses every row it has already seen.**  Found 2026-08-15 while costing the
@@ -790,7 +790,7 @@ took three fixes (iavl v1.2.8, the store-push reorder in `b60c6316`, and the pee
 
 48. **CredentialHashMap and the other enclave-private derived indexes have NO comparison of any
     kind.**  Not mirrored, not hashed by GetStoreHash, not accumulated: corruption is invisible
-    to everything except update_credentials case 6b, which only exists because the suite happens
+    to everything except test_credentials case 6b, which only exists because the suite happens
     to recover through the primary hash.  This is the third member of the CredentialPCXY bug
     class (derived index, conditionally maintained, no ground-truth check).  Enclave-private
     accumulators would cost nothing consensus-wise -- enclave state never touches the app hash --
@@ -1321,7 +1321,7 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     is item 69's complaint about the state-sync join, in a place where the cost of being wrong has
     already been measured at 16 blocks and a rollback.
 
-81. **update_credentials.sh case 3 passes without proving what its own comment claims.**  The case is
+81. **test_credentials.sh case 3 passes without proving what its own comment claims.**  The case is
     the right idea -- the identity provider mints a credential for a DIFFERENT person (Ferdinand /
     Romualdez / Marcos, 1957-Sep-13) and al, who is Rodolfo Alberto / Asuncion / Villarica,
     1970-Feb-02, tries to update onto it.  First, middle, last and birthdate all move at once, which

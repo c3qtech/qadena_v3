@@ -48,7 +48,48 @@ function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 # with what is being tested -- and the suite reported a failure that looked like a chain problem.
 # A fixed name in a shared directory is also the classic shape of a symlink attack.
 proposal_file=$(mktemp -t qadena-params-proposal.XXXXXX) || { echo "could not create a temp file"; exit 1; }
-trap 'rm -f "$proposal_file"' EXIT INT TERM
+
+# THE EXIT PATH HAS TO SAY WHEN IT LEFT A PARAM RAISED, or this suite stops being idempotent in the
+# one way that matters.
+#
+# Case 4 walks sign_recover_key_guardian_assertion_mode through 0, 1 and 2 and restores the original
+# at the end.  That is fine when it completes.  But `set -e` is on, so a failed submit -- or a
+# Ctrl-C, or the suite being killed by a runner -- can exit BETWEEN raising the mode and restoring
+# it, leaving the chain at whatever the loop last set.  Observed for real: killing this suite
+# mid-loop left a devnet at 2 (enforce).
+#
+# The second-order effect is what makes it dangerous rather than untidy.  The next run reads
+# original_params FROM THE LIVE CHAIN, so it would take the stranded 2 as "original" and faithfully
+# restore to it -- permanently enforcing, with test_credentials.sh silently skipping its recovery
+# cases and the whole thing looking like a deliberate configuration.
+#
+# Restoring it from here is NOT the right answer: a governance round trip takes a voting period,
+# and this trap may well be firing BECAUSE governance just failed.  So it detects and reports,
+# loudly, with the command that fixes it -- turning a silent permanent config change into a visible
+# one.  (The in-flight restore proposal often lands on its own after the script dies, which is luck,
+# not a mechanism, and is exactly why the warning has to be printed either way.)
+cleanup_params_suite() {
+    local rc=$?
+    rm -f "$proposal_file"
+    if [ -n "${original_assertion_mode:-}" ]; then
+        local now
+        now=$(live_params 2>/dev/null | jq -r '.sign_recover_key_guardian_assertion_mode // 0' 2>/dev/null)
+        if [ -n "$now" ] && [ "$now" != "$original_assertion_mode" ]; then
+            echo "" >&2
+            echo "WARNING: this suite is exiting with sign_recover_key_guardian_assertion_mode left at $now" >&2
+            echo "         (it was $original_assertion_mode when the suite started)." >&2
+            echo "" >&2
+            echo "  A restore proposal may still be in flight and land on its own -- check with:" >&2
+            echo "      qadenad query qadena params --output json | jq .params.sign_recover_key_guardian_assertion_mode" >&2
+            echo "" >&2
+            echo "  If it stays at $now, put it back BEFORE running this suite again: a later run reads" >&2
+            echo "  the live params as its baseline and would restore to $now rather than $original_assertion_mode." >&2
+            echo "  At 2 (enforce), test_credentials.sh skips its key-recovery cases." >&2
+        fi
+    fi
+    exit $rc
+}
+trap cleanup_params_suite EXIT INT TERM
 
 fail() {
     echo "FAILED: $1" >&2
@@ -178,6 +219,10 @@ authority=$(qadenad_alias query auth module-account gov --output json 2>/dev/nul
 
 original_params=$(live_params)
 [ -n "$original_params" ] && [ "$original_params" != "null" ] || fail "could not read the module params"
+# Recorded for the exit trap above, which cannot read original_params reliably (it is a large JSON
+# blob and the trap may fire before it is set).
+original_assertion_mode=$(echo "$original_params" | jq -r '.sign_recover_key_guardian_assertion_mode // 0')
+echo "guardian assertion mode at start: $original_assertion_mode"
 echo "params read; cool-down is currently $(echo "$original_params" | jq -r '.update_credential_min_blocks_between_updates // "unset"')"
 
 echo "========================="

@@ -288,7 +288,7 @@ genesis:
         update_birthdate_max_year_delta: 1
         # TEST VALUE.  ~4 hours at this chain's 1.5s blocks -- the old "~1 day at 8s blocks" comment
         # never matched this config, which sets timeout_commit 1.5s.  4 hours is fine here: case 9
-        # of update_credentials.sh only needs the window to still be open moments after case 1.
+        # of test_credentials.sh only needs the window to still be open moments after case 1.
         # Mainnet targets 3s blocks and a real day: see update_credential_min_blocks_between_updates
         # in config/launch-config.yml.
         update_credential_min_blocks_between_updates: "10000"

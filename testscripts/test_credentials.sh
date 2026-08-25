@@ -50,7 +50,7 @@
 # script rather than passing quietly.
 #
 # The KEY RECOVERY cases (6, 6a, 6b) RUN BY DEFAULT, against THIS RUN'S jill like every other case.
-# Set UPDATE_CREDENTIALS_SKIP_RECOVERY=1 to leave them out -- an escape hatch, not a gate: they cost
+# Set TEST_CREDENTIALS_SKIP_RECOVERY=1 to leave them out -- an escape hatch, not a gate: they cost
 # one protect-key and a handful of transactions, so the reason to skip them is a chain that cannot
 # afford the traffic, not a correctness constraint.  regression.sh reaches this through its ordinary
 # --skip recovery.
@@ -279,6 +279,12 @@ echo "========================="
 expect_ok qadenad_alias tx qadena create-credential $swap_a $swap_bf personal-info "Rhodora Roxas$suffix" "Roxas$suffix" "Villarica$suffix" "1970-Mar-02" "PH" "PH" "F" --from $identityprovider --yes
 expect_ok qadenad_alias tx qadena update-credential $swap_a $swap_bf personal-info --from $u_dory --yes
 
+# The old spelling is still honoured.  This script was update_credentials.sh, and the variable was
+# named after it; someone with the old name in a shell history or a CI job would otherwise find the
+# recovery cases quietly running again rather than being skipped, which is the wrong direction for
+# an escape hatch to fail in.
+: ${TEST_CREDENTIALS_SKIP_RECOVERY:=$UPDATE_CREDENTIALS_SKIP_RECOVERY}
+
 # WHAT THE GUARDIAN IDENTITY-ASSERTION GATE DOES TO THESE CASES.
 #
 # The recovery cases below are signed by three partners, and TWO of them are INSTITUTIONAL:
@@ -306,29 +312,113 @@ expect_ok qadenad_alias tx qadena update-credential $swap_a $swap_bf personal-in
 # The gate's own behaviour in all three modes is covered where it can be asserted precisely:
 # cmd/qadenad_enclave/enclave_guardian_assertion_test.go drives the real SignRecoverKey handler
 # across every param state, both guardian classes, and matching/mismatched/absent assertions.
+# BASELINE THE ENCLAVE'S ASSERTION COUNTER BEFORE ANY SIGNATURE, so the checks below can measure
+# what THIS run produced.  The log file is per-day and cumulative, so an absolute count says nothing
+# on a chain that has already run today -- only the delta does.  Read before the mode branch because
+# BOTH branches need it: audit asserts the gate spoke, enforce asserts the refusals came from it.
+enclave_log=$(ls -t "$QADENAHOME/logs"/qadena-*.log 2>/dev/null | head -1)
+# -a because the log carries ANSI colour and the occasional binary byte, which otherwise makes grep
+# report "Binary file matches" and print no count at all.
+assertion_lines_before=0
+if [[ -n "$enclave_log" ]]; then
+    assertion_lines_before=$(grep -ac "guardian-assertion: MISMATCH" "$enclave_log" 2>/dev/null)
+    [[ -n "$assertion_lines_before" ]] || assertion_lines_before=0
+fi
+
 guardian_assertion_mode=$(qadenad_alias query qadena params --output json 2>/dev/null \
     | jq -r '.params.sign_recover_key_guardian_assertion_mode // 0')
 [[ -n "$guardian_assertion_mode" ]] || guardian_assertion_mode=0
 echo "guardian identity-assertion mode: $guardian_assertion_mode"
 
-if [[ "$guardian_assertion_mode" -ge 2 && -z "$UPDATE_CREDENTIALS_SKIP_RECOVERY" ]]; then
+if [[ "$guardian_assertion_mode" -ge 2 && -z "$TEST_CREDENTIALS_SKIP_RECOVERY" ]]; then
     echo "========================="
-    echo "SKIPPING key recovery cases: guardian assertion mode is $guardian_assertion_mode (enforce)"
+    echo "6e. ENFORCE: an institutional guardian with no identity assertion is REFUSED"
     echo "========================="
-    echo "  Two of jill's three recovery partners are institutional ($identityprovider as a service"
-    echo "  provider, pioneer1 as a pioneer), and at enforce an institutional signature without an"
-    echo "  identity assertion is refused -- so the 3-of-3 threshold can never be met here."
-    echo ""
-    echo "  This is the gate working, not a regression.  Running these cases needs a producer that"
-    echo "  sends the identity hash it verified (the app-server half); pass it with"
-    echo "  sign-recover-key --guardian-credential-hash <hex>."
-    echo ""
-    echo "  The gate itself IS tested, in all three modes and both guardian classes, by"
-    echo "  cmd/qadenad_enclave/enclave_guardian_assertion_test.go."
-    UPDATE_CREDENTIALS_SKIP_RECOVERY=1
+    # THE SECURITY PROPERTY, ON A REAL CHAIN.  Everything else in this suite tests that recovery
+    # WORKS; this tests that it stops working for the case the gate exists to stop.
+    #
+    # The full happy path cannot run at enforce, and deliberately is not faked: completing it needs
+    # the guardian to send the identity hash it verified, produced by the app-server half.  A test
+    # that derived that hash itself would prove only that the test agrees with itself -- the whole
+    # value of the check is that the hash was computed independently, at issuance, by different
+    # code.  So what is asserted here is the half that needs no producer, which happens to be the
+    # half that matters:
+    #
+    #   * an institutional signature carrying NO assertion is REFUSED
+    #   * an INDIVIDUAL signature is still ACCEPTED -- the exemption has to hold precisely where
+    #     enforcement is on, or enforcing would break recovery for family and friends, the class
+    #     this control was never aimed at
+    #   * the seed phrase stays WITHHELD, because the threshold can no longer be met
+    #
+    # AN ENFORCE-SPECIFIC BASELINE.  assertion_lines_before counts MISMATCH lines in EVERY mode,
+    # so subtracting it from a mode=enforce count would go NEGATIVE on any log that already holds
+    # audit lines -- which is every chain that ran this suite before the mode was raised.  Count the
+    # same pattern that is checked later, and count it here, before a single signature is sent.
+    enforce_before=0
+    if [[ -n "$enclave_log" ]]; then
+        enforce_before=$(grep -ac "guardian-assertion: MISMATCH mode=enforce" "$enclave_log" 2>/dev/null)
+        [[ -n "$enforce_before" ]] || enforce_before=0
+    fi
+
+    # Same setup as case 6, against this run's jill.
+    expect_ok qadenad_alias tx qadena create-wallet $recover_jill_wallet pioneer1 --account-mnemonic="$recoverjillmnemonic" create-wallet-sponsor --yes
+    expect_ok qadenad_alias tx qadena create-credential $jill_recover_a $jill_recover_bf personal-info "Jill$suffix" "Lava$suffix" "Quimba$suffix" "1980-Jan-01" "PH" "PH" "F" --from $identityprovider --yes
+    expect_ok qadenad_alias tx qadena claim-credential $jill_recover_a $jill_recover_bf personal-info --from $recover_jill_wallet --recover-key --yes
+
+    echo "-------------------------"
+    echo "the service-provider guardian is refused"
+    echo "-------------------------"
+    expect_reject qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from $identityprovider --is-service-provider --yes
+
+    echo "-------------------------"
+    echo "the PIONEER guardian is refused too -- institutional is not only --is-service-provider"
+    echo "-------------------------"
+    # pioneer1 resolves through PioneerNodeType, which puts it in the same class.  Asserted
+    # separately because it is the classification most likely to be misread: nothing on the command
+    # line marks pioneer1 as institutional.
+    expect_reject qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from pioneer1 --yes
+
+    echo "-------------------------"
+    echo "the INDIVIDUAL guardian is still accepted"
+    echo "-------------------------"
+    expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from victor-eph1 --is-user --yes
+
+    echo "-------------------------"
+    echo "the seed phrase stays withheld: 1 of 3, and the other two cannot sign"
+    echo "-------------------------"
+    expect_reject qadenad_alias query qadena show-recover-key $recover_jill_wallet
+
+    echo "-------------------------"
+    echo "and the refusals were the GATE, not something else"
+    echo "-------------------------"
+    # A signature can be refused for plenty of reasons that have nothing to do with this change --
+    # a missing recover key, a guardian that is not a partner, an already-signed record.  Without
+    # this the two expect_reject calls above would pass just as well against a chain where recovery
+    # was broken outright, which would read as the gate working while it did nothing.
+    if [[ -z "$enclave_log" ]]; then
+        echo "  no enclave log under $QADENAHOME/logs -- cannot confirm the reason, not failing"
+    else
+        enforce_lines=$(grep -ac "guardian-assertion: MISMATCH mode=enforce" "$enclave_log" 2>/dev/null)
+        [[ -n "$enforce_lines" ]] || enforce_lines=0
+        enforce_delta=$(( enforce_lines - enforce_before ))
+        [[ "$enforce_delta" -ge 2 ]] || fail "the two institutional signatures were refused, but the enclave
+  logged only $enforce_delta guardian-assertion MISMATCH line(s) at mode=enforce (expected at least 2).
+  They were rejected for some OTHER reason, so this case is not testing the gate."
+        echo "  confirmed: $enforce_delta refusal(s) attributed to the identity assertion gate"
+    fi
+
+    echo "========================="
+    echo "6f. the rest of the recovery flow is NOT run at enforce"
+    echo "========================="
+    echo "  Cases 6, 6a and 6b need all three partners to sign, and two of them cannot without an"
+    echo "  identity hash from the app-server half.  Pass one with"
+    echo "  sign-recover-key --guardian-credential-hash <hex> once that exists."
+    echo "  The accept-a-correct-assertion path is covered meanwhile by"
+    echo "  cmd/qadenad_enclave/enclave_guardian_assertion_test.go, which drives the real handler."
+    TEST_CREDENTIALS_SKIP_RECOVERY=1
 fi
 
-if [[ -z "$UPDATE_CREDENTIALS_SKIP_RECOVERY" ]]; then
+if [[ -z "$TEST_CREDENTIALS_SKIP_RECOVERY" ]]; then
 
 # ON BY DEFAULT, and against THIS RUN'S jill -- see the header for why these used to use the shared
 # one, what that cost, and why they are no longer opt-in.  The partners stay shared on purpose: they
@@ -418,9 +508,64 @@ if [[ -z "$UPDATE_CREDENTIALS_SKIP_RECOVERY" ]]; then
     [ "$recovered2" = "$recovered" ] || fail "the two recoveries returned different seed phrases"
     echo "second recovery, via the current surname, returned the same mnemonic"
 
+    # WHAT THE GATE DID, MEASURED -- for BOTH states this script can reach.
+    #
+    # At mode 1 the recovery cases pass in exactly the same way they pass at mode 0: every signature
+    # is accepted either way, so nothing in this script's exit codes distinguishes a working audit
+    # from a gate that is silently inert.  The only observable difference is in the enclave log.
+    #
+    # So both directions are asserted, and each catches the opposite failure:
+    #
+    #   mode 0  the gate must have logged NOTHING.  A non-zero delta means it is evaluating
+    #           assertions on a chain that never asked it to -- which at best wastes work and at
+    #           worst starts refusing signatures the operator did not opt into.
+    #   mode 1  the gate must have logged at least the TWO institutional signatures per recovery
+    #           ($identityprovider as a service provider, pioneer1 as a pioneer), neither of which
+    #           carries an assertion.  A zero delta means the gate is inert -- the params never
+    #           reached the enclave, or the class test stopped matching service providers -- and
+    #           raising the mode to 2 later would silently protect nothing.
+    #
+    # Mode 2 is not reachable here: the cases are skipped above, because they cannot complete
+    # without a producer for the identity hash.
+    echo "========================="
+    echo "6c. what the guardian assertion gate did during these recoveries"
+    echo "========================="
+    if [[ -z "$enclave_log" ]]; then
+        echo "  no enclave log under $QADENAHOME/logs -- cannot measure, not failing"
+    else
+        assertion_lines_after=$(grep -ac "guardian-assertion: MISMATCH" "$enclave_log" 2>/dev/null)
+        [[ -n "$assertion_lines_after" ]] || assertion_lines_after=0
+        delta=$(( assertion_lines_after - assertion_lines_before ))
+        echo "  mode $guardian_assertion_mode: $delta MISMATCH line(s) logged by these recoveries"
+
+        if [[ "$guardian_assertion_mode" -eq 0 ]]; then
+            [[ "$delta" -eq 0 ]] || fail "the chain is at mode 0 (off) but the enclave logged $delta
+  guardian-assertion MISMATCH line(s).  Off must mean the assertion is not looked at AT ALL, so the
+  gate is running when nothing asked it to."
+            echo "  correct: the gate is off and stayed silent"
+        else
+            [[ "$delta" -ge 2 ]] || fail "the chain is at audit mode but these recoveries produced only
+  $delta guardian-assertion MISMATCH line(s), expected at least 2.  Every institutional signature
+  above carried no identity assertion, so each should have been flagged and still accepted.  Too few
+  means the gate is inert -- most likely the params never reached the enclave, or the
+  service-provider/pioneer class test stopped matching.  Raising the mode to 2 in that state would
+  silently protect nothing."
+            echo "  correct: institutional signatures were flagged and still accepted"
+
+            # And the individual guardian must NOT have been flagged.  Holding a family member to an
+            # assertion they cannot compute would break recovery for the class this control was
+            # never aimed at, and that failure would otherwise surface only at mode 2.
+            exempt=$(grep -ac "is an individual guardian, exempt" "$enclave_log" 2>/dev/null)
+            [[ -n "$exempt" ]] || exempt=0
+            [[ "$exempt" -ge 1 ]] || fail "no individual guardian was recorded as exempt.  victor-eph1
+  signs as a raw bech32 address and must never be asked for an assertion in any mode."
+            echo "  correct: the individual guardian was exempted"
+        fi
+    fi
+
 else
     echo "========================="
-    echo "6, 6a, 6b. key recovery -- SKIPPED (UPDATE_CREDENTIALS_SKIP_RECOVERY is set)"
+    echo "6, 6a, 6b. key recovery -- SKIPPED (TEST_CREDENTIALS_SKIP_RECOVERY is set)"
     echo "========================="
 fi
 

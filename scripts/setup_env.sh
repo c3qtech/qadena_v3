@@ -469,7 +469,7 @@ tx_reject_code() {
     # the usual cause, and simulation runs the message, so it is the chain refusing it.  Report the
     # qadena code when the text carries one, and the sentinel "rejected-before-broadcast" when it
     # does not, because returning EMPTY here made callers say "the chain ACCEPTED it" about a
-    # transaction that never existed.  That is how case 3 of update_credentials.sh was reported as a
+    # transaction that never existed.  That is how case 3 of test_credentials.sh was reported as a
     # policy failure while the credential's own Update Generation showed the update never applied.
     #
     # `tail -1`, not `head -1`, on the hash: these commands print more than one response, and taking
