@@ -92,7 +92,28 @@ validators:
       snapshot-interval: "2000"
       snapshot-keep-recent: "3"
   config:
-    log_level: "debug"
+    # QUIET THE FOUR MODULES THAT ARE THE VOLUME, KEEP EVERYTHING THAT DIAGNOSES.
+    #
+    # Debug logging is 92.2% of a node's log bytes -- measured on a real 13 GB day: p2p 45.9%,
+    # server 21.9%, consensus 15.7%, mempool 15.0%.  That is 11-13 GB per node per day, which
+    # fills a 60 GB disk in about five days and is what took the ARM fleet down on 2026-08-22
+    # (M4 halted at 99%, M1 stalled at 100% with 87 MB free).
+    #
+    # None of that volume is enclave diagnosis.  The drivers are Read PacketMsg, setHasVote, Send
+    # channel, BATCH SAVE, SAVE TREE.  The enclave's own output is untouched by this setting:
+    # 167,564 of its 168,177 debug lines carry no module= field at all, because they come from the
+    # enclave PROCESS's stdout rather than the SDK logger, so "*:debug" keeps every one of them.
+    #
+    # 8f8a1729 made a per-module level WORK -- before it, three places compared the whole string
+    # against "debug", so asking for "*:debug" produced silence on the one setting whose job is
+    # deciding what gets recorded when something goes wrong.  That fix shipped on 2026-08-22 and
+    # this line was never changed to use it, so the fleet kept generating 18 GB a node for
+    # prune_logs.sh to delete.  Both halves are needed: write less, and reap what is written.
+    #
+    # `server` is included where 8f8a1729's suggested string omitted it, because its own
+    # measurement puts it second at 21.9% -- confirmed again on M1 2026-08-26 (p2p 18.0 MB,
+    # server 15.7 MB, consensus 14.1 MB of a 48.3 MB sample).
+    log_level: "p2p:info,consensus:info,mempool:info,server:info,*:debug"
     moniker: "pioneer1"
     consensus:
       timeout_propose: "3s"

@@ -26,7 +26,13 @@ func TestSetLogLevel(t *testing.T) {
 
 		// NEGATIVE CONTROLS -- each of these returned false before the fix.
 		{"wildcard debug", "*:debug", true},
-		{"the fleet's level", "p2p:info,consensus:info,mempool:info,*:debug", true},
+		// VERBATIM FROM config/config.yml.  If that line changes, this case must change with it:
+		// the whole point is that the level the fleet actually runs still enables enclave debug.
+		{"the fleet's level", "p2p:info,consensus:info,mempool:info,server:info,*:debug", true},
+		// The string 8f8a1729 suggested, kept because it is quoted in that commit and in
+		// run_enclave_standalone.sh's comment; `server` was added to the deployed one after its own
+		// measurement put server second at 21.9%.
+		{"the level 8f8a1729 suggested", "p2p:info,consensus:info,mempool:info,*:debug", true},
 		{"wildcard debug listed first", "*:debug,p2p:info", true},
 		{"spaces around entries", "p2p:info , *:debug", true},
 		{"no wildcard, one debug entry", "p2p:info,server:debug", true},
