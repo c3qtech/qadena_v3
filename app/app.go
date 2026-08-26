@@ -355,7 +355,7 @@ const UpgradeName = "v050-to-v053"
 // registration picks up.  A node that STATE-SYNCED past the upgrade has the chain-state record
 // and NO disk file; this list is the only thing that lets it start.
 var historicalUpgradeNames = []string{
-	// "v1.1.23",  // <- appended when that plan ships
+	"v1.1.23", // applied 2026-08-26; first plan ever executed on a qadena chain
 }
 
 // upgradeHandlerNames computes the deduped set of plan names this binary must register.  Pure so
