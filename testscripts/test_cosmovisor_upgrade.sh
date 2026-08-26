@@ -88,7 +88,7 @@ info "preflight ok"
 
 # ---------------------------------------------------------------------------------------------
 stage "B. managed primary at $FROM_REF, fresh chain"
-"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$FROM_REF" --cosmovisor --from 1 --until 6 \
+"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$FROM_REF" --from 1 --until 6 \
     2>&1 | tee "$RUN_DIR/stage-B.log" | while read -r l; do info "$l"; done
 [[ ${pipestatus[1]} -eq 0 ]] || fail "primary bringup failed"
 cosmovisor_managed_on "$PRIMARY" || fail "primary is not managed after --cosmovisor bringup"
@@ -104,7 +104,7 @@ rsh_user "$PRIMARY" "cd \$HOME/qv3 && $TRAFFIC" \
 stage "D. package $vfrom and install+convert the joiner (NOT started, NOT joined yet)"
 # The joiner's genesis/bin must be the CHAIN-GENESIS-era binaries.  Package before the upgrade,
 # install on the joiner, convert -- it sits stopped until stage G.
-"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --joiner "$JOINER" --cosmovisor --from 7 --until 8 \
+"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --joiner "$JOINER" --from 7 --until 8 \
     2>&1 | tee "$RUN_DIR/stage-D.log" | while read -r l; do info "$l"; done
 [[ ${pipestatus[1]} -eq 0 ]] || fail "package/install on the joiner failed"
 cosmovisor_managed_on "$JOINER" || fail "joiner is not managed after phase-8 conversion"

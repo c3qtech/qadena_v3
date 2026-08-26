@@ -1,8 +1,13 @@
 #!/bin/zsh
 # Convert this node to cosmovisor management, or verify a conversion that already happened.
 #
-#   cosmovisor_setup.sh            convert (node must be stopped)
+#   cosmovisor_setup.sh --migrate  convert a FLAT home to the generation layout (node stopped)
 #   cosmovisor_setup.sh --check    report the layout without changing anything
+#
+# MIGRATION ONLY.  New nodes are born managed -- init.sh and install_release.sh create the tree
+# before any binary lands, so there is no conversion step in any normal path.  This script exists
+# for homes that predate that: a flat $QADENAHOME/bin full of real binaries, which this moves into
+# cosmovisor/genesis/bin and replaces with symlinks.  Once every node has been migrated it can go.
 #
 # WHAT "CONVERTED" MEANS, precisely:
 #
@@ -36,8 +41,15 @@ SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/setup_env.sh"
 
 CHECK=0
-# not `[[ ]] && CHECK=1`: under set -e a false test at top level is a fatal "error"
+MIGRATE=0
 if [[ "${1:-}" == "--check" ]]; then CHECK=1; fi
+if [[ "${1:-}" == "--migrate" ]]; then MIGRATE=1; fi
+if (( ! CHECK && ! MIGRATE )); then
+    echo "cosmovisor_setup.sh: say which:  --migrate (convert a flat home)  or  --check (report only)" >&2
+    echo "                     New nodes need neither -- init.sh and install_release.sh create the" >&2
+    echo "                     tree themselves." >&2
+    exit 1
+fi
 
 CV_TREE="$QADENAHOME/cosmovisor"
 GEN_BIN="$CV_TREE/genesis/bin"

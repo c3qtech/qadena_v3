@@ -139,6 +139,23 @@ mval() { grep "^$1:" "$stage/manifest.txt" 2>/dev/null | awk '{print $2}'; }
 # nothing (see the header), so the one-line definition is duplicated with a pointer to the
 # canonical one.  Same test: the `current` symlink, the one thing cosmovisor itself maintains.
 cosmovisor_managed() { [ -L "$QADENAHOME/cosmovisor/current" ]; }
+# Standalone copies of setup_env.sh's helpers -- this script deliberately sources nothing (see the
+# header), so the two definitions are duplicated with a pointer to the canonical ones.
+gen_bin()  { print -r -- "$QADENAHOME/cosmovisor/current/bin"; }
+relink()   {
+    local gen f b
+    gen=$(gen_bin); [ -d "$gen" ] || return 1
+    mkdir -p "$qadenabin" || return 1
+    for f in "$gen"/*(N); do
+        b=${f:t}
+        # Never clobber a real file: those are cosmovisor itself and the versioned copies the
+        # enclave handover reads by name.
+        [ -e "$qadenabin/$b" ] && [ ! -L "$qadenabin/$b" ] && continue
+        rm -f "$qadenabin/$b"
+        ln -s "../cosmovisor/current/bin/$b" "$qadenabin/$b" || return 1
+    done
+    return 0
+}
 
 # WHERE THE NODE LIVES.  Under sudo, $HOME is root's, and installing a node into /root is a mistake
 # that is tedious to undo -- the enclave needs root to run, so sudo is the normal case, not the
@@ -553,8 +570,13 @@ if [[ -n "$stage_upgrade" ]]; then
     exit 0
 fi
 
-if cosmovisor_managed && [[ -n "$(echo "$stage"/bin/*(N))" ]]; then
-    fail "this node is cosmovisor-managed and the package contains binaries.  The live names in $qadenabin are SYMLINKS into cosmovisor/current/bin -- writing them would silently mutate the current generation directory in place, which is precisely the unreplayable-history hazard the cosmovisor layout exists to prevent.  Use:  install_release.sh <archive> --stage-upgrade v<version> and schedule the swap by governance (rolling_upgrade.sh --via-governance)."
+# UPGRADING A NODE THAT HAS RUN MEANS SCHEDULING IT.  On an existing node the live names in
+# $qadenabin are symlinks into the current generation, so writing them would mutate the directory
+# that produced the existing blocks -- a node replaying them afterwards would execute them with
+# different code.  A FIRST install is exempt: it just created an empty genesis generation, and a
+# chain with no history has nothing to invalidate.
+if [[ "$mode" != "install" ]] && [[ -n "$(echo "$stage"/bin/*(N))" ]]; then
+    fail "this node already runs a generation and the package contains binaries.  Writing them would mutate the generation that produced this chain's existing blocks.  Schedule the change instead:  install_release.sh <archive> --stage-upgrade v<version>  then roll it with rolling_upgrade.sh --via-governance."
 fi
 
 needs_stop=0
@@ -664,7 +686,7 @@ for f in "$stage"/bin/*(N); do
             if [[ $stage_only -eq 1 ]]; then
                 echo "  staged   signer_enclave.$m (live copy left alone -- node is running)"
             else
-                install_file "$f" "$qadenabin/signer_enclave"
+                install_file "$f" "$(gen_bin)/signer_enclave"; relink
                 echo "  installed signer_enclave ($m)"
             fi
             ;;
@@ -678,7 +700,7 @@ for f in "$stage"/bin/*(N); do
             if [[ $stage_only -eq 1 ]]; then
                 echo "  staged   qadenad.$v (live copy left alone -- node is running)"
             else
-                install_file "$f" "$qadenabin/qadenad"
+                install_file "$f" "$(gen_bin)/qadenad"; relink
                 echo "  installed qadenad ($v)"
             fi
             ;;
@@ -688,7 +710,7 @@ for f in "$stage"/bin/*(N); do
             if [[ $stage_only -eq 1 ]]; then
                 echo "  skipped  $name (node is running)"
             else
-                install_file "$f" "$qadenabin/$name"
+                install_file "$f" "$(gen_bin)/$name"; relink
                 echo "  installed $name"
             fi
             ;;
@@ -844,12 +866,12 @@ if [[ -n "$new_unique" ]]; then
     echo ""
     echo "=== 6. enclave ==="
     if [[ "$mode" == "install" ]]; then
-        cp "$new_encl" "$qadenabin/qadenad_enclave"
+        cp "$new_encl" "$(gen_bin)/qadenad_enclave"; relink
         echo "  installed as this node's enclave"
     elif [[ "$cur_unique" == "$new_unique" ]]; then
         echo "  already current; nothing to switch"
     elif [[ $can_activate -eq 1 ]]; then
-        cp "$new_encl" "$qadenabin/qadenad_enclave"
+        cp "$new_encl" "$(gen_bin)/qadenad_enclave"; relink
         echo "  ACTIVATED.  The next start performs the handover: the old enclave boots in"
         echo "  --upgrade-mode and passes its sealed keys to the new one.  Both binaries stay on"
         echo "  disk, which is what makes that possible -- do not delete the old one."

@@ -79,7 +79,6 @@ RUN_DIR=""
 SCHEDULE=()
 ADDRESSABLE_WAIT_MIN=20
 BLOCK_SYNC=0
-COSMOVISOR=0
 # --from <stage>.  The sub-scripts have been phase-addressable all along; the fleet script was not,
 # so a failure at stage C meant redoing a ~24-minute SGX build that had already succeeded and whose
 # artifacts were still installed and healthy.  See TESTING-BACKLOG.md item 89.
@@ -201,7 +200,7 @@ while [[ $# -gt 0 ]]; do
             print -u2 "        --joiner m3 --test \"./testscripts/run_regression_continually.sh\""
             exit 1 ;;
         --block-sync)    BLOCK_SYNC=1; shift ;;
-        --cosmovisor)    COSMOVISOR=1; shift ;;
+        --cosmovisor)    shift ;;   # accepted and ignored: every node is cosmovisor-managed now
         --from)          FROM_STAGE="${2:u}"; shift 2 ;;
         --run-dir)       RUN_DIR="$2"; shift 2 ;;
         --help)
@@ -385,7 +384,6 @@ case "$BUILD_SGX" in
     # ego for the default to key on.  See TESTING-BACKLOG.md item 90.
     no)   SGX_FLAG="--no-sgx"; KIND="debug (forced with --no-sgx)" ;;
 esac
-CV_FLAG=""; (( COSMOVISOR )) && CV_FLAG="--cosmovisor"
 
 # The one combination that cannot work: an ego-signed enclave needs /dev/sgx_enclave to RUN, so an
 # SGX build cannot be installed onto a joiner without the devices.  The reverse is fine.  Refused
@@ -447,7 +445,7 @@ stage "A0. preflight every host BEFORE anything is stopped or moved"
 # at stage B seconds later.  Delegating to 1st_node_bringup's own phase 1 keeps one definition of
 # "can this machine do the job": toolchain presence AND version, checkout cleanliness, disk, SGX.
 # See TESTING-BACKLOG.md item 85.
-"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG $CV_FLAG --only 1 \
+"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG --only 1 \
     2>&1 | tee "$RUN_DIR/stage-A0-preflight.log"
 [[ ${pipestatus[1]} -eq 0 ]] || fail "the primary failed preflight; nothing has been changed on any host. See $RUN_DIR/stage-A0-preflight.log"
 
@@ -519,7 +517,7 @@ if run_stage B; then
 stage "B. 1st_node_bringup phases 1-6: build, init and start the primary"
 # Stops at 6 deliberately.  Packaging is stage D, AFTER the regression has upgraded the enclave --
 # see trap 1.  This is the fix for the sequence that failed on 2026-08-18.
-"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG $CV_FLAG --from 1 --until 6 \
+"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG --from 1 --until 6 \
     2>&1 | tee "$RUN_DIR/stage-B-bringup.log"
 [[ ${pipestatus[1]} -eq 0 ]] || fail "1st_node_bringup phases 1-6 failed; it is phase-resumable (--from N) once fixed. See $RUN_DIR/stage-B-bringup.log"
 assert_advancing "$PRIMARY" "after bringup"
@@ -577,7 +575,7 @@ fi
 for j in "${JOINERS[@]}"; do
     info ""
     info "installing on $j"
-    "$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" --only 8 $CV_FLAG \
+    "$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" --only 8 \
         2>&1 | tee "$RUN_DIR/stage-E-install-${j##*@}.log"
     [[ ${pipestatus[1]} -eq 0 ]] || fail "install failed on $j; see $RUN_DIR/stage-E-install-${j##*@}.log"
 
