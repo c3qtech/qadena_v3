@@ -128,6 +128,24 @@ note "boundary: blocks 1..$h_before executed by $FROM_REF ($vfrom)"
 
 # ---------------------------------------------------------------------------------------------
 stage "D. roll the primary to $TO_REF -- the version boundary lands here"
+
+# MOVE THE CHECKOUT FIRST.  rolling_upgrade.sh has no --ref: it builds whatever is checked out on
+# --build-from.  Stage B left that at $FROM_REF, so without this the "upgrade" would rebuild the
+# SAME code, the version check inside rolling_upgrade would refuse it, and a run that got past that
+# would report a pass having created no boundary at all -- the exact false green this file exists
+# to prevent.  Detached on purpose: nothing here should leave the primary on a branch that a later
+# fetch could move underneath it.
+info "moving $PRIMARY's checkout to $TO_REF"
+rsh_user "$PRIMARY" "cd \$HOME/qv3 && git fetch --all --tags --quiet && \
+    { git checkout --quiet --detach origin/$TO_REF 2>/dev/null || git checkout --quiet --detach $TO_REF; } && \
+    git log --oneline -1" 2>&1 | while read -r l; do info "$l"; done
+[[ ${pipestatus[1]} -eq 0 ]] || fail "could not check out $TO_REF on $PRIMARY"
+
+vnow=$(rsh_user "$PRIMARY" 'cat $HOME/qv3/cmd/qadenad/version.txt' | tr -d '\r\n')
+[[ "$vnow" == "$vto" ]] || fail \
+    "after checking out $TO_REF the primary reports chain version '$vnow', expected '$vto' -- the \
+checkout did not take, and rolling from here would build the wrong thing."
+
 "$SCRIPT_DIR/rolling_upgrade.sh" --node "$PRIMARY" --chain-only \
     --build-from "$PRIMARY" --repo "\$HOME/qv3" \
     2>&1 | tee "$RUN_DIR/stage-D-upgrade.log" | while read -r l; do info "$l"; done
