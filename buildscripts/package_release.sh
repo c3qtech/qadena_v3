@@ -63,7 +63,7 @@ only=""
 since=""
 
 # The default set is "what a node needs to run".  testscripts is deliberately outside it.
-DEFAULT_COMPONENTS="chain,enclave,signer,libs,scripts,config,prereqs"
+DEFAULT_COMPONENTS="chain,enclave,signer,libs,scripts,config,prereqs,cosmovisor"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -84,8 +84,8 @@ want() { echo ",$selected," | grep -q ",$1,"; }
 
 for c in ${(s:,:)selected}; do
     case "$c" in
-        chain|enclave|signer|libs|scripts|config|prereqs|testscripts) ;;
-        *) fail "unknown component '$c'.  Valid: chain enclave signer libs scripts config prereqs testscripts" ;;
+        chain|enclave|signer|libs|scripts|config|prereqs|testscripts|cosmovisor) ;;
+        *) fail "unknown component '$c'.  Valid: chain enclave signer libs scripts config prereqs testscripts cosmovisor" ;;
     esac
 done
 
@@ -261,6 +261,28 @@ if want libs; then
     done
     [[ -n "$(echo "$stage"/bin/*.so(N))" ]] \
         || fail "no libwasmvm*.so found -- qadenad links these at load time and will not start without them"
+fi
+
+if want cosmovisor; then
+    # The supervisor that swaps binaries at a governance-scheduled upgrade height.  Shipped from
+    # the build host (the whole fleet is the same arch) so joiners need no Go toolchain, and as a
+    # REAL FILE in bin/ -- it can never live inside the cosmovisor tree it swaps.  Its version is
+    # pinned in buildscripts/cosmovisor_version.txt; the manifest records what actually shipped so
+    # install_release can say so.
+    mkdir -p "$stage/bin"
+    if [[ -x "$qadenabin/cosmovisor" ]]; then
+        cp "$qadenabin/cosmovisor" "$stage/bin/cosmovisor"
+        cv_ver=$("$qadenabin/cosmovisor" version 2>&1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        echo "cosmovisor.version: ${cv_ver:-unknown}" >> "$manifest"
+        included="$included cosmovisor"
+    else
+        # Absent is allowed -- a fleet that has not adopted cosmovisor packages exactly as before.
+        # Explicitly selecting it is a stated intent, so THAT fails loudly.
+        if [[ ",${only}," == *",cosmovisor,"* ]]; then
+            fail "cosmovisor selected but $qadenabin/cosmovisor is not built -- run buildscripts/build_cosmovisor.sh"
+        fi
+        echo "  note: no cosmovisor at $qadenabin/cosmovisor -- packaging without it (build_cosmovisor.sh to include)"
+    fi
 fi
 
 if want scripts; then

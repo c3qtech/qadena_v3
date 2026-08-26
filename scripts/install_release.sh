@@ -224,6 +224,7 @@ echo "  checksums ok"
 while read -r _sum entry; do
     case "$entry" in
         bin/qadenad|bin/qadenad_enclave|bin/signer_enclave|bin/libwasmvm*.so) ;;
+        bin/cosmovisor) ;;
         scripts/*|testscripts/*|test_data/*) ;;
         config/config.yml|config/public.pem|config/node_params.json) ;;
         # Carried for the operator to run by hand; this script points at it but never runs it, and
@@ -592,6 +593,20 @@ for f in "$stage"/bin/*(N); do
             else
                 install_file "$f" "$qadenabin/$name"
                 echo "  installed $name"
+            fi
+            ;;
+        cosmovisor)
+            # A REAL FILE, always -- cosmovisor can never live inside (or be a symlink into) the
+            # tree it swaps.  Not versioned under a measurement (it is not one of the node's
+            # attested artifacts); the manifest's cosmovisor.version records what shipped.  While
+            # the node runs, cosmovisor IS the running supervisor, so it gets the same
+            # stage-only deference as every other live binary.
+            if [[ $stage_only -eq 1 ]]; then
+                echo "  skipped  cosmovisor (node is running; it will install on the next stopped install)"
+            else
+                install_file "$f" "$qadenabin/cosmovisor"
+                chmod +x "$qadenabin/cosmovisor"
+                echo "  installed cosmovisor ($(mval cosmovisor.version))"
             fi
             ;;
     esac
