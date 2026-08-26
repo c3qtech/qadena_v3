@@ -118,8 +118,7 @@ jq --arg u "$uniqueid" --arg s "$signerid" --arg st "unvalidated" \
 
 echo "  submitting..."
 hash=$(gov_tx "submit" tx gov submit-proposal "$gen" --from "${voters[1]}" | tail -1) || exit 1
-id=$(qq q tx "$hash" --output json 2>/dev/null \
-     | jq -r '.events[] | select(.type=="submit_proposal") | .attributes[] | select(.key=="proposal_id") | .value' | head -1)
+id=$(gov_proposal_id_of_tx "$hash")
 rm -f "$gen"
 [ -z "$id" ] && { echo "  could not determine the proposal id from $hash"; exit 1 }
 echo "  proposal id: $id"

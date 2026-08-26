@@ -1,0 +1,25 @@
+{
+ "messages": [
+  {
+   "@type": "/qadena.qadena.MsgUpdateEnclaveIdentity",
+   "authority": "qadena10d07y265gmmuvt4z0w9aw880jnsr700j5pc4em",
+   "uniqueID": "some-unique-id",
+   "signerID": "some-signer-id",
+   "status": "unvalidated"
+  },
+  {
+   "@type": "/cosmos.upgrade.v1beta1.MsgSoftwareUpgrade",
+   "authority": "qadena10d07y265gmmuvt4z0w9aw880jnsr700j5pc4em",
+   "plan": {
+    "name": "some-plan-name",
+    "height": "0",
+    "info": ""
+   }
+  }
+ ],
+ "metadata": "ipfs://CID",
+ "deposit": "100000qdn",
+ "title": "scheduled chain+enclave upgrade",
+ "summary": "register the new enclave measurement (unvalidated; quorum promotion follows), and halt at the plan height for the binary swap.  ORDER MATTERS: the identity lands the moment the proposal passes, the swap at the height -- naturally sequenced.",
+ "expedited": false
+}

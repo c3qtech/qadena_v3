@@ -268,3 +268,53 @@ gov_tx() {
     echo "  $desc: ok ($hash)" >&2
     printf "%s" "$hash"
 }
+
+# ---------------------------------------------------------------------------------------------
+# gov_proposal_id_of_tx <txhash> -- the proposal id a submit tx created, from the TX'S OWN EVENTS.
+#
+# Lifted from gov_register_enclave_identity.sh because rolling_upgrade.sh needed the same answer
+# and got it a worse way: listing recent proposals and content-matching.  That is a RACE -- the
+# regression suite submits proposals continuously (ids 27..31 on 2026-08-24 were all its), and an
+# upgrade proposal has no unique string to content-match on at all.  The submit event is the one
+# source that cannot name someone else's proposal.
+gov_proposal_id_of_tx() {
+    local hash="$1"
+    qq q tx "$hash" --output json 2>/dev/null \
+        | jq -r '.events[] | select(.type=="submit_proposal") | .attributes[] | select(.key=="proposal_id") | .value' \
+        | head -1
+}
+
+# gov_upgrade_height [margin_secs] -- a safe MsgSoftwareUpgrade height, computed from where the
+# chain is NOW plus however long governance will take.
+#
+#   height = current + ceil((voting_period + margin) / measured_blocktime)
+#
+# The voting period is read from chain params (expedited proposals should pass expedited_voting_period
+# via margin arithmetic on the CALLER side -- this reads the ordinary one).  Block time is MEASURED
+# over a short window rather than assumed: this fleet runs ~1.5s but nothing guarantees it, and a
+# height computed from a wrong block time either wastes hours or -- far worse -- lands BEFORE the
+# vote finishes, leaving a passed plan whose height is already history: the chain then halts at the
+# next block with no binaries staged anywhere.  Prints the height; caller passes it to the plan.
+gov_upgrade_height() {
+    local margin="${1:-120}"
+    local vp vp_secs h0 h1 bt total blocks
+    vp=$(gov_param '.params.voting_period // .voting_period')
+    # "300s" or "5m0s" or "0.000000300s"-style -- normalize via python-free parsing: strip a
+    # trailing s, then split h/m if present.
+    vp_secs=$(printf '%s' "$vp" | awk '{
+        gsub(/s$/,""); n=0
+        if (match($0,/[0-9]+h/)) { n+=substr($0,RSTART,RLENGTH-1)*3600; $0=substr($0,RSTART+RLENGTH) }
+        if (match($0,/[0-9]+m/)) { n+=substr($0,RSTART,RLENGTH-1)*60;   $0=substr($0,RSTART+RLENGTH) }
+        n+=$0+0; print int(n+0.999) }')
+    [ -n "$vp_secs" ] && [ "$vp_secs" -gt 0 ] 2>/dev/null || vp_secs=300
+
+    h0=$(qq status 2>&1 | grep -oE '"latest_block_height":"[0-9]+"' | grep -oE '[0-9]+' | head -1)
+    sleep 6
+    h1=$(qq status 2>&1 | grep -oE '"latest_block_height":"[0-9]+"' | grep -oE '[0-9]+' | head -1)
+    [ -n "$h0" ] && [ -n "$h1" ] || { echo ""; return 1 }
+    blocks=$(( h1 - h0 ))
+    [ "$blocks" -ge 1 ] || blocks=1
+    # blocktime = 6/blocks seconds; blocks needed = (vp+margin) * blocks / 6, rounded up, +floor
+    total=$(( ( (vp_secs + margin) * blocks + 5 ) / 6 + 5 ))
+    echo $(( h1 + total ))
+}

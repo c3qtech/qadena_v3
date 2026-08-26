@@ -241,7 +241,7 @@
 set -u
 setopt ERR_EXIT PIPE_FAIL
 
-NODES=(); ARCHIVE=""; NEW_UNIQUE=""; NEW_SIGNER=""; WAIT_SECS=1800; DRY=0; SKIP_GOV=0
+NODES=(); ARCHIVE=""; NEW_UNIQUE=""; NEW_SIGNER=""; WAIT_SECS=1800; DRY=0; SKIP_GOV=0; VIA_GOV=0
 BUILD_FROM=""; REPO_DIR="qv3"; SGX_MODE="auto"; PKG_OUT="/tmp/pkg"; BUILD_WAIT=3600; ALLOW_DIRTY=0
 CHAIN_ONLY=0; QUIESCE=0; QUIESCE_NOW=0
 BUILD_PATH='export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH;'
@@ -262,6 +262,7 @@ while (( $# )); do
         --build-wait) BUILD_WAIT="$2"; shift 2 ;;
         --allow-dirty) ALLOW_DIRTY=1; shift ;;
         --chain-only)  CHAIN_ONLY=1; SKIP_GOV=1; shift ;;
+        --via-governance) VIA_GOV=1; shift ;;
         --quiesce)     QUIESCE=1; shift ;;
         --quiesce-immediate) QUIESCE=1; QUIESCE_NOW=1; shift ;;
         --dry-run)    DRY=1; shift ;;
@@ -458,8 +459,15 @@ step "0. preflight"
 # refuse here first, before anything is stopped.  (--via-governance, which stages instead, will
 # bypass this check when it lands.)
 for __n in "${NODES[@]}"; do
-    if run "$__n" 'test -L $HOME/qadena/cosmovisor/current' 2>/dev/null; then
-        die "$__n is cosmovisor-managed.  This roll swaps live binaries outside a governance plan; use --via-governance (or de-convert the node deliberately)."
+    if (( VIA_GOV )); then
+        run "$__n" 'test -L $HOME/qadena/cosmovisor/current' 2>/dev/null \
+            || die "$__n is NOT cosmovisor-managed -- --via-governance stages binaries for a swap that only cosmovisor performs.  Run cosmovisor_setup.sh there first."
+        run "$__n" 'test -x $HOME/qadena/bin/cosmovisor' 2>/dev/null \
+            || die "$__n has no cosmovisor binary"
+    else
+        if run "$__n" 'test -L $HOME/qadena/cosmovisor/current' 2>/dev/null; then
+            die "$__n is cosmovisor-managed.  This roll swaps live binaries outside a governance plan; use --via-governance (or de-convert the node deliberately)."
+        fi
     fi
 done
 for n in "${NODES[@]}"; do
@@ -730,6 +738,98 @@ for n in "${NODES[@]}"; do
     [[ "$got" == "$LOCAL_SHA" ]] || die "$n: sha256 $got != $LOCAL_SHA"
     say "  $n verified"
 done
+
+# ---------------------------------------------------------------------------------------------
+# --via-governance: everything up to here (preflight, build --hold, package, distribute) is
+# identical to a live roll.  From here the shapes diverge completely: instead of a per-node
+# install+restart, binaries are STAGED everywhere, ONE proposal schedules the swap, and the chain
+# itself performs it at H on every node in the same block.  The whole point over the live roll:
+# no window in which the fleet runs mixed versions, and the history stays replayable because the
+# boundary is recorded on chain.
+if (( VIA_GOV )); then
+    [[ -n "$SRC_CHAIN" ]] || die "--via-governance needs --build-from (the plan name comes from the built version)"
+    PLAN="v$SRC_CHAIN"
+    step "2g. stage $PLAN on every node (nothing live is touched)"
+    for n in "${NODES[@]}"; do
+        ILOG="/tmp/stage_upgrade_$$.log"
+        run "$n" "~/qadena/scripts/install_release.sh $REMOTE --stage-upgrade $PLAN > $ILOG 2>&1 < /dev/null" \
+            || { run "$n" "tail -20 $ILOG" | sed 's/^/    /'; die "$n: staging failed (full log: $n:$ILOG)"; }
+        say "  $n staged"
+    done
+    if (( ! DRY )); then
+        # STAGED IS NOT ENOUGH -- STAGED THE SAME THING IS.  A node whose staged bytes differ
+        # forks at H, and nothing before H would say so.
+        ref_sha=""
+        for n in "${NODES[@]}"; do
+            sha=$(rsh "$n" "sha256sum ~/qadena/cosmovisor/upgrades/$PLAN/bin/qadenad 2>/dev/null" | cut -d' ' -f1)
+            [[ -n "$sha" ]] || die "$n: no staged qadenad for $PLAN after staging reported success"
+            [[ -z "$ref_sha" ]] && ref_sha="$sha"
+            [[ "$sha" == "$ref_sha" ]] || die "$n: staged qadenad sha differs across the fleet ($sha != $ref_sha)"
+        done
+        say "  staged qadenad identical on ${#NODES} node(s): ${ref_sha:0:16}"
+    fi
+
+    step "2h. one proposal: schedule $PLAN$( [[ -n "$NEW_UNIQUE" ]] && print -n ", register $NEW_UNIQUE" )"
+    encl_args=""
+    live_uniq=$(measure_of "${NODES[1]}")
+    if [[ -n "$NEW_UNIQUE" && "$NEW_UNIQUE" != "$live_uniq" ]]; then
+        say "  enclave changes: $live_uniq -> $NEW_UNIQUE (identity message rides in the proposal)"
+        encl_args="--unique-id $NEW_UNIQUE --signer-id $NEW_SIGNER"
+    else
+        say "  chain-only ($live_uniq unchanged): no identity message"
+    fi
+    run "${NODES[1]}" "~/qadena/scripts/gov_software_upgrade.sh --plan $PLAN --margin 180 $encl_args" \
+        || die "the governance step failed on ${NODES[1]} -- if the proposal passed but late, cancel the plan (see gov_software_upgrade.sh --help)"
+
+    if [[ -n "$encl_args" ]]; then
+        step "2i. promote $NEW_UNIQUE to active BEFORE the height"
+        # Promotion is by enclave quorum, and validateEnclaveIdentities runs on a trigger --
+        # restarting one node on its OLD binaries is the existing trigger (same as the live roll).
+        restart_node "${NODES[1]}"
+        for i in {60..1}; do
+            st=$(identity_status "$NEW_UNIQUE")
+            [[ "$st" == "active" ]] && break
+            sleep 6
+        done
+        st=$(identity_status "$NEW_UNIQUE")
+        [[ "$st" == "active" ]] || die "$NEW_UNIQUE is '$st', not active -- the swap at H would start an enclave the chain refuses.  CANCEL THE PLAN (MsgCancelUpgrade) before the height."
+        say "  $NEW_UNIQUE active"
+    fi
+
+    step "2j. wait for the swap height"
+    plan_h=$(rsh "${NODES[1]}" '~/qadena/bin/qadenad q upgrade plan -o json 2>/dev/null' | grep -oE '"height":"[0-9]+"' | grep -oE '[0-9]+' | head -1)
+    [[ -n "$plan_h" ]] || die "no plan on chain after a passed proposal?"
+    say "  plan height $plan_h"
+    while :; do
+        h=$(height_of "${NODES[1]}")
+        [[ -n "$h" ]] || { sleep 5; continue }   # nodes restart AT the height; RPC gaps are the swap happening
+        (( h >= plan_h + 2 )) && break
+        say "  ... $h / $plan_h"
+        sleep 10
+    done
+
+    step "2k. verify every node swapped and is live"
+    sleep 10
+    for n in "${NODES[@]}"; do
+        cur=$(rsh "$n" 'readlink ~/qadena/cosmovisor/current 2>/dev/null' | tr -d '
+')
+        [[ "$cur" == *"upgrades/$PLAN"* ]] || die "$n: current -> '$cur', expected upgrades/$PLAN -- cosmovisor did not swap (preupgrade hook failure?  see the node's log)"
+        ver=$(rsh "$n" '~/qadena/bin/qadenad version 2>/dev/null' | tr -d '
+' | head -1)
+        [[ "$ver" == "$SRC_CHAIN" ]] || die "$n: runs $ver, expected $SRC_CHAIN"
+        say "  $n: current -> $cur, version $ver"
+    done
+    for n in "${NODES[@]}"; do
+        h0=$(height_of "$n"); sleep 12; h1=$(height_of "$n"); cu=$(catching_up_of "$n")
+        [[ -n "$h1" && "$h1" -gt "${h0:-0}" && "$cu" == "false" ]] \
+            || die "$n: not live after the swap (h $h0->$h1, catching_up=$cu)"
+        say "  $n advancing ($h0 -> $h1, caught up)"
+    done
+
+    step "final: ROLL COMPLETE (via governance)"
+    say "every node swapped to $PLAN at height $plan_h in the same block"
+    exit 0
+fi
 
 if (( ! SKIP_GOV )); then
     # With --build-from these come from the package's manifest (stage 0c), so they are not
