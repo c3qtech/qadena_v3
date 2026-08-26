@@ -189,17 +189,38 @@ echo ""
 echo "PROCESSES"
 
 # The chain node.  Matched on the installed path rather than the bare name so a build, an editor or
-# a log tail holding the string cannot be mistaken for a running node.
+# a log tail holding the string cannot be mistaken for a running node -- but "the installed path"
+# is TWO paths now.  On a cosmovisor-managed node the supervisor execs the RESOLVED binary, so
+# argv reads $QADENAHOME/cosmovisor/<generation>/bin/qadenad, never $qadenabin/qadenad; and the
+# enclaves are spawned as SIBLINGS of the running qadenad, so their argv moves the same way even
+# though cosmovisor is not their parent.  Anchoring on $QADENAHOME keeps the original property
+# (a build tree or editor elsewhere cannot match) while accepting both layouts.
 chain_pid=$(pid_of "$qadenabin/qadenad .*start")
+[ -z "$chain_pid" ] && chain_pid=$(pid_of "$QADENAHOME/cosmovisor/.*/bin/qadenad .*start")
 if [ -n "$chain_pid" ]; then
     ok "qadenad          pid $chain_pid   up $(uptime_of $chain_pid)"
 else
     bad "qadenad          not running"
 fi
 
+# On a managed node, say which generation is live and whether a swap is pending -- the two
+# questions an operator actually has mid-upgrade.
+if [ -L "$QADENAHOME/cosmovisor/current" ]; then
+    cv_pid=$(pid_of "cosmovisor run")
+    if [ -n "$cv_pid" ]; then
+        ok "cosmovisor       pid $cv_pid   current -> $(readlink "$QADENAHOME/cosmovisor/current")"
+    else
+        bad "cosmovisor       not running (managed node launched without it?)"
+    fi
+    if [ -f "$QADENAHOME/data/upgrade-info.json" ]; then
+        info "  pending/applied upgrade: $(tr -d '\n' < "$QADENAHOME/data/upgrade-info.json" | head -c 120)"
+    fi
+fi
+
 # The enclave.  Under real SGX it runs under ego-host, so both spellings have to be tried -- looking
 # only for the bare binary would report a healthy SGX node as down.
 enclave_pid=$(pid_of "$qadenabin/qadenad_enclave")
+[ -z "$enclave_pid" ] && enclave_pid=$(pid_of "$QADENAHOME/cosmovisor/.*/bin/qadenad_enclave")
 [ -z "$enclave_pid" ] && enclave_pid=$(pid_of "ego-host.*qadenad_enclave")
 if [ -n "$enclave_pid" ]; then
     ok "qadenad_enclave  pid $enclave_pid   up $(uptime_of $enclave_pid)"
@@ -208,6 +229,7 @@ else
 fi
 
 signer_pid=$(pid_of "$qadenabin/signer_enclave")
+[ -z "$signer_pid" ] && signer_pid=$(pid_of "$QADENAHOME/cosmovisor/.*/bin/signer_enclave")
 [ -z "$signer_pid" ] && signer_pid=$(pid_of "ego-host.*signer_enclave")
 if [ -n "$signer_pid" ]; then
     ok "signer_enclave   pid $signer_pid   up $(uptime_of $signer_pid)"
