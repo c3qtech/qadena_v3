@@ -72,7 +72,7 @@ PROVISION="auto"
 CLONE_URL=$(git -C "${0:A:h}/.." remote get-url origin 2>/dev/null)
 [[ -n "$CLONE_URL" ]] || CLONE_URL="https://github.com/c3qtech/qadena_v3.git"
 REF=""
-BUILD_SGX=0
+BUILD_SGX=0; COSMOVISOR=0
 NO_SGX=0
 ADVERTISE=""
 PKG_OUT="/tmp/pkg"
@@ -94,6 +94,7 @@ while [[ $# -gt 0 ]]; do
         --no-provision) PROVISION="never"; shift ;;
         --ref)       REF="$2"; shift 2 ;;
         --build-sgx) BUILD_SGX=1; shift ;;
+        --cosmovisor) COSMOVISOR=1; shift ;;
         # NOT the same as omitting --build-sgx.  build.sh defaults to "ego installed means SGX", so
         # on any machine with ego, omitting the flag STILL produces an SGX build -- this is the only
         # way to ask for a debug one.  See TESTING-BACKLOG.md item 90.
@@ -585,6 +586,17 @@ fi
 # ---------------------------------------------------------------------------------------------
 run_phase 6 && phase "6. start and confirm blocks"
 if run_phase 6; then
+    if (( COSMOVISOR )); then
+        # Convert BEFORE the first start (the node must be stopped, and phase 4's wipe destroyed
+        # any previous tree).  build_cosmovisor.sh is idempotent; the setup script refuses a
+        # running node and verifies its own work.
+        info "--cosmovisor: converting the primary before first start"
+        rsh_user "$PRIMARY" "$BUILD_PATH cd $REPO && ./buildscripts/build_cosmovisor.sh" >/dev/null \
+            || fail "could not build cosmovisor on $PRIMARY"
+        rsh_user "$PRIMARY" "$NODE_HOME/scripts/cosmovisor_setup.sh" 2>&1 | grep "cosmovisor_setup" | while read -r l; do info "$l"; done
+        rsh_user "$PRIMARY" "test -L $NODE_HOME/cosmovisor/current" \
+            || fail "conversion did not produce a current symlink on $PRIMARY"
+    fi
     rsh_user "$PRIMARY" "rm -f $RUNLOG.start"
     # trap 4 again, mirrored: SGX must start WITH sudo, debug must not.
     ssh -o ConnectTimeout=10 "$PRIMARY" \
@@ -669,6 +681,14 @@ if run_phase 8 && [[ -n "$JOINER" ]]; then
     out=$(ssh -o ConnectTimeout=10 "$JOINER" "cd /tmp && rm -rf $dir && tar xzf $base && ${SUDO_J}./$dir/install.sh 2>&1 | tail -20") \
         || { print "$out" | while read -r l; do info "$l"; done; fail "install.sh failed on $JOINER"; }
     print "$out" | while read -r l; do info "$l"; done
+
+    if (( COSMOVISOR )); then
+        # The package carried bin/cosmovisor, so the joiner needs no toolchain -- just the layout.
+        info "--cosmovisor: converting the joiner"
+        rsh_user "$JOINER" "$JHOME/qadena/scripts/cosmovisor_setup.sh" 2>&1 | grep "cosmovisor_setup" | while read -r l; do info "$l"; done
+        rsh_user "$JOINER" "test -L $JHOME/qadena/cosmovisor/current" \
+            || fail "conversion did not produce a current symlink on $JOINER"
+    fi
 
     # Verify against the PRIMARY's genesis: the joiner has no genesis of its own until it joins.
     gen=$(rsh_user "$PRIMARY" "jq -r '.app_state.qadena.enclaveIdentityList[0].uniqueID' $NODE_HOME/config/genesis.json" | tr -d '\r')
