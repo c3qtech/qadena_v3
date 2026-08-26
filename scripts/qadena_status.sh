@@ -415,6 +415,31 @@ except Exception:
                         [ -z "$vaddr" ] && vaddr="?"
                     fi
                 fi
+                # "NOTHING TO DIAL" IS ONLY TRUE FROM SOMEWHERE ELSE.  If the unpublished pioneer
+                # is THIS node, its RPC is on localhost and none of these columns is unknown --
+                # height, catching-up, version and measurement are all one curl away.  Leaving them
+                # blank is exactly the case an operator hits: you run this ON the node you are
+                # wondering about, precisely BECAUSE it has not published, and the row about
+                # yourself is the emptiest one on the screen.
+                #
+                # Its own /status also carries voting_power and the consensus address directly, so
+                # they are read rather than derived through the pubKID -> valoper -> staking chain
+                # above -- same answer, one hop instead of three, and no bech32 surgery to get wrong.
+                if [ -n "$moniker" ] && [ "$pid" = "$moniker" ] && [ -n "$node_status" ]; then
+                    sh=$(echo "$node_status"  | jq -r '.result.sync_info.latest_block_height // "?"')
+                    scu=$(echo "$node_status" | jq -r '.result.sync_info.catching_up // "?"')
+                    spw=$(echo "$node_status" | jq -r '.result.validator_info.voting_power // "0"')
+                    sad=$(echo "$node_status" | jq -r '.result.validator_info.address // ""')
+                    sver=$(curl -s -m 3 "$rpc/abci_info" 2>/dev/null \
+                           | jq -r '.result.response.version // "?"')
+                    [ -z "$sver" ] && sver="?"
+                    suid=$(timeout 6 "$qadenabin/qadenad" --home "$QADENAHOME" q qadena enclave-measurement \
+                             --node "$rpc" -o json 2>/dev/null | jq -r '.uniqueID // empty')
+                    [ -z "$suid" ] && suid="?"
+                    [ "$sh" != "?" ] && [ "$sh" -gt "$best" ] 2>/dev/null && best=$sh
+                    rows="$rows$pid\t(unpublished, self)\t$sh\t$scu\t$spw\t$sad\t$sver\t$suid\n"
+                    continue
+                fi
                 rows="$rows$pid\t(unpublished)\t-\t-\t$vpower\t$vaddr\t-\t-\n"
                 continue
             fi
@@ -456,6 +481,21 @@ except Exception:
             # -- on the node's FIRST PROPOSED BLOCK after bonding -- so a validator with a small
             # stake can sit here for a while, voting normally, while the re-share audit cannot
             # count it and every audit tick is a no-op.
+            # SELF, UNPUBLISHED.  Everything except the address is known, because the node is this
+            # one -- so render a full row and let the state column carry the one thing that is
+            # actually wrong.  The blank-row treatment below is for OTHER nodes, where the missing
+            # columns really are unreachable.
+            if [ "$pip" = "(unpublished, self)" ]; then
+                slag=$((best - h))
+                sshare="-"; srest="-"
+                if [ -n "$total" ] && [ "$total" != "0" ]; then
+                    sshare=$(echo "$pw $total" | awk '{printf "%.1f", $1*100/$2}')
+                    srest=$(echo "$pw $total"  | awk '{printf "%.1f", ($2-$1)*100/$2}')
+                fi
+                saddr="${ad:0:12}"; [ -z "$saddr" ] && saddr="-"
+                warn "$mark $(printf %-9s "$pid") $(printf %-17s "no address (self)") $(printf %-13s "$saddr") $(printf %-8s "$ver") $(printf %-10s "$(short_uid "$uid")") $(printf %-10s "$h") $(printf %5s "$slag")  $(printf %-12s "$pw") $(printf %5s "$sshare")%  $(printf %6s "$srest")%   NOT PUBLISHED"
+                continue
+            fi
             if [ "$pip" = "(unpublished)" ]; then
                 # A REAL ROW, not a footnote.  Everything the chain knows is shown; only the
                 # columns that require dialling the node are "-".  A reader can then see at a
