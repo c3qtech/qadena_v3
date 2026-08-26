@@ -1142,7 +1142,7 @@ if [ "$from_genesis" = "true" ]; then
     # with no command shown, because there was none to show.  ps -eo pid,args prints the full command
     # on both platforms, so the self-filter works and a real leftover is named rather than numbered.
     leftover=$(ps -eo pid,args 2>/dev/null \
-        | grep -E "qadenad|run_enclave\.sh|run_signerenclave\.sh|ego-host" \
+        | grep -E "qadenad|cosmovisor run|run_enclave\.sh|run_signerenclave\.sh|ego-host" \
         | grep -v "grep" | grep -v "regression\.sh" || true)
     if [ -n "$leftover" ]; then
         echo "processes are still alive after stop_qadena.sh:"

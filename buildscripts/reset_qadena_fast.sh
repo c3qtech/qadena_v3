@@ -86,6 +86,8 @@ run_init() {
     # $QADENAHOME, and its fallback is a nested sudo that stops to ask for a password.  Cleared here
     # while still root; --advertise-ip-address has already announced the directory is going.
     case "$QADENAHOME" in
+        # De-converts a cosmovisor-managed node (tree and cosmovisor binary go with it);
+        # re-run cosmovisor_setup.sh after reinstalling if the node should stay managed.
         /*/qadena) rm -rf "$QADENAHOME" 2>/dev/null ;;
         *) echo "refusing to remove \$QADENAHOME=$QADENAHOME: not an absolute path ending in /qadena"; return 1 ;;
     esac

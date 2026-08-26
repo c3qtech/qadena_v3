@@ -122,7 +122,10 @@ echo "Running Ignite chain init..."
 echo "Removing $QADENAHOME"
 
 if [[ -d "$QADENAHOME" ]]; then
-    rm -rf $QADENAHOME
+    rm -rf $QADENAHOME    # ^ if that home was cosmovisor-managed, it is not any more -- the tree AND the cosmovisor
+    # binary in bin/ are gone.  A bringup that wants the node managed must re-run
+    # cosmovisor_setup.sh after its install step; run.sh will otherwise silently launch direct.
+
     # if fails, check if there are files owned by root
     if [[ $? != 0 ]]; then
         echo "Failed to remove $QADENAHOME"

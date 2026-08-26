@@ -216,6 +216,13 @@ quiesce_node() {
 step "0. preflight -- every host, BEFORE anything is touched"
 for n in "${NODES[@]}"; do
     rsh "$n" 'true' || die "$n unreachable over ssh (BatchMode: is the key loaded?)"
+    # COSMOVISOR: this script's PHASE 1 IS the unmanaged mechanism -- new chain binary LIVE, enclave
+    # only staged, no governance plan.  On a managed node install_release refuses the live write
+    # anyway (the bin/ names are symlinks into the current generation), so check here, before any
+    # node is stopped, rather than discovering it one node into the roll.
+    if rsh "$n" 'test -L $HOME/qadena/cosmovisor/current' 2>/dev/null; then
+        die "$n is cosmovisor-managed.  This script swaps live binaries outside a governance plan; on managed fleets use rolling_upgrade.sh --via-governance."
+    fi
     say "$n  chain=$(chain_version_of $n)  enclave=$(enclave_measurement_of $n)"
 done
 # BEFORE require_advancing, not after: a node the regression has just stopped would otherwise fail

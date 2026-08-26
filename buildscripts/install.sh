@@ -137,11 +137,27 @@ ensure_stopped_for_binaries() {
         node_stopped=1
         return 0
     fi
+    # COSMOVISOR REFUSAL, at the single choke point every non---hold binary install passes
+    # through.  On a managed node the live names in $qadenabin are SYMLINKS into
+    # cosmovisor/current/bin -- cp writes THROUGH a symlink, so a live install would silently
+    # rewrite the current generation directory in place: the exact unreplayable-history (and
+    # mapped-.so SIGSEGV) hazard the layout exists to end.  Stopping the node does not make it
+    # safe; the target is still the generation dir.  Placed after the container early-return so
+    # the SGX docker build behaves exactly as before.
+    if cosmovisor_managed 2>/dev/null; then
+        echo "Error: this node is cosmovisor-managed; a live binary install would write through the"
+        echo "       bin/ symlinks into cosmovisor/current/bin, mutating the current generation in"
+        echo "       place.  Either stage an upgrade instead:"
+        echo "           install_release.sh <archive> --stage-upgrade v<version>"
+        echo "       or build with --hold (versioned names only), or de-convert deliberately by"
+        echo "       removing \$QADENAHOME/cosmovisor and restoring real files in \$QADENAHOME/bin."
+        exit 1
+    fi
     echo "Stopping the node before installing binaries (a running binary cannot be replaced)"
     "$qadenascripts/stop_qadena.sh" --all > /dev/null 2>&1
     local alive
     alive=$(( $(count_procs qadenad) + $(count_procs qadenad_enclave) \
-              + $(count_procs signer_enclave) + $(count_procs ego-host) ))
+              + $(count_procs signer_enclave) + $(count_procs ego-host) + $(count_procs cosmovisor) ))
     if [[ $alive -ne 0 ]]; then
         echo "Error: $alive qadena process(es) still running after stop_qadena.sh --all."
         echo "       Refusing to install over them -- the copy would fail silently and you would be"

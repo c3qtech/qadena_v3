@@ -423,9 +423,9 @@ if run_phase 2; then
 
     # trap 3: the bracket class is what stops this matching our own ssh command line.
     sleep 3
-    left=$(ssh -o ConnectTimeout=10 "$PRIMARY" 'ps -eo pid,cmd | grep -E "qaden[a]d|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep | wc -l' | tr -d '\r')
+    left=$(ssh -o ConnectTimeout=10 "$PRIMARY" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep | wc -l' | tr -d '\r')
     [[ "$left" == "0" ]] || {
-        ssh -o ConnectTimeout=10 "$PRIMARY" 'ps -eo pid,cmd | grep -E "qaden[a]d|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep' | while read -r l; do info "$l"; done
+        ssh -o ConnectTimeout=10 "$PRIMARY" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep' | while read -r l; do info "$l"; done
         fail "$left process(es) survived the stop; kill them BY PID and re-run --only 2"
     }
     info "stopped: nothing matching the node or its enclaves is left"
@@ -655,7 +655,7 @@ if run_phase 8 && [[ -n "$JOINER" ]]; then
     if rsh_user "$JOINER" "test -x $JHOME/qadena/scripts/stop_qadena.sh"; then
         rsh "$JOINER" "$JHOME/qadena/scripts/stop_qadena.sh --all" >/dev/null 2>&1 || true
         sleep 3
-        left=$(ssh -o ConnectTimeout=10 "$JOINER" 'ps -eo pid,cmd | grep -E "qaden[a]d|eg[o] run|ego-hos[t]" | grep -v grep | wc -l' | tr -d '\r')
+        left=$(ssh -o ConnectTimeout=10 "$JOINER" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]" | grep -v grep | wc -l' | tr -d '\r')
         [[ "$left" == "0" ]] || fail "joiner still has $left process(es) running; kill by PID and re-run --only 8"
     fi
 

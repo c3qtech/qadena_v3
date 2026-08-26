@@ -23,6 +23,17 @@
 
 SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh" > /dev/null 2>&1
+
+# On a cosmovisor-managed node the live enclave name is a SYMLINK into cosmovisor/current/bin;
+# the cutover cp below would write through it and mutate the current generation in place.  On
+# managed fleets EVERY binary change is a governance plan -- rolling_upgrade.sh --via-governance
+# -- and this script is the unmanaged mechanism.
+if cosmovisor_managed 2>/dev/null; then
+    echo "activate_enclave.sh: this node is cosmovisor-managed -- the live-name cutover would write"
+    echo "activate_enclave.sh: through bin/ symlinks into the current generation.  Use"
+    echo "activate_enclave.sh: rolling_upgrade.sh --via-governance instead."
+    exit 1
+fi
 source "$SCRIPT_DIR/gov_lib.sh"
 source "$SCRIPT_DIR/enclave_lib.sh"
 

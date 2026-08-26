@@ -453,6 +453,15 @@ require_advancing() {
 }
 
 step "0. preflight"
+# COSMOVISOR: the per-node install_release --restart in step 3 is a LIVE binary swap with no
+# governance plan -- the unmanaged mechanism.  Managed nodes refuse it at install time anyway;
+# refuse here first, before anything is stopped.  (--via-governance, which stages instead, will
+# bypass this check when it lands.)
+for __n in "${NODES[@]}"; do
+    if run "$__n" 'test -L $HOME/qadena/cosmovisor/current' 2>/dev/null; then
+        die "$__n is cosmovisor-managed.  This roll swaps live binaries outside a governance plan; use --via-governance (or de-convert the node deliberately)."
+    fi
+done
 for n in "${NODES[@]}"; do
     rsh "$n" 'true' || die "$n unreachable"
     say "$n  enclave=$(measure_of $n)  height=$(height_of $n)"

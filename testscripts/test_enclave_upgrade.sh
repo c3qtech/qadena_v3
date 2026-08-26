@@ -76,6 +76,15 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# COSMOVISOR: this script IS the unmanaged upgrade mechanism -- it swaps live binaries outside any
+# governance plan, which is precisely what a managed fleet must never do (and its writes would go
+# through the bin/ symlinks into the current generation directory).  On managed fleets every
+# binary change is a plan: rolling_upgrade.sh --via-governance.
+if [ -L "${QADENAHOME:-$HOME/qadena}/cosmovisor/current" ]; then
+    echo "$(basename "$0"): refusing on a cosmovisor-managed node -- use rolling_upgrade.sh --via-governance" >&2
+    exit 1
+fi
+
 set -e
 
 function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }

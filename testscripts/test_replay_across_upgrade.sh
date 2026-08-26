@@ -107,6 +107,14 @@ cmd/qadenad/version.txt on $TO_REF."
 
 for h in "$PRIMARY" "$JOINER"; do
     rsh_user "$h" 'true' >/dev/null 2>&1 || fail "cannot ssh to $h"
+    # MUST STAY NON-MANAGED.  This test's mechanism is rolling_upgrade --chain-only: a live binary
+    # swap with NO upgrade height -- the exact unscheduled break it exists to detect.  A
+    # cosmovisor-managed fleet cannot express that (staging + a plan is the only path), so pointing
+    # this at managed hosts would fail at install time with a message about staging, several stages
+    # after wiping the chain.  Scheduled upgrades are test_cosmovisor_upgrade.sh's job.
+    if rsh_user "$h" 'test -L $HOME/qadena/cosmovisor/current' >/dev/null 2>&1; then
+        fail "$h is cosmovisor-managed -- this test needs UNMANAGED hosts (it performs a deliberate unscheduled binary swap).  Use test_cosmovisor_upgrade.sh for the managed flow, or de-convert."
+    fi
 done
 
 # ARCHIVE THE JOINER'S PREVIOUS INSTALL, and do it here rather than at stage F.
