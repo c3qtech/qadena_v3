@@ -108,6 +108,32 @@ cmd/qadenad/version.txt on $TO_REF."
 for h in "$PRIMARY" "$JOINER"; do
     rsh_user "$h" 'true' >/dev/null 2>&1 || fail "cannot ssh to $h"
 done
+
+# ARCHIVE THE JOINER'S PREVIOUS INSTALL, and do it here rather than at stage F.
+#
+# Two things go wrong without it, and the first run hit both.  install.sh refuses to overwrite a
+# versioned binary whose contents differ (fleet_lib trap 6), so the install fails; and if it did
+# not, nth_node_bringup's phase-1 preflight compares the joiner's CURRENT enclave measurement
+# against the primary's and refuses -- which is how a run that had already wiped the primary
+# reported "joiner height 5506, primary height 97": the joiner was still serving the PREVIOUS
+# chain, on a measurement from a build this run knows nothing about.
+#
+# Moved aside, never deleted: it holds a chain whose genesis this run is about to destroy, but it
+# also holds a keyring, and reaping it is the operator's call.
+jhome=$(rsh_user "$JOINER" 'print $HOME' | tr -d '\r')
+[[ -n "$jhome" ]] || fail "could not resolve \$HOME on $JOINER"
+if rsh_user "$JOINER" "test -d $jhome/qadena"; then
+    rsh_user "$JOINER" "test -x $jhome/qadena/scripts/stop_qadena.sh" \
+        && rsh_user "$JOINER" "$jhome/qadena/scripts/stop_qadena.sh --all" >/dev/null 2>&1
+    left=$(ssh -o ConnectTimeout=10 "$JOINER" 'ps -eo pid,cmd | grep -E "qaden[a]d|eg[o] run|signer_enclav[e]" | grep -v grep | wc -l' | tr -d '\r')
+    [[ "$left" == "0" ]] || fail "$JOINER still has $left node/enclave process(es); kill them BY PID and re-run"
+    stamp=$(date -u +%Y%m%d-%H%M%S)
+    rsh_user "$JOINER" "mv $jhome/qadena $jhome/qadena.pre-replay.$stamp.bak" \
+        || fail "could not archive $JOINER's old ~/qadena"
+    info "$JOINER: archived to $jhome/qadena.pre-replay.$stamp.bak"
+else
+    info "$JOINER: no ~/qadena to archive"
+fi
 info "preflight ok"
 
 # ---------------------------------------------------------------------------------------------
@@ -165,9 +191,13 @@ info "history on $TO_REF reaches height $h_after"
 
 # ---------------------------------------------------------------------------------------------
 stage "F. package what is running, then BLOCK-SYNC a fresh joiner from genesis"
-"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --from 7 --until 7 \
-    2>&1 | tee "$RUN_DIR/stage-F-package.log" | while read -r l; do info "$l"; done
-[[ ${pipestatus[1]} -eq 0 ]] || fail "could not package the running primary"
+# 7 PACKAGES what is actually running, 8 INSTALLS it on the joiner.  Both, and in one call: the
+# joiner must run the measurement the PRIMARY is running, which after a --chain-only roll is still
+# the enclave from --from-ref.  Building on the joiner instead would produce a different
+# measurement and phase 1 would refuse it -- EnclaveIdentity is keyed by measurement.
+"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --joiner "$JOINER" --from 7 --until 8 \
+    2>&1 | tee "$RUN_DIR/stage-F-package-install.log" | while read -r l; do info "$l"; done
+[[ ${pipestatus[1]} -eq 0 ]] || fail "could not package the primary and install it on $JOINER"
 
 # NO --state-sync.  Block-sync is the whole point: a state-synced joiner starts at a snapshot ABOVE
 # the boundary and never replays the blocks that disagree, so it would pass a chain that is broken.
