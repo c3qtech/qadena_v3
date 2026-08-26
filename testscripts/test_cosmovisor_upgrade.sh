@@ -134,7 +134,10 @@ rsh_user "$PRIMARY" "cd \$HOME/qv3 && $TRAFFIC" \
 stage "G. stage v$vto on the joiner, then block-sync it from genesis"
 # The upgrade package landed on the primary at /tmp during --via-governance's distribute; relay
 # it (workstation in the middle -- the nodes need not reach each other's accounts).
-pkg=$(rsh_user "$PRIMARY" 'ls -t /tmp/qadena-*.tar.gz 2>/dev/null | head -1' | tr -d '\r')
+# Constrained to THIS upgrade's version: /tmp accumulates archives from every previous run on
+# this host, and `ls -t | head -1` would happily relay one of those to the joiner -- which would
+# then stage binaries that do not match the plan the chain scheduled.
+pkg=$(rsh_user "$PRIMARY" "ls -t /tmp/qadena-full-$vto-*.tar.gz 2>/dev/null | head -1" | tr -d '\r')
 [[ -n "$pkg" ]] || fail "no package on the primary to relay"
 base=$(basename "$pkg")
 ssh -o ConnectTimeout=10 "$PRIMARY" "cat $pkg" | ssh -o ConnectTimeout=10 "$JOINER" "cat > /tmp/$base" \
