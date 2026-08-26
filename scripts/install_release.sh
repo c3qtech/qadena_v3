@@ -362,6 +362,19 @@ fi
 
 if [[ "$mode" == "install" ]]; then
     echo "  no qadenad and no enclave installed -- FIRST INSTALL"
+    # A NODE IS BORN MANAGED.  The generation tree is created here, before any binary lands, so
+    # this home is never briefly flat and there is no conversion step to forget.  genesis/ is the
+    # generation that executes from height 1, which is what lets this node replay history across
+    # a later upgrade.
+    mkdir -p "$QADENAHOME/cosmovisor/genesis/bin" || fail "cannot create $QADENAHOME/cosmovisor/genesis/bin"
+    if [[ ! -L "$QADENAHOME/cosmovisor/current" ]]; then
+        ( cd "$QADENAHOME/cosmovisor" && ln -sfn genesis current ) || fail "cannot create cosmovisor/current"
+    fi
+    cat > "$QADENAHOME/cosmovisor/cosmovisor_preupgrade.sh" <<'SHIM'
+#!/bin/zsh
+exec "$(dirname "$0")/../scripts/cosmovisor_preupgrade.sh" "$@"
+SHIM
+    chmod +x "$QADENAHOME/cosmovisor/cosmovisor_preupgrade.sh"
     if [[ $node_running -eq 1 ]]; then
         fail "something qadena-shaped is running but nothing is installed.  Stop it first:
        scripts/stop_qadena.sh --all"
