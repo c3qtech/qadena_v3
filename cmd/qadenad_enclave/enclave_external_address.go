@@ -272,6 +272,86 @@ func (s *qadenaServer) publishPioneerIntervalPublicKeyID(externalIPAddress strin
 	return true
 }
 
+// ---------------------------------------------------------------------------------------------
+// The bootstrap address map: where peers lived when the seed last looked.
+//
+// WHY IT EXISTS.  getSSPrivK dials an owner to collect its share, and it learns where to dial from
+// the MIRRORED IntervalPublicKeyID row -- chain state, which a joiner acquires at REPLAY speed.  A
+// peer that published its address above the joiner's snapshot is therefore invisible until catch-up
+// reaches that block: "no address for pioneer X -- cannot ask it for a share".  On the 2026-08-26
+// bringup that cost pioneer4 one owner out of three, survivable only because the key needed one
+// share and two others answered.  At threshold 2 with two owners briefly dark it is INSUFFICIENT,
+// which backlog 90 says the caller must HALT on.
+//
+// WHY IT IS SAFE, which rests on three properties and not on trusting the seed more than we already
+// do (it hands over the jar and regulator private keys and the trusted set):
+//
+//   FALLBACK ONLY    consulted only when the mirrored row has no address.  It can add reachability;
+//                    it can never redirect a node away from an address the chain knows.
+//   REPLAY ONLY      consulted only while catching up.  Once live the mirrored rows are current and
+//                    have the only claim.
+//   DISCARDED        deleted at the replay->live transition, so it cannot outlive its window.
+//
+// And the blast radius of a wrong entry is a FAILED DIAL, not wrong state: the share is checked by
+// attestation and the reconstructed key by the derive-to-pubK test, so a hostile address yields
+// nothing usable.  That is the same "eclipse, not key theft" distinction the cross-node write guard
+// draws -- except here it is bounded to one node's catch-up rather than written into chain state.
+//
+// It needs no generation guard, unlike the owners map: replay never writes to it.
+
+// bootstrapAddressesToServe is the SEED side -- every pioneer it can currently reach, by pioneerID.
+func (s *qadenaServer) bootstrapAddressesToServe() map[string]string {
+	out := map[string]string{}
+	for _, p := range s.getBondedAddressablePioneers() {
+		if ip, ok := s.getPioneerIPAddress(p); ok && ip != "" {
+			out[p] = ip
+		}
+	}
+	return out
+}
+
+// setBootstrapAddresses installs what the seed sent.  Not sealed: an address is public on chain.
+func (s *qadenaServer) setBootstrapAddresses(addrs map[string]string) {
+	if len(addrs) == 0 {
+		c.LoggerInfo(logger, extAddrTag+"the seed sent no bootstrap addresses -- an owner that "+
+			"published above our snapshot will be undiallable until replay reaches that block")
+		return
+	}
+	store := s.secrets(EnclaveBootstrapAddressesKeyPrefix)
+	for id, ip := range addrs {
+		store.Set(EnclaveKeyKey(id), []byte(ip))
+	}
+	c.LoggerInfo(logger, extAddrTag+"installed "+strconv.Itoa(len(addrs))+" bootstrap address(es) "+
+		"from the seed -- used ONLY while replaying, ONLY where the chain row is still empty, and "+
+		"dropped on going live")
+}
+
+// getBootstrapAddress is the fallback.  Callers must have checked the mirrored row first.
+func (s *qadenaServer) getBootstrapAddress(pioneerID string) (string, bool) {
+	b := s.secrets(EnclaveBootstrapAddressesKeyPrefix).Get(EnclaveKeyKey(pioneerID))
+	if len(b) == 0 {
+		return "", false
+	}
+	return string(b), true
+}
+
+// dropBootstrapAddresses runs at the replay->live transition.  After it the mirrored rows are
+// current and this map has no claim; keeping it would be a second, ageing answer to a question the
+// chain now answers correctly.
+func (s *qadenaServer) dropBootstrapAddresses() {
+	store := s.secrets(EnclaveBootstrapAddressesKeyPrefix)
+	keys := store.Keys()
+	if len(keys) == 0 {
+		return
+	}
+	// Keys() already strips the prefix and Delete() re-adds it, so the key passes straight through.
+	for _, k := range keys {
+		store.Delete(k)
+	}
+	c.LoggerInfo(logger, extAddrTag+"dropped "+strconv.Itoa(len(keys))+" bootstrap address(es): the "+
+		"chain is live, so the mirrored rows are current and are the only answer from here")
+}
+
 // orNone renders an address for a log line so an EMPTY one is visible as such rather than vanishing into
 // the surrounding text.
 func orNone(s string) string {

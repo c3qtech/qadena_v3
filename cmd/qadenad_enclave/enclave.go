@@ -346,6 +346,19 @@ const (
 	EnclaveSSIntervalSharesKeyPrefix = "Enclave/SSIntervalShares/value/"
 	EnclaveSSIntervalPrivKKeyPrefix  = "Enclave/SSIntervalPrivK/value/"
 	EnclaveSSIntervalPubKKeyPrefix   = "Enclave/SSIntervalPubK/value/"
+
+	// WHERE PEERS LIVED WHEN THE SEED LAST LOOKED -- a bootstrap crutch with a defined end.
+	//
+	// The mirrored IntervalPublicKeyID rows are authoritative for addresses, but they arrive at
+	// REPLAY speed, so a peer that published above the joiner's snapshot is undiallable until
+	// catch-up reaches that block.  This carries the seed's view across that window and is DELETED
+	// at the replay->live transition.  Unversioned like the rest of the secrets DB, but for the
+	// opposite reason to the others: not because it must survive a rollback, but because a
+	// catch-up can span enclave restarts and losing it mid-sync would waste the whole point.
+	//
+	// Deliberately NOT in storeHashKeys and never written by replay, so it needs no generation
+	// guard and cannot move a store hash.  See enclave_external_address.go.
+	EnclaveBootstrapAddressesKeyPrefix = "Enclave/BootstrapAddresses/value/"
 	// Where the re-share audit stopped scanning last time.  Node-local progress, NOT consensus
 	// state, and deliberately in the unversioned secrets DB: a chain rollback must not rewind it,
 	// and a restart must not lose it (a node that reboots oftener than a full sweep would never
@@ -1350,6 +1363,20 @@ func (s *qadenaServer) planSSReconstruct(pubKID string) (*ssReconstructJob, bool
 		// filter getBondedAddressablePioneers already applies.
 		ip, okIP := s.getPioneerIPAddress(owner)
 		if !okIP || ip == "" {
+			// THE CHAIN ROW IS EMPTY -- which on a REPLAYING node usually means "not yet", not
+			// "never".  The mirrored rows arrive at replay speed, so an owner that published above
+			// our snapshot is invisible until catch-up reaches that block, and an owner we cannot
+			// dial is one fewer toward the threshold.  Fall back to the seed's view, which is
+			// exactly what it was collected for.  Never while live: by then the rows are current
+			// and are the only answer, and the map has already been dropped.
+			if _, isLive, known := currentChainPosition(); known && !isLive {
+				if bip, okB := s.getBootstrapAddress(owner); okB && bip != "" {
+					c.LoggerInfo(logger, ssTag+"no chain address for pioneer "+owner+
+						" yet -- using the seed's bootstrap address while replaying")
+					job.nodes[owner] = "tcp://" + bip + ":26657"
+					continue
+				}
+			}
 			c.LoggerError(logger, ssTag+"no address for pioneer "+owner+
 				" -- cannot ask it for a share (registered but never published one?)")
 			continue
@@ -3497,6 +3524,9 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 		if in.IsLive {
 			c.LoggerInfo(logger, "chain is LIVE at height "+strconv.FormatInt(in.Height, 10)+" -- trust changes now apply")
 			reportStaleOwnerWrites(in.Height)
+			// The bootstrap addresses existed only to cover replay; the mirrored rows are current
+			// from here.  Dropped on the transition, not lazily, so the window has a hard edge.
+			s.dropBootstrapAddresses()
 			// Catching up is over, so settle what catching up deferred: honour deactivations we
 			// skipped, and queue for validation anything the chain considers active that we do not
 			// trust.  Runs on the transition only, not per block.
@@ -3965,6 +3995,8 @@ func (s *qadenaServer) QueryEnclaveSyncEnclave(goCtx context.Context, in *types.
 		SSIntervalOwners: owners,
 		NextCursor:       []byte(nextCursor),
 		Done:             done,
+		// FIRST PAGE ONLY.  A handful of entries that does not page, unlike the owners map.
+		PioneerAddresses: map[string]string{},
 		// CONFIRMED height, not the current block: it is a raw MetaDB key outside the IAVL tree,
 		// so a rollback cannot rewind it, and it is the record of what the network has rather than
 		// what this node is presently executing.  The joiner stamps it onto every owner record, so
@@ -3972,6 +4004,7 @@ func (s *qadenaServer) QueryEnclaveSyncEnclave(goCtx context.Context, in *types.
 		SeedHeight: s.getConfirmedHeight(),
 	}
 	if len(in.Cursor) == 0 {
+		page.PioneerAddresses = s.bootstrapAddressesToServe()
 		// First page only.  SSIntervalOwners is left nil inside params -- the owners travel in the
 		// page's own field so that every page carries them identically.
 		tmpEnclaveParams.SSIntervalOwners = nil
@@ -4789,6 +4822,8 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 	// The generation stamped onto every record we install; see setAllOwners.  Zero means the seed
 	// predates the field, which is no worse than before it existed.
 	var seedHeight int64
+	// The seed's view of where peers live, used only while replaying and dropped on going live.
+	bootstrapAddrs := map[string]string{}
 
 	if len(res.GetEncSyncEnclavePagePubK()) == 0 {
 		// An older seed that does not page.  Everything arrives at once, as it always did.
@@ -4829,6 +4864,13 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 			// advanced mid-transfer cannot leave us stamped behind it.
 			if page.SeedHeight > seedHeight {
 				seedHeight = page.SeedHeight
+			}
+			// First page only in practice, but merge rather than assign: a seed that starts
+			// sending them on every page must not have later pages overwrite the first.
+			for k, v := range page.PioneerAddresses {
+				if v != "" {
+					bootstrapAddrs[k] = v
+				}
 			}
 			for k, v := range page.SSIntervalOwners {
 				allOwners.Pioneers[k] = v
@@ -4893,6 +4935,7 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 
 	// store the owners -- accumulated across every page, installed once
 	s.setAllOwners(allOwners, seedHeight)
+	s.setBootstrapAddresses(bootstrapAddrs)
 
 	// intentionally don't store the shares, they're private to a specific enclave
 	// do not store the SSIntervalPrivKCache
@@ -6815,12 +6858,19 @@ func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*
 				myShare = oldShare
 			}
 		}
+		// MEASURE BEFORE, REPORT AFTER.  The count has to be read while the old record is still
+		// there, but saying so before the write is attempted announces a transition that may never
+		// happen: setOwnersAndShare refuses anything older than the record already holds, and a
+		// replaying joiner refuses one per historical re-share.  Logging "RECEIVED owners 3->1"
+		// and then "STALE ... IGNORING" describes one event twice, in contradictory terms -- and
+		// the first line is the one a reader greps for.  Measured on pioneer5's block-sync: seven
+		// refusals, seven RECEIVED lines claiming a rewind that never occurred, in a log whose
+		// whole purpose was proving the rewind had been stopped.
 		ownersChanged := false
+		prevOwnerCount := 0
 		if prev, had := s.getOwners(in.PubKID); had && len(prev.PioneerIDs) != len(owners) {
 			ownersChanged = true
-			c.LoggerInfo(logger, "ss-reshare: RECEIVED pubKID="+in.PubKID+
-				" owners "+strconv.Itoa(len(prev.PioneerIDs))+"->"+strconv.Itoa(len(owners))+
-				" myShare="+map[bool]string{true: "held", false: "absent"}[myShare != ""])
+			prevOwnerCount = len(prev.PioneerIDs)
 		}
 		// A REFUSED WRITE EARNS NO FOLLOW-UP.  setOwnersAndShare declines anything older than the
 		// record already holds -- a replaying node reaching this with a historical owner list is
@@ -6828,6 +6878,9 @@ func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*
 		// change would invalidate a gather that is still correct.
 		wrote := s.setOwnersAndShare(in.PubKID, owners, myShare)
 		if ownersChanged && wrote {
+			c.LoggerInfo(logger, "ss-reshare: RECEIVED pubKID="+in.PubKID+
+				" owners "+strconv.Itoa(prevOwnerCount)+"->"+strconv.Itoa(len(owners))+
+				" myShare="+map[bool]string{true: "held", false: "absent"}[myShare != ""])
 			// A gather started against the OLD owner record is now fetching from a stale plan.
 			// Invalidate its claim so the reschedule below (or the next trigger) can run against
 			// the new record; if the stale gather still completes with the TRUE key, the

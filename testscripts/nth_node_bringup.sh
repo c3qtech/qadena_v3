@@ -909,6 +909,7 @@ joiner_errors=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qad
     | grep -avE "SignerListener: Error accepting connection" \
     | grep -avE "failed to fetch block .*is not available, lowest height is" \
     | grep -avE "got an already committed block" \
+    | grep -avE "ss-reconstruct: no address for pioneer" \
       | grep -avE "ss-reconstruct: LAZY PATH")
 
 # COUNTED, NOT MERELY FORGIVEN.  The enclave logs LAZY PATH at ERROR level on purpose and says so at
@@ -917,6 +918,26 @@ joiner_errors=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qad
 # level exists to carry, so it is reported here instead.
 lazy_n=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qadena/logs/qadena.log 2>/dev/null" \
     | sed 's/\x1b\[[0-9;]*m//g' | grep -ac "ss-reconstruct: LAZY PATH" || true)
+# COUNTED, NOT MERELY FORGIVEN -- same reasoning as LAZY PATH below.
+#
+# "no address for pioneer X" means an OWNER of a key could not be dialled for its share.  On a
+# joiner this is expected and bounded: its owners map arrives CURRENT from sync-enclave, while its
+# chain view is still catching up, so an owner that published its address after the snapshot looks
+# unaddressable until replay reaches that block.  Widened deliberately by 1a149b4b, which returned
+# first publication to updateIsValidator under IsProposer -- an address now means BONDED AND
+# PROPOSED, so it lands later than it used to.
+#
+# NOT harmless in general, which is why it is reported rather than dropped: enclave_external_address.go
+# exists because an owner nobody can dial makes the chain OVERSTATE custody.  The failures that
+# matter -- INSUFFICIENT and EXHAUSTED, meaning the key could not be gathered at all -- are
+# deliberately absent from the filter above and still fail the run.
+noaddr_n=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qadena/logs/qadena.log 2>/dev/null" \
+    | sed 's/\x1b\[[0-9;]*m//g' | grep -ac "ss-reconstruct: no address for pioneer" || true)
+if [[ "${noaddr_n:-0}" -gt 0 ]] 2>/dev/null; then
+    info "ss-reconstruct could not dial an owner ${noaddr_n} time(s) -- expected while catching up, as an"
+    info "  owner that published after this node's snapshot looks unaddressable until replay reaches it."
+    info "  A count that keeps growing once caught up is a node that never published: check its bonding."
+fi
 if [[ "${lazy_n:-0}" -gt 0 ]] 2>/dev/null; then
     info "ss-reconstruct took the LAZY PATH ${lazy_n} time(s) -- expected for a joiner reaching for"
     info "  history it never saw.  Watch the count; INSUFFICIENT/EXHAUSTED are NOT allowed and fail."

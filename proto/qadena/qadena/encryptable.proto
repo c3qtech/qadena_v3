@@ -374,6 +374,26 @@ message EncryptableSyncEnclavePage {
 	bytes nextCursor = 3;
 	bool  done = 4;
 
+	// THE SEED'S VIEW OF WHERE EVERY PIONEER LIVES, keyed by pioneerID.  First page only: unlike
+	// the owners map this is a handful of entries and does not page.
+	//
+	// A BOOTSTRAP CRUTCH WITH A DEFINED END, not a second source of truth.  The joiner's mirrored
+	// IntervalPublicKeyID rows are authoritative for addresses, but they arrive at REPLAY speed --
+	// so a peer that published its address above the joiner's snapshot looks undiallable until
+	// catch-up reaches that block, and getSSPrivK cannot ask it for a share.  Seen on the
+	// 2026-08-26 bringup: "no address for pioneer pioneer3 -- cannot ask it for a share", which
+	// survived only because the key needed one share and two other owners were reachable.  With a
+	// threshold of 2 and two owners briefly dark, that is INSUFFICIENT, which backlog 90 says the
+	// caller must halt on.
+	//
+	// Used ONLY as a fallback, ONLY while replaying, and DELETED at the replay->live transition:
+	// after that the mirrored rows are current and have the only claim.  It therefore needs no
+	// generation guard -- replay never writes to it -- and it cannot diverge the store hash,
+	// because it never touches the mirrored store.  Consensus-safe by construction: it decides
+	// which peer this node DIALS, and a wrong answer costs a failed fetch, not wrong state -- the
+	// share is checked by attestation and the reconstructed key by the derive-to-pubK test.
+	map<string, string> pioneerAddresses = 6;
+
 	// The SEED's height when it served this page, stamped onto every owner record the joiner
 	// installs.  The joiner is about to replay history from genesis, and every owner list in that
 	// history is older than this -- so one number, taken once from a node that is demonstrably

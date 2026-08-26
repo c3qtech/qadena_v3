@@ -233,3 +233,96 @@ func TestPlanRepublishStillCorrectsAPublishedRow(t *testing.T) {
 	require.Equal(t, "10.0.0.99", s.planExternalAddressRepublish(),
 		"a node that MOVED after publishing must still correct its row")
 }
+
+// ---------------------------------------------------------------------------------------------
+// The bootstrap address map.  Covers the three properties that make it safe: fallback only,
+// replay only, and dropped on going live.
+
+// The window it exists for: an owner whose chain row is still empty because replay has not reached
+// the block where it published.  Without the fallback that owner is simply undiallable.
+func TestBootstrapAddressUsedWhileReplayingWhenChainRowIsEmpty(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	s.setPrivateEnclaveParamsPioneerInfo("pioneer1", "wallet-pioneer1", "", "", "")
+
+	owners := []string{"pioneer1", "pioneer2", "pioneer3"}
+	withPioneer(s, "pioneer1", "192.168.0.10")
+	withPioneer(s, "pioneer2", "192.168.0.11")
+	withPioneer(s, "pioneer3", "") // joined, not yet published in OUR replayed view
+	s.setOwnersAndShare("k", owners, aShare())
+	s.setBootstrapAddresses(map[string]string{"pioneer3": "192.168.0.12"})
+
+	withChainPosition(t, 100, false) // replaying
+
+	job, ok := s.planSSReconstruct("k")
+	require.True(t, ok)
+	require.Equal(t, "tcp://192.168.0.12:26657", job.nodes["pioneer3"],
+		"an owner with no chain row yet must be reachable via the seed's bootstrap address")
+}
+
+// FALLBACK ONLY.  A bootstrap entry must never displace an address the chain already knows --
+// otherwise a seed could redirect traffic away from a node that is publishing correctly.
+func TestBootstrapAddressNeverOverridesTheChainRow(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	s.setPrivateEnclaveParamsPioneerInfo("pioneer1", "wallet-pioneer1", "", "", "")
+
+	owners := []string{"pioneer1", "pioneer2"}
+	withPioneer(s, "pioneer1", "192.168.0.10")
+	withPioneer(s, "pioneer2", "192.168.0.11") // the chain HAS an address
+	s.setOwnersAndShare("k", owners, aShare())
+	s.setBootstrapAddresses(map[string]string{"pioneer2": "10.6.6.6"}) // a different one
+
+	withChainPosition(t, 100, false)
+
+	job, ok := s.planSSReconstruct("k")
+	require.True(t, ok)
+	require.Equal(t, "tcp://192.168.0.11:26657", job.nodes["pioneer2"],
+		"the chain row wins; the bootstrap map may only fill a gap")
+}
+
+// REPLAY ONLY.  Once live the mirrored rows are current, so an empty one means the peer really has
+// not published -- which must stay visible rather than being papered over by a stale seed answer.
+func TestBootstrapAddressNotUsedWhenLive(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	s.setPrivateEnclaveParamsPioneerInfo("pioneer1", "wallet-pioneer1", "", "", "")
+
+	owners := []string{"pioneer1", "pioneer2"}
+	withPioneer(s, "pioneer1", "192.168.0.10")
+	withPioneer(s, "pioneer2", "")
+	s.setOwnersAndShare("k", owners, aShare())
+	s.setBootstrapAddresses(map[string]string{"pioneer2": "192.168.0.12"})
+
+	withChainPosition(t, 100, true) // LIVE
+
+	job, ok := s.planSSReconstruct("k")
+	require.True(t, ok)
+	require.NotContains(t, job.nodes, "pioneer2",
+		"while live an empty chain row means NOT PUBLISHED, and must not be masked")
+}
+
+// DISCARDED.  The map has a hard edge, not a fading one.
+func TestDropBootstrapAddressesClearsThem(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	s.setBootstrapAddresses(map[string]string{"pioneer2": "192.168.0.11", "pioneer3": "192.168.0.12"})
+
+	got, ok := s.getBootstrapAddress("pioneer2")
+	require.True(t, ok)
+	require.Equal(t, "192.168.0.11", got)
+
+	s.dropBootstrapAddresses()
+
+	_, ok = s.getBootstrapAddress("pioneer2")
+	require.False(t, ok, "going live must leave nothing behind")
+	_, ok = s.getBootstrapAddress("pioneer3")
+	require.False(t, ok)
+
+	// Idempotent: the transition can fire again after a restart with nothing left to do.
+	s.dropBootstrapAddresses()
+}
+
+// A seed too old to send them leaves the joiner exactly as it was before this existed.
+func TestBootstrapAddressesAbsentIsHarmless(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	s.setBootstrapAddresses(map[string]string{})
+	_, ok := s.getBootstrapAddress("pioneer2")
+	require.False(t, ok)
+}
