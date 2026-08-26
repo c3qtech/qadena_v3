@@ -69,6 +69,8 @@ if (( CHECK )); then
     done
     [[ -x "$qadenabin/cosmovisor" ]] && say "  ok: cosmovisor ($($qadenabin/cosmovisor version 2>&1 | grep -oE 'v[0-9.]+' | head -1))" \
                                      || { say "  missing: $qadenabin/cosmovisor"; rc=1 }
+    [[ -x "$CV_TREE/cosmovisor_preupgrade.sh" ]] && say "  ok: preupgrade shim" \
+                                                 || { say "  missing: $CV_TREE/cosmovisor_preupgrade.sh (the at-height hook will not run)"; rc=1 }
     exit $rc
 fi
 
@@ -110,6 +112,17 @@ for so in "$qadenabin"/libwasmvm*.so(N); do
 done
 
 ( cd "$CV_TREE" && ln -s genesis current ) || die "cannot create the current symlink"
+
+# The at-height hook.  cosmovisor requires it AT $DAEMON_HOME/cosmovisor/<name> (verified against
+# the pinned source), but scripts/ must stay the single source of truth -- install_release.sh
+# --scripts updates scripts/, not this tree.  So what lives here is a two-line shim that execs the
+# real script; a WRITTEN FILE rather than a symlink, because cosmovisor chmods it (+x for the
+# current user) and stats it as a regular file.
+cat > "$CV_TREE/cosmovisor_preupgrade.sh" <<'SHIM'
+#!/bin/zsh
+exec "$(dirname "$0")/../scripts/cosmovisor_preupgrade.sh" "$@"
+SHIM
+chmod +x "$CV_TREE/cosmovisor_preupgrade.sh" || die "cannot install the preupgrade shim"
 
 say "symlinking $qadenabin names into cosmovisor/current/bin"
 for f in "$GEN_BIN"/*(N); do

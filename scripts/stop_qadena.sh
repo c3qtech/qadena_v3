@@ -18,6 +18,7 @@ fi
 stop_enclave=0
 stop_qadena=0
 stop_signer_enclave=0
+enclaves_only=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -45,8 +46,20 @@ while [[ $# -gt 0 ]]; do
       stop_signer_enclave=1
       shift
       ;;
+    --enclaves-only)
+      # For cosmovisor_preupgrade.sh, which runs BETWEEN the old qadenad's halt and the binary
+      # swap: the chain process is already gone (the halt), but rotatelogs is still the live log
+      # pipe of the run.sh | rotatelogs pipeline that cosmovisor is running INSIDE.  Killing it
+      # here would sever the node's own logging mid-upgrade -- so this mode stops both enclaves,
+      # skips the chain block, skips rotatelogs, and skips the final is_qadena_running check
+      # (which would count the healthy cosmovisor pipeline as a failure to stop).
+      stop_enclave=1
+      stop_signer_enclave=1
+      enclaves_only=1
+      shift
+      ;;
     --help)
-      echo "stop_qadena.sh:  Usage: stop_qadena.sh [--enclave] [--chain] [--signer-enclave]"
+      echo "stop_qadena.sh:  Usage: stop_qadena.sh [--enclave] [--chain] [--signer-enclave] [--enclaves-only]"
       exit 0
       ;;
     *)
@@ -83,15 +96,23 @@ stop_failed=0
 
 if [[ $stop_qadena -eq 1 ]] ; then
     echo "stop_qadena.sh: Stopping Qadena"
+    # THE COSMOVISOR PARENT FIRST, when there is one.  `pkill -f "qadenad"` matches the CHILD (its
+    # argv carries .../cosmovisor/current/bin/qadenad) but not the parent, whose argv is
+    # `cosmovisor run start`.  Killed child-first, cosmovisor merely observes an exit and exits
+    # after it -- fine in practice, but nothing verified it; parent-first is deterministic, and a
+    # cosmovisor mid-upgrade-swap must not be left to finish the swap against a node we are
+    # stopping.  Bracket-classed so this ssh-able command never matches itself.
+    pkill -INT -f "[c]osmovisor run" 2>/dev/null
     pkill -INT -f "qadenad"
 
     # check if qadenad is dead after 2 seconds
     sleep 2
-    if pgrep -f "qadenad" > /dev/null ; then
+    if pgrep -f "qadenad" > /dev/null || pgrep -f "[c]osmovisor run" > /dev/null ; then
         echo "stop_qadena.sh: qadenad did not exit on SIGINT, escalating to SIGKILL"
+        pkill -9 -f "[c]osmovisor run" 2>/dev/null
         pkill -9 -f "qadenad"
         sleep 1
-        if pgrep -f "qadenad" > /dev/null ; then
+        if pgrep -f "qadenad" > /dev/null || pgrep -f "[c]osmovisor run" > /dev/null ; then
             echo "stop_qadena.sh: Error: qadenad is STILL running after SIGKILL"
             stop_failed=1
         fi
@@ -195,16 +216,26 @@ fi
 # if rotatelogs is running, stop it
 
 #detect if rotatelogs is running
-pgrep -f "rotatelogs.*qadena" > /dev/null
-if [[ $? -eq 0 ]]; then
-    echo "stop_qadena.sh: Stopping rotatelogs"
-    pkill -f "rotatelogs.*qadena"
-fi
+if [[ $enclaves_only -eq 0 ]]; then
+    pgrep -f "rotatelogs.*qadena" > /dev/null
+    if [[ $? -eq 0 ]]; then
+        echo "stop_qadena.sh: Stopping rotatelogs"
+        pkill -f "rotatelogs.*qadena"
+    fi
 
-sleep 5
-if is_qadena_running; then
-    echo "stop_qadena.sh: Error: Qadena is still running"
-    exit 1
+    sleep 5
+    if is_qadena_running; then
+        echo "stop_qadena.sh: Error: Qadena is still running"
+        exit 1
+    fi
+else
+    # --enclaves-only: rotatelogs is the caller's live log pipe, and is_qadena_running would count
+    # the cosmovisor pipeline this hook is running inside.  Verify only what this mode stopped.
+    sleep 2
+    if pgrep -x qadenad_enclave > /dev/null || pgrep -x signer_enclave > /dev/null || pgrep -f "[e]go-host" > /dev/null ; then
+        echo "stop_qadena.sh: Error: an enclave is still running after --enclaves-only"
+        stop_failed=1
+    fi
 fi
 
 # REMOVE THE ENCLAVE'S UNIX SOCKET, because a leftover one can make the NEXT start fail in a way
