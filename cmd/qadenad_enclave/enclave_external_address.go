@@ -317,9 +317,13 @@ func (s *qadenaServer) setBootstrapAddresses(addrs map[string]string) {
 			"published above our snapshot will be undiallable until replay reaches that block")
 		return
 	}
+	// EnclaveStoreString, not raw bytes: every other table in this DB is stored that way, and the
+	// standard exporter (exportSecretsTable) unmarshals it -- storing raw would make the section
+	// unreadable by the one tool that exists to read it.
 	store := s.secrets(EnclaveBootstrapAddressesKeyPrefix)
 	for id, ip := range addrs {
-		store.Set(EnclaveKeyKey(id), []byte(ip))
+		v := types.EnclaveStoreString{S: ip}
+		store.Set(EnclaveKeyKey(id), s.Cdc.MustMarshal(&v))
 	}
 	c.LoggerInfo(logger, extAddrTag+"installed "+strconv.Itoa(len(addrs))+" bootstrap address(es) "+
 		"from the seed -- used ONLY while replaying, ONLY where the chain row is still empty, and "+
@@ -332,7 +336,12 @@ func (s *qadenaServer) getBootstrapAddress(pioneerID string) (string, bool) {
 	if len(b) == 0 {
 		return "", false
 	}
-	return string(b), true
+	var v types.EnclaveStoreString
+	s.Cdc.MustUnmarshal(b, &v)
+	if v.GetS() == "" {
+		return "", false
+	}
+	return v.GetS(), true
 }
 
 // dropBootstrapAddresses runs at the replay->live transition.  After it the mirrored rows are

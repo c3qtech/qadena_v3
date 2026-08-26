@@ -1376,6 +1376,17 @@ func (s *qadenaServer) planSSReconstruct(pubKID string) (*ssReconstructJob, bool
 					job.nodes[owner] = "tcp://" + bip + ":26657"
 					continue
 				}
+				// SAY WHICH FAILURE THIS IS.  The two read identically and mean opposite things:
+				// here we DID consult the seed's map and it did not list this peer, so the peer was
+				// not addressable when we synced -- nothing about whether it has published since.
+				// The live message below is the other case, where the map is gone and an empty row
+				// really does mean "never published".  One text for both sent a reader looking for
+				// a node that had not bonded when the actual answer was that the seed never knew it.
+				c.LoggerError(logger, ssTag+"no address for pioneer "+owner+
+					" -- cannot ask it for a share.  The chain row is empty AND the seed's bootstrap "+
+					"map does not list it, so it was not addressable when we synced; it may have "+
+					"published since, at a height this node has not replayed yet")
+				continue
 			}
 			c.LoggerError(logger, ssTag+"no address for pioneer "+owner+
 				" -- cannot ask it for a share (registered but never published one?)")
@@ -2432,6 +2443,16 @@ func (s *qadenaServer) exportSections() []exportSection {
 
 		{"AuthorizedSignatories", func() any { return s.getAllDSVSAuthorizedSignatories() }},
 		{"EnclaveIdentityMap", func() any { return s.getAllEnclaveIdentities() }},
+
+		// THE BOOTSTRAP ADDRESSES, whose ABSENCE is as informative as their content.
+		//
+		// They exist only while a joiner is catching up and are deleted at the replay->live
+		// transition, so on a live node an EMPTY section is the correct answer and a POPULATED one
+		// means the drop did not happen.  On a replaying node the content answers the question its
+		// log line cannot: sync-enclave runs in the standalone enclave BEFORE the node starts, so
+		// "installed N bootstrap address(es)" goes to the operator's terminal and is unrecoverable
+		// afterwards.  This is the only way to ask a running node what the seed actually gave it.
+		{"EnclaveBootstrapAddresses", func() any { return s.exportSecretsTable(EnclaveBootstrapAddressesKeyPrefix) }},
 
 		// Added because their absence is exactly what made the 2026-08-09 fork undiagnosable.
 		// ScanTransferHistory is a CONSENSUS INPUT -- the AML window decides whether a transfer is

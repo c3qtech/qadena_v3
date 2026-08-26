@@ -326,3 +326,25 @@ func TestBootstrapAddressesAbsentIsHarmless(t *testing.T) {
 	_, ok := s.getBootstrapAddress("pioneer2")
 	require.False(t, ok)
 }
+
+// THE SECTION MUST BE READABLE BY THE TOOL THAT EXISTS TO READ IT.  The values are stored as
+// EnclaveStoreString like every other table in the secrets DB; storing raw bytes built fine and
+// round-tripped fine through get/set, and would have handed exportSecretsTable garbage -- a section
+// that exists but lies is worse than one that is missing.
+func TestBootstrapAddressesAreExportable(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	s.setBootstrapAddresses(map[string]string{
+		"pioneer2": "192.168.0.11",
+		"pioneer3": "192.168.0.12",
+	})
+
+	got := s.exportSecretsTable(EnclaveBootstrapAddressesKeyPrefix)
+	require.Equal(t, map[string]string{
+		"pioneer2": "192.168.0.11",
+		"pioneer3": "192.168.0.12",
+	}, got)
+
+	// And an empty section is the CORRECT answer on a live node, not a missing one.
+	s.dropBootstrapAddresses()
+	require.Empty(t, s.exportSecretsTable(EnclaveBootstrapAddressesKeyPrefix))
+}
