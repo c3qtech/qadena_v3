@@ -63,11 +63,12 @@
 # is validated.  Then old and new nodes speak the same protocol, a mixed fleet is fine at every
 # instant, and the nodes can simply be replaced in turn.
 #
-# USE split_roll_upgrade.sh INSTEAD IF THE RELEASE ADDS A CHAIN MESSAGE TYPE.  An old qadenad cannot
-# decode one it was not built with, so a block carrying it is invalid to that node -- it halts or
-# forks.  That case needs the chain binaries everywhere BEFORE any enclave that produces the new
-# message goes live, which is a different (two-phase) shape.  If you are unsure which you have:
-# did x/qadena/types/tx.proto gain a message?  Then it is the split roll.
+# A RELEASE THAT ADDS A CHAIN MESSAGE TYPE NEEDS NO SPECIAL SHAPE ANY MORE.  It used to: an old
+# qadenad cannot decode a message it was not built with, so a block carrying one is invalid to
+# that node -- it halts or forks -- and the fix was a two-phase roll (split_roll_upgrade.sh, now
+# retired) that got the chain binaries everywhere BEFORE any enclave could produce the new
+# message.  The scheduled swap removes the window that made that necessary: every node changes
+# binaries at the SAME HEIGHT, so no node ever sees a message its binary cannot decode.
 #
 # ---------------------------------------------------------------------------------------------
 # THE ARCHIVE: WHERE IT COMES FROM AND HOW IT WAS MADE

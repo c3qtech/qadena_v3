@@ -47,7 +47,7 @@ while [[ $# -gt 0 ]]; do
             # This is the only correct order on real SGX, where MRENCLAVE is a hash of the built
             # image and therefore CANNOT be known before the build: build --hold, read the
             # measurement off the artifact (ego uniqueid), register it by governance, wait for it to
-            # go active, and only then swap it in with scripts/activate_enclave.sh.
+            # go active, and only then let the scheduled swap put it in service at the plan height.
             #
             # Swapping first is what leaves a node down: the old enclave refuses to hand its sealed
             # keys to a measurement the chain has not made active.
@@ -67,7 +67,8 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: install.sh [--enclave] [--signer-enclave] [--chain] [--scripts] [--provider-scripts] [--testscripts] [--all] [--hold]"
             echo "  --hold  install qadenad_enclave.<uniqueID> only; do not replace the live binary"
             echo "          (and do not stop the node).  Required on SGX, where the measurement is"
-            echo "          only knowable after the build.  Activate later with activate_enclave.sh."
+            echo "          only knowable after the build.  Deploy it as a governance plan:"
+            echo "          build.sh --release, commit, then roll the fleet."
             exit 0
             ;;
         *)
@@ -206,7 +207,8 @@ if [[ $install_enclave -eq 1 ]]; then
     install_binary "$enclave_path/qadenad_enclave" "$qadenabin/qadenad_enclave.$unique_id"
     if [[ $hold -eq 1 ]]; then
         echo "  held back: staged as qadenad_enclave.$unique_id; the live binary is unchanged"
-        echo "  register it, wait for active, then: scripts/activate_enclave.sh $unique_id"
+        echo "  deploy it as a governance plan (registration, promotion and the attested"
+        echo "  handover all happen there): build.sh --release, commit, then roll the fleet."
     else
         install_binary "$enclave_path/qadenad_enclave" "$(gen_dest)/qadenad_enclave"
         cosmovisor_relink

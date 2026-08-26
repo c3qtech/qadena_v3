@@ -296,7 +296,7 @@ else
         active)
             ok "$src is ACTIVE on chain -- safe to deploy"
             info "  1.  ./buildscripts/build.sh --hold      # stage $src; node keeps running"
-            info "  2.  scripts/activate_enclave.sh $src    # stop, swap, start -- performs the handover"
+            info "  2.  build.sh --release + a fleet upgrade   # schedules the swap and the handover"
             info "  (or plain ./buildscripts/build.sh, which stops the node and swaps in one step --"
             info "   safe here only because $src is already active)"
             if [ -n "$newest_ver" ] && [ "$srcver" = "$newest_ver" ]; then
@@ -316,7 +316,7 @@ else
             info "  1.  ./buildscripts/build.sh --hold      # stage it; live binary untouched, node keeps running"
             info "  2.  scripts/gov_register_enclave_identity.sh $src <signerID>"
             info "  3.  re-run this script until $src reads active"
-            info "  4.  scripts/activate_enclave.sh $src    # stop, swap, start -- performs the handover"
+            info "  4.  build.sh --release + a fleet upgrade   # schedules the swap and the handover"
             echo
             info "  --hold matters because the ORDER is forced: the old enclave will not hand its"
             info "  sealed keys to a measurement the chain has not made active, so swapping the live"
@@ -327,7 +327,7 @@ else
             echo
             info "  If you already swapped a binary in and the node will not start, nothing is lost --"
             info "  the old binary and its enclave_params are untouched.  Recover with:"
-            info "      scripts/activate_enclave.sh ${running:-<old-measurement>}" ;;
+            info "      build.sh --release, commit, then roll the fleet" ;;
     esac
 fi
 

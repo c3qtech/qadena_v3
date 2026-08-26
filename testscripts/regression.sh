@@ -1334,7 +1334,11 @@ if [ "$with_enclave_upgrade" = "true" ]; then
     # LAST OF ALL, and after credentials.  It stops the node, swaps the enclave binary and restarts,
     # so anything after it would be measuring a different process; and it needs reports already on
     # record, which the suites above produce.
-    run_test "enclave-upgrade" "$qadenatestscripts/test_enclave_upgrade.sh"
+    # RETIRED with the live-swap enclave upgrade it exercised.  An enclave change is a governance
+    # plan now: the measurement is registered, promoted to active, and the attested handover runs
+    # from the at-height hook on every node at once.  That path is covered end to end by
+    # testscripts/test_cosmovisor_upgrade.sh, which needs a fleet and so does not belong here.
+    :
 fi
 
 summarize

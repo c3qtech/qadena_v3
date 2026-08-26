@@ -35,11 +35,10 @@
 #      at the last step with a measurement mismatch that read as a build fault and was an ordering
 #      fault.  Stages run: start -> regress -> package -> install -> join.
 #
-#   2. AND DO NOT REBUILD AFTER THE UPGRADE EITHER.  test_enclave_upgrade.sh bumps the //go:embed-ed
-#      id files, builds, and RESTORES them on exit, so the checkout no longer describes the running
-#      node: a later build_enclave.sh on that machine silently produces the PRE-upgrade identity.
-#      Packaging is safe -- package_release.sh takes the INSTALLED artifacts -- which is exactly why
-#      stage D packages rather than rebuilds.
+#   2. AND DO NOT REBUILD AFTER AN UPGRADE EITHER.  A checkout can stop describing the running node
+#      -- an enclave identity is //go:embed-ed, so building at the wrong commit silently produces a
+#      DIFFERENT measurement than the one installed.  Packaging is safe (package_release.sh takes
+#      the INSTALLED artifacts), which is exactly why stage D packages rather than rebuilds.
 #
 #   3. NEVER RUN A SUITE WHILE THE CONTINUOUS LOOP IS RUNNING.  They share ann, pioneer1 and the
 #      treasury, and the collisions surface as "could not provision" or "Invalid destination
