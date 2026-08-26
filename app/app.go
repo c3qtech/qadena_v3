@@ -399,12 +399,30 @@ func upgradeHandlerNames(binaryVersion string, historical []string, diskName str
 //     applied, so a restarted node always recognises its own history
 //  4. historicalUpgradeNames above, for state-synced nodes with no disk file
 //
-// All version-named plans use the generic RunMigrations handler: they exist to move BINARIES at
-// a height, not to add store modules.  A future plan that adds a module gets its own explicit
-// StoreUpgrades entry beside the legacy one -- do not widen the generic path.
+// All version-named plans exist to move BINARIES at a height, not to add store modules.  A plan
+// that genuinely adds one gets its own explicit handler and StoreUpgrades entry beside the legacy
+// one -- do not widen the generic path.
 func (app *App) RegisterUpgradeHandlers() {
 	migrate := func(ctx context.Context, _ upgradetypes.Plan, fromVM module.VersionMap) (module.VersionMap, error) {
-		return app.ModuleManager.RunMigrations(ctx, app.Configurator(), fromVM)
+		// A BINARY-SWAP PLAN MUST NEVER *INITIALISE* A MODULE.  RunMigrations treats any module
+		// missing from fromVM as brand new and runs its InitGenesis -- and on 2026-08-26 that
+		// took the node down at the upgrade height with
+		//
+		//     panic: error initializing evm coin info: denom metadata aatom could not be found
+		//
+		// because x/vm, x/erc20 and the two ibc light clients were absent from this chain's
+		// stored version map.  Every node applies the plan in the same block, so an InitGenesis
+		// that panics on one panics on all of them -- and the block cannot be skipped, so the
+		// chain is stuck until a new binary is staged everywhere.  A worse variant is silent: an
+		// InitGenesis that SUCCEEDS re-initialises that module's state mid-chain.
+		//
+		// Filling the gaps with the CURRENT consensus versions means RunMigrations sees no new
+		// modules, while still migrating every module whose STORED version is genuinely behind.
+		vm := app.ModuleManager.GetVersionMap()
+		for name, v := range fromVM {
+			vm[name] = v
+		}
+		return app.ModuleManager.RunMigrations(ctx, app.Configurator(), vm)
 	}
 
 	upgradeInfo, err := app.UpgradeKeeper.ReadUpgradeInfoFromDisk()
