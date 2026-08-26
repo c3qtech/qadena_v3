@@ -838,16 +838,28 @@ if (( VIA_GOV )); then
     fi
 
     step "2j. wait for the swap height"
-    plan_h=$(rsh "${NODES[1]}" '~/qadena/bin/qadenad q upgrade plan -o json 2>/dev/null' | grep -oE '"height":"[0-9]+"' | grep -oE '[0-9]+' | head -1)
-    [[ -n "$plan_h" ]] || die "no plan on chain after a passed proposal?"
-    say "  plan height $plan_h"
-    while :; do
-        h=$(height_of "${NODES[1]}")
-        [[ -n "$h" ]] || { sleep 5; continue }   # nodes restart AT the height; RPC gaps are the swap happening
-        (( h >= plan_h + 2 )) && break
-        say "  ... $h / $plan_h"
-        sleep 10
-    done
+    say "  querying the scheduled plan"
+    plan_h=$(rsh "${NODES[1]}" '~/qadena/bin/qadenad q upgrade plan -o json 2>/dev/null' | grep -oE '"height":"[0-9]+"' | grep -oE '[0-9]+' | head -1) || true
+    if [[ -z "$plan_h" ]]; then
+        # AN EMPTY PLAN QUERY IS AMBIGUOUS, and the two meanings are opposite.  x/upgrade DELETES
+        # the plan once it is applied, so "no plan" is the normal state AFTER a successful swap --
+        # which a short height or a slow submit can reach before this line runs.  Treating it as
+        # failure would fail a run that had just succeeded.  Ask the other question instead.
+        applied_h=$(rsh "${NODES[1]}" "~/qadena/bin/qadenad q upgrade applied $PLAN 2>/dev/null" | grep -oE '[0-9]+' | head -1) || true
+        [[ -n "$applied_h" ]] || die "no plan named $PLAN is scheduled and none has been applied -- the proposal passed, so either it carried a different name or the plan was cancelled"
+        say "  plan $PLAN was ALREADY applied at height $applied_h"
+        plan_h="$applied_h"
+    else
+        say "  plan height $plan_h"
+        while :; do
+            h=$(height_of "${NODES[1]}") || true
+            # Nodes restart AT the height, so an unanswering RPC here is the swap happening.
+            if [[ -z "$h" ]]; then say "  ... (RPC quiet -- restarting?)"; sleep 5; continue; fi
+            (( h >= plan_h + 2 )) && break
+            say "  ... $h / $plan_h"
+            sleep 10
+        done
+    fi
 
     step "2k. verify every node swapped and is live"
     sleep 10

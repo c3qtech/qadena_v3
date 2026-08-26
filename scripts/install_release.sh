@@ -483,6 +483,18 @@ if [[ -n "$stage_upgrade" ]]; then
     [[ -n "$mver" ]] || fail "--stage-upgrade: the manifest carries no qadenad.version -- cannot verify the plan name"
     [[ "$stage_upgrade" == "v$mver" ]] || fail "--stage-upgrade $stage_upgrade does not match this package's qadenad.version ($mver -> plan name would be v$mver).  Staging under the wrong name leaves a dir the swap will never use."
 
+    # NEVER STAGE INTO THE LIVE GENERATION.  After a swap, `current` points at upgrades/<plan>,
+    # so re-staging that same plan would rewrite the binaries the node is RUNNING FROM -- the
+    # mutate-the-current-generation hazard this whole layout exists to prevent.  Learned the hard
+    # way on 2026-08-26: the differing-bytes refusal below said "remove the stale dir
+    # deliberately", that was done, and it deleted the live generation's enclaves out from under a
+    # running node, leaving ~/qadena/bin's symlinks dangling.  A bad live generation is repaired
+    # by staging a NEW plan name, never by re-staging the running one.
+    cur_gen=$(readlink "$QADENAHOME/cosmovisor/current" 2>/dev/null)
+    if [[ "$cur_gen" == *"upgrades/$stage_upgrade" ]]; then
+        fail "$stage_upgrade is the generation this node is CURRENTLY RUNNING (current -> $cur_gen).  Staging into it would rewrite the running binaries in place.  If that generation is bad, bump the version and stage a NEW plan name -- do not re-stage the live one."
+    fi
+
     updir="$QADENAHOME/cosmovisor/upgrades/$stage_upgrade/bin"
     echo ""
     echo "=== 4. staging upgrade $stage_upgrade (binaries only; the running node is untouched) ==="
@@ -493,7 +505,7 @@ if [[ -n "$stage_upgrade" ]]; then
         b=$(basename "$f")
         [[ "$b" == "cosmovisor" ]] && continue   # never inside the tree it swaps
         if [[ -f "$updir/$b" ]] && ! cmp -s "$f" "$updir/$b"; then
-            fail "$updir/$b already exists with different contents -- a previously staged $stage_upgrade differs from this package.  Two artifacts claiming one plan name is exactly the ambiguity plan names exist to prevent; remove the stale dir deliberately if this package is the right one."
+            fail "$updir/$b already exists with different contents -- a previously staged $stage_upgrade differs from this package.  Two artifacts claiming one plan name is exactly the ambiguity plan names exist to prevent.  If this package is the right one AND that plan has not been applied anywhere yet, remove $QADENAHOME/cosmovisor/upgrades/$stage_upgrade deliberately and re-run.  If the plan is already live on any node, bump the version and stage a NEW name instead."
         fi
         cp "$f" "$updir/$b" || fail "cannot stage $b"
         chmod +x "$updir/$b" 2>/dev/null
@@ -509,7 +521,10 @@ if [[ -n "$stage_upgrade" ]]; then
     for cont in qadenad_enclave signer_enclave; do
         if [[ ! -x "$updir/$cont" ]]; then
             csrc="$QADENAHOME/cosmovisor/current/bin/$cont"
-            [[ -x "$csrc" ]] || fail "the package carries no $cont and current/bin has none to continue with"
+            # -x, not -e: a DANGLING symlink (current pointing at a removed generation) is exactly
+            # the state that made this loop silently carry nothing forward, producing an upgrade
+            # dir that looks staged and spawns no enclave at the height.
+            [[ -x "$csrc" ]] || fail "the package carries no $cont, and $csrc is missing or unresolvable (is current -> $(readlink "$QADENAHOME/cosmovisor/current" 2>/dev/null) intact?).  An upgrade dir without it leaves the swapped node with no enclave to spawn."
             cp "$csrc" "$updir/$cont" || fail "cannot carry $cont forward from current/bin"
             echo "  carried  $cont (unchanged, from the current generation)"
         fi
