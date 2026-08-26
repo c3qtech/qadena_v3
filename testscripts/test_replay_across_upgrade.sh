@@ -229,8 +229,15 @@ earliest=$(rsh_user "$JOINER" 'curl -s --max-time 5 localhost:26657/status | jq 
     "the joiner's earliest block is ${earliest:-unknown}, not 1 -- it did not replay from genesis, \
 so it never crossed the boundary and this run proves nothing."
 
+# THE BOUNDARY IS THE MINIMUM, NOT THE TARGET.  Requiring only $h_before would pass a joiner that
+# crossed the boundary and then stalled one block later, which is a broken chain reported green.
+# $h_after is where the primary stood when stage E finished, so reaching it means the joiner
+# replayed every block this run produced -- on both sides of the boundary.
 [[ "$hj" -ge "$h_before" ]] || fail \
     "the joiner reached only $hj, below the boundary at $h_before -- it never crossed."
+[[ "$hj" -ge "$h_after" ]] || fail \
+    "the joiner reached $hj but the primary was at $h_after when the traffic finished -- it crossed \
+the boundary and then stopped, so the blocks built on $vto were not all replayed."
 
 info "the joiner replayed blocks 1..$hj from genesis, across the $vfrom -> $vto boundary at $h_before"
 note "PASSED: replay survives $FROM_REF -> $TO_REF"
