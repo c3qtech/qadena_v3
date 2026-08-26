@@ -551,6 +551,42 @@ if [[ -n "$BUILD_FROM" ]]; then
     # -- on the FIRST node, after governance has already passed, which is the expensive half to
     # redo.  Checked here, before anything is built or proposed.
     LIVE_VER=$(rsh "$BUILD_FROM" '~/qadena/bin/qadenad_enclave -version 2>/dev/null' | tr -d '\r' | head -1) || true
+
+    # THE CHAIN VERSION IS NO LONGER ONLY --chain-only's BUSINESS.  --via-governance derives the
+    # PLAN NAME from it (v$SRC_CHAIN), so it is read unconditionally now.
+    SRC_CHAIN=$(rsh "$BUILD_FROM" "cat $RD/cmd/qadenad/version.txt 2>/dev/null" | tr -d '\r' | head -1) || true
+    LIVE_CHAIN=$(rsh "$BUILD_FROM" '~/qadena/bin/qadenad version 2>/dev/null' | tr -d '\r' | head -1) || true
+
+    # IS THE ENCLAVE ACTUALLY PART OF THIS ROLL?  The three enclave preconditions below all
+    # protect the HANDOVER, so applying them to a roll that changes no measurement asserts a
+    # transition nobody is making -- which is exactly how a chain-only --via-governance run died
+    # in stage E on 2026-08-26, demanding a bump to cmd/qadenad_enclave/version.txt for an enclave
+    # it was not touching.  --chain-only says so explicitly; --via-governance is told by the
+    # checkout: same measurement as the build host runs means enclave-unchanged.  The live roll
+    # (neither flag) keeps asserting them exactly as before.
+    ENCL_CHANGING=1
+    if (( CHAIN_ONLY )); then
+        ENCL_CHANGING=0
+    elif (( VIA_GOV )); then
+        run_meas0=$(measure_of "$BUILD_FROM") || true
+        if [[ -n "$SRC_UNIQ" && -n "$run_meas0" && "$SRC_UNIQ" == "$run_meas0" ]]; then
+            ENCL_CHANGING=0
+            say "enclave:  $SRC_UNIQ unchanged -- this is a chain-only upgrade"
+        fi
+    fi
+
+    # The chain version must MOVE for any staged upgrade.  Two independent reasons, either fatal:
+    # the plan name would otherwise name a version the running binary ALREADY registers a handler
+    # for, so nothing would ever halt and the "upgrade" would silently no-op; and install_release
+    # refuses to overwrite qadenad.<version> with the differing bytes of a non-reproducible build.
+    if (( CHAIN_ONLY || VIA_GOV )); then
+        [[ -n "$SRC_CHAIN" ]] || die "$BUILD_FROM: cannot read $RD/cmd/qadenad/version.txt"
+        if [[ -n "$LIVE_CHAIN" && "$SRC_CHAIN" == "$LIVE_CHAIN" ]]; then
+            die "cmd/qadenad/version.txt is $SRC_CHAIN and $BUILD_FROM already runs $SRC_CHAIN.  A plan named v$SRC_CHAIN would be one the RUNNING binary already has a handler for, so no node would ever halt for it and the swap would silently not happen.  Bump cmd/qadenad/version.txt in the checkout and COMMIT it."
+        fi
+        say "chain:    $LIVE_CHAIN -> $SRC_CHAIN$( (( VIA_GOV )) && print -n " (plan v$SRC_CHAIN)" )"
+    fi
+
     if (( CHAIN_ONLY )); then
         # --chain-only: THE ENCLAVE IS DELIBERATELY UNCHANGED, so the two checks below are not
         # merely skippable, they are WRONG here.  Both exist to protect the enclave HANDOVER --
@@ -559,14 +595,8 @@ if [[ -n "$BUILD_FROM" ]]; then
         # a transition that this roll is specifically not making.  What must still be true is that
         # the CHAIN version moved, because install_release.sh refuses to overwrite a versioned
         # binary whose bytes differ, and a non-reproducible rebuild always differs.
-        SRC_CHAIN=$(rsh "$BUILD_FROM" "cat $RD/cmd/qadenad/version.txt 2>/dev/null" | tr -d '\r' | head -1) || true
-        LIVE_CHAIN=$(rsh "$BUILD_FROM" '~/qadena/bin/qadenad version 2>/dev/null' | tr -d '\r' | head -1) || true
-        say "chain-only: enclave stays $SRC_VER/$SRC_UNIQ; chain $LIVE_CHAIN -> $SRC_CHAIN"
-        [[ -n "$SRC_CHAIN" ]] || die "$BUILD_FROM: cannot read $RD/cmd/qadenad/version.txt"
-        if [[ -n "$LIVE_CHAIN" && "$SRC_CHAIN" == "$LIVE_CHAIN" ]]; then
-            die "cmd/qadenad/version.txt is $SRC_CHAIN and $BUILD_FROM already runs $SRC_CHAIN -- install_release.sh will refuse to overwrite qadenad.$SRC_CHAIN with bytes that differ (the build is not reproducible).  Bump cmd/qadenad/version.txt in the checkout and COMMIT it."
-        fi
-    elif [[ -n "$LIVE_VER" && -n "$SRC_VER" ]]; then
+        say "chain-only: enclave stays $SRC_VER/$SRC_UNIQ"
+    elif (( ENCL_CHANGING )) && [[ -n "$LIVE_VER" && -n "$SRC_VER" ]]; then
         say "running:  version=$LIVE_VER"
         if [[ "$SRC_VER" == "$LIVE_VER" ]]; then
             die "version.txt is $SRC_VER and $BUILD_FROM already runs $SRC_VER -- the handover needs a STRICTLY GREATER version and will not run.  Bump cmd/qadenad_enclave/version.txt in the checkout and COMMIT it."
@@ -578,7 +608,7 @@ if [[ -n "$BUILD_FROM" ]]; then
 
     # A MEASUREMENT THE CHAIN HAS RETIRED IS RETIRED PERMANENTLY -- governance cannot move an
     # inactive row back.  Cheaper to learn now than after a proposal.
-    if [[ -n "$SRC_UNIQ" ]] && (( ! CHAIN_ONLY )); then
+    if [[ -n "$SRC_UNIQ" ]] && (( ENCL_CHANGING )); then
         st=$(identity_status "$SRC_UNIQ") || true
         [[ "$st" == "inactive" ]] \
             && die "$SRC_UNIQ is INACTIVE on chain and that is PERMANENT -- pick a NEW measurement in the checkout (cmd/qadenad_enclave/test_unique_id.txt) and commit it"
@@ -677,7 +707,12 @@ if [[ -n "$BUILD_FROM" ]]; then
         # binary whose contents differ.  A chain-only roll would fail at the first install for a
         # component it never meant to touch.
         only_arg=""
-        (( CHAIN_ONLY )) && only_arg=" --only chain,libs,scripts,config"
+        # Also when --via-governance found the enclave unchanged: shipping a REBUILT enclave that
+        # carries the same embedded measurement is backlog 105's hazard (two different binaries
+        # answering to one uniqueNNN).  Leaving it out means --stage-upgrade carries the current
+        # generation's enclave forward byte-for-byte, which is what "the enclave did not change"
+        # should mean.
+        (( CHAIN_ONLY || ! ${ENCL_CHANGING:-1} )) && only_arg=" --only chain,libs,scripts,config"
         out=$(rsh "$BUILD_FROM" "cd $RD && $BUILD_PATH ./buildscripts/package_release.sh --out $PKG_OUT$only_arg 2>&1 | tail -25") \
             || { print "$out" | while read -r l; do say "    $l"; done; die "package_release.sh failed on $BUILD_FROM" }
         print "$out" | while read -r l; do say "    $l"; done
