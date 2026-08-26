@@ -101,6 +101,44 @@ if cosmovisor_managed && [[ -x "$qadenabin/cosmovisor" ]] ; then
         exit 1
     fi
     echo "run.sh: cosmovisor-managed (current -> $(readlink $QADENAHOME/cosmovisor/current))"
+
+    # RESUME A SWAP COSMOVISOR CANNOT PERFORM ITSELF.
+    #
+    # cosmovisor decides to upgrade by watching data/upgrade-info.json, but gates that decision on
+    # `<current-binary> status` reporting a height >= the plan height.  That gate needs a LIVE RPC,
+    # and there is one important case where it never gets one: a node REPLAYING history that halts
+    # at the boundary.  It dies applying the plan's block before its RPC ever serves, so the gate
+    # errors, cosmovisor treats the exit as an ordinary crash, and the next start replays into the
+    # same panic.  That loop is permanent -- and it is exactly the genesis-joiner case cosmovisor
+    # exists here to make work (observed on a joiner at height 486, 2026-08-26).
+    #
+    # x/upgrade writes upgrade-info.json ONLY when it actually halts for a plan, so the file's
+    # presence plus a `current` that does not already point at that plan means: this node stopped
+    # for an upgrade it has not performed.  If the binaries are staged, do what cosmovisor would
+    # have done -- hook first, then flip -- and let it start on the new generation.
+    _pending="$QADENAHOME/data/upgrade-info.json"
+    if [[ -f "$_pending" ]] ; then
+        _plan=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_pending" | head -1)
+        _cur=$(readlink "$QADENAHOME/cosmovisor/current")
+        if [[ -n "$_plan" && "$_cur" != *"upgrades/$_plan" ]] ; then
+            if [[ -x "$QADENAHOME/cosmovisor/upgrades/$_plan/bin/qadenad" ]] ; then
+                echo "run.sh: this node halted for upgrade '$_plan' and has not performed it -- resuming the swap"
+                if [[ -x "$QADENAHOME/cosmovisor/cosmovisor_preupgrade.sh" ]] ; then
+                    "$QADENAHOME/cosmovisor/cosmovisor_preupgrade.sh" "$_plan" || {
+                        echo "run.sh:  Error: the preupgrade hook failed for '$_plan'; not swapping"
+                        exit 1
+                    }
+                fi
+                ( cd "$QADENAHOME/cosmovisor" && rm -f current && ln -s "upgrades/$_plan" current )                     || { echo "run.sh:  Error: could not repoint current at upgrades/$_plan"; exit 1 }
+                echo "run.sh: current -> $(readlink $QADENAHOME/cosmovisor/current)"
+            else
+                echo "run.sh:  Error: this node halted for upgrade '$_plan' but nothing is staged at"
+                echo "run.sh:         $QADENAHOME/cosmovisor/upgrades/$_plan/bin -- it cannot start until"
+                echo "run.sh:         that release is staged (install_release.sh --stage-upgrade $_plan)."
+                exit 1
+            fi
+        fi
+    fi
     # UNSAFE_SKIP_BACKUP=true by default: cosmovisor's pre-swap backup copies the whole data dir,
     # which on this fleet's disks would stall the upgrade at H for minutes and can fill the disk
     # outright.  History safety comes from the staged-binaries design, not from a data copy.

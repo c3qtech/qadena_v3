@@ -51,12 +51,26 @@ NEW_BIN_DIR="$QADENAHOME/cosmovisor/upgrades/$PLAN_NAME/bin"
 say "tearing down the orphaned enclaves"
 "$qadenascripts/stop_qadena.sh" --enclaves-only || die "enclave teardown failed -- refusing to swap over live orphans"
 
-# The socket must actually be gone before any handoff starts an enclave of its own.
+# NO ENCLAVE MAY BE SERVING before a handoff starts one of its own -- but the test for that is a
+# live PROCESS, not a socket file.  A crashed enclave leaves the file behind with nothing on the
+# other end, and stop_qadena.sh does not remove it in that case: it early-exits at "Qadena is no
+# longer running" before reaching its socket-cleanup section.  Failing on the file alone made this
+# hook refuse to resume a swap on a node whose enclave had already died -- which is precisely the
+# node that needs the resume (observed on the joiner at height 486, 2026-08-26).
 for i in {30..1}; do
-    [[ -S /tmp/qadena_50051.sock ]] || break
+    pgrep -x qadenad_enclave >/dev/null 2>&1 || pgrep -f "[e]go-host.*qadenad_enclave" >/dev/null 2>&1 || break
     sleep 1
 done
-[[ -S /tmp/qadena_50051.sock ]] && die "/tmp/qadena_50051.sock still present after teardown"
+if pgrep -x qadenad_enclave >/dev/null 2>&1 || pgrep -f "[e]go-host.*qadenad_enclave" >/dev/null 2>&1; then
+    die "an enclave process is still alive after teardown -- refusing to swap over it"
+fi
+# Debris, now that nothing is behind it.  /tmp is sticky, so a socket left by a run as another
+# user (root, after a sudo start) cannot be unlinked by this one -- that IS fatal, because the
+# next enclave will fail to bind it.
+rm -f /tmp/qadena_*.sock 2>/dev/null
+if [[ -S /tmp/qadena_50051.sock ]]; then
+    die "/tmp/qadena_50051.sock survives removal (owned by $(stat -c %U /tmp/qadena_50051.sock 2>/dev/null || echo '?'), /tmp is sticky) -- the next enclave cannot bind it.  sudo rm -f /tmp/qadena_50051.sock"
+fi
 
 # ---------------------------------------------------------------------------------------------
 # Measurement comparison decides whether a handoff is needed.  Debug enclaves answer -unique-id;
