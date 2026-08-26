@@ -146,8 +146,11 @@ vnow=$(rsh_user "$PRIMARY" 'cat $HOME/qv3/cmd/qadenad/version.txt' | tr -d '\r\n
     "after checking out $TO_REF the primary reports chain version '$vnow', expected '$vto' -- the \
 checkout did not take, and rolling from here would build the wrong thing."
 
+# NO --repo.  It is RELATIVE TO $HOME (default "qv3", used as "\$HOME/$REPO_DIR"), so passing an
+# absolute path produced "$HOME/$HOME/qv3" and rolling_upgrade reported a missing version.txt as if
+# the checkout were wrong.  The default is already correct.
 "$SCRIPT_DIR/rolling_upgrade.sh" --node "$PRIMARY" --chain-only \
-    --build-from "$PRIMARY" --repo "\$HOME/qv3" \
+    --build-from "$PRIMARY" \
     2>&1 | tee "$RUN_DIR/stage-D-upgrade.log" | while read -r l; do info "$l"; done
 [[ ${pipestatus[1]} -eq 0 ]] || fail "the rolling upgrade to $TO_REF failed"
 assert_advancing "$PRIMARY" "D"
