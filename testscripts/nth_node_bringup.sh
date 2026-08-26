@@ -908,6 +908,7 @@ joiner_errors=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qad
     | grep -avE "enclaveSynchronizeStores OUT-OF-SYNC|couldn't find an active enclave identity" \
     | grep -avE "SignerListener: Error accepting connection" \
     | grep -avE "failed to fetch block .*is not available, lowest height is" \
+    | grep -avE "got an already committed block" \
       | grep -avE "ss-reconstruct: LAZY PATH")
 
 # COUNTED, NOT MERELY FORGIVEN.  The enclave logs LAZY PATH at ERROR level on purpose and says so at
@@ -947,6 +948,27 @@ fi
 #   evm indexer "height 1 is    the EVM indexer walking from block 1 on a STATE-SYNCED node whose
 #   not available, lowest       history starts at the snapshot.  Structural to state-sync and
 #   height is N"                cosmetic: the blocks below the snapshot do not exist by design.
+#
+#   "got an already committed    blocksync asked SEVERAL peers for overlapping ranges and a second
+#   block #N (possibly from      copy of a block arrived after the first was committed.  Whichever
+#   the slow peer ...)"          peer answers second loses the race; the loser's copy is discarded.
+#                                CONSENSUS-NEUTRAL BY CONSTRUCTION: it is about which peer replied
+#                                first, not about what the block contained -- a block whose CONTENT
+#                                disagreed fails as a wrong-AppHash or a bad-commit line instead,
+#                                and neither is allowed here.
+#                                WHERE IN THE JOIN IT HAPPENS, checked rather than assumed: AFTER
+#                                state-sync has restored the snapshot and handed over to blocksync
+#                                to catch up to the tip.  On the 2026-08-26 run .52 restored at
+#                                height 2001 and every one of these errors named a block between
+#                                #2032 and #2202 -- above the snapshot, inside the catch-up window,
+#                                tagged module=blocksync.  None occurred during state-sync itself,
+#                                which is why this entry is safe to allow: it forgives duplicate
+#                                DELIVERY during catch-up, not anything about restoring a snapshot.
+#                                STRUCTURALLY INVISIBLE UNTIL THE THIRD NODE, which is why this
+#                                arrived late: the first joiner has exactly one peer to ask, so no
+#                                range can overlap.  pioneer2 (peers: M1) logged 0; pioneer3 (peers:
+#                                M1 and M2) logged 17, from both .162 and .154 -- and the joiner was
+#                                caught up and healthy at the moment the run was failed over them.
 #
 #   ss-reconstruct: LAZY PATH   a joiner reaching for an SS interval key from before it existed.
 #                               getSSPrivK names this case itself -- "a node needing a HISTORICAL

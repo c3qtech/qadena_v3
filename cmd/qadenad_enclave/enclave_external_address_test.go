@@ -26,11 +26,11 @@ func withSealedParamsDir(t *testing.T, s *qadenaServer) string {
 func resetExtAddrState(t *testing.T) {
 	t.Helper()
 	extAddrMu.Lock()
-	extAddrBroadcast, extAddrGaveUp = "", false
+	extAddrBroadcast, extAddrGaveUp, extAddrUnpublishedNoted = "", false, false
 	extAddrMu.Unlock()
 	t.Cleanup(func() {
 		extAddrMu.Lock()
-		extAddrBroadcast, extAddrGaveUp = "", false
+		extAddrBroadcast, extAddrGaveUp, extAddrUnpublishedNoted = "", false, false
 		extAddrMu.Unlock()
 	})
 }
@@ -182,4 +182,54 @@ func TestNoteExternalAddressIgnoredBeforeInit(t *testing.T) {
 	require.Equal(t, "", s.getPrivateEnclaveParamsPioneerExternalIPAddress())
 	_, err := os.Stat(path)
 	require.True(t, os.IsNotExist(err), "sealed params were written for an uninitialized enclave")
+}
+
+// AN EMPTY ROW IS UNPUBLISHED, NOT STALE, and this path must leave it alone.
+//
+// SyncEnclave and AddAsValidator both create the pioneer row with an empty address, so every joiner
+// starts in this state.  Filling it in from here made a node "addressable" within ~11 blocks of
+// starting -- unbonded, unable to propose, and counted by getBondedAddressablePioneers, which sizes
+// getThreshold.  Observed on the 2026-08-26 bringup: pioneer3 advertised 192.168.86.52 at zero
+// voting power because phase 6 had not run.  First publication belongs to updateIsValidator, under
+// IsProposer, and to nothing else.
+func TestPlanRepublishWillNotPublishAnEmptyRow(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	withSealedParamsDir(t, s)
+	resetExtAddrState(t)
+
+	s.setPrivateEnclaveParamsPioneerInfo("pioneer3", "carol", "", "", "")
+	s.setPrivateEnclaveParamsPioneerExternalIPAddress("10.0.0.52")
+	s.setIntervalPublicKeyIdNoNotify(types.IntervalPublicKeyID{
+		PubKID: "carol", NodeID: "pioneer3", NodeType: types.PioneerNodeType,
+		ExternalIPAddress: "",
+	})
+
+	require.Equal(t, "", s.planExternalAddressRepublish(),
+		"an unpublished row must not be filled in here -- that would make an unbonded node addressable")
+
+	// And it must not have armed the loop guard: nothing was broadcast, so a LATER genuine
+	// republish (after the node bonds, publishes, and then moves) must still be offered.
+	extAddrMu.Lock()
+	broadcast, gaveUp := extAddrBroadcast, extAddrGaveUp
+	extAddrMu.Unlock()
+	require.Equal(t, "", broadcast, "declining to publish must not record a broadcast")
+	require.False(t, gaveUp, "declining to publish must not trip the give-up guard")
+}
+
+// The correction path still works once the row HAS been published: this is the moved-node case the
+// republish exists for, and the empty-row guard must not have broken it.
+func TestPlanRepublishStillCorrectsAPublishedRow(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	withSealedParamsDir(t, s)
+	resetExtAddrState(t)
+
+	s.setPrivateEnclaveParamsPioneerInfo("pioneer3", "carol", "", "", "")
+	s.setPrivateEnclaveParamsPioneerExternalIPAddress("10.0.0.99")
+	s.setIntervalPublicKeyIdNoNotify(types.IntervalPublicKeyID{
+		PubKID: "carol", NodeID: "pioneer3", NodeType: types.PioneerNodeType,
+		ExternalIPAddress: "10.0.0.52",
+	})
+
+	require.Equal(t, "10.0.0.99", s.planExternalAddressRepublish(),
+		"a node that MOVED after publishing must still correct its row")
 }

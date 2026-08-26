@@ -9,7 +9,7 @@
 # audit all left it alone.  This was only ever established by reading the code; nothing exercised
 # it, which is what TESTING-BACKLOG item 109 asks for first.
 #
-# WHY IT MATTERS.  getAddressablePioneers tests the field for EMPTINESS, not reachability, so a
+# WHY IT MATTERS.  getBondedAddressablePioneers tests the field for EMPTINESS, not reachability, so a
 # moved node keeps counting toward the re-share audit's owner target while being undialable.  The
 # chain then overstates custody: it lists an owner whose shares nobody can fetch.
 #

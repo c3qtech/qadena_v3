@@ -168,7 +168,7 @@ func TestSelectionIsUniform(t *testing.T) {
 	}
 }
 
-// The caller's slice is the live result of getAddressablePioneers; selecting must not reorder it.
+// The caller's slice is the live result of getBondedAddressablePioneers; selecting must not reorder it.
 func TestSelectDoesNotMutateTheCallersSlice(t *testing.T) {
 	f := fleet(100)
 	before := make([]string, len(f))
@@ -315,7 +315,7 @@ func TestPlanSSRotationSnapshotsEverythingTheRotationNeeds(t *testing.T) {
 		PubK:     "enclave-pubk-1",
 	})
 
-	// Registered but never published an address: getAddressablePioneers excludes it, so the plan
+	// Registered but never published an address: getBondedAddressablePioneers excludes it, so the plan
 	// must not carry it at all.
 	s.setIntervalPublicKeyIdNoNotify(types.IntervalPublicKeyID{
 		NodeID:   "pioneer2",

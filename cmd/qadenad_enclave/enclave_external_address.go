@@ -9,7 +9,7 @@ package main
 // on every start.  So after an IP change the chain advertised the old address forever: restart,
 // re-bond, rotation and audit all left it alone.
 //
-// That is not cosmetic.  getAddressablePioneers() tests the field for EMPTINESS, not
+// That is not cosmetic.  getBondedAddressablePioneers() tests the field for EMPTINESS, not
 // reachability, so a moved node keeps counting toward the re-share audit's owner target while
 // being undialable -- the chain then overstates custody, and getSSPrivK and the who-has fallback
 // both dial an address nobody is listening on.  A static lab fleet never notices; a cloud
@@ -54,6 +54,12 @@ var (
 	extAddrMu        sync.Mutex
 	extAddrBroadcast string // the address we last broadcast a republish for
 	extAddrGaveUp    bool   // it did not stick; stop retrying until the sealed value moves
+
+	// Said ONCE.  The condition it reports -- row published, node not yet a proposer -- persists
+	// for every block until the node bonds and proposes, and UpdateHeight arrives every 11 of
+	// them.  A line per occurrence would be a slow drip that says the same thing forever, which is
+	// how a log stops being read; store_accumulator.go records what that costs.
+	extAddrUnpublishedNoted bool
 )
 
 // noteExternalAddress folds the host-supplied address into the sealed params.
@@ -140,6 +146,39 @@ func (s *qadenaServer) planExternalAddressRepublish() string {
 		// this path only CORRECTS a row that already exists.
 		return ""
 	}
+	if rowIP == "" {
+		// AN EMPTY ROW IS NOT A STALE ROW -- IT IS AN UNPUBLISHED ONE, and filling it here would
+		// quietly undo the rule the rest of the system depends on: that a published address means
+		// the node BONDED AND PROPOSED.  SyncEnclave and AddAsValidator both create the row with an
+		// empty address, so every joiner starts here; correcting it from this path made a node
+		// addressable within ~11 blocks of starting, with zero voting power and no ability to
+		// propose.  Observed on the 2026-08-26 bringup: pioneer3 held a published address while
+		// unbonded, because phase 6 had not run.
+		//
+		// getBondedAddressablePioneers is what consumes that field, and it feeds getThreshold --
+		// so an unbonded node counted as an owner moves the security parameter and can carry a
+		// share it has no stake behind.  First publication stays updateIsValidator's job, under
+		// IsProposer; this path only ever CORRECTS an address the node has already advertised.
+		//
+		// Nothing is lost by waiting: updateIsValidator sets PioneerIsValidator only after the
+		// broadcast succeeds, so a failed first publish is retried on the next proposed block.
+		//
+		// SAID AT INFO, ONCE.  "This node is not addressable and here is why" is the first question
+		// an operator asks when the audit will not count it, and silence sent them to read this
+		// source instead.
+		extAddrMu.Lock()
+		if !extAddrUnpublishedNoted {
+			extAddrUnpublishedNoted = true
+			c.LoggerInfo(logger, extAddrTag+"chain row for "+pioneerID+" carries NO address yet and "+
+				"this path will not create one -- the first publication is updateIsValidator's, on this "+
+				"node's first PROPOSED block after bonding.  This node is at "+sealed+" and is not "+
+				"addressable until then, so the re-share audit will not count it and peers cannot dial "+
+				"it for shares.  Said once.  If this node IS bonded and proposing and the row stays "+
+				"empty, the publish is FAILING rather than waiting -- look for a broadcast error above.")
+		}
+		extAddrMu.Unlock()
+		return ""
+	}
 	if rowIP == sealed {
 		return ""
 	}
@@ -223,6 +262,13 @@ func (s *qadenaServer) publishPioneerIntervalPublicKeyID(externalIPAddress strin
 		c.LoggerError(logger, extAddrTag+"failed to broadcast "+err.Error())
 		return false
 	}
+	// THE EVENT THAT MAKES THIS NODE ADDRESSABLE, and it was silent until now.  Everything
+	// downstream keys off this row: getBondedAddressablePioneers counts it, getThreshold is sized
+	// from that count, and getSSPrivK dials the address to collect shares.  A node that never
+	// reaches this line is invisible to all three, and the only previous evidence was its absence.
+	c.LoggerInfo(logger, extAddrTag+"PUBLISHED "+pioneerID+" at "+orNone(externalIPAddress)+
+		" -- this node is now addressable: it counts toward the re-share audit's owner target and "+
+		"peers will dial this address for its shares")
 	return true
 }
 
@@ -335,7 +381,7 @@ func (s *qadenaServer) reportUnreachablePioneers(plan *ssRotationPlan) {
 		if n >= silentRoundsBeforeAlarm {
 			// The actionable phrasing, because by now the likeliest cause is not a hiccup: either
 			// the node is down, or it MOVED and nobody updated its p2p.external_address.  It still
-			// counts toward the owner target either way -- getAddressablePioneers tests the field
+			// counts toward the owner target either way -- getBondedAddressablePioneers tests the field
 			// for emptiness, not reachability -- so the chain is overstating custody.
 			c.LoggerError(logger, msg+" -- it is still counted as a share owner.  Either the node "+
 				"is down, or its address changed and config.toml's p2p.external_address was never "+
