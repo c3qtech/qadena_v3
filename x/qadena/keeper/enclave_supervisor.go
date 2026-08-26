@@ -31,6 +31,7 @@ package keeper
 // the deleted scripts used; nothing in cmd/qadenad_enclave changes.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -47,6 +48,10 @@ import (
 
 	"cosmossdk.io/log"
 	"github.com/cosmos/cosmos-sdk/client/flags"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 	servertypes "github.com/cosmos/cosmos-sdk/server/types"
 	"github.com/spf13/cast"
 
@@ -308,7 +313,30 @@ func prepareEnclaveProcesses(logger log.Logger) int {
 	// The signer is judged separately below -- adopting a chain enclave says nothing about it.
 	adopted := enclaveSocketAnswers()
 	if adopted {
-		c.LoggerInfo(logger, "an enclave is already serving on the socket -- adopting it (externally managed: this node will not stop or restart it; the watchdog still owns liveness)")
+		// THE ADOPTION GUARD.  Liveness alone is not identity: the one situation that reliably
+		// produces a live socket at startup is a node that died without signalling its children --
+		// which is exactly what the upgrade-height panic does -- so the enclave most likely to be
+		// sitting here is the PREVIOUS build's.  Adopting it runs new consensus logic against an
+		// old enclave, and nothing downstream would say so; the drift surfaces later as attestation
+		// failures that name neither cause.  So ask the socket which build it is and compare with
+		// the binary this qadenad would spawn (the sibling -- under a staged-upgrade layout that is
+		// the NEW directory).  In the cosmovisor flow the preupgrade hook tears the orphans down
+		// first, making this unreachable; it is the backstop for every path with no hook: a manual
+		// restart after a crash, an operator-started enclave from the wrong tree.
+		//
+		// Either side answering "" is treated as UNKNOWN and adoption proceeds as before -- an
+		// enclave predating the RPC must not be bricked by a guard it cannot satisfy.
+		runningID := runningEnclaveUniqueID(3 * time.Second)
+		expectedBin, _ := enclaveBinPath(home, "qadenad_enclave")
+		expectedID := binaryUniqueID(home, expectedBin)
+		if runningID != "" && expectedID != "" && runningID != expectedID {
+			panic(fmt.Sprintf("enclave supervisor: the enclave on the socket runs %s but this node's binary (%s) measures %s -- "+
+				"a pre-upgrade enclave survived a restart and MUST NOT be adopted: it would execute this chain's "+
+				"blocks with the previous build's logic.  Run stop_qadena.sh --all and start again.",
+				runningID, expectedBin, expectedID))
+		}
+		c.LoggerInfo(logger, "an enclave is already serving on the socket -- adopting it (externally managed: this node will not stop or restart it; the watchdog still owns liveness; measurement "+
+			map[bool]string{true: "verified: " + runningID, false: "UNVERIFIED (running=" + orUnknown(runningID) + " expected=" + orUnknown(expectedID) + ")"}[runningID != "" && runningID == expectedID])
 	}
 	if externalChainEnclave && !adopted {
 		c.LoggerInfo(logger, "--external-enclave: not spawning the chain enclave; waiting for one to appear on the socket")
@@ -316,6 +344,18 @@ func prepareEnclaveProcesses(logger log.Logger) int {
 
 	// The SIGNER is spawned regardless of who owns the chain enclave: it is this node's remote
 	// block signer (priv_validator_laddr), not part of the debugging surface.
+	//
+	// A signer answering :26661 while NO chain enclave is being adopted is a stray -- the pair is
+	// spawned and dies together, so half of it surviving means the other half's death went
+	// unhandled (the post-upgrade orphan again: the signer has its own 60s redial loop and can
+	// outlive everything else).  It has no measurement RPC to interrogate, so the guard is
+	// coarser than the chain enclave's: refuse the half-adopted state rather than risk a
+	// previous build silently signing this node's blocks.
+	if enclaveSpawnMode == SpawnModeStart && !adopted && !externalChainEnclave && signerSocketAnswers() {
+		panic("enclave supervisor: a signer_enclave answers :26661 but no chain enclave is being adopted -- " +
+			"a stray signer from a previous run survived, and adopting only half a pair risks the previous " +
+			"build signing this node's blocks.  Run stop_qadena.sh --all and start again.")
+	}
 	if enclaveSpawnMode == SpawnModeStart && !signerSocketAnswers() {
 		spawnSignerEnclave(logger, home)
 	}
@@ -346,6 +386,72 @@ func prepareEnclaveProcesses(logger log.Logger) int {
 // signerSocketAnswers reports whether something is already serving the signer's health endpoint,
 // so a restart onto an orphaned signer adopts it instead of starting a second one that would
 // fail to bind.
+func orUnknown(s string) string {
+	if s == "" {
+		return "(unknown)"
+	}
+	return s
+}
+
+// runningEnclaveUniqueID asks the enclave currently serving the socket which build it is.  Uses
+// its own short-lived dial rather than the keeper's client, because at adoption time nothing has
+// connected yet.  Empty means "could not tell" -- an enclave predating the RPC, or one that
+// answered the ping but not this -- which callers must treat as unknown, not as a mismatch.
+func runningEnclaveUniqueID(timeout time.Duration) string {
+	addr := fmt.Sprintf("unix:///tmp/qadena_%d.sock", DefaultPort)
+	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithTimeout(timeout))
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	r, err := types.NewQadenaEnclaveClient(conn).QueryEnclaveMeasurement(ctx, &types.QueryEnclaveMeasurementRequest{})
+	if err != nil {
+		return ""
+	}
+	return r.GetUniqueID()
+}
+
+// EnclaveBinaryPath is the exported face of enclaveBinPath, for callers outside the keeper that
+// must name the SAME enclave binary the supervisor would spawn -- most importantly the init
+// dispatch, whose uniqueID ends up registered on chain.  One resolver, no second opinion.
+func EnclaveBinaryPath(home, name string) string {
+	bin, _ := enclaveBinPath(home, name)
+	return bin
+}
+
+// binaryUniqueID reads the measurement out of an enclave binary ON DISK: `ego uniqueid` for a
+// signed build, the binary's own -unique-id flag for a debug one (it prints the embedded id and
+// exits -- the same probe install_release.sh's debug_id_of uses).  Empty means unreadable.
+//
+// THE TWO BRANCHES ARE NOT INTERCHANGEABLE, and the real-mode one must be ego.  The enclave only
+// overrides its embedded uniqueID with the true measurement (hex of selfReport.UniqueID) when
+// started with --realenclave; exec'ing a SIGNED binary with a bare -unique-id would print the
+// EMBEDDED id while the running enclave reports its MRENCLAVE, and the guard would declare a
+// mismatch on a perfectly matched pair.  On the running side the symmetry holds for the same
+// reason: QueryEnclaveMeasurement returns the post-override value, so real compares
+// MRENCLAVE-to-MRENCLAVE and debug compares embedded-to-embedded.
+//
+// PRIVILEGES: everything here is a read -- a file measurement (`ego uniqueid` opens the binary,
+// no SGX devices), or a debug exec that prints and exits.  Nothing needs the device access or
+// root that spawning under `ego run` needs, so the guard runs identically for a node started
+// with sudo and one running via device-group membership.
+func binaryUniqueID(home, bin string) string {
+	if EnclaveRealMode(home) {
+		id, err := EgoID("uniqueid", bin)
+		if err != nil {
+			return ""
+		}
+		return id
+	}
+	out, err := exec.Command(bin, "-unique-id").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func signerSocketAnswers() bool {
 	httpc := &http.Client{Timeout: time.Second}
 	resp, err := httpc.Get("http://localhost:26661/ping")

@@ -129,7 +129,11 @@ func runInitEnclaveDispatch(cmd *cobra.Command, logger log.Logger, moniker, extA
 		if signerID, err = keeper.EgoID("signerid", home+"/config/public.pem"); err != nil {
 			return fmt.Errorf("cannot read the signer id (reinstall public.pem: install_release.sh, or copy from cmd/qadenad_enclave): %w", err)
 		}
-		if uniqueID, err = keeper.EgoID("uniqueid", home+"/bin/qadenad_enclave"); err != nil {
+		// THE RESOLVER, NOT A HARDCODED PATH.  This uniqueID is what MsgInitEnclave registers on
+		// chain, so it must measure the binary the supervisor actually spawns -- the sibling of the
+		// running qadenad under a staged-upgrade layout, which home/bin only matches by symlink
+		// coincidence.  Measuring a different file here registers an identity no enclave runs.
+		if uniqueID, err = keeper.EgoID("uniqueid", keeper.EnclaveBinaryPath(home, "qadenad_enclave")); err != nil {
 			return fmt.Errorf("cannot read the enclave's unique id: %w", err)
 		}
 	}
