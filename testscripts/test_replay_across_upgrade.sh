@@ -87,7 +87,7 @@ info "run dir   $RUN_DIR"
 # ---------------------------------------------------------------------------------------------
 stage "A. preflight -- refuse a run that cannot prove anything"
 
-# THE REFS MUST DIFFER IN VERSION, or rolling_upgrade --chain-only refuses to roll and the run
+# THE REFS MUST DIFFER IN VERSION, or the swap in stage D changes nothing and the run
 # would report a pass having upgraded nothing.  Checked HERE, before a chain is wiped, because
 # discovering it at stage D costs the whole bringup.
 # BRACES ARE LOAD-BEARING.  In zsh, "$FROM_REF:cmd/..." parses the ":c" as a PARAMETER MODIFIER
@@ -101,20 +101,15 @@ vto=$(git   -C "$SCRIPT_DIR/.." show "${TO_REF}:cmd/qadenad/version.txt"   2>/de
 [[ -n "$vto"   ]] || fail "cannot read cmd/qadenad/version.txt at $TO_REF -- is that ref fetched?"
 info "chain version  $FROM_REF=$vfrom  ->  $TO_REF=$vto"
 [[ "$vfrom" != "$vto" ]] || fail \
-    "both refs carry chain version $vfrom.  rolling_upgrade --chain-only refuses to roll when the \
+    "both refs carry chain version $vfrom.  the swap in stage D would change nothing when the \
 version has not moved, so this run would upgrade nothing and pass regardless.  Bump \
 cmd/qadenad/version.txt on $TO_REF."
 
 for h in "$PRIMARY" "$JOINER"; do
     rsh_user "$h" 'true' >/dev/null 2>&1 || fail "cannot ssh to $h"
-    # MUST STAY NON-MANAGED.  This test's mechanism is rolling_upgrade --chain-only: a live binary
-    # swap with NO upgrade height -- the exact unscheduled break it exists to detect.  A
-    # cosmovisor-managed fleet cannot express that (staging + a plan is the only path), so pointing
-    # this at managed hosts would fail at install time with a message about staging, several stages
-    # after wiping the chain.  Scheduled upgrades are test_cosmovisor_upgrade.sh's job.
-    if rsh_user "$h" 'test -L $HOME/qadena/cosmovisor/current' >/dev/null 2>&1; then
-        fail "$h is cosmovisor-managed -- this test needs UNMANAGED hosts (it performs a deliberate unscheduled binary swap).  Use test_cosmovisor_upgrade.sh for the managed flow, or de-convert."
-    fi
+    # Every node is cosmovisor-managed now, and this test works WITH that rather than against it:
+    # stage D swaps the current generation by hand, creating an unrecorded boundary on purpose.
+    # Nothing to refuse here -- the check above is only that the host answers.
 done
 
 # ARCHIVE THE JOINER'S PREVIOUS INSTALL, and do it here rather than at stage F.
@@ -180,13 +175,39 @@ vnow=$(rsh_user "$PRIMARY" 'cat $HOME/qv3/cmd/qadenad/version.txt' | tr -d '\r\n
     "after checking out $TO_REF the primary reports chain version '$vnow', expected '$vto' -- the \
 checkout did not take, and rolling from here would build the wrong thing."
 
-# NO --repo.  It is RELATIVE TO $HOME (default "qv3", used as "\$HOME/$REPO_DIR"), so passing an
-# absolute path produced "$HOME/$HOME/qv3" and rolling_upgrade reported a missing version.txt as if
-# the checkout were wrong.  The default is already correct.
-"$SCRIPT_DIR/rolling_upgrade.sh" --node "$PRIMARY" --chain-only \
-    --build-from "$PRIMARY" \
-    2>&1 | tee "$RUN_DIR/stage-D-upgrade.log" | while read -r l; do info "$l"; done
-[[ ${pipestatus[1]} -eq 0 ]] || fail "the rolling upgrade to $TO_REF failed"
+# THE SWAP IS DELIBERATELY UNSCHEDULED, and this test is the one place that is allowed.
+#
+# It used to call rolling_upgrade --chain-only, which swapped the live binary in place.  Every
+# normal path now refuses that: binaries live in a generation directory, and rewriting the
+# generation that produced existing blocks is exactly the unrecorded consensus boundary the layout
+# exists to prevent.  But an unrecorded boundary is PRECISELY WHAT THIS TEST MUST CREATE -- it
+# exists to detect changes that would break replay if shipped that way.  So it performs the swap
+# itself, by writing into the current generation, with no plan and no height.
+#
+# Read that as: this is the mistake, staged on purpose, so the verdict can tell you whether making
+# it would have cost you the chain.
+info "building $TO_REF on $PRIMARY (staged; the live generation is untouched by the build)"
+rsh_user "$PRIMARY" "$BUILD_PATH cd \$HOME/qv3 && ./buildscripts/build.sh --hold --skip-enclave" \
+    > "$RUN_DIR/stage-D-build.log" 2>&1 \
+    || { tail -20 "$RUN_DIR/stage-D-build.log" | while read -r l; do info "$l"; done
+         fail "building $TO_REF on $PRIMARY failed"; }
+
+info "stopping the primary and swapping its CURRENT generation to $vto -- no upgrade height"
+rsh_user "$PRIMARY" '~/qadena/scripts/stop_qadena.sh --all' >/dev/null 2>&1
+rsh_user "$PRIMARY" "set -e
+    gen=\$(readlink -f \$HOME/qadena/cosmovisor/current)
+    cp \$HOME/qadena/bin/qadenad.$vto \$gen/bin/qadenad
+    for so in \$HOME/qadena/bin/libwasmvm*.so.$vto; do
+        [ -e \"\$so\" ] || continue
+        b=\$(basename \$so .$vto)
+        cp \$so \$gen/bin/\$b
+    done"     || fail "could not swap the primary's generation to $vto"
+
+info "restarting the primary on the swapped generation"
+rsh_user "$PRIMARY" 'nohup ~/qadena/scripts/start_qadena.sh > /dev/null 2>&1 < /dev/null &' >/dev/null 2>&1
+sleep 30
+vrun=$(rsh_user "$PRIMARY" '~/qadena/bin/qadenad version' | tr -d '\r\n')
+[[ "$vrun" == "$vto" ]] || fail "after the swap the primary runs '$vrun', expected '$vto' -- no boundary was created"
 assert_advancing "$PRIMARY" "D"
 
 # ---------------------------------------------------------------------------------------------
@@ -200,7 +221,7 @@ info "history on $TO_REF reaches height $h_after"
 # ---------------------------------------------------------------------------------------------
 stage "F. package what is running, then BLOCK-SYNC a fresh joiner from genesis"
 # 7 PACKAGES what is actually running, 8 INSTALLS it on the joiner.  Both, and in one call: the
-# joiner must run the measurement the PRIMARY is running, which after a --chain-only roll is still
+# joiner must run the measurement the PRIMARY is running, which after a chain-only generation swap is still
 # the enclave from --from-ref.  Building on the joiner instead would produce a different
 # measurement and phase 1 would refuse it -- EnclaveIdentity is keyed by measurement.
 "$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --joiner "$JOINER" --from 7 --until 8 \

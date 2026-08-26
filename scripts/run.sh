@@ -85,10 +85,9 @@ echo "run.sh: ------------"
 # the id flags were inert (the unix-domain-socket branch never read them), and --log-level was a
 # lossy re-derivation of the config.toml value qadenad reads natively.
 #
-# COSMOVISOR AUTO-DETECT.  A node whose disk carries the cosmovisor tree (cosmovisor_managed:
-# the `current` symlink exists -- the one thing cosmovisor itself maintains) launches through
-# cosmovisor with the SAME flags; everything else launches exactly as before.  The node's own
-# disk state decides, so the ~30 scripts that start and stop nodes never learn cosmovisor exists.
+# EVERY NODE LAUNCHES THROUGH COSMOVISOR -- there is no other mode.  The ~30 scripts that start
+# and stop nodes still never mention it: they call start_qadena.sh, and this is the one place that
+# knows how a node is launched.
 #
 # The check_upgrade_enclave.sh preflight above runs in BOTH branches on purpose: cosmovisor's
 # post-swap restart bypasses run.sh entirely, so if the at-height handoff failed, the next manual

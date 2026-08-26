@@ -28,12 +28,18 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh" > /dev/null 2>&1
 # the cutover cp below would write through it and mutate the current generation in place.  On
 # managed fleets EVERY binary change is a governance plan -- rolling_upgrade.sh --via-governance
 # -- and this script is the unmanaged mechanism.
-if cosmovisor_managed 2>/dev/null; then
-    echo "activate_enclave.sh: this node is cosmovisor-managed -- the live-name cutover would write"
-    echo "activate_enclave.sh: through bin/ symlinks into the current generation.  Use"
-    echo "activate_enclave.sh: rolling_upgrade.sh --via-governance instead."
-    exit 1
-fi
+# RETIRED.  This script's job was the live enclave cutover -- copy a staged measurement over the
+# live name and restart so the handover runs.  Under the generation layout that write would land
+# inside the current generation, so a node replaying this chain's history would execute
+# pre-cutover blocks with the post-cutover enclave: an unrecorded consensus boundary, which is the
+# whole class of failure the layout exists to end.  An enclave change is now a governance plan,
+# and the handover runs from the at-height hook instead.
+echo "activate_enclave.sh: RETIRED -- an enclave change is a governance plan now." >&2
+echo "activate_enclave.sh:   build.sh --release   (bumps the versions the plan name needs)" >&2
+echo "activate_enclave.sh:   rolling_upgrade.sh --node ... --via-governance --build-from <host>" >&2
+echo "activate_enclave.sh: The attested handover still runs -- from cosmovisor_preupgrade.sh, at" >&2
+echo "activate_enclave.sh: the scheduled height, on every node at once." >&2
+exit 1
 source "$SCRIPT_DIR/gov_lib.sh"
 source "$SCRIPT_DIR/enclave_lib.sh"
 
