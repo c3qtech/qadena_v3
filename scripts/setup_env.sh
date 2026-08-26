@@ -62,6 +62,15 @@ export qadenad_binary="$qadenabin/qadenad"
 
 export LD_LIBRARY_PATH="$qadenabin:$LD_LIBRARY_PATH"
 
+# Is this node cosmovisor-managed?  THE TEST IS THE `current` SYMLINK, deliberately: it is the one
+# thing cosmovisor itself maintains, so its presence means the tree was actually set up -- a
+# half-created cosmovisor/ directory without it must NOT flip any behavior.  Everything that
+# branches on management (run.sh's launch, the live-install refusals, status) asks this one
+# function, so the definition of "managed" cannot drift between callers.
+cosmovisor_managed() {
+    [ -L "$QADENAHOME/cosmovisor/current" ]
+}
+
 # echo to stderr
 echo "Qadena home: $QADENAHOME" >&2
 echo "Qadena bin: $qadenabin" >&2

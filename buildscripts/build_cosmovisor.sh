@@ -17,7 +17,9 @@
 # -mod=vendor and cosmovisor is not vendored; module-aware install with an explicit version
 # ignores the surrounding module, which is exactly what we want.
 
-set -e
+# NO `set -e`: setup_env.sh runs a chain query while being sourced (set_min_gas_price), which
+# fails on a STOPPED node -- and this script's whole precondition is a stopped node.  Errors on
+# the steps that matter are checked explicitly instead.
 SCRIPT_DIR="${0:A:h}"
 
 # READ THE PIN BEFORE SOURCING setup_env.sh -- it redefines SCRIPT_DIR to scripts/, and the pin
