@@ -502,17 +502,33 @@ if [[ -n "$stage_upgrade" ]]; then
     done
     [[ $staged_n -gt 0 ]] || fail "the package contains no binaries to stage"
     [[ -x "$updir/qadenad" ]] || fail "the package carries no qadenad -- an upgrade dir without the chain binary can never be swapped to"
-    [[ -x "$updir/qadenad_enclave" ]] || fail "the package carries no qadenad_enclave -- the supervisor spawns SIBLINGS, so an upgrade dir must carry all binaries or the swapped node runs the old enclave"
+    # A CHAIN-ONLY PACKAGE (--only chain,libs,...) carries no enclaves at all -- the measurement
+    # is not changing, so the upgrade continues on the CURRENT generation's enclaves.  The upgrade
+    # dir still needs them physically (the supervisor spawns SIBLINGS of the running qadenad), so
+    # they are carried forward from current/bin: byte-identical continuation, not a swap.
+    for cont in qadenad_enclave signer_enclave; do
+        if [[ ! -x "$updir/$cont" ]]; then
+            csrc="$QADENAHOME/cosmovisor/current/bin/$cont"
+            [[ -x "$csrc" ]] || fail "the package carries no $cont and current/bin has none to continue with"
+            cp "$csrc" "$updir/$cont" || fail "cannot carry $cont forward from current/bin"
+            echo "  carried  $cont (unchanged, from the current generation)"
+        fi
+    done
 
     # Versioned names in ~/qadena/bin are real files and safe on a running node; the handoff and
     # the identity tooling read them, so stage the measurement-named enclave too.  Inline rather
     # than install_versioned(), which is defined two sections below this early exit.
     if [[ -f "$stage/bin/qadenad_enclave" && -n "$new_unique" ]]; then
         vdest="$qadenabin/qadenad_enclave.$new_unique"
-        if [[ -f "$vdest" ]] && ! cmp -s "$stage/bin/qadenad_enclave" "$vdest"; then
-            fail "$vdest already exists with different contents -- refusing to overwrite a versioned name"
+        if [[ -f "$vdest" ]]; then
+            # Same measurement, possibly different bytes: the build is not reproducible, so a
+            # rebuild legitimately differs.  The EXISTING versioned file describes what this node
+            # actually ran under that name -- keep it.  The upgrade-dir copy above is the one the
+            # swap uses.
+            cmp -s "$stage/bin/qadenad_enclave" "$vdest" || echo "  note: $vdest kept (package's rebuild differs byte-wise; measurement unchanged)"
+        else
+            cp "$stage/bin/qadenad_enclave" "$vdest" && chmod +x "$vdest" && echo "  staged   qadenad_enclave.$new_unique"
         fi
-        [[ -f "$vdest" ]] || { cp "$stage/bin/qadenad_enclave" "$vdest" && chmod +x "$vdest" && echo "  staged   qadenad_enclave.$new_unique"; }
     fi
 
     echo ""
