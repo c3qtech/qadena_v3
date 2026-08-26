@@ -564,6 +564,11 @@ if [[ -n "$BUILD_FROM" ]]; then
     # it was not touching.  --chain-only says so explicitly; --via-governance is told by the
     # checkout: same measurement as the build host runs means enclave-unchanged.  The live roll
     # (neither flag) keeps asserting them exactly as before.
+    # An enclave-unchanged --via-governance roll IS a chain-only roll in every downstream
+    # respect -- skip the enclave build, package without it, register no identity -- so it SETS
+    # CHAIN_ONLY rather than adding a second condition at each of those sites.  (SKIP_GOV is not
+    # set with it: --chain-only sets that at parse time because a live roll has no proposal to
+    # make, whereas this roll's whole purpose is one.)
     ENCL_CHANGING=1
     if (( CHAIN_ONLY )); then
         ENCL_CHANGING=0
@@ -571,7 +576,8 @@ if [[ -n "$BUILD_FROM" ]]; then
         run_meas0=$(measure_of "$BUILD_FROM") || true
         if [[ -n "$SRC_UNIQ" && -n "$run_meas0" && "$SRC_UNIQ" == "$run_meas0" ]]; then
             ENCL_CHANGING=0
-            say "enclave:  $SRC_UNIQ unchanged -- this is a chain-only upgrade"
+            CHAIN_ONLY=1
+            say "enclave:  $SRC_UNIQ unchanged -- treating this as a chain-only upgrade"
         fi
     fi
 
@@ -707,12 +713,12 @@ if [[ -n "$BUILD_FROM" ]]; then
         # binary whose contents differ.  A chain-only roll would fail at the first install for a
         # component it never meant to touch.
         only_arg=""
-        # Also when --via-governance found the enclave unchanged: shipping a REBUILT enclave that
-        # carries the same embedded measurement is backlog 105's hazard (two different binaries
-        # answering to one uniqueNNN).  Leaving it out means --stage-upgrade carries the current
-        # generation's enclave forward byte-for-byte, which is what "the enclave did not change"
-        # should mean.
-        (( CHAIN_ONLY || ! ${ENCL_CHANGING:-1} )) && only_arg=" --only chain,libs,scripts,config"
+        # Reached by --via-governance too, via the CHAIN_ONLY it sets when the measurement did not
+        # move: shipping a REBUILT enclave carrying the same embedded measurement is backlog 105's
+        # hazard (two different binaries answering to one uniqueNNN).  Left out, --stage-upgrade
+        # carries the current generation's enclave forward byte-for-byte, which is what "the
+        # enclave did not change" should mean.
+        (( CHAIN_ONLY )) && only_arg=" --only chain,libs,scripts,config"
         out=$(rsh "$BUILD_FROM" "cd $RD && $BUILD_PATH ./buildscripts/package_release.sh --out $PKG_OUT$only_arg 2>&1 | tail -25") \
             || { print "$out" | while read -r l; do say "    $l"; done; die "package_release.sh failed on $BUILD_FROM" }
         print "$out" | while read -r l; do say "    $l"; done
