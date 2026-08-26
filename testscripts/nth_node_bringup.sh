@@ -873,12 +873,54 @@ if (( STATE_SYNC )); then
 else
     info "block-syncing (rebuilds every enclave-private table by executing each block; slow and correct)"
 fi
+# TWO HOURS IS FOR A SLOW SYNC, NOT A DEAD ONE.  This loop only ever asked "is catching_up still
+# true", so a joiner that had DIVERGED -- pinned at one height while the primary ran away -- was
+# indistinguishable from one that was merely behind, and the run spent the full two hours before
+# saying so.  Measured on the 2026-08-26 negative control: the joiner stopped at height 3 with
+# "wrong Block.Header.AppHash" already in its log at 05:40, and the harness would not have reported
+# it until 06:39.  For a CI gate that is the difference between usable and not.
+#
+# A DIVERGENCE IS FATAL IMMEDIATELY.  No amount of waiting resolves a block whose app hash does not
+# reproduce, so the app-hash line is checked on the same cadence as the progress line -- no extra
+# ssh -- and fails the moment it appears, quoting it.
+#
+# A STALL IS NOT, AT LEAST NOT AT ONCE.  A joiner's FIRST block can legitimately take minutes: a
+# fresh enclave seeds its mirrored stores and may import private state from a peer, and height
+# cannot advance while either is in flight.  That is why the deleted delayed_init_enclave.sh
+# tolerated ten minutes of no progress before calling a sync dead, and why this requires the stall
+# to PERSIST -- and to be a stall, not a pause, by insisting the PRIMARY moved while the joiner did
+# not.  A fleet that is quiet everywhere is not this failure.
+stall_since_h=""; stall_polls=0
 for i in {1..480}; do
     cu=$(ssh "$JOINER" 'curl -s --max-time 5 localhost:26657/status 2>/dev/null | jq -r ".result.sync_info.catching_up"' | tr -d '\r')
     [[ "$cu" == "false" ]] && break
     if (( i % 8 == 0 )); then
         jn=$(height "$JOINER"); pn=$(height "$PRIMARY")
         info "  ... joiner ${jn:-?} / primary ${pn:-?}${jn:+ (behind by $(( ${pn:-0} - ${jn:-0} )))}"
+
+        diverged=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qadena/logs/qadena.log 2>/dev/null \
+            | sed 's/\x1b\[[0-9;]*m//g' | grep -a 'wrong Block.Header.AppHash' | tail -1" | tr -d '\r')
+        if [[ -n "$diverged" ]]; then
+            info "$diverged"
+            fail "the joiner DIVERGED at height ${jn:-?}: it computed a different app hash than the chain \
+recorded, so no amount of catching up will resolve it.  Compare /block_results at that height on both \
+nodes -- identical events with different gas_used means a store operation was added or removed, which \
+is consensus-affecting and needs an upgrade height."
+        fi
+
+        # Only a stall if the joiner is frozen AND the chain is not.
+        if [[ -n "$jn" && "$jn" == "$stall_since_h" && -n "$pn" && "$pn" -gt "$jn" ]]; then
+            (( stall_polls++ ))
+            if (( stall_polls >= 5 )); then      # 5 * 8 polls * 15s = 10 minutes
+                info "still catching up, but the joiner has not advanced.  Last log lines:"
+                jlog 30
+                fail "the joiner has been stuck at height $jn for ten minutes while the primary reached \
+$pn.  That is not a slow sync.  Nothing in its log names an app-hash mismatch, so look for a halt, a \
+panic, or an enclave that stopped answering."
+            fi
+        else
+            stall_since_h="$jn"; stall_polls=0
+        fi
     fi
     sleep 15
 done
