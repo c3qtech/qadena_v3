@@ -163,7 +163,8 @@ func ConfigureEnclaveSupervisor(logger log.Logger, appOpts servertypes.AppOption
 // for it.  Exported because the init dispatch needs the same answer to decide between real
 // measurement ids and the debug "*".
 func EnclaveRealMode(home string) bool {
-	return hostSupportsSGX() && binaryIsEgoSigned(filepath.Join(home, "bin", "qadenad_enclave"))
+	bin, _ := enclaveBinPath(home, "qadenad_enclave")
+	return hostSupportsSGX() && binaryIsEgoSigned(bin)
 }
 
 func hostSupportsSGX() bool {
@@ -383,8 +384,56 @@ func chainIDFromGenesis(path string) (string, error) {
 	return g.ChainID, nil
 }
 
+// enclaveSiblingBin locates a child binary that must match the RUNNING qadenad.
+//
+// SIBLINGS FIRST, NODE HOME SECOND.  qadenad, qadenad_enclave and signer_enclave are one artifact
+// set: the enclave carries most of the consensus-relevant logic, so a chain binary driving an
+// enclave from a different build is a fleet that disagrees with itself while every process looks
+// healthy.  Resolving the children from $HOME/qadena/bin made that set splittable -- upgrade the
+// chain binary alone and the old enclave keeps running underneath it, which is exactly the
+// ambiguity that produced two different binaries both calling themselves unique060 on 2026-08-26.
+//
+// It is also what a staged-upgrade layout needs.  cosmovisor swaps <upgrade>/bin/qadenad and
+// nothing else; children looked up from the node home would not move with it, and the node would
+// come back at the new height running the old enclave.  Siblings move as a unit for free -- and
+// the build already links with -Wl,-rpath,$ORIGIN, so libwasmvm resolves the same way.
+//
+// THE FALLBACK IS NOT COSMETIC.  Existing installs put binaries in $HOME/qadena/bin while qadenad
+// may be invoked from anywhere (a build tree, /usr/local/bin), so a sibling-only lookup would
+// break every current deployment on the first restart.  Falling back keeps them working; the log
+// line says which was used, because "the wrong enclave, silently" is the failure this exists to
+// prevent and it cannot be diagnosed from behaviour alone.
+// SPLIT FROM THE LOGGING WRAPPER SO EVERY CALLER AGREES.  EnclaveRealMode inspects the enclave
+// binary for an ego signature to decide whether it must run under `ego run`, and it has no logger.
+// If it inspected $HOME/qadena/bin while spawn used a sibling, the node could test one binary and
+// execute another -- deciding "debug enclave" about a signed one, or the reverse.  One resolver,
+// no second opinion.
+func enclaveBinPath(home, name string) (path string, isSibling bool) {
+	if self, err := os.Executable(); err == nil {
+		if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil {
+			self = resolved
+		}
+		sibling := filepath.Join(filepath.Dir(self), name)
+		if _, serr := os.Stat(sibling); serr == nil {
+			return sibling, true
+		}
+	}
+	return filepath.Join(home, "bin", name), false
+}
+
+func enclaveSiblingBin(logger log.Logger, home, name string) string {
+	bin, sibling := enclaveBinPath(home, name)
+	if sibling {
+		c.LoggerInfo(logger, "enclave supervisor: using "+name+" beside the running qadenad: "+bin)
+		return bin
+	}
+	c.LoggerInfo(logger, "enclave supervisor: no "+name+" beside the running qadenad; falling back to "+bin+
+		" -- the chain binary and its enclave can drift apart this way, so prefer installing them together")
+	return bin
+}
+
 func spawnChainEnclave(logger log.Logger, home, chainID string) {
-	bin := filepath.Join(home, "bin", "qadenad_enclave")
+	bin := enclaveSiblingBin(logger, home, "qadenad_enclave")
 	if _, err := os.Stat(bin); err != nil {
 		panic(fmt.Sprintf("enclave supervisor: no enclave binary at %s -- install it (install.sh --enclave) or start one externally and pass --external-enclave", bin))
 	}
@@ -412,7 +461,7 @@ func spawnChainEnclave(logger log.Logger, home, chainID string) {
 }
 
 func spawnSignerEnclave(logger log.Logger, home string) {
-	bin := filepath.Join(home, "bin", "signer_enclave")
+	bin := enclaveSiblingBin(logger, home, "signer_enclave")
 	if _, err := os.Stat(bin); err != nil {
 		panic(fmt.Sprintf("enclave supervisor: no signer enclave binary at %s -- install it (install.sh --signer-enclave)", bin))
 	}
