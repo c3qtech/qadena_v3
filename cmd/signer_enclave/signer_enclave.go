@@ -350,12 +350,42 @@ func main() {
 	// TCP dialer - connect to remote validator with retry
 	log.Printf("Dialing remote validator at %s", *remoteAddr)
 
-	var conn net.Conn
 	maxRetries := 60 // 1 minute with 1 second intervals
+
+	// RECONNECT, DO NOT EXIT.  The retry loop below only ever covered the FIRST dial: once
+	// connected, handleConnection served until the socket closed and then main returned, exiting
+	// 0.  A closed socket is not "work finished" -- CometBFT's SignerListener drops the connection
+	// on a PING TIMEOUT and immediately loops back to accept a new one, so the listener is sitting
+	// there waiting while the only process that could answer has just left.
+	//
+	// Measured on pioneer2, 2026-08-26 11:45: a 1481ms consensus step, then "SignerListener: Ping
+	// timeout", then "signer_enclave process exited unexpectedly (code 0)", then the node halting
+	// itself because it will not sign without a signer.  A transient stall cost a validator for
+	// over an hour.  The enclave was healthy throughout -- 32MB heap, 24 goroutines.
+	//
+	// THIS IS NOT THE RESPAWN LOOP 96313d25 REMOVED, and the distinction is the point.  That
+	// policy is about a PARENT not resurrecting a dead child: "a spawned enclave that exits takes
+	// the node down with a named cause ... the loop only ever saved an idle crash, at the price of
+	// hiding every crash it recovered".  Nothing here is dead.  This process is alive and holds
+	// its key; it is re-establishing its own connection, which is the ordinary contract for a
+	// CometBFT remote signer.  A signer that genuinely cannot reach the node still gives up after
+	// maxRetries and exits non-zero, so a real failure is still loud, and SIGINT still exits 20.
+	for {
+		if !dialAndServe(*remoteAddr, secretConnKey, priv, pub, maxRetries) {
+			return
+		}
+		log.Printf("connection to %s closed -- redialing (the node's listener is already waiting for us)", *remoteAddr)
+	}
+}
+
+// dialAndServe connects once and serves until the connection closes.  Returns true if the caller
+// should redial, false if it should stop trying.
+func dialAndServe(remoteAddr string, secretConnKey ed25519.PrivKey, priv ed25519.PrivKey, pub tmcrypto.PubKey, maxRetries int) bool {
+	var conn net.Conn
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		var err error
-		conn, err = net.Dial("tcp", *remoteAddr)
+		conn, err = net.Dial("tcp", remoteAddr)
 		if err == nil {
 			fmt.Printf("Connected to remote validator at %s (attempt %d)\n", conn.RemoteAddr(), attempt)
 
@@ -373,7 +403,7 @@ func main() {
 
 			log.Printf("Established secret connection with %X", secretConn.RemotePubKey().Address())
 			handleConnection(secretConn, priv, pub)
-			return
+			return true
 		}
 
 		if attempt == maxRetries {
@@ -385,6 +415,10 @@ func main() {
 		}
 		time.Sleep(1 * time.Second)
 	}
+	// Unreachable: the loop above ends only via log.Fatalf on the final attempt.  Returning false
+	// rather than true keeps the caller honest if that ever changes -- a dial loop that has given
+	// up must not be re-entered forever.
+	return false
 }
 
 func handleConnection(conn net.Conn, priv ed25519.PrivKey, pub tmcrypto.PubKey) {
