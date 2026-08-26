@@ -93,14 +93,20 @@ echo "run.sh: ------------"
 # The check_upgrade_enclave.sh preflight above runs in BOTH branches on purpose: cosmovisor's
 # post-swap restart bypasses run.sh entirely, so if the at-height handoff failed, the next manual
 # restart through here is what retries it.  Do not "clean this up" by moving the detect above it.
-if cosmovisor_managed && [[ -x "$qadenabin/cosmovisor" ]] ; then
-    if [[ -n $EXTERNAL_ENCLAVE ]] ; then
-        # The at-height hook tears down every enclave it finds; an operator's debugger-attached
-        # enclave would be collateral.  Debug workflows stay on unmanaged nodes.
-        echo "run.sh:  Error: --external-enclave cannot be combined with a cosmovisor-managed node"
-        exit 1
-    fi
-    echo "run.sh: cosmovisor-managed (current -> $(readlink $QADENAHOME/cosmovisor/current))"
+# EVERY NODE LAUNCHES THROUGH COSMOVISOR.  There is no direct-launch fallback: a node whose tree
+# is missing has lost the thing that makes its history replayable, and starting it anyway is how
+# that gets discovered weeks later on a joiner.  Fail here, with the command that fixes it.
+cosmovisor_require "run.sh" || exit 1
+
+if [[ -n $EXTERNAL_ENCLAVE ]] ; then
+    # The at-height hook tears down every enclave it finds, so an operator's debugger-attached
+    # enclave would be collateral.  Attach to the enclave the node spawns instead.
+    echo "run.sh:  Error: --external-enclave is not supported (every node is cosmovisor-managed;"
+    echo "run.sh:         the upgrade hook would tear down an externally started enclave)."
+    exit 1
+fi
+
+echo "run.sh: cosmovisor (current -> $(readlink $QADENAHOME/cosmovisor/current))"
 
     # A SWAP COSMOVISOR CANNOT PERFORM ITSELF.
     #
@@ -167,10 +173,7 @@ if cosmovisor_managed && [[ -x "$qadenabin/cosmovisor" ]] ; then
         cosmovisor_pending_plan > /dev/null || break
         echo "run.sh: the node stopped for a scheduled upgrade it has not performed -- completing it and restarting"
     done
-else
-    $qadenabin/qadenad start --json-rpc.api eth,txpool,personal,net,debug,web3 --api.enable=true --grpc.enable=true --grpc.address 0.0.0.0:9090 --home=$QADENAHOME $EXTERNAL_ENCLAVE
-    RC=$?
-fi
+
 
 echo "run.sh: ------------"
 echo "run.sh: QADENA ENDED (rc $RC)"
