@@ -839,13 +839,17 @@ if (( VIA_GOV )); then
 
     step "2j. wait for the swap height"
     say "  querying the scheduled plan"
-    plan_h=$(rsh "${NODES[1]}" '~/qadena/bin/qadenad q upgrade plan -o json 2>/dev/null' | grep -oE '"height":"[0-9]+"' | grep -oE '[0-9]+' | head -1) || true
+    # WHITESPACE-TOLERANT ON PURPOSE.  `q upgrade plan -o json` PRETTY-PRINTS ("height": "486"),
+    # unlike `qadenad status`, whose compact output every other extractor here was written against.
+    # A compact-only pattern silently yields an empty height, which then reads as "no plan" -- the
+    # opposite of the truth, one line after the proposal passed.
+    plan_h=$(rsh "${NODES[1]}" '~/qadena/bin/qadenad q upgrade plan -o json 2>/dev/null' | grep -oE '"height"[[:space:]]*:[[:space:]]*"?[0-9]+' | grep -oE '[0-9]+' | head -1) || true
     if [[ -z "$plan_h" ]]; then
         # AN EMPTY PLAN QUERY IS AMBIGUOUS, and the two meanings are opposite.  x/upgrade DELETES
         # the plan once it is applied, so "no plan" is the normal state AFTER a successful swap --
         # which a short height or a slow submit can reach before this line runs.  Treating it as
         # failure would fail a run that had just succeeded.  Ask the other question instead.
-        applied_h=$(rsh "${NODES[1]}" "~/qadena/bin/qadenad q upgrade applied $PLAN 2>/dev/null" | grep -oE '[0-9]+' | head -1) || true
+        applied_h=$(rsh "${NODES[1]}" "~/qadena/bin/qadenad q upgrade applied $PLAN 2>/dev/null" | grep -oE 'height[^0-9]*[0-9]+' | grep -oE '[0-9]+' | head -1) || true
         [[ -n "$applied_h" ]] || die "no plan named $PLAN is scheduled and none has been applied -- the proposal passed, so either it carried a different name or the plan was cancelled"
         say "  plan $PLAN was ALREADY applied at height $applied_h"
         plan_h="$applied_h"
