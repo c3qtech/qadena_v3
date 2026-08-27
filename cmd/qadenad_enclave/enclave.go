@@ -2177,28 +2177,28 @@ func (s *qadenaServer) preInitEnclave(ctx context.Context, isValidator bool, pio
 	s.setPrivateEnclaveParamsPioneerIsValidator(isValidator)
 	s.setPrivateEnclaveParamsPioneerExternalIPAddress(externalIPAddress)
 
-	setExternalIPAddress := ""
-	if isValidator {
-		setExternalIPAddress = externalIPAddress
-	}
-
-	s.setIntervalPublicKeyIdNoNotify(types.IntervalPublicKeyID{
-		NodeID:            s.getPrivateEnclaveParamsPioneerID(),
-		NodeType:          types.PioneerNodeType,
-		PubKID:            s.getPrivateEnclaveParamsPioneerWalletID(),
-		ExternalIPAddress: setExternalIPAddress,
-	})
-
-	s.setPublicKeyNoNotify(types.PublicKey{
-		PubKID:   s.getPrivateEnclaveParamsPioneerWalletID(),
-		PubKType: types.TransactionPubKType,
-		PubK:     s.getPrivateEnclaveParamsPioneerPubK(),
-	})
-	s.setPublicKeyNoNotify(types.PublicKey{
-		PubKID:   s.getPrivateEnclaveParamsPioneerWalletID(),
-		PubKType: types.EnclavePubKType,
-		PubK:     s.getPrivateEnclaveParamsEnclavePubK(),
-	})
+	// THE MIRRORED STORES ARE NOT WRITTEN HERE.
+	//
+	// This used to seed three rows describing this node -- one IntervalPublicKeyID and two
+	// PublicKey.  Every value came from the private params set just above, so nothing is lost by
+	// not writing them; what they cost was the invariant that the mirrored stores hold exactly
+	// what the CHAIN holds.  This node's identity does not reach chain state until its
+	// registration commits, and startup reconciliation hashes those stores and compares.
+	//
+	// For a joiner the gap is the whole genesis replay up to its own registration height, so
+	// every restart below it reported ENCLAVE STORES DIVERGED on a node whose app hashes matched
+	// the chain at every height.  For the genesis pioneer the gap is one field -- the address,
+	// present here but null in genesis -- and closes at its first proposed block.
+	//
+	// The readers answer from the params instead while the chain is not known to be live
+	// (selfIdentityNotYetOnChain), INCLUDING getAddressPublishedPioneers, which enumerates and so
+	// unions this node in rather than taking a miss-fallback.  Omitting that was what broke
+	// InitEnclave the first time this was attempted: the SS rotation was planned over a pioneer
+	// set this node had vanished from, and the message no longer matched its remote report.
+	//
+	// externalIPAddress is recorded in the params above and is NOT published here.  Publication
+	// stays the proposer path's job, which is what keeps "published address => bonded and
+	// proposed" true.
 
 	return
 }
