@@ -475,9 +475,9 @@ except Exception:
             pw=$(echo "$st" | jq -r '.result.validator_info.voting_power // "0"')
             ad=$(echo "$st" | jq -r '.result.validator_info.address // ""')
             # WHAT EACH PEER IS ACTUALLY RUNNING, asked of the peer rather than assumed from this
-            # node.  A rolling upgrade is precisely the window where the fleet is NOT uniform, and
-            # that is the window in which this table gets read -- "did M4 come back on the new
-            # enclave" has no answer here without these two columns.  /abci_info carries the app
+            # node.  Upgrades swap every node at the same height, so the fleet should be uniform --
+            # which makes a node that ISN'T the thing worth seeing, and this table is where you
+            # see it.  "Did M4 come back on the new enclave" has no answer without these columns.  /abci_info carries the app
             # version; enclave-measurement is a normal chain query, so both work against a remote
             # node with no ssh.  Neither is fatal if it fails: a "?" costs nothing, and blocking
             # the whole table on one slow peer would.
@@ -586,7 +586,7 @@ except Exception:
         if [ "$unsafe" = "0" ]; then
             info "every validator can be stopped one at a time without halting the chain"
         else
-            info "$unsafe validator(s) hold more than 1/3 -- a ROLLING UPGRADE IS NOT POSSIBLE"
+            info "$unsafe validator(s) hold more than 1/3 -- STOPPING ONE HALTS THE CHAIN"
             info "until stake is spread so that no one validator exceeds 33.33%"
         fi
         info "(=> marks this node; consensus needs MORE than 66.67% online)"
