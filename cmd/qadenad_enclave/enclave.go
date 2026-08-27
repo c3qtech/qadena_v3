@@ -2177,29 +2177,28 @@ func (s *qadenaServer) preInitEnclave(ctx context.Context, isValidator bool, pio
 	s.setPrivateEnclaveParamsPioneerIsValidator(isValidator)
 	s.setPrivateEnclaveParamsPioneerExternalIPAddress(externalIPAddress)
 
-	// THE MIRRORED STORES ARE NOT WRITTEN HERE, and that is the point.
-	//
-	// This used to seed three rows -- one IntervalPublicKeyID and two PublicKey -- describing this
-	// node's own identity.  Every value came from the private params set just above, so they were
-	// duplicates; what they cost was the invariant that the mirrored stores hold exactly what the
-	// CHAIN holds.  This node's identity does not reach chain state until its registration
-	// commits, so the copy disagreed with the chain until then, and startup reconciliation
-	// (enclave_grpc_client.go) hashes those stores and compares.
-	//
-	// For a joiner the gap is the entire genesis replay up to its own registration height -- on
-	// 2026-08-26 a joiner registered at 439 and replayed from block 1, so every restart below that
-	// height reported ENCLAVE STORES DIVERGED on a node whose app hashes matched the chain exactly.
-	// For the genesis pioneer the gap is one field (the address, present here but null in genesis)
-	// and closes at its first proposed block, which is why it was never seen there.
-	//
-	// The readers answer this node's own identity from the params instead
-	// (getPublicKey / getIntervalPublicKeyId / getIntervalPublicKeyIdByPubKID), so nothing loses
-	// access to it -- and the rows arrive in the mirror the ordinary way, from the chain, once the
-	// registration is committed.
-	//
-	// externalIPAddress is still recorded in params above; it is NOT published here.  Publication
-	// remains the proposer path's job, which is what keeps "published address => bonded and
-	// proposed" true.
+	setExternalIPAddress := ""
+	if isValidator {
+		setExternalIPAddress = externalIPAddress
+	}
+
+	s.setIntervalPublicKeyIdNoNotify(types.IntervalPublicKeyID{
+		NodeID:            s.getPrivateEnclaveParamsPioneerID(),
+		NodeType:          types.PioneerNodeType,
+		PubKID:            s.getPrivateEnclaveParamsPioneerWalletID(),
+		ExternalIPAddress: setExternalIPAddress,
+	})
+
+	s.setPublicKeyNoNotify(types.PublicKey{
+		PubKID:   s.getPrivateEnclaveParamsPioneerWalletID(),
+		PubKType: types.TransactionPubKType,
+		PubK:     s.getPrivateEnclaveParamsPioneerPubK(),
+	})
+	s.setPublicKeyNoNotify(types.PublicKey{
+		PubKID:   s.getPrivateEnclaveParamsPioneerWalletID(),
+		PubKType: types.EnclavePubKType,
+		PubK:     s.getPrivateEnclaveParamsEnclavePubK(),
+	})
 
 	return
 }
@@ -7003,33 +7002,6 @@ func (s *qadenaServer) getPublicKey(pubKID string, pubKType string) (publicKey s
 	))
 	var pk types.PublicKey
 	if b == nil {
-		// THIS NODE'S OWN KEYS ARE ANSWERED FROM PARAMS, NOT FROM THE MIRROR.
-		//
-		// The mirrored stores are this enclave's copy of CHAIN state, and they are hashed into an
-		// accumulator that startup reconciliation compares against the chain's.  This node's own
-		// identity does not reach chain state until its registration commits, so writing it into
-		// the mirror early -- which preInitEnclave used to do -- made the copy disagree with the
-		// chain for as long as that took.  On a joiner replaying from genesis that is the whole
-		// replay up to its own registration height, and a restart anywhere in there reports
-		// ENCLAVE STORES DIVERGED on a node that is perfectly healthy.
-		//
-		// The values were only ever duplicates of the private params, so the params are the
-		// authority and the mirror stays a mirror.  Answering here keeps every caller working
-		// during the window, without the enclave holding rows the chain has never seen.
-		if own := s.getPrivateEnclaveParamsPioneerWalletID(); own != "" && pubKID == own {
-			switch pubKType {
-			case types.TransactionPubKType:
-				if v := s.getPrivateEnclaveParamsPioneerPubK(); v != "" {
-					c.LoggerDebug(logger, "pubk "+pubKID+" "+pubKType+" answered from enclave params (not yet on chain)")
-					return v, true
-				}
-			case types.EnclavePubKType:
-				if v := s.getPrivateEnclaveParamsEnclavePubK(); v != "" {
-					c.LoggerDebug(logger, "pubk "+pubKID+" "+pubKType+" answered from enclave params (not yet on chain)")
-					return v, true
-				}
-			}
-		}
 		c.LoggerDebug(logger, "Couldn't find pubk "+pubKID+" "+pubKType)
 		found = false
 	} else {
@@ -7084,16 +7056,6 @@ func (s *qadenaServer) getIntervalPublicKeyId(nodeID string, nodeType string) (k
 	))
 	var ipki types.IntervalPublicKeyID
 	if b == nil {
-		// This node's own record, from params -- see the note in getPublicKey.  Only the fields
-		// this reader returns are answered; the ADDRESS is deliberately not among them, and the
-		// republish path reads it from params directly anyway
-		// (enclave_external_address.go: getPrivateEnclaveParamsPioneerExternalIPAddress).
-		if own := s.getPrivateEnclaveParamsPioneerID(); own != "" && nodeID == own && nodeType == types.PioneerNodeType {
-			if wid := s.getPrivateEnclaveParamsPioneerWalletID(); wid != "" {
-				c.LoggerDebug(logger, "intervalPublicKeyId "+nodeID+" answered from enclave params (not yet on chain)")
-				return wid, "", "", true
-			}
-		}
 		c.LoggerDebug(logger, "Couldn't find intervalPublicKeyId", nodeID, nodeType)
 		found = false
 	} else {
@@ -7114,11 +7076,6 @@ func (s *qadenaServer) getIntervalPublicKeyIdByPubKID(pubKID string) (keyID stri
 	b := store.Get(types.IntervalPublicKeyIDByPubKIDKey(pubKID))
 	var ipki types.IntervalPublicKeyID
 	if b == nil {
-		// This node's own record, keyed the other way -- see the note in getPublicKey.
-		if own := s.getPrivateEnclaveParamsPioneerWalletID(); own != "" && pubKID == own {
-			c.LoggerDebug(logger, "intervalpublickeyidbypubkid "+pubKID+" answered from enclave params (not yet on chain)")
-			return own, "", true
-		}
 		c.LoggerDebug(logger, "Couldn't find intervalpublickeyidbypubkid"+pubKID)
 		found = false
 	} else {
