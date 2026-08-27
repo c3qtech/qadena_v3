@@ -272,7 +272,7 @@ gov_tx() {
 # ---------------------------------------------------------------------------------------------
 # gov_proposal_id_of_tx <txhash> -- the proposal id a submit tx created, from the TX'S OWN EVENTS.
 #
-# Lifted from gov_register_enclave_identity.sh because rolling_upgrade.sh needed the same answer
+# Lifted from gov_register_enclave_identity.sh because upgrade_fleet.sh needed the same answer
 # and got it a worse way: listing recent proposals and content-matching.  That is a RACE -- the
 # regression suite submits proposals continuously (ids 27..31 on 2026-08-24 were all its), and an
 # upgrade proposal has no unique string to content-match on at all.  The submit event is the one

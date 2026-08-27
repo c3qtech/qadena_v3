@@ -589,7 +589,7 @@ fi
 # different code.  A FIRST install is exempt: it just created an empty genesis generation, and a
 # chain with no history has nothing to invalidate.
 if [[ "$mode" != "install" ]] && [[ -n "$(echo "$stage"/bin/*(N))" ]]; then
-    fail "this node already runs a generation and the package contains binaries.  Writing them would mutate the generation that produced this chain's existing blocks.  Schedule the change instead:  install_release.sh <archive> --stage-upgrade v<version>  then roll it with rolling_upgrade.sh --via-governance."
+    fail "this node already runs a generation and the package contains binaries.  Writing them would mutate the generation that produced this chain's existing blocks.  Schedule the change instead:  install_release.sh <archive> --stage-upgrade v<version>  then roll it with upgrade_fleet.sh."
 fi
 
 needs_stop=0

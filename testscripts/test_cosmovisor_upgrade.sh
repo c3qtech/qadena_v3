@@ -25,7 +25,7 @@
 # across an ENCLAVE-measurement boundary is documented out of scope -- its genesis-era enclave
 # cannot sync-enclave from seeds running the new measurement (the seed-measurement gate), and
 # that limitation pre-dates cosmovisor.  The FLEET side of a chain+enclave upgrade is covered by
-# rolling_upgrade --via-governance itself.
+# upgrade_fleet.sh itself.
 
 set -u
 SCRIPT_DIR="${0:A:h}"
@@ -117,7 +117,7 @@ rsh_user "$PRIMARY" "cd \$HOME/qv3 && git fetch --all --tags --quiet && \
     git log --oneline -1" 2>&1 | while read -r l; do info "$l"; done
 [[ ${pipestatus[1]} -eq 0 ]] || fail "could not check out $TO_REF on $PRIMARY"
 
-"$SCRIPT_DIR/rolling_upgrade.sh" --node "$PRIMARY" --via-governance --build-from "$PRIMARY" \
+"$SCRIPT_DIR/upgrade_fleet.sh" --node "$PRIMARY" --build-from "$PRIMARY" \
     2>&1 | tee "$RUN_DIR/stage-E-upgrade.log" | while read -r l; do info "$l"; done
 [[ ${pipestatus[1]} -eq 0 ]] || fail "--via-governance failed"
 cur=$(cosmovisor_current_of "$PRIMARY")

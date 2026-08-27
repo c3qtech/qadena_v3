@@ -20,7 +20,7 @@
 # the operator to derive it mid-incident.
 #
 # WHAT THIS SCRIPT DOES NOT DO: build, package, distribute, or stage binaries.  That is
-# rolling_upgrade.sh --via-governance, which calls this as its governance step.  Submitting a plan
+# upgrade_fleet.sh, which calls this as its governance step.  Submitting a plan
 # for binaries that are not staged everywhere halts the fleet at H -- the preflight there exists
 # for that; going around it means you have checked staging yourself.
 
