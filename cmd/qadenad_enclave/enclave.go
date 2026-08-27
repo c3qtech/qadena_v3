@@ -703,7 +703,7 @@ func effectiveShareCap() int {
 // getPioneerIPAddress reads s.CacheCtx".
 //
 // The rotation had the same disease and never got the same cure: UpdateHeight detached
-// updateSSIntervalKey wholesale, so getBondedAddressablePioneers ITERATED CacheCtx from a goroutine
+// updateSSIntervalKey wholesale, so getAddressPublishedPioneers ITERATED CacheCtx from a goroutine
 // while block execution wrote to it -- and TransactionComplete's failure path re-derives
 // s.CacheCtx outright, so even the field read races.  Cloning the context would not help: the
 // sdk.Context is a value but the cachekv store inside it is a pointer to the same unsynchronized
@@ -727,7 +727,7 @@ type ssRotationPlan struct {
 // in practice, inside the UpdateHeight or InitEnclave handler, before anything detaches.
 func (s *qadenaServer) planSSRotation() *ssRotationPlan {
 	plan := &ssRotationPlan{
-		pioneers:     s.getBondedAddressablePioneers(),
+		pioneers:     s.getAddressPublishedPioneers(),
 		ips:          make(map[string]string),
 		enclavePubKs: make(map[string]string),
 	}
@@ -985,7 +985,7 @@ func (s *qadenaServer) addSSShare(pioneerIDs []string, pubKID string, privK stri
 
 	// THE OWNER COUNT IS A SECURITY PARAMETER, and it moves silently: a pioneer joins the set
 	// on its FIRST PROPOSED BLOCK after bonding (updateIsValidator publishes its address, and
-	// getBondedAddressablePioneers counts only pioneers that have one).  At four owners the threshold crosses
+	// getAddressPublishedPioneers counts only pioneers that have one).  At four owners the threshold crosses
 	// from 1 to 2 and the key becomes genuinely Shamir-split, which changes what a "share" IS
 	// for every receiver.  Record the crossing here rather than leaving it to be reconstructed
 	// from a state dump after something breaks.
@@ -1360,7 +1360,7 @@ func (s *qadenaServer) planSSReconstruct(pubKID string) (*ssReconstructJob, bool
 		// that is registered but has never PUBLISHED an address (updateIsValidator only does that
 		// on a node's first proposed block).  Without it the plan carries "tcp://:26657", which
 		// burns one of the threshold fetch slots on a dial that cannot succeed.  This mirrors the
-		// filter getBondedAddressablePioneers already applies.
+		// filter getAddressPublishedPioneers already applies.
 		ip, okIP := s.getPioneerIPAddress(owner)
 		if !okIP || ip == "" {
 			// THE CHAIN ROW IS EMPTY -- which on a REPLAYING node usually means "not yet", not
@@ -1403,7 +1403,7 @@ func (s *qadenaServer) planSSReconstruct(pubKID string) (*ssReconstructJob, bool
 	for _, o := range job.owners {
 		ownerSet[o] = true
 	}
-	for _, p := range s.getBondedAddressablePioneers() {
+	for _, p := range s.getAddressPublishedPioneers() {
 		if len(job.fallback) >= effectiveProbeCap() {
 			break
 		}
@@ -2265,7 +2265,7 @@ func (s *qadenaServer) WhoHasSSKey(ctx context.Context, in *types.MsgWhoHasSSKey
 			nodes:    make(map[string]string),
 			fallback: make(map[string]string),
 		}
-		for _, p := range s.getBondedAddressablePioneers() {
+		for _, p := range s.getAddressPublishedPioneers() {
 			if p == me {
 				continue
 			}
@@ -3598,7 +3598,7 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 			if err := s.refuseIfCatchingUp("an SS interval key rotation"); err == nil {
 				// THE PLAN IS BUILT HERE, ON THE EXECUTION THREAD; ONLY THEN DOES THE WORK
 				// DETACH.  updateSSIntervalKey used to be detached wholesale, which put
-				// getBondedAddressablePioneers' CacheCtx iteration on a goroutine racing block
+				// getAddressPublishedPioneers' CacheCtx iteration on a goroutine racing block
 				// execution -- see ssRotationPlan for the history of this exact bug.
 				plan := s.planSSRotation()
 				rplan := s.planSSReshare(plan)
@@ -7002,6 +7002,21 @@ func (s *qadenaServer) getPublicKey(pubKID string, pubKType string) (publicKey s
 	))
 	var pk types.PublicKey
 	if b == nil {
+		// This node's own keys, from params, while they may not be on chain yet.
+		if s.selfIdentityNotYetOnChain() {
+			if own := s.getPrivateEnclaveParamsPioneerWalletID(); own != "" && pubKID == own {
+				switch pubKType {
+				case types.TransactionPubKType:
+					if v := s.getPrivateEnclaveParamsPioneerPubK(); v != "" {
+						return v, true
+					}
+				case types.EnclavePubKType:
+					if v := s.getPrivateEnclaveParamsEnclavePubK(); v != "" {
+						return v, true
+					}
+				}
+			}
+		}
 		c.LoggerDebug(logger, "Couldn't find pubk "+pubKID+" "+pubKType)
 		found = false
 	} else {
@@ -7056,6 +7071,14 @@ func (s *qadenaServer) getIntervalPublicKeyId(nodeID string, nodeType string) (k
 	))
 	var ipki types.IntervalPublicKeyID
 	if b == nil {
+		// This node's own record, from params, while it may not be on chain yet.
+		if s.selfIdentityNotYetOnChain() && nodeType == types.PioneerNodeType {
+			if own := s.getPrivateEnclaveParamsPioneerID(); own != "" && nodeID == own {
+				if wid := s.getPrivateEnclaveParamsPioneerWalletID(); wid != "" {
+					return wid, "", "", true
+				}
+			}
+		}
 		c.LoggerDebug(logger, "Couldn't find intervalPublicKeyId", nodeID, nodeType)
 		found = false
 	} else {
@@ -7076,6 +7099,12 @@ func (s *qadenaServer) getIntervalPublicKeyIdByPubKID(pubKID string) (keyID stri
 	b := store.Get(types.IntervalPublicKeyIDByPubKIDKey(pubKID))
 	var ipki types.IntervalPublicKeyID
 	if b == nil {
+		// Same record, keyed the other way.
+		if s.selfIdentityNotYetOnChain() {
+			if own := s.getPrivateEnclaveParamsPioneerWalletID(); own != "" && pubKID == own {
+				return own, "", true
+			}
+		}
 		c.LoggerDebug(logger, "Couldn't find intervalpublickeyidbypubkid"+pubKID)
 		found = false
 	} else {
@@ -7139,7 +7168,7 @@ func (s *qadenaServer) setIntervalPublicKeyIdNoNotify(in types.IntervalPublicKey
 	storeByPubKID.Set(types.IntervalPublicKeyIDByPubKIDKey(in.PubKID), b)
 }
 
-// getBondedAddressablePioneers returns the pioneers that have published an external address --
+// getAddressPublishedPioneers returns the pioneers that have published an external address --
 // which, by the invariant below, means the pioneers that are BONDED and have proposed.
 //
 // THE NAME CARRIES THE INVARIANT ON PURPOSE.  "Addressable" alone was read as "reachable", and the
@@ -7161,10 +7190,15 @@ func (s *qadenaServer) setIntervalPublicKeyIdNoNotify(in types.IntervalPublicKey
 // key is genuinely Shamir-split.  Crossing four therefore changes what a "share" IS for every
 // receiver, which is how the fork at height 30755 happened.
 //
-// Named for what it tests, not for validator status: a validator that is not a pioneer never
-// appears here, a bonded validator that has not yet proposed does not either, and reachability is
-// a real requirement rather than a proxy.
-func (s *qadenaServer) getBondedAddressablePioneers() (pioneers []string) {
+// NAMED FOR WHAT IT TESTS.  It selects on a PUBLISHED ADDRESS and nothing else -- there is no
+// bonding check here.  Bonding is implied rather than verified: updateIsValidator() is the only
+// thing that publishes an address, and it fires on a pioneer's first proposed block after
+// bonding.  The previous name (getBondedAddressablePioneers) promised a gate this code does not
+// apply, which is worth avoiding for a set whose size is a security parameter.
+//
+// So: a validator that is not a pioneer never appears here, a bonded validator that has not yet
+// proposed does not either, and reachability is a real requirement rather than a proxy.
+func (s *qadenaServer) getAddressPublishedPioneers() (pioneers []string) {
 	pioneers = make([]string, 0)
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.IntervalPublicKeyIDKeyPrefix))
 	itr := store.Iterator(nil, nil)
@@ -7177,6 +7211,28 @@ func (s *qadenaServer) getBondedAddressablePioneers() (pioneers []string) {
 		itr.Next()
 	}
 	itr.Close()
+
+	// UNION THIS NODE, while its own row may not be on chain yet.  An iterating reader cannot be
+	// rescued by a miss-fallback -- it never misses, it simply does not see you -- and this set
+	// feeds the SS rotation, so a genesis pioneer absent from it plans a rotation over the wrong
+	// owners and signs a message that no longer matches its remote report.  That is exactly what
+	// broke InitEnclave on 2026-08-27.
+	//
+	// MEMBERSHIP IS UNCHANGED BY CONSTRUCTION: the same ExternalIPAddress != "" test is applied,
+	// through selfPioneerAddress, which yields an address only for a validator.  So a genesis
+	// pioneer appears exactly as it did when preInitEnclave wrote the row, and a joiner -- whose
+	// address stays empty until it proposes -- still does not.  That equivalence matters more
+	// than usual here: the SIZE of this set is a security parameter (see above).
+	if s.selfIdentityNotYetOnChain() {
+		if own := s.getPrivateEnclaveParamsPioneerID(); own != "" && s.selfPioneerAddress() != "" {
+			if !slices.Contains(pioneers, own) {
+				pioneers = append(pioneers, own)
+				// Store iteration is key-ordered, so sort to put the union where the row would
+				// have appeared rather than at the end.
+				sort.Strings(pioneers)
+			}
+		}
+	}
 
 	return
 }
@@ -7660,6 +7716,38 @@ func (s *qadenaServer) getCredentialByPCXY(pcXY []byte, credentialType string) (
 	return
 }
 
+// selfIdentityNotYetOnChain reports whether this node's own identity may still be missing from the
+// mirrored stores -- i.e. the chain is not known to be LIVE.
+//
+// THE MIRRORED STORES ARE THIS ENCLAVE'S COPY OF CHAIN STATE and are hashed into an accumulator
+// that startup reconciliation compares against the chain's.  A node's own identity does not reach
+// chain state until its registration commits, so anything written there early makes the copy
+// disagree with the chain until then -- which on a joiner is the WHOLE genesis replay, and reports
+// ENCLAVE STORES DIVERGED on a perfectly healthy node.
+//
+// So the rows are not written; the private params answer instead, and only during this window.
+// Same shape as the seed's bootstrap addresses (enclave_external_address.go): a private, unhashed
+// source consulted ONLY while replaying, with a hard edge at the live transition.
+//
+// `!known` counts as "not live" deliberately: setChainPosition first runs in UpdateHeight, so at
+// InitEnclave time the position is not known at all -- and that is exactly when the genesis
+// pioneer needs its own address to be visible.
+func (s *qadenaServer) selfIdentityNotYetOnChain() bool {
+	_, isLive, known := currentChainPosition()
+	return !known || !isLive
+}
+
+// selfPioneerAddress is the address this node would have published: its real one once it is a
+// validator, empty before that.  Reproduces exactly what preInitEnclave used to write into the
+// mirrored row, which is what keeps getAddressPublishedPioneers' membership unchanged -- and that
+// set's SIZE is a security parameter (see the note there).
+func (s *qadenaServer) selfPioneerAddress() string {
+	if !s.getPrivateEnclaveParamsPioneerIsValidator() {
+		return ""
+	}
+	return s.getPrivateEnclaveParamsPioneerExternalIPAddress()
+}
+
 func (s *qadenaServer) getPioneerIPAddress(pioneerID string) (pioneerIP string, found bool) {
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.IntervalPublicKeyIDKeyPrefix))
 
@@ -7669,6 +7757,14 @@ func (s *qadenaServer) getPioneerIPAddress(pioneerID string) (pioneerIP string, 
 	))
 	var ipki types.IntervalPublicKeyID
 	if b == nil {
+		// This node's own row, from params, while it may not be on chain yet -- see
+		// selfIdentityNotYetOnChain.  "found" with an EMPTY address for a non-validator is the
+		// row preInitEnclave used to write, and callers rely on that distinction.
+		if s.selfIdentityNotYetOnChain() {
+			if own := s.getPrivateEnclaveParamsPioneerID(); own != "" && pioneerID == own {
+				return s.selfPioneerAddress(), true
+			}
+		}
 		c.LoggerDebug(logger, "Couldn't find pioneeripaddress "+pioneerID+" "+types.PioneerNodeType)
 		found = false
 	} else {
@@ -7852,7 +7948,7 @@ func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 	unvalidated := s.getUnvalidatedEnclaveIdentities()
 	c.LoggerDebug(logger, "unvalidateEnclaveIdentities "+c.PrettyPrint(unvalidated))
 	// validate the identities
-	pioneers := s.getBondedAddressablePioneers()
+	pioneers := s.getAddressPublishedPioneers()
 
 	// AN ENCLAVE THAT CANNOT EVALUATE PEERS MUST NOT VOTE ON THEM.  The verdict below counts how
 	// many pioneers WE TRUST confirmed the identity, so an enclave with no trust beyond itself
@@ -7866,7 +7962,7 @@ func (s *qadenaServer) validateEnclaveIdentities(broadcast bool) {
 	// unique048 stay `unvalidated`, because the only node able to promote it had ruled itself out.
 	// With no other pioneers the existing branch below marks the identity valid on its own
 	// authority, which is right: there is nobody else to ask.
-	c.LoggerDebug(logger, "getBondedAddressablePioneers "+c.PrettyPrint(pioneers))
+	c.LoggerDebug(logger, "getAddressPublishedPioneers "+c.PrettyPrint(pioneers))
 	// randomize the array
 	pioneers = randomizePioneerIDs(pioneers, s.getPrivateEnclaveParamsPioneerID())
 	c.LoggerDebug(logger, "randomizePioneerIDs "+c.PrettyPrint(pioneers))

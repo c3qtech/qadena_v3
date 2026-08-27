@@ -9,7 +9,7 @@ package main
 // on every start.  So after an IP change the chain advertised the old address forever: restart,
 // re-bond, rotation and audit all left it alone.
 //
-// That is not cosmetic.  getBondedAddressablePioneers() tests the field for EMPTINESS, not
+// That is not cosmetic.  getAddressPublishedPioneers() tests the field for EMPTINESS, not
 // reachability, so a moved node keeps counting toward the re-share audit's owner target while
 // being undialable -- the chain then overstates custody, and getSSPrivK and the who-has fallback
 // both dial an address nobody is listening on.  A static lab fleet never notices; a cloud
@@ -155,7 +155,7 @@ func (s *qadenaServer) planExternalAddressRepublish() string {
 		// propose.  Observed on the 2026-08-26 bringup: pioneer3 held a published address while
 		// unbonded, because phase 6 had not run.
 		//
-		// getBondedAddressablePioneers is what consumes that field, and it feeds getThreshold --
+		// getAddressPublishedPioneers is what consumes that field, and it feeds getThreshold --
 		// so an unbonded node counted as an owner moves the security parameter and can carry a
 		// share it has no stake behind.  First publication stays updateIsValidator's job, under
 		// IsProposer; this path only ever CORRECTS an address the node has already advertised.
@@ -263,7 +263,7 @@ func (s *qadenaServer) publishPioneerIntervalPublicKeyID(externalIPAddress strin
 		return false
 	}
 	// THE EVENT THAT MAKES THIS NODE ADDRESSABLE, and it was silent until now.  Everything
-	// downstream keys off this row: getBondedAddressablePioneers counts it, getThreshold is sized
+	// downstream keys off this row: getAddressPublishedPioneers counts it, getThreshold is sized
 	// from that count, and getSSPrivK dials the address to collect shares.  A node that never
 	// reaches this line is invisible to all three, and the only previous evidence was its absence.
 	c.LoggerInfo(logger, extAddrTag+"PUBLISHED "+pioneerID+" at "+orNone(externalIPAddress)+
@@ -302,7 +302,7 @@ func (s *qadenaServer) publishPioneerIntervalPublicKeyID(externalIPAddress strin
 // bootstrapAddressesToServe is the SEED side -- every pioneer it can currently reach, by pioneerID.
 func (s *qadenaServer) bootstrapAddressesToServe() map[string]string {
 	out := map[string]string{}
-	for _, p := range s.getBondedAddressablePioneers() {
+	for _, p := range s.getAddressPublishedPioneers() {
 		if ip, ok := s.getPioneerIPAddress(p); ok && ip != "" {
 			out[p] = ip
 		}
@@ -470,7 +470,7 @@ func (s *qadenaServer) reportUnreachablePioneers(plan *ssRotationPlan) {
 		if n >= silentRoundsBeforeAlarm {
 			// The actionable phrasing, because by now the likeliest cause is not a hiccup: either
 			// the node is down, or it MOVED and nobody updated its p2p.external_address.  It still
-			// counts toward the owner target either way -- getBondedAddressablePioneers tests the field
+			// counts toward the owner target either way -- getAddressPublishedPioneers tests the field
 			// for emptiness, not reachability -- so the chain is overstating custody.
 			c.LoggerError(logger, msg+" -- it is still counted as a share owner.  Either the node "+
 				"is down, or its address changed and config.toml's p2p.external_address was never "+
