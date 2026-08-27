@@ -69,8 +69,6 @@
 #   --signer ID        The enclave signer id.  Same.
 #   --wait-secs N      How long to wait for the identity to go active, and what is passed to
 #                      install_release.sh --wait-active on each node.  Default 1800.
-#   --skip-governance  The measurement is ALREADY registered and ACTIVE.  Skips step 2 whole: no
-#                      proposal, no votes, no promotion restart.  --unique/--signer not needed.
 #   --dry-run          Print what would run.  No copy, no vote, no install.  Preflight and the
 #                      advancing checks still run FOR REAL, so it needs a live fleet to work.
 #   --help
@@ -159,9 +157,8 @@
 #
 #     tar xzOf <archive> '*/manifest.txt' | grep qadenad_enclave
 #
-# Use --skip-governance INSTEAD of both when the measurement is already active.  Getting that
-# wrong is only safe in one direction: --skip-governance against an UNregistered measurement
-# leaves every node waiting out the full --wait-secs for an identity that never goes active.
+# Neither is needed when the measurement has not moved: the build detects that and the proposal
+# carries no identity message.
 #
 # BUILDING WITH --build-from
 #
@@ -243,11 +240,9 @@
 #       --archive ~/qadena-full-1.1.14-abc1234.tar.gz \
 #       --unique unique052 --signer 0d4a1f... --dry-run
 #
-#   # Resume a roll that died after m2 -- unique052 is already active, so governance is done.
-#   # List only the nodes still to roll.  NOTE the quorum arithmetic still counts the WHOLE
-#   # fleet, not just the nodes named here; the advancing check only watches the ones named.
-#   ./upgrade_fleet.sh --node m3 --node m4 \
-#       --archive ~/qadena-full-1.1.14-abc1234.tar.gz --skip-governance
+#   # THERE IS NO PARTIAL ROLL TO RESUME.  Every node swaps at the same height, so the fleet is
+#   # either before that height or past it -- never half-upgraded.  If a node was down at the
+#   # height, it performs the swap itself on its next start (run.sh completes an owed upgrade).
 #
 # AFTERWARDS, the last line this prints is the one worth acting on.  The next rotation tick runs
 # the SS re-share audit, and that is where a fleet which upgraded cleanly but can no longer
@@ -745,7 +740,7 @@ if [[ -n "$BUILD_FROM" ]]; then
         man=$(tar xzOf "$ARCHIVE" '*/manifest.txt' 2>/dev/null) || true
         [[ -n "$man" ]] || die "the package has no manifest.txt -- cannot read the measurement out of it"
         # A chain-only package carries no enclave, so it carries no measurement -- and needs none:
-        # --chain-only implies --skip-governance, because there is no new identity to register.
+        # A chain-only package carries no enclave, so there is no new identity to register.
         if (( CHAIN_ONLY )); then
             say "  chain-only package: no enclave component, nothing to register"
         elif [[ -z "$NEW_UNIQUE" ]]; then
