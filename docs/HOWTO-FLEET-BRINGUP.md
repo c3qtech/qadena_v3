@@ -1,4 +1,4 @@
-# Bringing up M1-M4, and the re-share growth test
+# Bringing up a fleet (M1-M4, or SGX1-SGX2), and the re-share growth test
 
 Two scripts bring up a fleet.  They differ in what they are asking.
 
@@ -22,6 +22,15 @@ that and `full_fleet_bringup.sh`'s header before changing either.
 | M4 | `alvillarica@192.168.86.136` | |
 
 All aarch64 debug-enclave boxes: no SGX, no ego, ~3 minute builds.
+
+| name | address | notes |
+|---|---|---|
+| SGX1 | `alvillarica@192.168.86.120` | primary |
+| SGX2 | `alvillarica@192.168.86.140` | |
+
+**x86_64 with real SGX**: `/dev/sgx_enclave` and `/dev/sgx_provision` present, ego at
+`/usr/local/bin/ego`, 2 cores, **~41 minute builds**.  Nothing about the aarch64 line
+above applies to these two -- do not read it as covering the whole table.
 
 ---
 
@@ -102,6 +111,67 @@ seeding its enclave store from a snapshot.
 
 The audit after M2 is the first one that can fail meaningfully.  Everything before it
 is a baseline.
+
+---
+
+## The same run on SGX1 + SGX2
+
+The schedule truncated to two nodes.  Same shape, same order, same reason -- there are
+simply two positions instead of four.
+
+```sh
+./testscripts/fleet_bringup_with_tests.sh \
+  --primary alvillarica@192.168.86.120 \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_reshare_audit.sh" \
+  --joiner alvillarica@192.168.86.140 \
+    --test "./testscripts/test_ss_reshare_audit.sh" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/run_regression_continually.sh" \
+  --block-sync
+```
+
+**What two nodes reach, and what they do not.**  SGX2 is position M2, so the audit
+after it joins is the first that can fail meaningfully -- it must heal the size-1 keys
+1 -> 2.  What a two-node fleet **cannot** reach is the M4 row above: the threshold
+never crosses 1 -> 2, so **`shamir.Split` never runs**.  For that, use M1-M4.
+
+**Do not omit the `--test` entries** -- see *an empty schedule is a deploy* under
+*Traps this has already hit*.
+
+### Real SGX changes three things
+
+The first SGX fleet run was 2026-08-27; every run before it was a debug enclave on ARM.
+
+- **Nothing needs a flag.**  Preflight probes both hosts and prints
+  `build SGX (ego and devices present)`.  Do not pass `--build-sgx`; it is for forcing
+  the case the probe cannot see.
+- **Do not bump `test_unique_id.txt`.**  That convention under *Before you run* exists
+  because a debug enclave takes its identity from that embedded string.  On SGX the
+  measurement is computed by ego from the signed binary -- a real MRENCLAVE, e.g.
+  `cd2b86aeea28d059d6f87420c0ba27c57bad91b4ed3d0ce7696ed70bf7da25a4` -- and editing the
+  file changes nothing that matters.
+- **Budget ~41 minutes for the build**, not the ~24 quoted elsewhere: these boxes have
+  2 cores.
+
+### Block-sync from genesis works again
+
+Item 107's older note that the chain was unjoinable by block-sync (an AppHash halt at
+height 3) described a **version-skew** defect: history written by 1.1.16, replayed under
+1.1.17's added gas-metered read, with no upgrade height gating it.  A fleet bringup does
+not hit it, because genesis is created by the same build the joiner replays with.  On
+2026-08-27 SGX2 block-synced from genesis and ended at `earliest=1` -- the first node on
+any fleet to do so, M2-M4 having all state-synced and so all reporting `earliest=2001`.
+
+That is worth checking on any block-synced joiner, because it is the one field that
+distinguishes the two paths after the fact:
+
+```sh
+curl -s localhost:26657/status | jq -r '.result.sync_info.earliest_block_height'
+```
 
 ---
 
@@ -203,6 +273,28 @@ A plain `pkill -f "run_regression_continually"` kills the ssh session carrying i
 chain with every process still running, so the height must be seen to ADVANCE.
 Phase 6 checks no validator reaches 2/3 for the same reason -- skipping it by hand is
 what halted this fleet (item 108).
+
+**An empty schedule is a deploy, not a growth test.**  `fleet_bringup_with_tests.sh`
+tests nothing unless a `--test` asks for it, so a run with no schedule comes up green
+having measured nothing.  The sharp edge is that `wait_addressable` is called from the
+**first `--test` of each joiner** -- so a run with no tests also never waits for the
+joiner to publish its external address, and the one gate that proves a joiner is a real
+SS key owner silently does not run.  On 2026-08-27 that produced a healthy-looking
+two-node SGX fleet whose addressability had to be confirmed by hand:
+
+```sh
+qadenad q qadena list-interval-public-key-id --limit 5000 -o json \
+  | jq '[.intervalPublicKeyID[]? | select(.nodeType=="pioneer" and .externalIPAddress!="")] | length'
+```
+
+**`pgrep` counts are not evidence -- read the command lines.**  Checking whether a soak
+is running with `pgrep -f "regression" | wc -l` returns 1 on an idle box, because the
+ssh command carrying the query matches itself.  Bracket-class the pattern *and* pass
+`-a`, so what matched is visible rather than inferred:
+
+```sh
+ssh $HOST 'pgrep -af "run_regression_continuall[y]"'
+```
 
 ---
 

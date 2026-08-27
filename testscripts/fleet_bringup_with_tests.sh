@@ -625,7 +625,16 @@ fi
 
 # ---------------------------------------------------------------------------------------------
 if run_stage G; then
-stage "G. join each node by state-sync, in turn"
+# ONE definition of which sync ran, resolved BEFORE the header prints and reused by the join below.
+# The header used to say "state-sync" unconditionally, so a --block-sync run wrote a log that
+# claimed coverage of the one path block-sync never touches -- and the run directory is the only
+# record anyone reads afterwards.  Two strings that can disagree about what happened is one too many.
+if (( BLOCK_SYNC )); then
+    SYNC_KIND="block-sync"; sync_arg=()
+else
+    SYNC_KIND="state-sync"; sync_arg=(--state-sync)
+fi
+stage "G. join each node by $SYNC_KIND, in turn"
 # WALK THE SCHEDULE, not the joiner list: a --test between two --joiner entries belongs to the
 # joiner BEFORE it, and only the schedule knows which.  The leading tests were already run in stage
 # C, so they are skipped here by only starting to honour test: entries once a joiner has been seen.
@@ -666,13 +675,8 @@ fi
     info ""
     # WHICH SYNC RAN IS RECORDED, because "the joiner caught up" means something different in each
     # case: a state-synced joiner IMPORTED the enclave-private tables from a snapshot, a block-synced
-    # one replayed history and never touched that path.
-    sync_arg=(--state-sync)
-    sync_kind="state-sync"
-    if (( BLOCK_SYNC )); then
-        sync_arg=()
-        sync_kind="block-sync"
-    fi
+    # one replayed history and never touched that path.  $SYNC_KIND and $sync_arg are resolved once
+    # at the top of this stage, so the header and this line cannot disagree.
     # THROUGH PHASE 7, NOT 5 -- the difference is the whole growth test.  full_fleet_bringup stops
     # at 5 deliberately ("stops short of converting it to a validator"), because converting re-splits
     # stake and is worth watching.  But a node that is not a VALIDATOR never proposes a block, and
@@ -682,8 +686,8 @@ fi
     # the guard that matters here: it verifies neither node reaches 2/3, which is exactly the check
     # a hand-written loop skipped when it halted this fleet (TESTING-BACKLOG item 108).  Phase 7 is
     # test_peer_agreement.sh -- the first thing in the sequence that compares two nodes at all.
-    info "joining $j as $pioneer by $sync_kind (through phase 7: join, bond, agree)"
-    print "$j joined by: $sync_kind (as $pioneer)" >> "$RUN_DIR/fleet.txt"
+    info "joining $j as $pioneer by $SYNC_KIND (through phase 7: join, bond, agree)"
+    print "$j joined by: $SYNC_KIND (as $pioneer)" >> "$RUN_DIR/fleet.txt"
     "$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" \
         --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" --from 1 --until 7 \
         2>&1 | tee "$RUN_DIR/stage-G-join-${j##*@}.log"
@@ -714,8 +718,31 @@ for e in "${SCHEDULE[@]}"; do
 done
 print "  archives       : ~/qadena.pre-bringup.$STAMP.bak on each joiner (delete once satisfied)"
 print ""
-print "Not done here, deliberately: converting joiners to validators (nth_node_bringup phases 6-7)."
-print "That re-splits stake, and on a small fleet a single divergent node then halts the chain, so"
-print "it is worth watching rather than automating:"
-print "  ./testscripts/nth_node_bringup.sh --primary $PRIMARY --joiner <joiner> --from 6 --until 7"
+# WHAT THIS SCRIPT DID AND DID NOT DO -- and it must describe THIS script.  This block used to be a
+# copy of full_fleet_bringup's, which stops at phase 5 and says so; here the joiners are bonded by
+# phase 7, so the text told the operator to go and re-run a conversion that had already happened.
+print "Joiners WERE converted to validators: nth_node_bringup ran --from 1 --until 7, so each one is"
+print "bonded, has proposed a block, and is therefore addressable, an SS key owner and visible to the"
+print "re-share audit.  (full_fleet_bringup stops at phase 5 and leaves them unbonded; this script"
+print "must not, or every audit sits at target=1 healing nothing.  See the stage G comment.)"
+# (I) is the INDEX of the last match, 0 when there is none -- so this asks "was any --test
+# scheduled?" without a loop.  A plain `print ... || print ...` chain would have made only the
+# FIRST line of each group conditional and printed the rest unconditionally.
+#
+# The heading is printed only if something goes under it: a bare "Not covered by this run:" with an
+# empty list reads as a truncated summary, which is the opposite of the reassurance it should give.
+if (( ${SCHEDULE[(I)test:*]} == 0 || BLOCK_SYNC )); then
+    print ""
+    print "Not covered by this run:"
+fi
+if (( ${SCHEDULE[(I)test:*]} == 0 )); then
+    print "  - anything chain-level.  No --test was scheduled, so nothing beyond join, bond and peer"
+    print "    agreement was exercised -- and NO WAIT-UNTIL-ADDRESSABLE RAN either, because that gate"
+    print "    lives with the first --test.  Check it by hand before trusting the fleet:"
+    print "      qadenad q qadena list-interval-public-key-id --limit 5000 -o json | jq '[.intervalPublicKeyID[]? | select(.nodeType==\"pioneer\" and .externalIPAddress!=\"\")] | length'"
+fi
+if (( BLOCK_SYNC )); then
+    print "  - state-sync, and the private-state transfer it depends on.  --block-sync replays history"
+    print "    and never seeds the joiner's enclave store from a snapshot."
+fi
 note "done: ${#JOINED[@]} joiner(s)"

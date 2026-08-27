@@ -514,7 +514,15 @@ fi
 
 # ---------------------------------------------------------------------------------------------
 if run_stage H; then
-stage "H. join each node by state-sync, in turn"
+# ONE definition of which sync ran, resolved BEFORE the header prints and reused by the join below.
+# The header used to say "state-sync" unconditionally, so a --block-sync run wrote a log that claimed
+# coverage of the one path block-sync never touches.  Same fix as stage G in fleet_bringup_with_tests.
+if (( BLOCK_SYNC )); then
+    SYNC_KIND="block-sync"; sync_arg=()
+else
+    SYNC_KIND="state-sync"; sync_arg=(--state-sync)
+fi
+stage "H. join each node by $SYNC_KIND, in turn"
 n=1
 JOINED=()
 for j in "${JOINERS[@]}"; do
@@ -531,15 +539,10 @@ for j in "${JOINERS[@]}"; do
     info ""
     # WHICH SYNC RAN IS RECORDED, because "the joiner caught up" means something different in each
     # case: a state-synced joiner IMPORTED the enclave-private tables from a snapshot, a block-synced
-    # one replayed history and never touched that path.
-    sync_arg=(--state-sync)
-    sync_kind="state-sync"
-    if (( BLOCK_SYNC )); then
-        sync_arg=()
-        sync_kind="block-sync"
-    fi
-    info "joining $j as $pioneer by $sync_kind"
-    print "$j joined by: $sync_kind (as $pioneer)" >> "$RUN_DIR/fleet.txt"
+    # one replayed history and never touched that path.  $SYNC_KIND and $sync_arg are resolved once
+    # at the top of this stage, so the header and this line cannot disagree.
+    info "joining $j as $pioneer by $SYNC_KIND"
+    print "$j joined by: $SYNC_KIND (as $pioneer)" >> "$RUN_DIR/fleet.txt"
     "$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" \
         --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" --from 1 --until 5 \
         2>&1 | tee "$RUN_DIR/stage-H-join-${j##*@}.log"
