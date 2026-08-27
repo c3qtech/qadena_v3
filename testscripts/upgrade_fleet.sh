@@ -52,8 +52,10 @@
 #                      and WAIT for any in-flight run to finish, before anything else happens.
 #                      Without it the roll only WARNS.  Worth using: the regression restarts the
 #                      node it runs on, which during a roll is a second node down.
-#   --chain-only       roll a CHAIN-ONLY change: qadenad moved, the enclave did not.  Implies
-#                      --skip-governance (an unchanged measurement is already registered).
+#   --chain-only       a CHAIN-ONLY change: qadenad moved, the enclave did not.  USUALLY
+#                      INFERRED -- the build compares the measurement it produced against what
+#                      the fleet runs -- so pass this only to force it.  No enclave identity is
+#                      registered, because an unchanged measurement already is.
 #                      Packages --only chain,libs,scripts,config, so the unchanged enclave is
 #                      not re-staged -- the build is not reproducible, so re-packaging an
 #                      identical-in-name enclave would collide with the one already installed.
@@ -61,9 +63,10 @@
 #                      The enclave preconditions (strictly-greater version, measurement not
 #                      already running) are SKIPPED, not because they are inconvenient but
 #                      because they assert a handover this roll deliberately does not perform.
-#   --unique ID        The NEW enclave measurement (unique052, or an SGX MRENCLAVE).  Required
-#                      unless --skip-governance.  See WHERE --unique AND --signer COME FROM.
-#   --signer ID        The enclave signer id.  Same condition.
+#   --unique ID        The NEW enclave measurement (unique052, or an SGX MRENCLAVE).  Read from
+#                      the package's manifest under --build-from, so it rarely needs typing.
+#                      See WHERE --unique AND --signer COME FROM.
+#   --signer ID        The enclave signer id.  Same.
 #   --wait-secs N      How long to wait for the identity to go active, and what is passed to
 #                      install_release.sh --wait-active on each node.  Default 1800.
 #   --skip-governance  The measurement is ALREADY registered and ACTIVE.  Skips step 2 whole: no
