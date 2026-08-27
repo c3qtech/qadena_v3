@@ -344,18 +344,102 @@ func ProvideERC20CustomGetSigner() txsigning.CustomGetSigner {
 
 const UpgradeName = "v050-to-v053"
 
+// historicalUpgradeNames lists every version-named upgrade plan that has ever been APPLIED on a
+// qadena chain.  Append one entry per shipped plan; the --via-governance preflight asserts the
+// previous plan was recorded here before it will schedule a new one.
+//
+// WHY A MAINTAINED LIST EXISTS when the two dynamic registrations below cover the common cases:
+// x/upgrade's PreBlocker refuses to start ("upgrade handler is missing for %s upgrade plan") when
+// the LAST APPLIED plan -- read from CHAIN STATE, not disk -- has no handler.  A node that
+// physically executed the upgrade still has data/upgrade-info.json, which the dynamic
+// registration picks up.  A node that STATE-SYNCED past the upgrade has the chain-state record
+// and NO disk file; this list is the only thing that lets it start.
+var historicalUpgradeNames = []string{
+	"v1.1.23", // applied 2026-08-26; first plan ever executed on a qadena chain
+}
+
+// upgradeHandlerNames computes the deduped set of plan names this binary must register.  Pure so
+// it is testable without constructing an app -- the four sources and why each exists are on
+// RegisterUpgradeHandlers below.
+func upgradeHandlerNames(binaryVersion string, historical []string, diskName string) []string {
+	names := map[string]bool{UpgradeName: true}
+	if binaryVersion != "" {
+		names["v"+binaryVersion] = true
+	}
+	for _, n := range historical {
+		if n != "" {
+			names[n] = true
+		}
+	}
+	if diskName != "" {
+		names[diskName] = true
+	}
+	out := make([]string, 0, len(names))
+	for n := range names {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// RegisterUpgradeHandlers wires x/upgrade for the cosmovisor flow.
+//
+// THE MECHANISM IS HANDLER ASYMMETRY.  A governance plan named "v<version>" halts every binary
+// that does NOT register that name -- x/upgrade dumps data/upgrade-info.json and panics
+// `UPGRADE "<name>" NEEDED`, the exact string cosmovisor watches for -- and is applied by the
+// binary that DOES.  Because every build embeds its own version below, a binary automatically
+// registers its own plan name: the version bump that already happens per release IS the handler
+// registration, and the old binary halting at H is not a failure but the signal for the swap.
+//
+// Registered names, deduped:
+//  1. the legacy v050-to-v053, whose store-loader block must stay pinned to it alone
+//  2. "v" + this binary's embedded version (ldflags from cmd/qadenad/version.txt; a plain
+//     `go build` without them leaves it empty -- warn rather than register a plan named "v")
+//  3. whatever data/upgrade-info.json names -- the plan this node most recently halted for or
+//     applied, so a restarted node always recognises its own history
+//  4. historicalUpgradeNames above, for state-synced nodes with no disk file
+//
+// All version-named plans exist to move BINARIES at a height, not to add store modules.  A plan
+// that genuinely adds one gets its own explicit handler and StoreUpgrades entry beside the legacy
+// one -- do not widen the generic path.
 func (app *App) RegisterUpgradeHandlers() {
-	app.UpgradeKeeper.SetUpgradeHandler(
-		UpgradeName,
-		func(ctx context.Context, _ upgradetypes.Plan, fromVM module.VersionMap) (module.VersionMap, error) {
-			return app.ModuleManager.RunMigrations(ctx, app.Configurator(), fromVM)
-		},
-	)
+	migrate := func(ctx context.Context, _ upgradetypes.Plan, fromVM module.VersionMap) (module.VersionMap, error) {
+		// A BINARY-SWAP PLAN MUST NEVER *INITIALISE* A MODULE.  RunMigrations treats any module
+		// missing from fromVM as brand new and runs its InitGenesis -- and on 2026-08-26 that
+		// took the node down at the upgrade height with
+		//
+		//     panic: error initializing evm coin info: denom metadata aatom could not be found
+		//
+		// because x/vm, x/erc20 and the two ibc light clients were absent from this chain's
+		// stored version map.  Every node applies the plan in the same block, so an InitGenesis
+		// that panics on one panics on all of them -- and the block cannot be skipped, so the
+		// chain is stuck until a new binary is staged everywhere.  A worse variant is silent: an
+		// InitGenesis that SUCCEEDS re-initialises that module's state mid-chain.
+		//
+		// Filling the gaps with the CURRENT consensus versions means RunMigrations sees no new
+		// modules, while still migrating every module whose STORED version is genuinely behind.
+		vm := app.ModuleManager.GetVersionMap()
+		for name, v := range fromVM {
+			vm[name] = v
+		}
+		return app.ModuleManager.RunMigrations(ctx, app.Configurator(), vm)
+	}
 
 	upgradeInfo, err := app.UpgradeKeeper.ReadUpgradeInfoFromDisk()
 	if err != nil {
 		panic(err)
 	}
+
+	if cosmossdkversion.Version == "" {
+		c.LoggerError(app.Logger(), "no embedded version (built without buildscripts/build.sh's ldflags?) -- "+
+			"this binary registers no version-named upgrade handler and will HALT at any version-named "+
+			"upgrade height rather than apply it")
+	}
+	for _, n := range upgradeHandlerNames(cosmossdkversion.Version, historicalUpgradeNames, upgradeInfo.Name) {
+		app.UpgradeKeeper.SetUpgradeHandler(n, migrate)
+	}
+
+	// UNCHANGED, and pinned to the legacy name only: version-named plans add no store modules.
 	if upgradeInfo.Name == UpgradeName && !app.UpgradeKeeper.IsSkipHeight(upgradeInfo.Height) {
 		storeUpgrades := storetypes.StoreUpgrades{
 			Added: []string{

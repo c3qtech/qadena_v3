@@ -123,6 +123,7 @@ echo "Removing $QADENAHOME"
 
 if [[ -d "$QADENAHOME" ]]; then
     rm -rf $QADENAHOME
+
     # if fails, check if there are files owned by root
     if [[ $? != 0 ]]; then
         echo "Failed to remove $QADENAHOME"
@@ -148,11 +149,33 @@ cp $qadenabuild/config/config.yml $qadenabuild/config.yml
 
 echo "Initializing chain"
 if ignite chain init --home $QADENAHOME ; then
-    echo "Built chain, copying"
-    if [[ ! -d "$qadenabin" ]] ; then
-        mkdir -p "$qadenabin"
-    fi
-    cp `which qadena_v3d` $qadenabin/qadenad
+    echo "Built chain, creating the cosmovisor layout"
+
+    # A NODE IS BORN MANAGED.  There is no flat layout and no conversion step: the home is
+    # created in its final shape here, so nothing downstream has to ask whether this node "is"
+    # a cosmovisor node.  genesis/ is the generation that executes blocks from height 1, which
+    # is what lets a replaying joiner reproduce this chain's history later.
+    mkdir -p "$QADENAHOME/cosmovisor/genesis/bin" || { echo "cannot create the cosmovisor tree"; exit 1; }
+    ( cd "$QADENAHOME/cosmovisor" && ln -sfn genesis current ) || { echo "cannot create current"; exit 1; }
+
+    # The supervisor itself, which can never live inside the tree it swaps.  Built here rather
+    # than assumed: init.sh already builds from source, and a node with a tree but no cosmovisor
+    # cannot start at all.
+    "$qadenabuildscripts/build_cosmovisor.sh" || { echo "cannot build cosmovisor"; exit 1; }
+
+    # The at-height hook, as a shim execing the scripts/ copy (install.sh --scripts keeps that
+    # one current; cosmovisor requires the hook at this fixed path).
+    cat > "$QADENAHOME/cosmovisor/cosmovisor_preupgrade.sh" <<'SHIM'
+#!/bin/zsh
+exec "$(dirname "$0")/../scripts/cosmovisor_preupgrade.sh" "$@"
+SHIM
+    chmod +x "$QADENAHOME/cosmovisor/cosmovisor_preupgrade.sh"
+
+    # Seed the generation with ignite's binary so the genesis-patching steps below have a working
+    # qadenad.  install.sh replaces it with the properly linked build (this one carries no version
+    # ldflags, so it would register no version-named upgrade handler).
+    cp `which qadena_v3d` "$QADENAHOME/cosmovisor/genesis/bin/qadenad"
+    cosmovisor_relink || { echo "cannot link $qadenabin into the generation"; exit 1; }
 else
     rm $qadenabuild/config.yml
     echo "Failed to build chain, removing config.yml"

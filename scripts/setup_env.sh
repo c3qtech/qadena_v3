@@ -62,6 +62,75 @@ export qadenad_binary="$qadenabin/qadenad"
 
 export LD_LIBRARY_PATH="$qadenabin:$LD_LIBRARY_PATH"
 
+# ---------------------------------------------------------------------------------------------
+# COSMOVISOR IS THE ONLY LAYOUT.  Every qadena node keeps its binaries in a generation directory
+# under $QADENAHOME/cosmovisor and reaches them through symlinks in $QADENAHOME/bin.  There is no
+# unmanaged mode: a node is born managed (init.sh / install_release.sh build the tree) and stays
+# that way.
+#
+# WHY NO FALLBACK.  An auto-detecting run.sh looked tolerant but was worse: `rm -rf $QADENAHOME`
+# (init.sh, reset_qadena_fast.sh) silently returned a node to a flat layout, where in-place binary
+# installs are legal again -- which is precisely how unreplayable history gets reintroduced, and
+# it did so QUIETLY.  Requiring the tree turns that into a loud failure with a fix-it command.
+#
+# The `current` symlink is the test, because it is the one thing cosmovisor itself maintains: a
+# half-created cosmovisor/ directory does not count as a tree.
+cosmovisor_managed() {
+    [ -L "$QADENAHOME/cosmovisor/current" ]
+}
+
+# Where binaries actually live: the CURRENT generation's bin.  Every installer resolves its
+# destination through this one function, so "where does a binary go" cannot drift between callers.
+cosmovisor_gen_bin() {
+    print -r -- "$QADENAHOME/cosmovisor/current/bin"
+}
+
+# Re-create $qadenabin's symlinks for whatever the current generation now holds.  Called after
+# ANYTHING changes that directory's contents -- the libwasmvm .so files, in particular, only
+# appear once binaries are installed, so init has to relink twice.
+#
+# RELATIVE targets: an archived home (qadena.pre-bringup.*.bak) then carries links that resolve
+# inside the archive instead of dangling back at the live tree.
+cosmovisor_relink() {
+    local gen f b
+    gen="$QADENAHOME/cosmovisor/current/bin"
+    [ -d "$gen" ] || return 1
+    mkdir -p "$qadenabin" || return 1
+    for f in "$gen"/*(N); do
+        b=${f:t}
+        # Only ever replace a symlink or a missing name.  A REAL file here is either cosmovisor
+        # itself or a versioned copy, and clobbering one would destroy the artifact the enclave
+        # handover and the identity checks read.
+        if [ -e "$qadenabin/$b" ] && [ ! -L "$qadenabin/$b" ]; then
+            continue
+        fi
+        rm -f "$qadenabin/$b"
+        ln -s "../cosmovisor/current/bin/$b" "$qadenabin/$b" || return 1
+    done
+    return 0
+}
+
+# The hard assertion that replaced the old silent fallback.  Anything that needs to run against a
+# node's binaries calls this first.
+cosmovisor_require() {
+    local who="${1:-this command}"
+    if ! cosmovisor_managed ; then
+        echo "$who: $QADENAHOME is not a cosmovisor node (no cosmovisor/current)." >&2
+        echo "        Every qadena node keeps its binaries in a generation directory; there is no" >&2
+        echo "        flat layout any more.  Build one with buildscripts/init.sh, install a release" >&2
+        echo "        package, or migrate an existing flat home with:" >&2
+        echo "            scripts/cosmovisor_setup.sh --migrate" >&2
+        return 1
+    fi
+    if [ ! -x "$qadenabin/cosmovisor" ] ; then
+        echo "$who: no cosmovisor binary at $qadenabin/cosmovisor -- the tree exists but nothing can" >&2
+        echo "        launch it.  buildscripts/build_cosmovisor.sh (build host), or reinstall a" >&2
+        echo "        release package that carries it." >&2
+        return 1
+    fi
+    return 0
+}
+
 # echo to stderr
 echo "Qadena home: $QADENAHOME" >&2
 echo "Qadena bin: $qadenabin" >&2

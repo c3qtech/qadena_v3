@@ -86,6 +86,9 @@ run_init() {
     # $QADENAHOME, and its fallback is a nested sudo that stops to ask for a password.  Cleared here
     # while still root; --advertise-ip-address has already announced the directory is going.
     case "$QADENAHOME" in
+        # Removes the generation tree and the cosmovisor binary along with everything else, so
+        # the node cannot start until buildscripts/init.sh rebuilds the home (which recreates the
+        # tree).  There is no separate conversion step to remember.
         /*/qadena) rm -rf "$QADENAHOME" 2>/dev/null ;;
         *) echo "refusing to remove \$QADENAHOME=$QADENAHOME: not an absolute path ending in /qadena"; return 1 ;;
     esac

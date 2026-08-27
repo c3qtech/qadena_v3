@@ -85,7 +85,7 @@ NEW_ID="catchup$(on "$PRIMARY" 'date +%H%M%S')"
 print "  will register $NEW_ID while the joiner is down"
 
 phase "2. stop the joiner"
-on "$JOINER" '~/qadena/scripts/stop_qadena.sh --all > /dev/null 2>&1; sleep 2; ps -eo command | grep -cE "[q]adenad start|[q]adenad_encla[v]e"' | read survivors
+on "$JOINER" '~/qadena/scripts/stop_qadena.sh --all > /dev/null 2>&1; sleep 2; ps -eo command | grep -cE "[q]adenad start|[q]adenad_encla[v]e|[c]osmovisor run"' | read survivors
 [[ ${survivors:-0} -eq 0 ]] || fail "$survivors process(es) survived the stop on the joiner"
 print "  joiner stopped"
 down_at=$(on "$PRIMARY" 'curl -s --max-time 6 http://localhost:26657/status | jq -r .result.sync_info.latest_block_height')

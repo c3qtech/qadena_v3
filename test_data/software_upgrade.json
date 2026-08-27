@@ -1,0 +1,18 @@
+{
+ "messages": [
+  {
+   "@type": "/cosmos.upgrade.v1beta1.MsgSoftwareUpgrade",
+   "authority": "qadena10d07y265gmmuvt4z0w9aw880jnsr700j5pc4em",
+   "plan": {
+    "name": "some-plan-name",
+    "height": "0",
+    "info": ""
+   }
+  }
+ ],
+ "metadata": "ipfs://CID",
+ "deposit": "100000qdn",
+ "title": "scheduled binary upgrade",
+ "summary": "halt at the plan height; cosmovisor swaps to the staged binaries",
+ "expedited": false
+}

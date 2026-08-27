@@ -110,6 +110,7 @@ wait_active=0
 wait_secs=1800
 restart=0
 force=0
+stage_upgrade=""
 home_override=""
 prune=1
 
@@ -117,6 +118,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --wait-active)    wait_active=1; shift ;;
     --wait-active=*)  wait_active=1; wait_secs="${1#*=}"; shift ;;
+    --stage-upgrade)  [[ -n "$2" && "$2" != --* ]] || { echo "--stage-upgrade requires a plan name (e.g. v1.1.23)"; exit 1; }
+                      stage_upgrade="$2"; shift 2 ;;
     --restart)        restart=1; shift ;;
     --force)          force=1; shift ;;
     --no-prune)       prune=0; shift ;;
@@ -131,6 +134,28 @@ done
 
 fail() { echo ""; echo "install: $1" >&2; exit 1; }
 mval() { grep "^$1:" "$stage/manifest.txt" 2>/dev/null | awk '{print $2}'; }
+
+# STANDALONE copy of setup_env.sh's cosmovisor_managed() -- this script deliberately sources
+# nothing (see the header), so the one-line definition is duplicated with a pointer to the
+# canonical one.  Same test: the `current` symlink, the one thing cosmovisor itself maintains.
+cosmovisor_managed() { [ -L "$QADENAHOME/cosmovisor/current" ]; }
+# Standalone copies of setup_env.sh's helpers -- this script deliberately sources nothing (see the
+# header), so the two definitions are duplicated with a pointer to the canonical ones.
+gen_bin()  { print -r -- "$QADENAHOME/cosmovisor/current/bin"; }
+relink()   {
+    local gen f b
+    gen=$(gen_bin); [ -d "$gen" ] || return 1
+    mkdir -p "$qadenabin" || return 1
+    for f in "$gen"/*(N); do
+        b=${f:t}
+        # Never clobber a real file: those are cosmovisor itself and the versioned copies the
+        # enclave handover reads by name.
+        [ -e "$qadenabin/$b" ] && [ ! -L "$qadenabin/$b" ] && continue
+        rm -f "$qadenabin/$b"
+        ln -s "../cosmovisor/current/bin/$b" "$qadenabin/$b" || return 1
+    done
+    return 0
+}
 
 # WHERE THE NODE LIVES.  Under sudo, $HOME is root's, and installing a node into /root is a mistake
 # that is tedious to undo -- the enclave needs root to run, so sudo is the normal case, not the
@@ -224,6 +249,7 @@ echo "  checksums ok"
 while read -r _sum entry; do
     case "$entry" in
         bin/qadenad|bin/qadenad_enclave|bin/signer_enclave|bin/libwasmvm*.so) ;;
+        bin/cosmovisor) ;;
         scripts/*|testscripts/*|test_data/*) ;;
         config/config.yml|config/public.pem|config/node_params.json) ;;
         # Carried for the operator to run by hand; this script points at it but never runs it, and
@@ -336,6 +362,19 @@ fi
 
 if [[ "$mode" == "install" ]]; then
     echo "  no qadenad and no enclave installed -- FIRST INSTALL"
+    # A NODE IS BORN MANAGED.  The generation tree is created here, before any binary lands, so
+    # this home is never briefly flat and there is no conversion step to forget.  genesis/ is the
+    # generation that executes from height 1, which is what lets this node replay history across
+    # a later upgrade.
+    mkdir -p "$QADENAHOME/cosmovisor/genesis/bin" || fail "cannot create $QADENAHOME/cosmovisor/genesis/bin"
+    if [[ ! -L "$QADENAHOME/cosmovisor/current" ]]; then
+        ( cd "$QADENAHOME/cosmovisor" && ln -sfn genesis current ) || fail "cannot create cosmovisor/current"
+    fi
+    cat > "$QADENAHOME/cosmovisor/cosmovisor_preupgrade.sh" <<'SHIM'
+#!/bin/zsh
+exec "$(dirname "$0")/../scripts/cosmovisor_preupgrade.sh" "$@"
+SHIM
+    chmod +x "$QADENAHOME/cosmovisor/cosmovisor_preupgrade.sh"
     if [[ $node_running -eq 1 ]]; then
         fail "something qadena-shaped is running but nothing is installed.  Stop it first:
        scripts/stop_qadena.sh --all"
@@ -459,6 +498,100 @@ fi
 #
 # Deferred to here so that a run which turns out to be blocked -- unregistered identity, wrong
 # signer, inactive with no --wait-active -- never takes the node down for nothing.
+
+# ---------------------------------------------------------------------------------------------
+# COSMOVISOR: staging and the live-write refusal.  Everything above this point (sha verification,
+# measurement identity, the enclave-status checks) ran as usual; what changes is only WHERE bytes
+# may land.
+if [[ -n "$stage_upgrade" ]]; then
+    cosmovisor_managed || fail "--stage-upgrade only makes sense on a cosmovisor-managed node (no $QADENAHOME/cosmovisor/current) -- run cosmovisor_setup.sh first"
+
+    # The plan name IS the contract: cosmovisor swaps to upgrades/<name> when x/upgrade halts for
+    # <name>, and the binary registers "v"+its own version.  A dir staged under any other name is
+    # dead weight that LOOKS like preparedness, so the mismatch is fatal, not a warning.
+    mver=$(mval qadenad.version)
+    [[ -n "$mver" ]] || fail "--stage-upgrade: the manifest carries no qadenad.version -- cannot verify the plan name"
+    [[ "$stage_upgrade" == "v$mver" ]] || fail "--stage-upgrade $stage_upgrade does not match this package's qadenad.version ($mver -> plan name would be v$mver).  Staging under the wrong name leaves a dir the swap will never use."
+
+    # NEVER STAGE INTO THE LIVE GENERATION.  After a swap, `current` points at upgrades/<plan>,
+    # so re-staging that same plan would rewrite the binaries the node is RUNNING FROM -- the
+    # mutate-the-current-generation hazard this whole layout exists to prevent.  Learned the hard
+    # way on 2026-08-26: the differing-bytes refusal below said "remove the stale dir
+    # deliberately", that was done, and it deleted the live generation's enclaves out from under a
+    # running node, leaving ~/qadena/bin's symlinks dangling.  A bad live generation is repaired
+    # by staging a NEW plan name, never by re-staging the running one.
+    cur_gen=$(readlink "$QADENAHOME/cosmovisor/current" 2>/dev/null)
+    if [[ "$cur_gen" == *"upgrades/$stage_upgrade" ]]; then
+        fail "$stage_upgrade is the generation this node is CURRENTLY RUNNING (current -> $cur_gen).  Staging into it would rewrite the running binaries in place.  If that generation is bad, bump the version and stage a NEW plan name -- do not re-stage the live one."
+    fi
+
+    updir="$QADENAHOME/cosmovisor/upgrades/$stage_upgrade/bin"
+    echo ""
+    echo "=== 4. staging upgrade $stage_upgrade (binaries only; the running node is untouched) ==="
+    mkdir -p "$updir" || fail "cannot create $updir"
+
+    staged_n=0
+    for f in "$stage"/bin/*(N); do
+        b=$(basename "$f")
+        [[ "$b" == "cosmovisor" ]] && continue   # never inside the tree it swaps
+        if [[ -f "$updir/$b" ]] && ! cmp -s "$f" "$updir/$b"; then
+            fail "$updir/$b already exists with different contents -- a previously staged $stage_upgrade differs from this package.  Two artifacts claiming one plan name is exactly the ambiguity plan names exist to prevent.  If this package is the right one AND that plan has not been applied anywhere yet, remove $QADENAHOME/cosmovisor/upgrades/$stage_upgrade deliberately and re-run.  If the plan is already live on any node, bump the version and stage a NEW name instead."
+        fi
+        cp "$f" "$updir/$b" || fail "cannot stage $b"
+        chmod +x "$updir/$b" 2>/dev/null
+        staged_n=$((staged_n+1))
+        echo "  staged   $b"
+    done
+    [[ $staged_n -gt 0 ]] || fail "the package contains no binaries to stage"
+    [[ -x "$updir/qadenad" ]] || fail "the package carries no qadenad -- an upgrade dir without the chain binary can never be swapped to"
+    # A CHAIN-ONLY PACKAGE (--only chain,libs,...) carries no enclaves at all -- the measurement
+    # is not changing, so the upgrade continues on the CURRENT generation's enclaves.  The upgrade
+    # dir still needs them physically (the supervisor spawns SIBLINGS of the running qadenad), so
+    # they are carried forward from current/bin: byte-identical continuation, not a swap.
+    for cont in qadenad_enclave signer_enclave; do
+        if [[ ! -x "$updir/$cont" ]]; then
+            csrc="$QADENAHOME/cosmovisor/current/bin/$cont"
+            # -x, not -e: a DANGLING symlink (current pointing at a removed generation) is exactly
+            # the state that made this loop silently carry nothing forward, producing an upgrade
+            # dir that looks staged and spawns no enclave at the height.
+            [[ -x "$csrc" ]] || fail "the package carries no $cont, and $csrc is missing or unresolvable (is current -> $(readlink "$QADENAHOME/cosmovisor/current" 2>/dev/null) intact?).  An upgrade dir without it leaves the swapped node with no enclave to spawn."
+            cp "$csrc" "$updir/$cont" || fail "cannot carry $cont forward from current/bin"
+            echo "  carried  $cont (unchanged, from the current generation)"
+        fi
+    done
+
+    # Versioned names in ~/qadena/bin are real files and safe on a running node; the handoff and
+    # the identity tooling read them, so stage the measurement-named enclave too.  Inline rather
+    # than install_versioned(), which is defined two sections below this early exit.
+    if [[ -f "$stage/bin/qadenad_enclave" && -n "$new_unique" ]]; then
+        vdest="$qadenabin/qadenad_enclave.$new_unique"
+        if [[ -f "$vdest" ]]; then
+            # Same measurement, possibly different bytes: the build is not reproducible, so a
+            # rebuild legitimately differs.  The EXISTING versioned file describes what this node
+            # actually ran under that name -- keep it.  The upgrade-dir copy above is the one the
+            # swap uses.
+            cmp -s "$stage/bin/qadenad_enclave" "$vdest" || echo "  note: $vdest kept (package's rebuild differs byte-wise; measurement unchanged)"
+        else
+            cp "$stage/bin/qadenad_enclave" "$vdest" && chmod +x "$vdest" && echo "  staged   qadenad_enclave.$new_unique"
+        fi
+    fi
+
+    echo ""
+    echo "  staged $staged_n file(s) into $updir"
+    echo "  NOTHING live was written.  The swap happens when the chain reaches the plan's height;"
+    echo "  scripts/config in this package were NOT installed (do that in a maintenance restart)."
+    exit 0
+fi
+
+# UPGRADING A NODE THAT HAS RUN MEANS SCHEDULING IT.  On an existing node the live names in
+# $qadenabin are symlinks into the current generation, so writing them would mutate the directory
+# that produced the existing blocks -- a node replaying them afterwards would execute them with
+# different code.  A FIRST install is exempt: it just created an empty genesis generation, and a
+# chain with no history has nothing to invalidate.
+if [[ "$mode" != "install" ]] && [[ -n "$(echo "$stage"/bin/*(N))" ]]; then
+    fail "this node already runs a generation and the package contains binaries.  Writing them would mutate the generation that produced this chain's existing blocks.  Schedule the change instead:  install_release.sh <archive> --stage-upgrade v<version>  then roll it with upgrade_fleet.sh."
+fi
+
 needs_stop=0
 stop_reason=""
 stage_only=0
@@ -566,7 +699,7 @@ for f in "$stage"/bin/*(N); do
             if [[ $stage_only -eq 1 ]]; then
                 echo "  staged   signer_enclave.$m (live copy left alone -- node is running)"
             else
-                install_file "$f" "$qadenabin/signer_enclave"
+                install_file "$f" "$(gen_bin)/signer_enclave"; relink
                 echo "  installed signer_enclave ($m)"
             fi
             ;;
@@ -580,7 +713,7 @@ for f in "$stage"/bin/*(N); do
             if [[ $stage_only -eq 1 ]]; then
                 echo "  staged   qadenad.$v (live copy left alone -- node is running)"
             else
-                install_file "$f" "$qadenabin/qadenad"
+                install_file "$f" "$(gen_bin)/qadenad"; relink
                 echo "  installed qadenad ($v)"
             fi
             ;;
@@ -590,8 +723,22 @@ for f in "$stage"/bin/*(N); do
             if [[ $stage_only -eq 1 ]]; then
                 echo "  skipped  $name (node is running)"
             else
-                install_file "$f" "$qadenabin/$name"
+                install_file "$f" "$(gen_bin)/$name"; relink
                 echo "  installed $name"
+            fi
+            ;;
+        cosmovisor)
+            # A REAL FILE, always -- cosmovisor can never live inside (or be a symlink into) the
+            # tree it swaps.  Not versioned under a measurement (it is not one of the node's
+            # attested artifacts); the manifest's cosmovisor.version records what shipped.  While
+            # the node runs, cosmovisor IS the running supervisor, so it gets the same
+            # stage-only deference as every other live binary.
+            if [[ $stage_only -eq 1 ]]; then
+                echo "  skipped  cosmovisor (node is running; it will install on the next stopped install)"
+            else
+                install_file "$f" "$qadenabin/cosmovisor"
+                chmod +x "$qadenabin/cosmovisor"
+                echo "  installed cosmovisor ($(mval cosmovisor.version))"
             fi
             ;;
     esac
@@ -732,12 +879,12 @@ if [[ -n "$new_unique" ]]; then
     echo ""
     echo "=== 6. enclave ==="
     if [[ "$mode" == "install" ]]; then
-        cp "$new_encl" "$qadenabin/qadenad_enclave"
+        cp "$new_encl" "$(gen_bin)/qadenad_enclave"; relink
         echo "  installed as this node's enclave"
     elif [[ "$cur_unique" == "$new_unique" ]]; then
         echo "  already current; nothing to switch"
     elif [[ $can_activate -eq 1 ]]; then
-        cp "$new_encl" "$qadenabin/qadenad_enclave"
+        cp "$new_encl" "$(gen_bin)/qadenad_enclave"; relink
         echo "  ACTIVATED.  The next start performs the handover: the old enclave boots in"
         echo "  --upgrade-mode and passes its sealed keys to the new one.  Both binaries stay on"
         echo "  disk, which is what makes that possible -- do not delete the old one."

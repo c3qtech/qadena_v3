@@ -94,6 +94,7 @@ while [[ $# -gt 0 ]]; do
         --no-provision) PROVISION="never"; shift ;;
         --ref)       REF="$2"; shift 2 ;;
         --build-sgx) BUILD_SGX=1; shift ;;
+        --cosmovisor) shift ;;   # accepted and ignored: every node is cosmovisor-managed now
         # NOT the same as omitting --build-sgx.  build.sh defaults to "ego installed means SGX", so
         # on any machine with ego, omitting the flag STILL produces an SGX build -- this is the only
         # way to ask for a debug one.  See TESTING-BACKLOG.md item 90.
@@ -423,9 +424,9 @@ if run_phase 2; then
 
     # trap 3: the bracket class is what stops this matching our own ssh command line.
     sleep 3
-    left=$(ssh -o ConnectTimeout=10 "$PRIMARY" 'ps -eo pid,cmd | grep -E "qaden[a]d|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep | wc -l' | tr -d '\r')
+    left=$(ssh -o ConnectTimeout=10 "$PRIMARY" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep | wc -l' | tr -d '\r')
     [[ "$left" == "0" ]] || {
-        ssh -o ConnectTimeout=10 "$PRIMARY" 'ps -eo pid,cmd | grep -E "qaden[a]d|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep' | while read -r l; do info "$l"; done
+        ssh -o ConnectTimeout=10 "$PRIMARY" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep' | while read -r l; do info "$l"; done
         fail "$left process(es) survived the stop; kill them BY PID and re-run --only 2"
     }
     info "stopped: nothing matching the node or its enclaves is left"
@@ -585,6 +586,10 @@ fi
 # ---------------------------------------------------------------------------------------------
 run_phase 6 && phase "6. start and confirm blocks"
 if run_phase 6; then
+    # No conversion step: init.sh (phase 4) created the generation tree, so the node is already
+    # managed.  Asserted rather than assumed -- a home that is not managed cannot start at all.
+    rsh_user "$PRIMARY" "test -L $NODE_HOME/cosmovisor/current" \
+        || fail "$PRIMARY has no cosmovisor/current after init -- init.sh should have created it"
     rsh_user "$PRIMARY" "rm -f $RUNLOG.start"
     # trap 4 again, mirrored: SGX must start WITH sudo, debug must not.
     ssh -o ConnectTimeout=10 "$PRIMARY" \
@@ -655,7 +660,7 @@ if run_phase 8 && [[ -n "$JOINER" ]]; then
     if rsh_user "$JOINER" "test -x $JHOME/qadena/scripts/stop_qadena.sh"; then
         rsh "$JOINER" "$JHOME/qadena/scripts/stop_qadena.sh --all" >/dev/null 2>&1 || true
         sleep 3
-        left=$(ssh -o ConnectTimeout=10 "$JOINER" 'ps -eo pid,cmd | grep -E "qaden[a]d|eg[o] run|ego-hos[t]" | grep -v grep | wc -l' | tr -d '\r')
+        left=$(ssh -o ConnectTimeout=10 "$JOINER" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]" | grep -v grep | wc -l' | tr -d '\r')
         [[ "$left" == "0" ]] || fail "joiner still has $left process(es) running; kill by PID and re-run --only 8"
     fi
 
@@ -669,6 +674,11 @@ if run_phase 8 && [[ -n "$JOINER" ]]; then
     out=$(ssh -o ConnectTimeout=10 "$JOINER" "cd /tmp && rm -rf $dir && tar xzf $base && ${SUDO_J}./$dir/install.sh 2>&1 | tail -20") \
         || { print "$out" | while read -r l; do info "$l"; done; fail "install.sh failed on $JOINER"; }
     print "$out" | while read -r l; do info "$l"; done
+
+    # install_release.sh creates the generation tree on a first install, so the joiner is already
+    # managed; assert it rather than converting.
+    rsh_user "$JOINER" "test -L $JHOME/qadena/cosmovisor/current" \
+        || fail "$JOINER has no cosmovisor/current after install -- install_release.sh should have created it"
 
     # Verify against the PRIMARY's genesis: the joiner has no genesis of its own until it joins.
     gen=$(rsh_user "$PRIMARY" "jq -r '.app_state.qadena.enclaveIdentityList[0].uniqueID' $NODE_HOME/config/genesis.json" | tr -d '\r')

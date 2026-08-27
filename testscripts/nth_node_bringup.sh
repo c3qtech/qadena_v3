@@ -938,6 +938,26 @@ info "caught up at $(height "$JOINER")"
 #
 # The allow-list is deliberately SHORT and each entry is justified.  Anything unexplained fails the
 # run: an error nobody has classified is exactly the one worth stopping for.
+# THE BOUNDARY HALT IS NOT AN ERROR ON A MANAGED JOINER -- it is the mechanism working.  A node
+# replaying history across a scheduled upgrade MUST stop at the plan height; x/upgrade says so at
+# ERROR level, three lines' worth (the plan message, the FinalizeBlock wrapper, and the panic).
+#
+# Scoped deliberately, in two ways, because a blanket exemption would hide the failure this whole
+# effort is about.  It applies only when the joiner is cosmovisor-MANAGED, and only to a halt whose
+# plan name the node has since PERFORMED -- `current` points at that upgrade.  A halt for a plan
+# that was never performed, or on an unmanaged node, still fails the run: that node is stuck, and
+# stuck is exactly what must not be reported green.
+CV_HALT_RE='__no_match_sentinel__'
+cv_plan=$(ssh -n "$JOINER" 'readlink $HOME/qadena/cosmovisor/current 2>/dev/null' 2>/dev/null | tr -d '\r')
+if [[ "$cv_plan" == upgrades/* ]]; then
+    cv_name="${cv_plan#upgrades/}"
+    # `.*` around the name rather than literal quotes: CometBFT re-logs the same message nested
+    # inside err="...", where the quotes come through BACKSLASH-ESCAPED.  Matching on the plan
+    # name and the word NEEDED covers both spellings without inviting a quoting bug.
+    CV_HALT_RE="UPGRADE .*$cv_name.* NEEDED"
+    info "cosmovisor-managed joiner: allowing the halt for '$cv_name', which it has since performed"
+fi
+
 info "checking the joiner's log for errors raised during this run"
 joiner_errors=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qadena/logs/qadena.log 2>/dev/null" \
     | sed 's/\x1b\[[0-9;]*m//g' \
@@ -952,6 +972,7 @@ joiner_errors=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qad
     | grep -avE "failed to fetch block .*is not available, lowest height is" \
     | grep -avE "got an already committed block" \
     | grep -avE "ss-reconstruct: no address for pioneer" \
+    | grep -avE "$CV_HALT_RE" \
       | grep -avE "ss-reconstruct: LAZY PATH")
 
 # COUNTED, NOT MERELY FORGIVEN.  The enclave logs LAZY PATH at ERROR level on purpose and says so at

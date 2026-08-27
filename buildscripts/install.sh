@@ -47,7 +47,7 @@ while [[ $# -gt 0 ]]; do
             # This is the only correct order on real SGX, where MRENCLAVE is a hash of the built
             # image and therefore CANNOT be known before the build: build --hold, read the
             # measurement off the artifact (ego uniqueid), register it by governance, wait for it to
-            # go active, and only then swap it in with scripts/activate_enclave.sh.
+            # go active, and only then let the scheduled swap put it in service at the plan height.
             #
             # Swapping first is what leaves a node down: the old enclave refuses to hand its sealed
             # keys to a measurement the chain has not made active.
@@ -67,7 +67,8 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: install.sh [--enclave] [--signer-enclave] [--chain] [--scripts] [--provider-scripts] [--testscripts] [--all] [--hold]"
             echo "  --hold  install qadenad_enclave.<uniqueID> only; do not replace the live binary"
             echo "          (and do not stop the node).  Required on SGX, where the measurement is"
-            echo "          only knowable after the build.  Activate later with activate_enclave.sh."
+            echo "          only knowable after the build.  Deploy it as a governance plan:"
+            echo "          build.sh --release, commit, then roll the fleet."
             exit 0
             ;;
         *)
@@ -137,11 +138,28 @@ ensure_stopped_for_binaries() {
         node_stopped=1
         return 0
     fi
+    # A LIVE INSTALL MAY ONLY TOUCH A GENERATION THAT HAS EXECUTED NOTHING.  Binaries land in the
+    # current generation directory (see gen_dest below), so on a chain WITH history that would
+    # rewrite the binaries that produced the existing blocks -- and a node replaying that history
+    # afterwards would execute the old blocks with the new code.  That is the unreplayable-history
+    # hazard the generation layout exists to end, so it is refused rather than merely warned about.
+    #
+    # A fresh home (no application.db -- init.sh just made it) has no history to invalidate, which
+    # is what keeps the ordinary build-and-install loop working.
+    if [[ -d "$QADENAHOME/data/application.db" ]]; then
+        echo "Error: this chain has history; installing binaries would rewrite the generation that"
+        echo "       produced it, and a node replaying those blocks would then execute them with"
+        echo "       different code.  Schedule the change instead:"
+        echo "           install_release.sh <archive> --stage-upgrade v<version>"
+        echo "       (or build with --hold, which writes only versioned names), or wipe the chain"
+        echo "       with buildscripts/init.sh if this is a throwaway node."
+        exit 1
+    fi
     echo "Stopping the node before installing binaries (a running binary cannot be replaced)"
     "$qadenascripts/stop_qadena.sh" --all > /dev/null 2>&1
     local alive
     alive=$(( $(count_procs qadenad) + $(count_procs qadenad_enclave) \
-              + $(count_procs signer_enclave) + $(count_procs ego-host) ))
+              + $(count_procs signer_enclave) + $(count_procs ego-host) + $(count_procs cosmovisor) ))
     if [[ $alive -ne 0 ]]; then
         echo "Error: $alive qadena process(es) still running after stop_qadena.sh --all."
         echo "       Refusing to install over them -- the copy would fail silently and you would be"
@@ -160,6 +178,22 @@ install_binary() {
     fi
 }
 
+# WHERE A LIVE BINARY GOES: the current generation's bin, never $qadenabin directly.  $qadenabin
+# holds symlinks into this directory plus the versioned real copies, so writing here is what makes
+# `qadenad` on this node mean the new build.  Versioned names (qadenad_enclave.<meas>, ...) stay in
+# $qadenabin as REAL files -- the enclave handover and the identity tooling read them by name.
+gen_dest() {
+    local d
+    d=$(cosmovisor_gen_bin)
+    if [[ ! -d "$d" ]]; then
+        echo "Error: $d does not exist -- this node has no cosmovisor generation to install into." >&2
+        echo "       Create one with buildscripts/init.sh, or migrate a flat home with" >&2
+        echo "       scripts/cosmovisor_setup.sh --migrate" >&2
+        exit 1
+    fi
+    print -r -- "$d"
+}
+
 if [[ $install_enclave -eq 1 ]]; then
     echo "Installing enclave"
     [[ $hold -eq 0 ]] && ensure_stopped_for_binaries
@@ -173,9 +207,11 @@ if [[ $install_enclave -eq 1 ]]; then
     install_binary "$enclave_path/qadenad_enclave" "$qadenabin/qadenad_enclave.$unique_id"
     if [[ $hold -eq 1 ]]; then
         echo "  held back: staged as qadenad_enclave.$unique_id; the live binary is unchanged"
-        echo "  register it, wait for active, then: scripts/activate_enclave.sh $unique_id"
+        echo "  deploy it as a governance plan (registration, promotion and the attested"
+        echo "  handover all happen there): build.sh --release, commit, then roll the fleet."
     else
-        install_binary "$enclave_path/qadenad_enclave" "$qadenabin/qadenad_enclave"
+        install_binary "$enclave_path/qadenad_enclave" "$(gen_dest)/qadenad_enclave"
+        cosmovisor_relink
     fi
 fi
 
@@ -193,7 +229,8 @@ if [[ $install_signer_enclave -eq 1 ]]; then
     if [[ $hold -eq 1 ]]; then
         echo "  held back: staged as signer_enclave.$unique_id; the live binary is unchanged"
     else
-        install_binary "$signer_enclave_path/signer_enclave" "$qadenabin/signer_enclave"
+        install_binary "$signer_enclave_path/signer_enclave" "$(gen_dest)/signer_enclave"
+        cosmovisor_relink
     fi
 fi
 
@@ -207,7 +244,8 @@ if [[ $install_chain -eq 1 ]]; then
     if [[ $hold -eq 1 ]]; then
         echo "  held back: staged as qadenad.$VERSION; the live binary is unchanged"
     else
-        install_binary "$chain_path/qadenad" "$qadenabin/qadenad"
+        install_binary "$chain_path/qadenad" "$(gen_dest)/qadenad"
+        cosmovisor_relink
     fi
 
     # THE LIBRARIES ARE PART OF "THE LIVE BINARY", and this cp used to sit OUTSIDE the --hold guard
@@ -239,7 +277,11 @@ if [[ $install_chain -eq 1 ]]; then
         done
         echo "  held back: libwasmvm staged as *.so.$VERSION; the live libraries are unchanged"
     else
-        cp $qadenabuild/vendor/github.com/CosmWasm/wasmvm/v2/internal/api/*.so $qadenabin/
+        # BESIDE THE BINARY THAT LOADS THEM.  qadenad links with -Wl,-rpath,$ORIGIN, so each
+        # generation resolves its own libwasmvm; putting these in $qadenabin instead would make
+        # every generation load whichever copy happened to be there.
+        cp $qadenabuild/vendor/github.com/CosmWasm/wasmvm/v2/internal/api/*.so "$(gen_dest)/"
+        cosmovisor_relink
     fi
 fi
 

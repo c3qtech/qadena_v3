@@ -1,9 +1,22 @@
 #!/bin/zsh
-# A SIMPLE rolling upgrade of a running fleet: one node at a time, no downtime for the chain.
+# Upgrade a running fleet BY GOVERNANCE: stage the new binaries on every node, schedule a height,
+# and let the chain swap them all in the same block.
 #
-#   ./rolling_upgrade.sh --node m1 --node m2 --node m3 --node m4 \
-#                        --archive ~/qadena-full-1.1.14-abc1234.tar.gz \
-#                        --unique unique052 --signer <signerid>
+#   ./upgrade_fleet.sh --node m1 --node m2 --node m3 --node m4 --build-from m1
+#
+# NOT A ROLLING UPGRADE, despite what this script used to be called.  A rolling upgrade replaces
+# nodes one at a time and therefore runs mixed versions for a while, which is safe only if the
+# change cannot affect block execution -- and deciding that correctly is exactly what went wrong
+# in a427b26f.  Here no two nodes ever execute a block with different logic, and the boundary is
+# recorded ON CHAIN, which is what keeps the history replayable afterwards.
+#
+# The trade is a short, scheduled, fleet-wide pause at the height instead of a mixed-version
+# window.  On a fleet where a mistake means a fork and a chain restart, that is the better side.
+#
+# There is no live-swap mode.  Binaries live in a cosmovisor generation directory, so replacing
+# one in place rewrites the generation that produced the existing blocks -- and a node replaying
+# them afterwards would execute them with different code.  --via-governance is still accepted and
+# ignored, because it named the only behaviour there is.
 #
 # OPTIONS
 #
@@ -39,8 +52,10 @@
 #                      and WAIT for any in-flight run to finish, before anything else happens.
 #                      Without it the roll only WARNS.  Worth using: the regression restarts the
 #                      node it runs on, which during a roll is a second node down.
-#   --chain-only       roll a CHAIN-ONLY change: qadenad moved, the enclave did not.  Implies
-#                      --skip-governance (an unchanged measurement is already registered).
+#   --chain-only       a CHAIN-ONLY change: qadenad moved, the enclave did not.  USUALLY
+#                      INFERRED -- the build compares the measurement it produced against what
+#                      the fleet runs -- so pass this only to force it.  No enclave identity is
+#                      registered, because an unchanged measurement already is.
 #                      Packages --only chain,libs,scripts,config, so the unchanged enclave is
 #                      not re-staged -- the build is not reproducible, so re-packaging an
 #                      identical-in-name enclave would collide with the one already installed.
@@ -48,13 +63,12 @@
 #                      The enclave preconditions (strictly-greater version, measurement not
 #                      already running) are SKIPPED, not because they are inconvenient but
 #                      because they assert a handover this roll deliberately does not perform.
-#   --unique ID        The NEW enclave measurement (unique052, or an SGX MRENCLAVE).  Required
-#                      unless --skip-governance.  See WHERE --unique AND --signer COME FROM.
-#   --signer ID        The enclave signer id.  Same condition.
+#   --unique ID        The NEW enclave measurement (unique052, or an SGX MRENCLAVE).  Read from
+#                      the package's manifest under --build-from, so it rarely needs typing.
+#                      See WHERE --unique AND --signer COME FROM.
+#   --signer ID        The enclave signer id.  Same.
 #   --wait-secs N      How long to wait for the identity to go active, and what is passed to
 #                      install_release.sh --wait-active on each node.  Default 1800.
-#   --skip-governance  The measurement is ALREADY registered and ACTIVE.  Skips step 2 whole: no
-#                      proposal, no votes, no promotion restart.  --unique/--signer not needed.
 #   --dry-run          Print what would run.  No copy, no vote, no install.  Preflight and the
 #                      advancing checks still run FOR REAL, so it needs a live fleet to work.
 #   --help
@@ -63,11 +77,12 @@
 # is validated.  Then old and new nodes speak the same protocol, a mixed fleet is fine at every
 # instant, and the nodes can simply be replaced in turn.
 #
-# USE split_roll_upgrade.sh INSTEAD IF THE RELEASE ADDS A CHAIN MESSAGE TYPE.  An old qadenad cannot
-# decode one it was not built with, so a block carrying it is invalid to that node -- it halts or
-# forks.  That case needs the chain binaries everywhere BEFORE any enclave that produces the new
-# message goes live, which is a different (two-phase) shape.  If you are unsure which you have:
-# did x/qadena/types/tx.proto gain a message?  Then it is the split roll.
+# A RELEASE THAT ADDS A CHAIN MESSAGE TYPE NEEDS NO SPECIAL SHAPE ANY MORE.  It used to: an old
+# qadenad cannot decode a message it was not built with, so a block carrying one is invalid to
+# that node -- it halts or forks -- and the fix was a two-phase roll (split_roll_upgrade.sh, now
+# retired) that got the chain binaries everywhere BEFORE any enclave could produce the new
+# message.  The scheduled swap removes the window that made that necessary: every node changes
+# binaries at the SAME HEIGHT, so no node ever sees a message its binary cannot decode.
 #
 # ---------------------------------------------------------------------------------------------
 # THE ARCHIVE: WHERE IT COMES FROM AND HOW IT WAS MADE
@@ -142,9 +157,8 @@
 #
 #     tar xzOf <archive> '*/manifest.txt' | grep qadenad_enclave
 #
-# Use --skip-governance INSTEAD of both when the measurement is already active.  Getting that
-# wrong is only safe in one direction: --skip-governance against an UNregistered measurement
-# leaves every node waiting out the full --wait-secs for an identity that never goes active.
+# Neither is needed when the measurement has not moved: the build detects that and the proposal
+# carries no identity message.
 #
 # BUILDING WITH --build-from
 #
@@ -214,23 +228,21 @@
 # EXAMPLES
 #
 #   # The usual case: a new enclave, not yet known to the chain.
-#   ./rolling_upgrade.sh --node m1 --node m2 --node m3 --node m4 \
+#   ./upgrade_fleet.sh --node m1 --node m2 --node m3 --node m4 \
 #       --archive ~/qadena-full-1.1.14-abc1234.tar.gz \
 #       --unique unique052 --signer 0d4a1f...
 #
 #   # One command, from a committed tree to an upgraded fleet.  m1 builds; all four roll.
-#   ./rolling_upgrade.sh --node m1 --node m2 --node m3 --node m4 --build-from m1 --no-sgx
+#   ./upgrade_fleet.sh --node m1 --node m2 --node m3 --node m4 --build-from m1 --no-sgx
 #
 #   # Read the plan back before committing to it.
-#   ./rolling_upgrade.sh --node m1 --node m2 --node m3 --node m4 \
+#   ./upgrade_fleet.sh --node m1 --node m2 --node m3 --node m4 \
 #       --archive ~/qadena-full-1.1.14-abc1234.tar.gz \
 #       --unique unique052 --signer 0d4a1f... --dry-run
 #
-#   # Resume a roll that died after m2 -- unique052 is already active, so governance is done.
-#   # List only the nodes still to roll.  NOTE the quorum arithmetic still counts the WHOLE
-#   # fleet, not just the nodes named here; the advancing check only watches the ones named.
-#   ./rolling_upgrade.sh --node m3 --node m4 \
-#       --archive ~/qadena-full-1.1.14-abc1234.tar.gz --skip-governance
+#   # THERE IS NO PARTIAL ROLL TO RESUME.  Every node swaps at the same height, so the fleet is
+#   # either before that height or past it -- never half-upgraded.  If a node was down at the
+#   # height, it performs the swap itself on its next start (run.sh completes an owed upgrade).
 #
 # AFTERWARDS, the last line this prints is the one worth acting on.  The next rotation tick runs
 # the SS re-share audit, and that is where a fleet which upgraded cleanly but can no longer
@@ -241,7 +253,7 @@
 set -u
 setopt ERR_EXIT PIPE_FAIL
 
-NODES=(); ARCHIVE=""; NEW_UNIQUE=""; NEW_SIGNER=""; WAIT_SECS=1800; DRY=0; SKIP_GOV=0
+NODES=(); ARCHIVE=""; NEW_UNIQUE=""; NEW_SIGNER=""; WAIT_SECS=1800; DRY=0
 BUILD_FROM=""; REPO_DIR="qv3"; SGX_MODE="auto"; PKG_OUT="/tmp/pkg"; BUILD_WAIT=3600; ALLOW_DIRTY=0
 CHAIN_ONLY=0; QUIESCE=0; QUIESCE_NOW=0
 BUILD_PATH='export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH;'
@@ -253,7 +265,6 @@ while (( $# )); do
         --unique)     NEW_UNIQUE="$2"; shift 2 ;;
         --signer)     NEW_SIGNER="$2"; shift 2 ;;
         --wait-secs)  WAIT_SECS="$2"; shift 2 ;;
-        --skip-governance) SKIP_GOV=1; shift ;;   # already registered and active
         --build-from) BUILD_FROM="$2"; shift 2 ;;
         --repo)       REPO_DIR="$2"; shift 2 ;;
         --build-sgx)  SGX_MODE="sgx"; shift ;;
@@ -261,7 +272,8 @@ while (( $# )); do
         --package-out) PKG_OUT="$2"; shift 2 ;;
         --build-wait) BUILD_WAIT="$2"; shift 2 ;;
         --allow-dirty) ALLOW_DIRTY=1; shift ;;
-        --chain-only)  CHAIN_ONLY=1; SKIP_GOV=1; shift ;;
+        --chain-only)  CHAIN_ONLY=1; shift ;;   # usually inferred; forces the enclave to be left alone
+        --via-governance) shift ;;   # accepted and ignored: this is the only mode now
         --quiesce)     QUIESCE=1; shift ;;
         --quiesce-immediate) QUIESCE=1; QUIESCE_NOW=1; shift ;;
         --dry-run)    DRY=1; shift ;;
@@ -453,6 +465,16 @@ require_advancing() {
 }
 
 step "0. preflight"
+# COSMOVISOR: the per-node install_release --restart in step 3 is a LIVE binary swap with no
+# governance plan -- the unmanaged mechanism.  Managed nodes refuse it at install time anyway;
+# refuse here first, before anything is stopped.  (--via-governance, which stages instead, will
+# bypass this check when it lands.)
+for __n in "${NODES[@]}"; do
+    run "$__n" 'test -L $HOME/qadena/cosmovisor/current' 2>/dev/null \
+        || die "$__n has no cosmovisor generation tree -- every node keeps its binaries in one, and the swap this schedules is performed by cosmovisor.  buildscripts/init.sh, a release install, or scripts/cosmovisor_setup.sh --migrate."
+    run "$__n" 'test -x $HOME/qadena/bin/cosmovisor' 2>/dev/null \
+        || die "$__n has no cosmovisor binary"
+done
 for n in "${NODES[@]}"; do
     rsh "$n" 'true' || die "$n unreachable"
     say "$n  enclave=$(measure_of $n)  height=$(height_of $n)"
@@ -534,6 +556,44 @@ if [[ -n "$BUILD_FROM" ]]; then
     # -- on the FIRST node, after governance has already passed, which is the expensive half to
     # redo.  Checked here, before anything is built or proposed.
     LIVE_VER=$(rsh "$BUILD_FROM" '~/qadena/bin/qadenad_enclave -version 2>/dev/null' | tr -d '\r' | head -1) || true
+
+    # THE CHAIN VERSION IS NO LONGER ONLY --chain-only's BUSINESS.  --via-governance derives the
+    # PLAN NAME from it (v$SRC_CHAIN), so it is read unconditionally now.
+    SRC_CHAIN=$(rsh "$BUILD_FROM" "cat $RD/cmd/qadenad/version.txt 2>/dev/null" | tr -d '\r' | head -1) || true
+    LIVE_CHAIN=$(rsh "$BUILD_FROM" '~/qadena/bin/qadenad version 2>/dev/null' | tr -d '\r' | head -1) || true
+
+    # IS THE ENCLAVE ACTUALLY PART OF THIS ROLL?  The three enclave preconditions below all
+    # protect the HANDOVER, so applying them to a roll that changes no measurement asserts a
+    # transition nobody is making -- which is exactly how a chain-only --via-governance run died
+    # in stage E on 2026-08-26, demanding a bump to cmd/qadenad_enclave/version.txt for an enclave
+    # it was not touching.  --chain-only says so explicitly; --via-governance is told by the
+    # checkout: same measurement as the build host runs means enclave-unchanged.  The live roll
+    # (neither flag) keeps asserting them exactly as before.
+    # An enclave-unchanged --via-governance roll IS a chain-only roll in every downstream
+    # respect -- skip the enclave build, package without it, register no identity -- so it SETS
+    # CHAIN_ONLY rather than adding a second condition at each of those sites.
+    ENCL_CHANGING=1
+    if (( CHAIN_ONLY )); then
+        ENCL_CHANGING=0
+    else
+        run_meas0=$(measure_of "$BUILD_FROM") || true
+        if [[ -n "$SRC_UNIQ" && -n "$run_meas0" && "$SRC_UNIQ" == "$run_meas0" ]]; then
+            ENCL_CHANGING=0
+            CHAIN_ONLY=1
+            say "enclave:  $SRC_UNIQ unchanged -- treating this as a chain-only upgrade"
+        fi
+    fi
+
+    # The chain version must MOVE for any staged upgrade.  Two independent reasons, either fatal:
+    # the plan name would otherwise name a version the running binary ALREADY registers a handler
+    # for, so nothing would ever halt and the "upgrade" would silently no-op; and install_release
+    # refuses to overwrite qadenad.<version> with the differing bytes of a non-reproducible build.
+    [[ -n "$SRC_CHAIN" ]] || die "$BUILD_FROM: cannot read $RD/cmd/qadenad/version.txt"
+    if [[ -n "$LIVE_CHAIN" && "$SRC_CHAIN" == "$LIVE_CHAIN" ]]; then
+        die "cmd/qadenad/version.txt is $SRC_CHAIN and $BUILD_FROM already runs $SRC_CHAIN.  A plan named v$SRC_CHAIN would be one the RUNNING binary already has a handler for, so no node would ever halt for it and the swap would silently not happen.  Bump cmd/qadenad/version.txt in the checkout and COMMIT it."
+    fi
+    say "chain:    $LIVE_CHAIN -> $SRC_CHAIN (plan v$SRC_CHAIN)"
+
     if (( CHAIN_ONLY )); then
         # --chain-only: THE ENCLAVE IS DELIBERATELY UNCHANGED, so the two checks below are not
         # merely skippable, they are WRONG here.  Both exist to protect the enclave HANDOVER --
@@ -542,14 +602,8 @@ if [[ -n "$BUILD_FROM" ]]; then
         # a transition that this roll is specifically not making.  What must still be true is that
         # the CHAIN version moved, because install_release.sh refuses to overwrite a versioned
         # binary whose bytes differ, and a non-reproducible rebuild always differs.
-        SRC_CHAIN=$(rsh "$BUILD_FROM" "cat $RD/cmd/qadenad/version.txt 2>/dev/null" | tr -d '\r' | head -1) || true
-        LIVE_CHAIN=$(rsh "$BUILD_FROM" '~/qadena/bin/qadenad version 2>/dev/null' | tr -d '\r' | head -1) || true
-        say "chain-only: enclave stays $SRC_VER/$SRC_UNIQ; chain $LIVE_CHAIN -> $SRC_CHAIN"
-        [[ -n "$SRC_CHAIN" ]] || die "$BUILD_FROM: cannot read $RD/cmd/qadenad/version.txt"
-        if [[ -n "$LIVE_CHAIN" && "$SRC_CHAIN" == "$LIVE_CHAIN" ]]; then
-            die "cmd/qadenad/version.txt is $SRC_CHAIN and $BUILD_FROM already runs $SRC_CHAIN -- install_release.sh will refuse to overwrite qadenad.$SRC_CHAIN with bytes that differ (the build is not reproducible).  Bump cmd/qadenad/version.txt in the checkout and COMMIT it."
-        fi
-    elif [[ -n "$LIVE_VER" && -n "$SRC_VER" ]]; then
+        say "chain-only: enclave stays $SRC_VER/$SRC_UNIQ"
+    elif (( ENCL_CHANGING )) && [[ -n "$LIVE_VER" && -n "$SRC_VER" ]]; then
         say "running:  version=$LIVE_VER"
         if [[ "$SRC_VER" == "$LIVE_VER" ]]; then
             die "version.txt is $SRC_VER and $BUILD_FROM already runs $SRC_VER -- the handover needs a STRICTLY GREATER version and will not run.  Bump cmd/qadenad_enclave/version.txt in the checkout and COMMIT it."
@@ -561,7 +615,7 @@ if [[ -n "$BUILD_FROM" ]]; then
 
     # A MEASUREMENT THE CHAIN HAS RETIRED IS RETIRED PERMANENTLY -- governance cannot move an
     # inactive row back.  Cheaper to learn now than after a proposal.
-    if [[ -n "$SRC_UNIQ" ]] && (( ! CHAIN_ONLY )); then
+    if [[ -n "$SRC_UNIQ" ]] && (( ENCL_CHANGING )); then
         st=$(identity_status "$SRC_UNIQ") || true
         [[ "$st" == "inactive" ]] \
             && die "$SRC_UNIQ is INACTIVE on chain and that is PERMANENT -- pick a NEW measurement in the checkout (cmd/qadenad_enclave/test_unique_id.txt) and commit it"
@@ -603,7 +657,7 @@ if [[ -n "$BUILD_FROM" ]]; then
     # and build_signer_enclave.sh, while the chain install above that gate still runs.
     (( CHAIN_ONLY )) && sgxflag="$sgxflag --skip-enclave"
 
-    LOCAL_PKG="${TMPDIR:-/tmp}/rolling_upgrade_pkg"
+    LOCAL_PKG="${TMPDIR:-/tmp}/upgrade_fleet_pkg"
     mkdir -p "$LOCAL_PKG"
     BLOG="$LOCAL_PKG/build.log"
 
@@ -660,6 +714,11 @@ if [[ -n "$BUILD_FROM" ]]; then
         # binary whose contents differ.  A chain-only roll would fail at the first install for a
         # component it never meant to touch.
         only_arg=""
+        # Reached by --via-governance too, via the CHAIN_ONLY it sets when the measurement did not
+        # move: shipping a REBUILT enclave carrying the same embedded measurement is backlog 105's
+        # hazard (two different binaries answering to one uniqueNNN).  Left out, --stage-upgrade
+        # carries the current generation's enclave forward byte-for-byte, which is what "the
+        # enclave did not change" should mean.
         (( CHAIN_ONLY )) && only_arg=" --only chain,libs,scripts,config"
         out=$(rsh "$BUILD_FROM" "cd $RD && $BUILD_PATH ./buildscripts/package_release.sh --out $PKG_OUT$only_arg 2>&1 | tail -25") \
             || { print "$out" | while read -r l; do say "    $l"; done; die "package_release.sh failed on $BUILD_FROM" }
@@ -681,7 +740,7 @@ if [[ -n "$BUILD_FROM" ]]; then
         man=$(tar xzOf "$ARCHIVE" '*/manifest.txt' 2>/dev/null) || true
         [[ -n "$man" ]] || die "the package has no manifest.txt -- cannot read the measurement out of it"
         # A chain-only package carries no enclave, so it carries no measurement -- and needs none:
-        # --chain-only implies --skip-governance, because there is no new identity to register.
+        # A chain-only package carries no enclave, so there is no new identity to register.
         if (( CHAIN_ONLY )); then
             say "  chain-only package: no enclave component, nothing to register"
         elif [[ -z "$NEW_UNIQUE" ]]; then
@@ -722,162 +781,116 @@ for n in "${NODES[@]}"; do
     say "  $n verified"
 done
 
-if (( ! SKIP_GOV )); then
-    # With --build-from these come from the package's manifest (stage 0c), so they are not
-    # required on the command line -- but under --dry-run nothing was built, so they are unknown.
-    if (( DRY )) && [[ -n "$BUILD_FROM" ]]; then
-        NEW_UNIQUE="${NEW_UNIQUE:-(from the manifest of the package 0c would build)}"
-        NEW_SIGNER="${NEW_SIGNER:-(likewise)}"
-    fi
-    [[ -n "$NEW_UNIQUE" && -n "$NEW_SIGNER" ]] \
-        || die "--unique and --signer are required unless --skip-governance or --build-from"
-    step "2. register $NEW_UNIQUE by governance, and get it promoted"
-    say "submitting from ${NODES[1]} (it also votes)"
-    run "${NODES[1]}" "cd ~/qv3 && ./testscripts/test_update_enclave_identity.sh $NEW_UNIQUE $NEW_SIGNER unvalidated" >/dev/null
-    # NEWEST PROPOSAL, VIA REVERSE PAGING -- not a filtered list.  `q gov proposals` PAGINATES at
-    # 100 and this chain already holds over a thousand, so listing and taking the last entry finds
-    # the hundredth-oldest proposal, or nothing at all.  (The same default silently truncated a
-    # list-public-key reading during the last rollout and made an owner-count report wrong.)
-    # --page-reverse --page-limit 1 asks the chain for exactly the newest one, which is immune to
-    # how many exist.  Note the id is a quoted STRING with a space after the colon in the
-    # pretty-printed output, so parse the JSON rather than grepping for `"id":"N"`.
-    # FIND *OUR* PROPOSAL BY ITS CONTENT, not by being the newest.  "Newest" is a RACE: the
-    # regression suite submits governance proposals continuously -- ids 27..31 on 2026-08-24 were
-    # all its ("add bankscan-... to the whitelist", "regression test: unchanged params ...") -- so
-    # between our submit and this query another can land.  Voting on that one would miss ours
-    # entirely AND cast unintended votes on somebody else's proposal, and the old status-only
-    # check could not tell the difference: a regression proposal in its voting period passes it.
-    #
-    # So: among recent proposals, take the one that is BOTH in its voting period AND names the
-    # measurement we are registering.  Page-reverse for the same reason as ever -- the default
-    # page of 100 would find the hundredth-oldest on a chain that holds thousands.
-    plist=$(rsh "${NODES[1]}" '~/qadena/bin/qadenad q gov proposals --page-reverse --page-limit 20 -o json 2>/dev/null') || true
-    [[ -n "$plist" ]] || die "could not list proposals on ${NODES[1]}"
-    PROP=$(print -r -- "$plist" | python3 -c '
-import json, sys
-u = sys.argv[1]
-try:
-    ps = json.load(sys.stdin)["proposals"]
-except Exception:
-    sys.exit(0)
-for p in ps:
-    if p.get("status") != "PROPOSAL_STATUS_VOTING_PERIOD":
-        continue
-    if u in json.dumps(p):
-        print(p["id"])
-        break
-' "$NEW_UNIQUE") || true
-    [[ -n "$PROP" ]] \
-        || die "no proposal in its voting period names $NEW_UNIQUE -- did the submit fail?  (checked the newest 20)"
-    say "  proposal $PROP -- verified in its voting period AND naming $NEW_UNIQUE"
-    CHAIN=$(rsh "${NODES[1]}" '~/qadena/bin/qadenad status 2>/dev/null' | tr ',' '\n' | grep -oE '"network":"[^"]+"' | cut -d'"' -f4) || true
-    # QUORUM: one validator is 25% against a 33.4% quorum.  Every node votes.
-    for n in "${NODES[@]:1}"; do
-        k=$(rsh "$n" '~/qadena/bin/qadenad keys list --keyring-backend test 2>/dev/null' | grep -oE 'pioneer[0-9]+' | head -1) || true
-        [[ -n "$k" ]] || { say "  $n: no pioneer key, skipping vote"; continue }
-        say "  voting yes from $k on $n"
-        run "$n" "~/qadena/bin/qadenad tx gov vote $PROP yes --from $k --keyring-backend test --chain-id $CHAIN --gas auto --gas-adjustment 1.4 --gas-prices 100000000aqdn -y" >/dev/null
+# ---------------------------------------------------------------------------------------------
+# --via-governance: everything up to here (preflight, build --hold, package, distribute) is
+# identical to a live roll.  From here the shapes diverge completely: instead of a per-node
+# install+restart, binaries are STAGED everywhere, ONE proposal schedules the swap, and the chain
+# itself performs it at H on every node in the same block.  The whole point over the live roll:
+# no window in which the fleet runs mixed versions, and the history stays replayable because the
+# boundary is recorded on chain.
+[[ -n "$SRC_CHAIN" ]] || die "--build-from is required: the plan name comes from the built chain version"
+PLAN="v$SRC_CHAIN"
+step "2g. stage $PLAN on every node (nothing live is touched)"
+for n in "${NODES[@]}"; do
+    ILOG="/tmp/stage_upgrade_$$.log"
+    run "$n" "~/qadena/scripts/install_release.sh $REMOTE --stage-upgrade $PLAN > $ILOG 2>&1 < /dev/null" \
+        || { run "$n" "tail -20 $ILOG" | sed 's/^/    /'; die "$n: staging failed (full log: $n:$ILOG)"; }
+    say "  $n staged"
+done
+if (( ! DRY )); then
+    # STAGED IS NOT ENOUGH -- STAGED THE SAME THING IS.  A node whose staged bytes differ
+    # forks at H, and nothing before H would say so.
+    ref_sha=""
+    for n in "${NODES[@]}"; do
+        sha=$(rsh "$n" "sha256sum ~/qadena/cosmovisor/upgrades/$PLAN/bin/qadenad 2>/dev/null" | cut -d' ' -f1)
+        [[ -n "$sha" ]] || die "$n: no staged qadenad for $PLAN after staging reported success"
+        [[ -z "$ref_sha" ]] && ref_sha="$sha"
+        [[ "$sha" == "$ref_sha" ]] || die "$n: staged qadenad sha differs across the fleet ($sha != $ref_sha)"
     done
-
-    # WAIT FOR THE PROPOSAL TO PASS BEFORE RESTARTING ANYTHING.
-    #
-    # The restart exists to TRIGGER validateEnclaveIdentities, which promotes an UNVALIDATED
-    # identity row to active -- and that row DOES NOT EXIST until the proposal passes.  Restart
-    # first and the trigger is spent on nothing: the post-restart UpdateHeight finds no row to
-    # promote, and the promotion then waits for the next natural keyUpdateFrequency tick, which is
-    # precisely the hours-long delay the restart was meant to avoid.  The script would sit out its
-    # entire --wait-secs and fail, after governance had already passed -- the expensive half to redo.
-    #
-    # It also makes the VOTES safe by construction.  A proposal cannot pass on votes that are still
-    # sitting in a mempool, so once this returns every vote is on chain.  Restarting earlier can
-    # drop the primary's OWN vote, which it cast at submit time, with nothing to show for it.
-    #
-    # Before this existed the script restarted immediately after voting and won the race by luck --
-    # the voting period here is short enough that the proposal usually passed first.
-    if (( ! DRY )); then
-        say "waiting for proposal $PROP to pass (up to ${WAIT_SECS}s) before restarting anything"
-        pwaited=0
-        while true; do
-            pst=$(rsh "${NODES[1]}" "~/qadena/bin/qadenad q gov proposal $PROP -o json 2>/dev/null" \
-                  | grep -oE 'PROPOSAL_STATUS_[A-Z_]+' | head -1) || true
-            if [[ "$pst" == "PROPOSAL_STATUS_PASSED" ]]; then
-                say "  proposal $PROP PASSED after ${pwaited}s"
-                break
-            fi
-            # A REJECTION WITH NO "NO" VOTES IS A QUORUM FAILURE, not a rejection on merit, and it
-            # reads identically in the status.  Say so here rather than leaving it to be puzzled out.
-            if [[ "$pst" == "PROPOSAL_STATUS_REJECTED" || "$pst" == "PROPOSAL_STATUS_FAILED" ]]; then
-                die "proposal $PROP is $pst -- $NEW_UNIQUE will never be registered.  Check the tally before assuming it was voted down: a rejection showing ZERO no-votes is a failure to reach the 33.4% quorum, which needs at least two validators voting."
-            fi
-            sleep 10; pwaited=$(( pwaited + 10 ))
-            (( pwaited % 60 == 0 )) && say "    ${pwaited}s  status=${pst:-(unreadable -- is ${NODES[1]} up?)}"
-            (( pwaited < WAIT_SECS )) \
-                || die "proposal $PROP is still ${pst:-unreadable} after ${WAIT_SECS}s -- not restarting anything on a proposal that has not passed"
-        done
-    fi
-
-    say "restarting ${NODES[1]} on its OLD enclave to trigger the identity check"
-    (( DRY )) || restart_node "${NODES[1]}"
-
-    say "waiting for $NEW_UNIQUE to become active (up to ${WAIT_SECS}s)"
-    if (( ! DRY )); then
-        waited=0
-        while [[ "$(identity_status $NEW_UNIQUE)" != "active" && $waited -lt $WAIT_SECS ]]; do
-            sleep 15; waited=$(( waited + 15 ))
-            st=$(identity_status $NEW_UNIQUE)
-            # AN EMPTY STATUS IS AMBIGUOUS and that ambiguity wasted a full wait window once:
-            # it means EITHER "the chain has not promoted it yet" OR "the node we are asking is
-            # down".  Distinguish them, or a dead node looks exactly like a slow chain.
-            if [[ -z "$st" ]]; then
-                if [[ -z "$(height_of ${NODES[1]})" ]]; then
-                    die "${NODES[1]} stopped answering while waiting for promotion -- it is DOWN, not slow"
-                fi
-                st="(not registered yet)"
-            fi
-            printf "    %4ds  status=%s\n" "$waited" "$st"
-        done
-        [[ "$(identity_status $NEW_UNIQUE)" == "active" ]] || die "$NEW_UNIQUE never became active"
-        say "  ACTIVE"
-    fi
+    say "  staged qadenad identical on ${#NODES} node(s): ${ref_sha:0:16}"
 fi
 
-step "3. roll the fleet, one node at a time"
+step "2h. one proposal: schedule $PLAN$( [[ -n "$NEW_UNIQUE" ]] && print -n ", register $NEW_UNIQUE" )"
+encl_args=""
+live_uniq=$(measure_of "${NODES[1]}")
+if [[ -n "$NEW_UNIQUE" && "$NEW_UNIQUE" != "$live_uniq" ]]; then
+    say "  enclave changes: $live_uniq -> $NEW_UNIQUE (identity message rides in the proposal)"
+    encl_args="--unique-id $NEW_UNIQUE --signer-id $NEW_SIGNER"
+else
+    say "  chain-only ($live_uniq unchanged): no identity message"
+fi
+run "${NODES[1]}" "~/qadena/scripts/gov_software_upgrade.sh --plan $PLAN --margin 180 $encl_args" \
+    || die "the governance step failed on ${NODES[1]} -- if the proposal passed but late, cancel the plan (see gov_software_upgrade.sh --help)"
+
+if [[ -n "$encl_args" ]]; then
+    step "2i. promote $NEW_UNIQUE to active BEFORE the height"
+    # Promotion is by enclave quorum, and validateEnclaveIdentities runs on a trigger --
+    # restarting one node on its OLD binaries is the existing trigger (same as the live roll).
+    restart_node "${NODES[1]}"
+    for i in {60..1}; do
+        st=$(identity_status "$NEW_UNIQUE")
+        [[ "$st" == "active" ]] && break
+        sleep 6
+    done
+    st=$(identity_status "$NEW_UNIQUE")
+    [[ "$st" == "active" ]] || die "$NEW_UNIQUE is '$st', not active -- the swap at H would start an enclave the chain refuses.  CANCEL THE PLAN (MsgCancelUpgrade) before the height."
+    say "  $NEW_UNIQUE active"
+fi
+
+step "2j. wait for the swap height"
+say "  querying the scheduled plan"
+# WHITESPACE-TOLERANT ON PURPOSE.  `q upgrade plan -o json` PRETTY-PRINTS ("height": "486"),
+# unlike `qadenad status`, whose compact output every other extractor here was written against.
+# A compact-only pattern silently yields an empty height, which then reads as "no plan" -- the
+# opposite of the truth, one line after the proposal passed.
+plan_h=$(rsh "${NODES[1]}" '~/qadena/bin/qadenad q upgrade plan -o json 2>/dev/null' | grep -oE '"height"[[:space:]]*:[[:space:]]*"?[0-9]+' | grep -oE '[0-9]+' | head -1) || true
+if [[ -z "$plan_h" ]]; then
+    # AN EMPTY PLAN QUERY IS AMBIGUOUS, and the two meanings are opposite.  x/upgrade DELETES
+    # the plan once it is applied, so "no plan" is the normal state AFTER a successful swap --
+    # which a short height or a slow submit can reach before this line runs.  Treating it as
+    # failure would fail a run that had just succeeded.  Ask the other question instead.
+    applied_h=$(rsh "${NODES[1]}" "~/qadena/bin/qadenad q upgrade applied $PLAN 2>/dev/null" | grep -oE 'height[^0-9]*[0-9]+' | grep -oE '[0-9]+' | head -1) || true
+    [[ -n "$applied_h" ]] || die "no plan named $PLAN is scheduled and none has been applied -- the proposal passed, so either it carried a different name or the plan was cancelled"
+    say "  plan $PLAN was ALREADY applied at height $applied_h"
+    plan_h="$applied_h"
+else
+    say "  plan height $plan_h"
+    while :; do
+        h=$(height_of "${NODES[1]}") || true
+        # Nodes restart AT the height, so an unanswering RPC here is the swap happening.
+        if [[ -z "$h" ]]; then say "  ... (RPC quiet -- restarting?)"; sleep 5; continue; fi
+        (( h >= plan_h + 2 )) && break
+        say "  ... $h / $plan_h"
+        sleep 10
+    done
+fi
+
+step "2k. verify every node swapped and is live"
+sleep 10
 for n in "${NODES[@]}"; do
-    say "$n: activating"
-    # DO NOT HAND-ROLL THIS LOOP.  require_advancing below is the only thing standing between a
-    # rolling upgrade and a halted chain: on four equal validators, taking a SECOND node down
-    # before the first is back leaves 50%, which is under the two-thirds threshold, and the chain
-    # stops with every process still running and no error anywhere.  That happened on 2026-08-23
-    # doing exactly this by hand -- see backlog 108.
-    # The signer keeps its name across a non-reproducible rebuild; move it aside (never delete --
-    # the old enclave must stay on disk for the handover).
-    run "$n" 'mkdir -p ~/qadena/bin/superseded; for f in ~/qadena/bin/signer_enclave.unique*; do [ -e "$f" ] && mv -f "$f" ~/qadena/bin/superseded/ ; done; true' >/dev/null 2>&1 || true
-    # REDIRECT ON THE REMOTE SIDE, or this hangs forever.  install_release.sh --restart leaves the
-    # node running DETACHED (PPID 1), and that process inherits THIS ssh session's stdout and
-    # stderr.  ssh does not close the channel until every process holding those fds has exited --
-    # and the one holding them is the node, which never exits.  So the install completes, the node
-    # comes up healthy, and the roll sits forever on a pipe that will never close.
-    #
-    # On 2026-08-24 that hung the roll after M1: install_release.sh had already exited, M1 was up
-    # and advancing on the new enclave, and the script waited 9 minutes on nothing before it was
-    # noticed.  It would have waited indefinitely -- there is no timeout on this call.
-    #
-    # Sending the remote output to a file and fetching it afterwards is what lets the channel
-    # close.  The build stage above carries the same note for the same reason; this is that trap
-    # arriving through install_release.sh instead.
-    ILOG="/tmp/install_release_$$.log"
-    irc=0
-    run "$n" "~/qadena/scripts/install_release.sh $REMOTE --wait-active=$WAIT_SECS --restart > $ILOG 2>&1 < /dev/null" || irc=$?
-    if (( ! DRY )); then
-        rsh "$n" "tail -40 $ILOG" 2>/dev/null | while read -r l; do say "    $l"; done
-    fi
-    (( irc == 0 )) || die "[$n] install_release.sh FAILED (exit $irc) -- full output in $n:$ILOG"
-    (( DRY )) || sleep 20
-    (( DRY )) || require_advancing "$n"
-    say "  $n now on $(measure_of $n)"
+    cur=$(rsh "$n" 'readlink ~/qadena/cosmovisor/current 2>/dev/null' | tr -d '
+')
+    [[ "$cur" == *"upgrades/$PLAN"* ]] || die "$n: current -> '$cur', expected upgrades/$PLAN -- cosmovisor did not swap (preupgrade hook failure?  see the node's log)"
+    ver=$(rsh "$n" '~/qadena/bin/qadenad version 2>/dev/null' | tr -d '
+' | head -1)
+    [[ "$ver" == "$SRC_CHAIN" ]] || die "$n: runs $ver, expected $SRC_CHAIN"
+    say "  $n: current -> $cur, version $ver"
+done
+for n in "${NODES[@]}"; do
+    h0=$(height_of "$n"); sleep 12; h1=$(height_of "$n"); cu=$(catching_up_of "$n")
+    [[ -n "$h1" && "$h1" -gt "${h0:-0}" && "$cu" == "false" ]] \
+        || die "$n: not live after the swap (h $h0->$h1, catching_up=$cu)"
+    say "  $n advancing ($h0 -> $h1, caught up)"
 done
 
-step "4. final state"
-for n in "${NODES[@]}"; do say "$n  enclave=$(measure_of $n)  height=$(height_of $n)"; done
-print ""
-say "Watch the next rotation tick for the audit:  grep 'ss-reshare: AUDIT' ~/qadena/logs/qadena.log"
+step "final: ROLL COMPLETE (via governance)"
+say "every node swapped to $PLAN at height $plan_h in the same block"
+exit 0
+
+# ---------------------------------------------------------------------------------------------
+# The LIVE roll that used to follow -- register the measurement, then replace binaries one node at
+# a time -- is gone with the layout that made it possible.  Binaries live in a generation
+# directory now, so replacing one in place rewrites the generation that produced the existing
+# blocks, and a node replaying them afterwards executes them with different code.  There is one
+# upgrade mechanism: stage everywhere, schedule a height, swap together.  The branch above IS that
+# mechanism, and it exits when it is done.

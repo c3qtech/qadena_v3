@@ -9,6 +9,7 @@ update_test_unique_id_flag=""
 build_sgx_flag=""
 hold_flag=""
 update_build_number=0
+release=0
 TITLE="FINAL"
 skip_enclave=0
 force_sgx=0
@@ -28,6 +29,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --update-build-number)
       update_build_number=1
+      shift
+      ;;
+    --release)
+      # Deploy intent.  Bumps both version files (see the version block below) and implies
+      # --hold, because a release is built on a host whose node is running and whose live
+      # binaries must not move until the chain says so.
+      release=1
+      hold_flag="--hold"
       shift
       ;;
     --skip-enclave)
@@ -56,7 +65,7 @@ while [[ $# -gt 0 ]]; do
       fi
       ;;
     --help)
-      echo "Usage: build.sh [--update-test-unique-id] [--update-build-number] [--skip-enclave] [--build-sgx] [--no-sgx] [--hold] [--title <title>]"
+      echo "Usage: build.sh [--release] [--update-test-unique-id] [--update-build-number] [--skip-enclave] [--build-sgx] [--no-sgx] [--hold] [--title <title>]"
       echo "  --hold  stage binaries without replacing the live ones (and without stopping the node)"
       echo "  SGX is the DEFAULT when ego is installed (it decides -tags realenclave, which"
       echo "  silently controls whether real attestation is verified).  --no-sgx opts out."
@@ -98,9 +107,55 @@ elif [[ $force_sgx -eq 0 ]] && command -v ego > /dev/null 2>&1; then
     echo "build.sh: pass --no-sgx for a debug build."
 fi
 
+# THE ENCLAVES ARE BUILT FIRST, and the order is load-bearing on SGX.  A real enclave's identity
+# is its MEASUREMENT, which is a property of the built artifact and is not knowable until after
+# the build -- so a chain binary stamped with its version BEFORE the enclave exists cannot know
+# whether the enclave changed.  Building the enclave first makes the measurement available while
+# the chain's version is still being decided.
+if [[ $skip_enclave == 0 ]] ; then
+    $qadenabuildscripts/build_enclave.sh --title $TITLE $update_test_unique_id_flag $build_sgx_flag $hold_flag
+    if [ $? -ne 0 ] ; then
+        echo "************"
+        echo "   $TITLE ERROR"
+        echo "************"
+        exit 1
+    fi
+
+    $qadenabuildscripts/build_signer_enclave.sh --title $TITLE $update_test_unique_id_flag $build_sgx_flag $hold_flag
+    if [ $? -ne 0 ] ; then
+        echo "************"
+        echo "   $TITLE ERROR"
+        echo "************"
+        exit 1
+    fi
+fi
+
 VERSION_FILE="$qadenabuild/cmd/qadenad/version.txt"
-# update version
-if [ $update_build_number -eq 1 ] ; then
+ENCL_VERSION_FILE="$qadenabuild/cmd/qadenad_enclave/version.txt"
+
+# --release: THE VERSION MOVES, ALWAYS.  Every deployment is now a governance plan named
+# "v<chain version>", and a plan whose name the running binary already registers a handler for is
+# a SILENT NO-OP -- no halt, no swap.  So a build meant for deployment must leave a version behind
+# that no deployed binary claims.
+#
+# Bumped unconditionally rather than by detecting "did anything change", for two reasons: the
+# build is not reproducible, so bytes always differ and detection would fire every time anyway;
+# and on SGX the only honest change-detector is the measurement, which is compared at ROLL time
+# against what the fleet actually runs -- the one place the answer matters.  The enclave version
+# moves with it because the attested handover requires strictly-greater; when the measurement did
+# NOT move, that bump is simply inert.
+if [ $release -eq 1 ] ; then
+    VERSION=$(increment_version "$VERSION_FILE")
+    ENCL_VERSION=$(increment_version "$ENCL_VERSION_FILE")
+    echo "----------------------------------------------------------------------"
+    echo "RELEASE BUILD"
+    echo "  chain version   -> $VERSION      (governance plan will be v$VERSION)"
+    echo "  enclave version -> $ENCL_VERSION"
+    echo ""
+    echo "  COMMIT BOTH version.txt FILES before rolling: the roll builds from a"
+    echo "  committed checkout, and refuses a tree that matches no commit."
+    echo "----------------------------------------------------------------------"
+elif [ $update_build_number -eq 1 ] ; then
     VERSION=$(increment_version "$VERSION_FILE")
     echo "--------------------"
     echo "Updated build number to $VERSION"
@@ -176,25 +231,19 @@ if [ $? -ne 0 ] ; then
     exit 1
 fi
 
-$qadenabuildscripts/install.sh --chain $hold_flag
-
-if [[ $skip_enclave == 0 ]] ; then
-    $qadenabuildscripts/build_enclave.sh --title $TITLE $update_test_unique_id_flag $build_sgx_flag $hold_flag
-    if [ $? -ne 0 ] ; then
-        echo "************"
-        echo "   $TITLE ERROR"
-        echo "************"
-        exit 1
-    fi
-
-    $qadenabuildscripts/build_signer_enclave.sh --title $TITLE $update_test_unique_id_flag $build_sgx_flag $hold_flag
-    if [ $? -ne 0 ] ; then
-        echo "************"
-        echo "   $TITLE ERROR"
-        echo "************"
-        exit 1
-    fi
+# CHECKED, because install.sh can legitimately REFUSE.  It declines to overwrite the generation
+# that produced existing blocks, so on a chain with history a plain build installs nothing -- and
+# reporting FINAL SUCCESS over that refusal would hand back a binary that is not what the node
+# runs.  (Observed doing exactly that the first time the refusal fired.)
+if ! $qadenabuildscripts/install.sh --chain $hold_flag ; then
+    echo "**********************************"
+    echo "$TITLE BUILT, BUT NOT INSTALLED"
+    echo "**********************************"
+    echo "The binaries are in the build tree; install.sh declined to place them (reason above)."
+    echo "For a change you intend to deploy:   build.sh --release   (stages, never touches live)"
+    exit 1
 fi
+
 
 echo "------------------"
 echo "      $TITLE SUCCESS!"

@@ -83,7 +83,7 @@ func (k msgServer) PioneerUpdateIntervalPublicKeyID(goCtx context.Context, msg *
 	// (enclave.go:3787) and SyncEnclave (:4960) both do, and only InitEnclave (:3233) and
 	// updateIsValidator (:3631) carry one.  SetIntervalPublicKeyID overwrites unconditionally, so
 	// without this a re-sync would blank the address of a perfectly healthy pioneer and drop it
-	// out of getBondedAddressablePioneers -- shrinking the owner set that getThreshold is computed from.
+	// out of getAddressPublishedPioneers -- shrinking the owner set that getThreshold is computed from.
 	externalIPAddress := msg.ExternalIPAddress
 	if externalIPAddress == "" && found {
 		externalIPAddress = current.ExternalIPAddress

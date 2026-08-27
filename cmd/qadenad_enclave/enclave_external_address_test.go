@@ -188,7 +188,7 @@ func TestNoteExternalAddressIgnoredBeforeInit(t *testing.T) {
 //
 // SyncEnclave and AddAsValidator both create the pioneer row with an empty address, so every joiner
 // starts in this state.  Filling it in from here made a node "addressable" within ~11 blocks of
-// starting -- unbonded, unable to propose, and counted by getBondedAddressablePioneers, which sizes
+// starting -- unbonded, unable to propose, and counted by getAddressPublishedPioneers, which sizes
 // getThreshold.  Observed on the 2026-08-26 bringup: pioneer3 advertised 192.168.86.52 at zero
 // voting power because phase 6 had not run.  First publication belongs to updateIsValidator, under
 // IsProposer, and to nothing else.

@@ -35,11 +35,10 @@
 #      at the last step with a measurement mismatch that read as a build fault and was an ordering
 #      fault.  Stages run: start -> regress -> package -> install -> join.
 #
-#   2. AND DO NOT REBUILD AFTER THE UPGRADE EITHER.  test_enclave_upgrade.sh bumps the //go:embed-ed
-#      id files, builds, and RESTORES them on exit, so the checkout no longer describes the running
-#      node: a later build_enclave.sh on that machine silently produces the PRE-upgrade identity.
-#      Packaging is safe -- package_release.sh takes the INSTALLED artifacts -- which is exactly why
-#      stage D packages rather than rebuilds.
+#   2. AND DO NOT REBUILD AFTER AN UPGRADE EITHER.  A checkout can stop describing the running node
+#      -- an enclave identity is //go:embed-ed, so building at the wrong commit silently produces a
+#      DIFFERENT measurement than the one installed.  Packaging is safe (package_release.sh takes
+#      the INSTALLED artifacts), which is exactly why stage D packages rather than rebuilds.
 #
 #   3. NEVER RUN A SUITE WHILE THE CONTINUOUS LOOP IS RUNNING.  They share ann, pioneer1 and the
 #      treasury, and the collisions surface as "could not provision" or "Invalid destination
@@ -341,7 +340,7 @@ for j in "${JOINERS[@]}"; do
                 "sudo zsh -lc $(printf '%q' "$jhome/qadena/scripts/stop_qadena.sh --all")" >/dev/null 2>&1 || true
             sleep 3
         fi
-        left=$(ssh -o ConnectTimeout=10 "$j" 'ps -eo pid,cmd | grep -E "qaden[a]d|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep | wc -l' | tr -d '\r')
+        left=$(ssh -o ConnectTimeout=10 "$j" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep | wc -l' | tr -d '\r')
         [[ "$left" == "0" ]] || fail "$j still has $left node/enclave process(es); kill them BY PID and re-run"
         rsh_user "$j" "mv $jhome/qadena $jhome/qadena.pre-bringup.$STAMP.bak" \
             || fail "could not archive $j's old ~/qadena"

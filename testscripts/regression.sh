@@ -1142,7 +1142,7 @@ if [ "$from_genesis" = "true" ]; then
     # with no command shown, because there was none to show.  ps -eo pid,args prints the full command
     # on both platforms, so the self-filter works and a real leftover is named rather than numbered.
     leftover=$(ps -eo pid,args 2>/dev/null \
-        | grep -E "qadenad|run_enclave\.sh|run_signerenclave\.sh|ego-host" \
+        | grep -E "qadenad|cosmovisor run|run_enclave\.sh|run_signerenclave\.sh|ego-host" \
         | grep -v "grep" | grep -v "regression\.sh" || true)
     if [ -n "$leftover" ]; then
         echo "processes are still alive after stop_qadena.sh:"
@@ -1334,7 +1334,11 @@ if [ "$with_enclave_upgrade" = "true" ]; then
     # LAST OF ALL, and after credentials.  It stops the node, swaps the enclave binary and restarts,
     # so anything after it would be measuring a different process; and it needs reports already on
     # record, which the suites above produce.
-    run_test "enclave-upgrade" "$qadenatestscripts/test_enclave_upgrade.sh"
+    # RETIRED with the live-swap enclave upgrade it exercised.  An enclave change is a governance
+    # plan now: the measurement is registered, promoted to active, and the attested handover runs
+    # from the at-height hook on every node at once.  That path is covered end to end by
+    # testscripts/test_cosmovisor_upgrade.sh, which needs a fleet and so does not belong here.
+    :
 fi
 
 summarize

@@ -200,6 +200,7 @@ while [[ $# -gt 0 ]]; do
             print -u2 "        --joiner m3 --test \"./testscripts/run_regression_continually.sh\""
             exit 1 ;;
         --block-sync)    BLOCK_SYNC=1; shift ;;
+        --cosmovisor)    shift ;;   # accepted and ignored: every node is cosmovisor-managed now
         --from)          FROM_STAGE="${2:u}"; shift 2 ;;
         --run-dir)       RUN_DIR="$2"; shift 2 ;;
         --help)
@@ -499,7 +500,7 @@ for j in "${JOINERS[@]}"; do
                 "sudo zsh -lc $(printf '%q' "$jhome/qadena/scripts/stop_qadena.sh --all")" >/dev/null 2>&1 || true
             sleep 3
         fi
-        left=$(ssh -o ConnectTimeout=10 "$j" 'ps -eo pid,cmd | grep -E "qaden[a]d|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep | wc -l' | tr -d '\r')
+        left=$(ssh -o ConnectTimeout=10 "$j" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep | wc -l' | tr -d '\r')
         [[ "$left" == "0" ]] || fail "$j still has $left node/enclave process(es); kill them BY PID and re-run"
         rsh_user "$j" "mv $jhome/qadena $jhome/qadena.pre-bringup.$STAMP.bak" \
             || fail "could not archive $j's old ~/qadena"

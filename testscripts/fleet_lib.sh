@@ -97,3 +97,40 @@ measurement_of() {   # host
     [[ "$out" =~ ^[0-9a-f]{64}$ ]] && { print "$out"; return }
     rsh_user "$h" 'strings $HOME/qadena/bin/qadenad_enclave 2>/dev/null | grep -m1 -ohE "unique[0-9]+"' | tr -d '\r'
 }
+
+# --------------------------------------------------------------------------------------------
+# Cosmovisor helpers.
+
+# cosmovisor_managed_on <host> -- is that node converted?  Same definition as setup_env.sh's
+# cosmovisor_managed (the `current` symlink), asked over ssh.
+cosmovisor_managed_on() {
+    rsh_user "$1" 'test -L $HOME/qadena/cosmovisor/current' >/dev/null 2>&1
+}
+
+# cosmovisor_current_of <host> -- the generation the node's `current` points at ("genesis",
+# "upgrades/v1.1.23"...), empty if unmanaged.
+cosmovisor_current_of() {
+    rsh_user "$1" 'readlink $HOME/qadena/cosmovisor/current 2>/dev/null' | tr -d '\r'
+}
+
+# staged_sha_of <host> <plan> -- sha256 of the staged qadenad for <plan>, empty if not staged.
+# The upgrade preflight compares this across the fleet and against the archive: a node whose
+# staged bytes differ would fork at H, and "staged" alone does not prove "staged the same thing".
+staged_sha_of() {
+    rsh_user "$1" "sha256sum \$HOME/qadena/cosmovisor/upgrades/$2/bin/qadenad 2>/dev/null | cut -d' ' -f1" | tr -d '\r'
+}
+
+# require_live <host> <label> -- height rising AND catching_up false.  assert_advancing without
+# the catching-up blind spot: after a fleet-wide swap at H every node restarts and REPLAYS
+# briefly, and a replaying node's height rises fast while it contributes nothing to consensus --
+# `catching_up == false` is the part that says the swap actually produced a live validator.
+require_live() {
+    local host="$1" label="$2" h0 h1 cu
+    h0=$(height_of "$host"); [[ -n "$h0" ]] || fail "$label: the RPC on $host did not answer"
+    sleep 12
+    h1=$(height_of "$host"); [[ -n "$h1" ]] || fail "$label: the RPC on $host stopped answering"
+    [[ "$h1" -gt "$h0" ]] || fail "$label: $host is NOT advancing (stuck at $h1)"
+    cu=$(rsh_user "$host" 'curl -s --max-time 5 localhost:26657/status | jq -r ".result.sync_info.catching_up"' | tr -d '\r')
+    [[ "$cu" == "false" ]] || fail "$label: $host is advancing but still catching up -- replaying, not participating"
+    info "$label: $host live ($h0 -> $h1, caught up)"
+}

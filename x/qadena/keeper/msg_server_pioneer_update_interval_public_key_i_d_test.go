@@ -109,7 +109,7 @@ func TestPioneerRowCrossNodeUpdateIsRejected(t *testing.T) {
 // An empty address means "no opinion".  AddAsValidator and SyncEnclave both publish Pioneer rows
 // with an empty ExternalIPAddress, and SetIntervalPublicKeyID overwrites unconditionally -- so
 // without the carry-forward a re-sync silently drops a healthy pioneer out of
-// getBondedAddressablePioneers, shrinking the set getThreshold is computed from.
+// getAddressPublishedPioneers, shrinking the set getThreshold is computed from.
 func TestPioneerRowEmptyAddressDoesNotEraseTheStoredOne(t *testing.T) {
 	k, ms, goCtx := setupMsgServer(t)
 	ctx := testCtx(goCtx)

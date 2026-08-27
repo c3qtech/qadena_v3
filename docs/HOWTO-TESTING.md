@@ -290,13 +290,19 @@ worked. Prove the sealed store survived by making a real scanned send.
    `validateEnclaveIdentities()`, whose only trigger is a counter that fires on the first proposer
    `UpdateHeight` **after the enclave process starts**, then not again for ~555 × 11 ≈ 6100 blocks.
    In practice: restart the node to force the window.
-3. Stop the chain, `build_enclave.sh`, start the chain. `run.sh` runs `check_upgrade_enclave.sh`
-   *before* launching anything; `upgrade_enclave.sh` boots the **old** enclave in `--upgrade-mode` so
-   the new one can dial it on 50051 and pull the keys across. There is no hot-upgrade path.
+3. Deploy it as a **governance plan**. An enclave change is no longer swapped in place: binaries
+   live in a cosmovisor generation directory, so writing one in place would leave the chain with an
+   unrecorded consensus boundary. `build.sh --release` bumps the versions the plan name needs;
+   commit them; then roll the fleet. Every node halts at the scheduled height, and
+   `cosmovisor_preupgrade.sh` runs the attested handover there: `upgrade_enclave.sh` boots the
+   **old** enclave in `--upgrade-mode` so the new one can dial it on 50051 and pull the keys
+   across. There is still no hot-upgrade path.
 4. Verify: `enclave_params_<new>.json` exists, its `RegulatorPrivK` and `JarPrivK` **byte-match** the
    old ones, old reports still decrypt, **and a scanned send still works**.
 
-`testscripts/test_enclave_upgrade.sh` does all of this; read it before changing the upgrade path.
+`testscripts/test_cosmovisor_upgrade.sh` exercises this end to end (its chain+enclave leg covers
+the handover); read it before changing the upgrade path. `check_upgrade_enclave.sh` remains the
+repair path — on the next start it ferries params forward if the at-height handover failed.
 
 ---
 
