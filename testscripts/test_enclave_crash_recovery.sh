@@ -62,7 +62,37 @@ echo "stalling enclave pid $enclave_pid at chain height $h0"
 # with no deadline on execution calls the chain blocks forever, and every suite after this one
 # hangs too.  Observed 2026-08-16: one failed assertion, enclave stopped for 2.5 hours, the whole
 # regression stalled behind it.  The trap fires on normal exit, on `fail`, and on interruption.
-trap 'as_enclave_owner kill -CONT "$enclave_pid" 2>/dev/null || true' EXIT INT TERM
+# RESUMING IS NOT RECOVERING, and that distinction cost 29 consecutive rounds on 2026-08-29.
+#
+# The halt this suite provokes kills CONSENSUS but leaves the PROCESS ALIVE, so SIGCONT alone
+# gives back a node that answers RPC and will never commit another block.  The restart that fixes
+# that sits after the assertions, so any `fail` skipped it -- and every later round then found a
+# chain already frozen, with its halt message written before that round's log offset.  One failure
+# poisoned the soak: 118 passes, then 29 identical 185s timeouts, the node down the whole time.
+#
+# So the trap RESTARTS the node, not just the enclave.  Idempotent on the happy path: the explicit
+# restart below leaves nothing for it to do, and start_qadena.sh is a no-op against a running node.
+crash_cleanup() {
+    as_enclave_owner kill -CONT "$enclave_pid" 2>/dev/null || true
+
+    # IS IT ADVANCING -- not "is it answering".  A halted node keeps serving RPC and reports a
+    # stuck height forever, so an answering check would call the exact state this exists to fix
+    # healthy.  Two reads, four seconds apart.
+    local a b
+    a=$(chain_height 2>/dev/null); sleep 4; b=$(chain_height 2>/dev/null)
+    if [ -n "$a" ] && [ -n "$b" ] && [ "$b" != "$a" ]; then
+        return 0    # advancing: the happy path already restarted it, or it never halted
+    fi
+
+    echo "crash_cleanup: chain is not advancing ($a -> $b) -- restarting the node"
+    # Same short grace the explicit restart uses, so a following round's watchdog fires promptly
+    # rather than waiting out the 2m default.
+    export QADENA_ENCLAVE_HEALTH_GRACE=15s
+    "$qadenascripts/stop_qadena.sh" --all >/dev/null 2>&1 || true
+    "$qadenascripts/start_qadena.sh" >/dev/null 2>&1 || \
+        echo "crash_cleanup: WARNING: start_qadena.sh failed -- the node is DOWN and later suites will fail against it"
+}
+trap crash_cleanup EXIT INT TERM
 
 # The log is cumulative across runs -- nothing rotates it -- so a halt message from a PREVIOUS
 # cycle of this very suite would satisfy the poll below instantly and falsely.  Everything this
