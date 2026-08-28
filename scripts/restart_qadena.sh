@@ -5,6 +5,12 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# UNDER SYSTEMD, ASK SYSTEMD -- one restart, one instance, and the unit keeps its own supervision.
+if qadena_systemd_managed; then
+    echo "restart_qadena.sh: systemd unit present -- restarting qadena.service"
+    exec sudo systemctl restart qadena
+fi
+
 # get parameter --skip-stop, --syslog-logger
 skip_stop=0
 syslog_logger=0

@@ -9,7 +9,11 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 # Root only when an ego enclave is actually in play: SGX hardware AND a signed binary.
 needs_root_if_real_enclave "stop_qadena.sh" "$qadenabin/qadenad_enclave"
 
-if ! is_qadena_running; then
+# NOT SHORT-CIRCUITED WHEN SYSTEMD OWNS THE NODE.  "Nothing is running" is not the same as
+# "nothing will run": an installed unit with Restart=on-failure can bring the node back seconds
+# after this script would otherwise have declared success.  So when the unit is present we fall
+# through and stop the UNIT below; only an unmanaged node can exit here.
+if ! qadena_systemd_managed && ! is_qadena_running; then
     echo "stop_qadena.sh: Good!  Qadena is no longer running."
     exit 0
 fi
@@ -76,6 +80,19 @@ if [[ $stop_qadena -eq 0 && $stop_enclave -eq 0 && $stop_signer_enclave -eq 0 ]]
     stop_signer_enclave=1
 fi
 
+
+# STOP THE UNIT FIRST, or every kill below races Restart=on-failure and the node comes back five
+# seconds later looking like it never stopped.  systemd's KillMode=control-group SIGTERMs the whole
+# cgroup -- qadenad, both enclaves and rotatelogs -- so the per-process work after this is
+# belt-and-braces for anything started outside the unit.
+#
+# NEVER FOR --enclaves-only.  That mode exists for cosmovisor_preupgrade.sh, which runs INSIDE the
+# unit at an upgrade height: stopping the unit from within it would tear down the very upgrade it
+# was invoked to perform.  Same reason run.sh's post-exit mop-up uses --enclaves-only.
+if qadena_systemd_managed && [[ $enclaves_only -eq 0 ]]; then
+    echo "stop_qadena.sh: systemd unit present -- stopping qadena.service"
+    sudo systemctl stop qadena || echo "stop_qadena.sh: WARNING: systemctl stop qadena failed; continuing with direct kills"
+fi
 
 echo "stop_qadena.sh: -----------"
 echo "stop_qadena.sh: STOP QADENA"

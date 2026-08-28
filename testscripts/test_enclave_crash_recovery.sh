@@ -109,15 +109,36 @@ advanced=$((h_final - h0))
 # block) but the NAMED halt waits for the watchdog's grace.  The ceiling covers the 2m default
 # plus margin; a node started with a shorter QADENA_ENCLAVE_HEALTH_GRACE (see the restart below)
 # exits this loop as soon as the message lands.
+# TWO CORRECT OUTCOMES, and the suite must accept both.
+#
+#   halt      haltOnEnclaveFailure panics; consensus dies, the PROCESS STAYS UP.  This is the
+#             common path, because a stalled enclave usually has a call in flight to cancel.
+#
+#   backstop  the watchdog declared the enclave dead but the cancellation reached NO IN-FLIGHT
+#             CALL, so haltOnEnclaveFailure never ran and the node is wedged rather than halted.
+#             enclave_call_context.go says so in as many words and exits non-zero on purpose,
+#             "so the supervisor can restart it".  Equally correct, and not rare: whether a call
+#             is in flight when SIGSTOP lands is a race, which is why this suite failed exactly
+#             once in 82 soak rounds (2026-08-28) and took the fleet down with it.
+#
+# Accepting only the first reported the second as a bug in the node, when the node had in fact
+# detected a worse condition and said so.  What must still fail is NEITHER appearing.
 halted=0
+halt_kind=""
 for i in {1..90}; do
-    if [ -f "$logfile" ] && tail -n "+$((log_start + 1))" "$logfile" | grep -aq "halting rather than committing a block without the enclave's state"; then
-        halted=1; break
+    if [ -f "$logfile" ]; then
+        tailed=$(tail -n "+$((log_start + 1))" "$logfile")
+        if print -r -- "$tailed" | grep -aq "halting rather than committing a block without the enclave's state"; then
+            halted=1; halt_kind="halt (haltOnEnclaveFailure ran)"; break
+        fi
+        if print -r -- "$tailed" | grep -aq "wedged rather than halted"; then
+            halted=1; halt_kind="backstop (no in-flight call to cancel; the node exited for the supervisor)"; break
+        fi
     fi
     sleep 2
 done
-[ $halted -eq 1 ] || fail "the chain stopped, but haltOnEnclaveFailure's message never appeared (waited 180s) -- either the watchdog did not declare the enclave dead, or the chain stopped for some other reason"
-echo "chain halted at $h_final ($advanced block(s) after the stall began), with haltOnEnclaveFailure in the log"
+[ $halted -eq 1 ] || fail "the chain stopped, but NEITHER halt message appeared in 180s -- not haltOnEnclaveFailure's, and not the wedged-node backstop's.  The watchdog did not declare the enclave dead at all, which is the case this suite exists to catch."
+echo "chain halted at $h_final ($advanced block(s) after the stall began) -- $halt_kind"
 
 as_enclave_owner kill -CONT "$enclave_pid" 2>/dev/null || true
 

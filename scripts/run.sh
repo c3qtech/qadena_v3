@@ -183,8 +183,12 @@ echo "run.sh: ------------"
 # next start would adopt the orphan -- but a stopped node should leave a stopped machine.
 if [[ -z $EXTERNAL_ENCLAVE ]] ; then
     if is_qadena_running ; then
+        # --enclaves-only, NOT --all: this runs as the unit's own ExecStart on its way out, and a
+        # full stop would ask systemd to stop the service that is currently executing this line.
+        # Reaping the orphaned enclaves is all that is wanted here anyway; systemd's
+        # KillMode=control-group takes the rest of the cgroup.
         echo "run.sh: cleaning up enclave processes the node left behind"
-        $qadenascripts/stop_qadena.sh --all
+        $qadenascripts/stop_qadena.sh --enclaves-only
     fi
 fi
 

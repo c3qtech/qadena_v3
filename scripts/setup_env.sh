@@ -62,6 +62,21 @@ export qadenad_binary="$qadenabin/qadenad"
 
 export LD_LIBRARY_PATH="$qadenabin:$LD_LIBRARY_PATH"
 
+# Is a systemd unit in charge of this node?
+#
+# WHY EVERY START/STOP MUST ASK.  The unit's ExecStart is run.sh, and Restart=on-failure exists to
+# recover an enclave crash -- so a script that kills the processes directly RACES systemd: it
+# restarts the unit seconds later, and the script's own start then launches a SECOND node beside
+# it.  Two instances, one home, one port set, one enclave socket.  When the unit is present the
+# scripts drive systemd instead of the processes.
+#
+# The FILE, not `is-active`: a stopped-but-installed unit still owns this node, and a stop that
+# went around systemd would leave it free to restart the node behind us.
+qadena_systemd_managed() {
+    [ -f /etc/systemd/system/qadena.service ]
+}
+
+
 # ---------------------------------------------------------------------------------------------
 # COSMOVISOR IS THE ONLY LAYOUT.  Every qadena node keeps its binaries in a generation directory
 # under $QADENAHOME/cosmovisor and reaches them through symlinks in $QADENAHOME/bin.  There is no
