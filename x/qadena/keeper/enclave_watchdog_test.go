@@ -262,9 +262,23 @@ func TestWatchdog_WedgedNodeExitsWhenTheHaltNeverRuns(t *testing.T) {
 	}
 }
 
-// And the converse: when the halt DOES run, the backstop must stay out of the way.  Exiting there
-// would turn a correct, named halt into a process death the operator did not ask for.
-func TestWatchdog_BackstopStaysQuietWhenTheHaltRuns(t *testing.T) {
+// And when the halt DOES run, the backstop must ALSO exit -- which reverses what this test
+// asserted until 2026-08-29.
+//
+// The original reasoning was that exiting there "would turn a correct, named halt into a process
+// death the operator did not ask for".  That holds only if a halted node is still useful, and it
+// is not: haltOnEnclaveFailure panics, CometBFT's recover kills the consensus reactor and returns,
+// and the process stays up serving /status with a height that never moves again.  Nothing
+// in-process rebuilds the reactor.
+//
+// Two incidents settled it.  .140 ran a full DAY in that state on 2026-08-09.  And on 2026-08-29 a
+// soak lost 29 consecutive rounds to it: every check that asks "is it answering" said yes, so
+// nothing noticed.  A named halt that leaves an invisible zombie is worse for the operator than a
+// process death, because the death is at least visible -- and the halt message is already in the
+// log before the exit, plus a second line naming why the process is going.  With a supervisor the
+// node comes back and startup reconciliation rebuilds it; without one it goes down loudly instead
+// of pretending to be up.
+func TestWatchdog_HaltedNodeAlsoExitsForTheSupervisor(t *testing.T) {
 	compressWatchdogTime(t, 50*time.Millisecond)
 	withEnclaveClient(t, &blockingEnclaveClient{})
 
@@ -290,8 +304,12 @@ func TestWatchdog_BackstopStaysQuietWhenTheHaltRuns(t *testing.T) {
 
 	select {
 	case code := <-exited:
-		t.Fatalf("the halt ran, so the backstop must not exit; it exited %d", code)
-	case <-time.After(time.Second): // comfortably past the compressed backstop
+		if code != 1 {
+			t.Fatalf("a halted node must exit non-zero so the supervisor restarts it; got %d", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the halt ran and consensus is dead, but the process stayed up -- it would serve a " +
+			"frozen height indefinitely and no supervisor would ever restart it")
 	}
 }
 
