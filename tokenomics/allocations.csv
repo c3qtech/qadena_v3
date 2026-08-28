@@ -1,0 +1,12 @@
+bucket_id,bucket_name,pct,tokens_qdn,genesis_type,genesis_address,permanent_home,cliff_days,vest_months,cliff_release_pct,stakes,circulating,custody_final,notes
+01,Adoption Programs,24,960000000,native_msig,<01_MSIG_ADDR>,cw3-adoption,0,0,0,no,no,cw3-flex 3of5,"Merchant incentives, DID onboarding, loyalty, gas subsidies. Capped annual tranches."
+02,Long-Term Reserve,15,600000000,native_msig,<02_MSIG_ADDR>,cw-vesting -> cw3-ltr,0,120,0,no,no,cw-vesting + cw3-flex 4of5,10yr linear unlock ENFORCED by cw-vesting; cw3 controls each unlocked tranche. Governance-only.
+03,Foundation Treasury,14,560000000,native_msig,<03_MSIG_ADDR>,"cw3-foundation (56M liquid) + cw-vesting -> cw3-foundation (504M, 6yr)",0,72,10,yes,partial,cw-vesting + cw3-flex 3of5,10% liquid for ops. Locked 504M is DELEGATED to consortium validators (locked stake works).
+04,Builder & Partner Grants,11,440000000,native_msig,<04_MSIG_ADDR>,cw3-grants,0,0,0,no,no,cw3-flex 3of5,"Integrators, POS, dev milestones. Vesting grant on delivery, start_time=grant date."
+05,Personnel,8,320000000,native_msig,<05_MSIG_ADDR>,cw3-personnel,0,0,0,no,no,cw3-flex 3of5,"Team 6% (12mo cliff@25, 36mo) + Advisors 2% (6mo cliff@12.5, 18mo). Split charter-bound."
+06,Early Backers Escrow,7,280000000,native_msig,<06_MSIG_ADDR>,cw3-backers,0,0,0,no,no,cw3-flex 3of5,"Grants as addresses arrive: 12mo cliff@20, 36mo linear, start_time=TGE (backdated)."
+07,Founders Escrow,5,200000000,native_msig,<07_MSIG_ADDR>,cw3-founders,0,0,0,no,no,cw3-flex 3of5,"2 founders x 100M. Grant on address supply: 18mo cliff@12.5, 42mo, start_time=TGE. eth_secp256k1, never-used, personal 2of3 multisig advised."
+09,Contingency Reserve,6,240000000,native_msig,<09_MSIG_ADDR>,cw3-contingency,0,0,0,no,no,cw3-flex 2of5,Security incident + regulatory response. LOW threshold for speed. Two named triggers in charter.
+10,Public Sector Programs,8,320000000,native_msig,<10_MSIG_ADDR>,cw3-pubsec,0,0,0,no,no,cw3-flex 5of7,"Sub-allocations: SEC PH VERITAS 60M; future MOUs; OTC swap reserve. Entities only, never individuals. Funds feegrant sponsor account."
+12,Node Operations,2,79998900,native_msig,<12_MSIG_ADDR>,cw3-nodeops,0,0,0,no,no,cw3-flex 3of5,"Post-launch onboarding: 1000 self-bond + 100 gas per node, then foundation delegates. Commission is operator compensation."
+12,Node Operations,2,1100,base,<GENVAL_1_ADDR>,stays native (operator-owned),0,0,0,self-bond,yes,operator key,Genesis validator: 1000 QDN gentx self-bond + 100 gas. Operator-supplied address.

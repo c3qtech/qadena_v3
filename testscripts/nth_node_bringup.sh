@@ -366,7 +366,7 @@ info "measurements agree -- attestation can succeed"
 
 # THE JOINER MUST NOT BE CARRYING A FOREIGN GENESIS.  A machine that was a node on a PREVIOUS chain
 # still has that chain's genesis, data and pioneer key -- and the chain-id string is identical
-# across rebuilds ("qadena_4444-1"), so nothing downstream notices.
+# across rebuilds ("qadena_4828-1"), so nothing downstream notices.
 #
 # It gets through because phase 3 mints the key only when one is ABSENT, and the WIPE lives inside
 # that same branch (add_full_node.sh does it under --stop-for-funding; the phase-4 resume

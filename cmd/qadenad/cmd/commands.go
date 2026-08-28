@@ -202,7 +202,7 @@ func setEVMChainIDFromGenesis(appOpts servertypes.AppOptions) {
 		return // genesis may not exist yet (e.g. during init)
 	}
 
-	// Parse numeric part from chain-id like "qadena_4444-1"
+	// Parse numeric part from chain-id like "qadena_4828-1"
 	cosmosChainID := appGenesis.ChainID
 	parts := strings.Split(cosmosChainID, "_")
 	if len(parts) != 2 {

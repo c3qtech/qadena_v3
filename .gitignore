@@ -56,3 +56,9 @@ cmd/signer_enclave/signer_enclave.unsigned
 cmd/qadenad/qadenad
 *~
 testkey
+# Phase A token-gating: release artifacts and helper binary are fetched/built, not committed.
+# testscripts/fetch_token_contracts.sh re-downloads and checksum-verifies the wasm.
+testscripts/token_contracts/*.wasm
+testscripts/tools/msgencode/msgencode
+testscripts/.a[0-9]periods.json
+testscripts/.native_periods.json

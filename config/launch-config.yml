@@ -38,17 +38,42 @@
 #   min_signed_per_window       5%                -                 5%
 #   slash_fraction_double_sign  5%                5% + perm jail    5%
 #   slash_fraction_downtime     0.01%             0 (jail only)     0.01%  -- see note
-#   voting_period               14 days           -                 7 days -- see note
+#   voting_period               14 days           -                 72h at launch -- see note
+#   expedited_voting_period     1 day             -                 6h at launch -- see note
 #   min_deposit                 250 ATOM          6000 OSMO         see note
-#   inflation_max / min         20% / 7%          -                 10% / 3% -- see note
+#   inflation_max / min         20% / 7%          -                 1% fixed -- see note
 #   goal_bonded                 67%               -                 67%
 #   community_tax               2%                -                 2%
 
 version: 1
 
-# TODO_CHAIN_ID: the numeric part is your EIP-155 chain ID and must be registered before anything
-# EVM-facing exists.  4444 is the test value.
-chain_id: "TODO_CHAIN_ID"
+# CHAIN ID.  The numeric part is the EIP-155 chain ID and must be REGISTERED in
+# ethereum-lists/chains before anything EVM-facing exists.
+#
+# This is not cosmetic.  EIP-155 replay protection IS the chain ID, and eth_secp256k1 derives the
+# same 0x address on every EVM chain -- so two chains sharing an ID means any address that exists
+# on both has its signed transactions replayable in BOTH directions.  A collision is a live
+# vulnerability, not a naming inconvenience.
+#
+# 4444 was the old test value and CANNOT be used: it is registered to Htmlcoin Mainnet (shortName
+# "html"), an active chain with a live RPC and block explorer.
+#
+# Checked against ethereum-lists/chains on 2026-08-27, digits 4/2/8:
+#   TAKEN  428 (Geso Verse) · 248 (Oasys Mainnet) · 824 (Daily Network) · 842 (Taraxa Testnet)
+#          8428 (THAT Mainnet) · 4444 (Htmlcoin Mainnet)
+#   FREE   482 · 284 · 4228 · 4288 · 4824 · 4828 · 2848
+#
+# Assigned as a stem-plus-digit family, so a misconfigured node is obvious at a glance:
+#   mainnet  qadena_482-1     <- this file
+#   testnet  qadena_4824-1    stem + 4
+#   devnet   qadena_4828-1    stem + 8   (config/config.yml)
+#
+# The -1 suffix is the EPOCH: bump it (-2, -3, ...) whenever a network is restarted from a NEW
+# genesis.  Mainnet stays at -1 unless the chain is re-genesised.
+#
+# RE-CHECK ALL THREE against the registry immediately before launch -- a pending PR could claim
+# one between now and then -- and reserve them by PR so a later collision cannot force a rename.
+chain_id: "qadena_482-1"
 
 # ---------------------------------------------------------------------------------------------
 # ACCOUNTS AND TOKEN ALLOCATION
@@ -57,64 +82,145 @@ chain_id: "TODO_CHAIN_ID"
 # NO MNEMONICS.  Production keys must never live in a repo file; supply addresses generated in
 # whatever custody you are using (hardware, multisig, MPC).  Everything here is TODO_ADDR_.
 #
-# Only pioneer1 and treasury need to exist for the chain to bootstrap.  Everything else is an
-# allocation decision, and the splits below are a starting structure, not a recommendation about
-# your cap table -- percentages are yours to set.
+# The allocation below is NOT a starting structure to be edited here.  It is transcribed from
+# tokenomics/allocations.csv, which is human-owned; qadena-master-brief.md is authoritative for
+# every percentage, token count, cliff, vest duration and threshold.  Changing any of them is an
+# OUT OF SCOPE decision -- ask the human, do not adjust this file.
 #
-# VESTING: ignite's accounts: block only writes plain balances.  Vesting accounts are written into
-# genesis.json afterwards, the same shape as the existing setPubKAndPubKID.sh step.  Four types:
-#   ContinuousVestingAccount  linear between start and end
-#   DelayedVestingAccount     single cliff, all at once
-#   PeriodicVestingAccount    tranches -- use this for cliff-then-monthly
-#   PermanentLockedAccount    never vests; only staking rewards are ever spendable
+# VESTING -- READ THIS, IT REVERSES EARLIER GUIDANCE IN THIS FILE.
 #
-# The property that makes this work: vesting accounts CAN stake and vote while locked, they just
-# cannot transfer.  Founder and foundation allocations therefore contribute to chain security and
-# governance from block one instead of sitting idle.
+# There are NO VESTING ACCOUNTS AND NO CONTRACTS AT GENESIS.  Not one.  Every bucket lands as a
+# plain BaseAccount at a temporary native 2-of-3 multisig, fully liquid, and every lock is applied
+# AFTER launch: permanent custody (cw3-flex / cw-vesting) is deployed in week 1 on the live chain
+# (brief Phase C), and individual grants are issued later still through a cw3 proposal carrying
+# MsgCreatePeriodicVestingAccount (brief Phase D1).
+#
+# This file previously described writing ContinuousVesting / DelayedVesting / PeriodicVesting /
+# PermanentLocked accounts into genesis.json after the fact.  DO NOT DO THAT.  It would put locked
+# accounts and unaudited schedules into the artifact everyone has to verify by hash before launch,
+# and it is not what the brief specifies.
+#
+# The reason it is safe to defer: the locks still work when applied later.  Vesting locks hold
+# against the EVM (balance reads resolve to SpendableCoin), locked tokens can still be delegated so
+# the foundation tranche secures the chain while locked, and a backdated start_time gives everyone
+# the same clock regardless of when their grant is actually issued.  See evm-vesting-handoff.md.
 accounts:
-  # --- must exist at genesis; cannot be moved to runtime ---
+  # --- CHAIN BOOTSTRAP IDENTITIES ---
+  #
+  # !! UNRESOLVED CONFLICT -- DO NOT DELETE THESE TWO WITHOUT READING THIS !!
+  #
+  # qadena-master-brief.md says "Zero external addresses at genesis except genesis validator
+  # operators", and specifies exactly 11 genesis accounts: 10 buckets + 1 validator.  Taken
+  # literally that deletes pioneer1 and treasury.  THEY CANNOT BE DELETED: the x/qadena genesis
+  # stanza further down this file is NAME-BOUND to both --
+  #     publicKeyList          needs pioneer1PubKID / pioneer1PubK_pubk (transaction AND credential)
+  #     intervalPublicKeyIDList needs both a `pioneer` and a `treasury` nodeType entry
+  #     bankSendWhitelistList   grants the AML scan exemption to treasuryPubKID
+  # and buildscripts/setPubKAndPubKID.sh resolves "<name>PubKID" from the keyring for a NAMED
+  # account, so the account has to exist at genesis for the substitution to produce anything.
+  #
+  # Resolving this means either (a) accepting two bootstrap identities the brief excludes, or
+  # (b) changing what x/qadena requires at genesis.  Both are OUT OF SCOPE per the brief
+  # ("genesis validator count/operators").  ASK THE HUMAN.  This blocks Phase B, not Phase A.
+  #
+  # Until then both are left in place, and their amounts are NOT drawn from any bucket -- which
+  # is itself part of the conflict, since the bucket percentages already sum to 100.
   - name: pioneer1
     address: "TODO_ADDR_PIONEER1"
     coins: ["1000000qdn"]
   - name: treasury
     address: "TODO_ADDR_TREASURY"
     coins: ["TODO_AMOUNT_TREASURYqdn"]
+  # --- THE TEN ALLOCATION BUCKETS ---
+  #
+  # Transcribed from tokenomics/allocations.csv, which is HUMAN-OWNED and authoritative.
+  # Names, percentages and amounts are COPIED, never recomputed here.  If a number below
+  # disagrees with the CSV, the CSV wins and this file is stale.
+  #
+  # Every bucket is held at genesis by a TEMPORARY native 2-of-3 multisig of the operator's own
+  # keys.  Permanent custody (cw3-flex / cw-vesting) is deployed in week 1 on the LIVE chain --
+  # see Phase C of the brief -- after which these msigs are empty scaffolding and are retired.
+  #
+  # bucket_id 08 and 11 are intentionally absent.  Ten buckets, not twelve.
 
-  # --- allocation buckets; see vesting note above ---
-  # foundation: long-term endowment.  PermanentLockedAccount is common here so the principal can
-  # never be spent, only the staking rewards it earns.
+  # Adoption Programs -- 24%, 960,000,000 QDN.  custody: cw3-flex 3of5
+  # Merchant incentives, DID onboarding, loyalty, gas subsidies. Capped annual tranches.
+  - name: adoption
+    address: "TODO_ADDR_ADOPTION"
+    coins: ["960000000qdn"]
+
+  # Long-Term Reserve -- 15%, 600,000,000 QDN.  custody: cw-vesting + cw3-flex 4of5
+  # 10yr linear unlock ENFORCED by cw-vesting; cw3 controls each unlocked tranche. Governance-
+  # only.
+  - name: ltr
+    address: "TODO_ADDR_LTR"
+    coins: ["600000000qdn"]
+
+  # Foundation Treasury -- 14%, 560,000,000 QDN.  custody: cw-vesting + cw3-flex 3of5
+  # 10% liquid for ops. Locked 504M is DELEGATED to consortium validators (locked stake works).
   - name: foundation
     address: "TODO_ADDR_FOUNDATION"
-    coins: ["TODO_AMOUNT_FOUNDATIONqdn"]
+    coins: ["560000000qdn"]
 
-  # founders/core: PeriodicVestingAccount, 12-month cliff then monthly over 36-48 months
+  # Builder & Partner Grants -- 11%, 440,000,000 QDN.  custody: cw3-flex 3of5
+  # Integrators, POS, dev milestones. Vesting grant on delivery, start_time=grant date.
+  - name: grants
+    address: "TODO_ADDR_GRANTS"
+    coins: ["440000000qdn"]
+
+  # Personnel -- 8%, 320,000,000 QDN.  custody: cw3-flex 3of5
+  # Team 6% (12mo cliff@25, 36mo) + Advisors 2% (6mo cliff@12.5, 18mo). Split charter-bound.
+  - name: personnel
+    address: "TODO_ADDR_PERSONNEL"
+    coins: ["320000000qdn"]
+
+  # Early Backers Escrow -- 7%, 280,000,000 QDN.  custody: cw3-flex 3of5
+  # Grants as addresses arrive: 12mo cliff@20, 36mo linear, start_time=TGE (backdated).
+  - name: backers
+    address: "TODO_ADDR_BACKERS"
+    coins: ["280000000qdn"]
+
+  # Founders Escrow -- 5%, 200,000,000 QDN.  custody: cw3-flex 3of5
+  # 2 founders x 100M. Grant on address supply: 18mo cliff@12.5, 42mo, start_time=TGE.
+  # eth_secp256k1, never-used, personal 2of3 multisig advised.
   - name: founders
     address: "TODO_ADDR_FOUNDERS"
-    coins: ["TODO_AMOUNT_FOUNDERSqdn"]
+    coins: ["200000000qdn"]
 
-  # investors: PeriodicVestingAccount on its own schedule
-  - name: investors
-    address: "TODO_ADDR_INVESTORS"
-    coins: ["TODO_AMOUNT_INVESTORSqdn"]
+  # Contingency Reserve -- 6%, 240,000,000 QDN.  custody: cw3-flex 2of5
+  # Security incident + regulatory response. LOW threshold for speed. Two named triggers in
+  # charter.
+  - name: contingency
+    address: "TODO_ADDR_CONTINGENCY"
+    coins: ["240000000qdn"]
 
-  # ecosystem/grants: foundation-controlled, usually liquid or lightly vested
-  - name: ecosystem
-    address: "TODO_ADDR_ECOSYSTEM"
-    coins: ["TODO_AMOUNT_ECOSYSTEMqdn"]
+  # Public Sector Programs -- 8%, 320,000,000 QDN.  custody: cw3-flex 5of7
+  # Sub-allocations: SEC PH VERITAS 60M; future MOUs; OTC swap reserve. Entities only, never
+  # individuals. Funds feegrant sponsor account.
+  - name: pubsec
+    address: "TODO_ADDR_PUBSEC"
+    coins: ["320000000qdn"]
 
-  # community/airdrop: liquid, usually claim-gated
-  - name: community
-    address: "TODO_ADDR_COMMUNITY"
-    coins: ["TODO_AMOUNT_COMMUNITYqdn"]
+  # Node Operations -- 2%, 80,000,000 QDN.  custody: cw3-flex 3of5
+  # Post-launch onboarding: 1000 self-bond + 100 gas per node, then foundation delegates.
+  # Commission is operator compensation.
+  # SPLIT ROW: this bucket is the reserve below PLUS the genesis validator account,
+  # which together sum to the full 80,000,000 QDN.
+  - name: nodeops
+    address: "TODO_ADDR_NODEOPS"
+    coins: ["79998900qdn"]
 
-  # create-wallet sponsor: a LIVE HOT account that pays user-onboarding incentives.  Size it against
-  # your growth plan -- see the incentive note in the qadena section below.
-  - name: create-wallet-sponsor
-    address: "TODO_ADDR_SPONSOR"
-    coins: ["TODO_AMOUNT_SPONSORqdn"]
+  # --- GENESIS VALIDATOR OPERATOR ---
+  # The ONLY externally-held address at genesis.  1,100 QDN = 1,000 gentx self-bond + 100 gas.
+  # Operator-supplied address; part of the Node Operations bucket, not additional to it.
+  # The validator set grows one node at a time POST-launch via Phase D2 -- one gentx here.
+  - name: genval1
+    address: "TODO_ADDR_GENVAL_1"
+    coins: ["1100qdn"]
 
 genesis:
-  chain_id: "TODO_CHAIN_ID"
+  # Must match the top-level chain_id above.  See the registry note there.
+  chain_id: "qadena_482-1"
 
   app_state:
 
@@ -169,18 +275,37 @@ genesis:
       params:
         mint_denom: "aqdn"
         # 31,536,000 / 3s.  RECOMPUTE -- see the block time note at the top.
-        blocks_per_year: "10512000"
-        # DELIBERATELY BELOW the Cosmos Hub's 20%/7% band.  The Hub buys security almost entirely
-        # with inflation; Qadena earns real fee revenue from credential issuance and ekyc royalties,
-        # so it can hold a lower band and dilute holders less.
         #
-        # The risk is under-securing: if the bonded ratio settles well below goal_bonded, inflation
-        # rises to inflation_max and if that ceiling is too low it cannot pull bonding up.  Watch
-        # the bonded ratio for the first months and raise by governance if it stalls under ~50%.
-        inflation_max: "0.10"
-        inflation_min: "0.03"
-        inflation_rate_change: "0.13"
-        # the bonded ratio inflation steers towards
+        # This is the MAINNET target (3s blocks), and is NOT the same number as the one the brief
+        # asks for.  qadena-master-brief.md Phase B says to compute blocks_per_year from the
+        # MEASURED devnet block time -- that is an input to the devnet genesis build, where the
+        # single-validator chain runs at timeout_commit with no consensus round-trip.  Keep the two
+        # separate: a devnet measurement must never be pasted in here.
+        blocks_per_year: "10512000"
+        # 1.00% FIXED.  inflation_min == inflation_max, so there is no band and no steering -- the
+        # rate is a constant.  This supersedes the earlier 10%/3% band; see tokenomics/
+        # qadena-master-brief.md, which is authoritative for every token decision.
+        #
+        # WHY SO LOW.  Provisions = rate x TOTAL supply, but they are paid out to BONDED stake
+        # only.  At launch bonded stake is ~504M of 4,000,000,000 -- the foundation's locked
+        # tranche delegated to consortium validators -- so the yield concentrates hard:
+        #     1% x 4.0B = 40M/yr paid to ~504M bonded  ->  ~7.9% staker APR
+        # A Cosmos-Hub-style 10% ceiling against that same tiny bonded set would pay roughly 79%,
+        # which is absurd yield for a permissioned consortium and dilutes every holder to fund it.
+        # The old band was written before the bonded set was known to be this small.
+        #
+        # Uncapped: inflation stays ON.  Never describe QDN as having a total, max or capped
+        # supply -- 4,000,000,000 is the INITIAL supply.
+        inflation_max: "0.010000000000000000"
+        inflation_min: "0.010000000000000000"
+        # No rate change: with min == max there is nothing to change between.
+        inflation_rate_change: "0"
+        #
+        # goal_bonded AND inflation_rate_change ARE NOW INERT.  They are kept, not deleted, so a
+        # future reader sees they were considered rather than forgotten -- x/mint only consults
+        # them when inflation is allowed to move between a min and a max, and here it is not.
+        # If the 1% constant is ever replaced by a real band, these two wake up again: do not
+        # "restore" the band without deciding these deliberately at the same time.
         goal_bonded: "0.67"
 
     # -----------------------------------------------------------------------------------------
@@ -195,19 +320,73 @@ genesis:
         min_deposit:
           - denom: "aqdn"
             amount: "10000000000000000000000"
-        max_deposit_period: "172800s"
-        # 7 days.  Cosmos Hub uses 14.  7 is the shorter end of normal and common for newer chains:
-        # it keeps governance responsive, at the cost of giving distributed delegators less time to
-        # notice a proposal.  Do not go below ~5 days -- the 300s in the test config exists purely
-        # so tests finish, and shipping anything near it makes governance capturable by whoever is
-        # simply paying attention that day.
-        voting_period: "604800s"
-        # expedited is for emergencies (a security patch), so it costs 5x and gets 1 day
+        # LAUNCH-WINDOW TIMINGS.  The three periods below are deliberately SHORTER than the
+        # steady-state values, and they are TEMPORARY.  Read the sunset clause before copying them
+        # anywhere.  Steady-state values to restore: max_deposit 172800s, voting 604800s,
+        # expedited 86400s.
+        #
+        # WHY SHORT IS SAFE *NOW* AND NOT LATER.  At launch, bonded stake is ~504M and nearly all
+        # of it is the foundation's locked tranche delegated to consortium validators -- so 66.7%
+        # of bonded stake IS the foundation.  The expedited period is therefore not a defence
+        # against outsiders; it is a SELF-IMPOSED REVIEW WINDOW, time for a non-colluding party to
+        # notice and object before something irreversible executes.  The stock warning about
+        # "giving distributed delegators less time to notice" does not bite yet because there are
+        # no distributed delegators yet.  That changes, and when it does these values must go back.
+        #
+        # 24h.  Clears junk proposals out of the queue faster.  Low risk while the foundation
+        # self-funds every deposit.
+        max_deposit_period: "86400s"
+        #
+        # 72h, down from 7 days.  Survives a weekend -- a proposal filed Friday evening still ends
+        # Monday evening -- while being 2.3x more responsive than the steady-state value.
+        #
+        # Do NOT compress this towards the expedited period.  A failed expedited proposal is
+        # converted to a regular one rather than rejected (see below), and the SDK sets the new end
+        # time from the ORIGINAL voting start -- x/gov/abci.go:
+        #     endTime := proposal.VotingStartTime.Add(*params.VotingPeriod)
+        # so the fallback window is (voting_period - expedited_voting_period), not a fresh period.
+        # At 72h/6h that leaves 66h of fallback.  Set voting_period to 8h with expedited at 6h and
+        # the fallback track silently collapses to 2h.  Keep the ratio wide.
+        voting_period: "259200s"
+        # expedited is for emergencies (a security patch), so it costs 5x
         expedited_min_deposit:
           - denom: "aqdn"
             amount: "50000000000000000000000"
-        expedited_voting_period: "86400s"
+        # 6h, down from 24h.  Long enough that a non-colluding council member in SOME timezone is
+        # awake and could object; short enough to actually be an emergency lever.
+        #
+        # THIS NUMBER HAS A PRECONDITION: it assumes the council spans timezones (PH/AU/US).  If
+        # the council ends up concentrated in ONE timezone, raise this to 12h ("43200s").  A window
+        # that fits entirely inside one region's night is the wrong design when the thing that can
+        # pass is enclave key custody -- see the charter rule below.
+        #
+        # Hard SDK constraint: must be STRICTLY LESS than voting_period, or ValidateBasic rejects
+        # the params (x/gov/types/v1/params.go).
+        expedited_voting_period: "21600s"
+        # UNCHANGED at 0.667, and it must stay above `threshold` (another hard SDK constraint).
+        # With the expedited period cut 4x, this is the only thing left separating the two tiers.
+        # Note also that a FAILED expedited proposal does not burn its deposit -- it just converts
+        # to a regular proposal -- so expedited is cheap to attempt.  Keep the bar high.
         expedited_threshold: "0.667"
+        #
+        # CHARTER RULE -- the params cannot express this, so the consortium agreement must.
+        # gov v1 has exactly two tiers and no per-message-type periods (see the note further down),
+        # while a passed proposal is what makes an enclave measurement `active` -- after which every
+        # node hands its sealed jar and regulator keys to that MRENCLAVE.  So the expedited track is
+        # RESERVED for params, upgrades and incident response, and MUST NOT be used for
+        # MsgUpdateEnclaveIdentity.  Enclave registration is a routine operation and belongs on the
+        # regular track; at 72h that is no longer painful.  This is the operational stand-in for a
+        # per-handler bar (backlog 95) until one exists.
+        #
+        # SUNSET -- these values expire.  Restore the steady-state timings when EITHER:
+        #   (a) stake NOT delegated by the foundation exceeds 25% of bonded stake, or
+        #   (b) TGE + 90 days,
+        # whichever comes first.  The risk being managed here is not the low numbers; it is the low
+        # numbers still being in place when real delegators arrive and can no longer be assumed to
+        # be watching the council chat.  Write the restoring MsgUpdateParams proposal at launch and
+        # commit it to the repo, so restoration is one command rather than a drafting exercise
+        # nobody gets around to.  Because these are gov params, the restoring proposal runs UNDER
+        # the lowered timings -- there is no chicken-and-egg.
         # TALLY PARAMS, AND WHY THESE NUMBERS.
         #
         # Read what quorum actually permits, not how many validators it implies: at minimum turnout

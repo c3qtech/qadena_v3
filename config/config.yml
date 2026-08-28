@@ -129,12 +129,12 @@ validators:
       size: "10000"
       
   client:
-    chain-id: "qadena_4444-1"
+    chain-id: "qadena_4828-1"
 build:
   main: cmd/qadenad
 
 genesis:
-  chain_id: "qadena_4444-1"
+  chain_id: "qadena_4828-1"
   app_state:
     # Params below are kept IDENTICAL to config/launch-config.yml wherever the value does not affect
     # how fast the test suite runs.  A param that only ever appears in the launch config is a param

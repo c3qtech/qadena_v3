@@ -308,7 +308,7 @@ if [ "$with_contracts" = "true" ]; then
     existing=$("$enfdir/enf_cli.sh" contract-addr 2>/dev/null | tail -1)
 
     # A recorded address only means something if the contract is still THERE.  The
-    # chain-id is constant across reinstalls (qadena_4444-1), so it cannot be used to
+    # chain-id is constant across reinstalls (qadena_4828-1), so it cannot be used to
     # spot a wiped chain -- and enf_state.json is gitignored local residue that
     # outlives any number of chains.  Asking the chain is both simpler and correct for
     # every reason the contract might be missing: chain wiped, wrong node, contract
