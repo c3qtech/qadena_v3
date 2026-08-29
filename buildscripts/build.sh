@@ -113,18 +113,27 @@ fi
 # whether the enclave changed.  Building the enclave first makes the measurement available while
 # the chain's version is still being decided.
 if [[ $skip_enclave == 0 ]] ; then
-    $qadenabuildscripts/build_enclave.sh --title $TITLE $update_test_unique_id_flag $build_sgx_flag $hold_flag
-    if [ $? -ne 0 ] ; then
+    # NAME THE SCRIPT AND ITS EXIT CODE.  Both branches below used to print the identical
+    # "$TITLE ERROR" and nothing else, so a failure said only that SOMETHING failed -- not which of
+    # the two scripts, not with what status, and not after which of its own steps.  On 2026-08-30
+    # that cost a fleet bringup and hours of bisection: the enclave and signer both printed their
+    # success lines and "Install done.", and the only other evidence was one anonymous banner.
+    $qadenabuildscripts/build_enclave.sh --title "$TITLE" $update_test_unique_id_flag $build_sgx_flag $hold_flag
+    rc=$?
+    echo "build.sh: build_enclave.sh exited $rc"
+    if [ $rc -ne 0 ] ; then
         echo "************"
-        echo "   $TITLE ERROR"
+        echo "   $TITLE ERROR: build_enclave.sh failed (exit $rc)"
         echo "************"
         exit 1
     fi
 
-    $qadenabuildscripts/build_signer_enclave.sh --title $TITLE $update_test_unique_id_flag $build_sgx_flag $hold_flag
-    if [ $? -ne 0 ] ; then
+    $qadenabuildscripts/build_signer_enclave.sh --title "$TITLE" $update_test_unique_id_flag $build_sgx_flag $hold_flag
+    rc=$?
+    echo "build.sh: build_signer_enclave.sh exited $rc"
+    if [ $rc -ne 0 ] ; then
         echo "************"
-        echo "   $TITLE ERROR"
+        echo "   $TITLE ERROR: build_signer_enclave.sh failed (exit $rc)"
         echo "************"
         exit 1
     fi

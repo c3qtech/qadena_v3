@@ -100,6 +100,22 @@ echo "stop_qadena.sh: -----------"
 
 stop_failed=0
 
+# enclave_running <basename> -- is a REAL enclave process alive, in either form?
+#
+# NEVER `pgrep -f "<name>"` for this.  -f matches whole command lines, so it also finds
+# `go build .../cmd/qadenad_enclave` and the scripts that run it.  That is not academic: the
+# detection loops below would then wait the full 60s for a "stubborn enclave" that was actually a
+# compiler, and escalate to SIGKILL against it.  Same substring trap that made a build die with
+# SIGINT and report only "$TITLE ERROR" (2026-08-30).
+#
+#   -x   the debug process, whose NAME is the enclave binary.
+#   -f   the SGX form `ego-host <path>/<name>`, whose name is ego-host so -x cannot see it.
+#        No build command line contains "ego-host", so this cannot match one.
+enclave_running() {
+    pgrep -x "$1" > /dev/null 2>&1 || pgrep -f "ego-host.*$1" > /dev/null 2>&1
+}
+
+
 # THE RESPAWN SUPERVISORS ARE GONE.  This script used to `pkill -KILL` the run_enclave.sh /
 # run_signerenclave.sh `while true` loops FIRST, unconditionally, because killing an enclave while
 # its supervisor lived just produced another one inside the verification window (one such loop
@@ -120,6 +136,10 @@ if [[ $stop_qadena -eq 1 ]] ; then
     # cosmovisor mid-upgrade-swap must not be left to finish the swap against a node we are
     # stopping.  Bracket-classed so this ssh-able command never matches itself.
     pkill -INT -f "[c]osmovisor run" 2>/dev/null
+    # SAY WHAT IS ABOUT TO BE SIGNALLED.  `pkill -f "qadenad"` matches any command line CONTAINING
+    # that substring -- including build commands (go build .../cmd/qadenad_enclave), the scripts
+    # that invoke them, and an ssh command that merely mentions the name.  When it hits one of
+    # those the victim dies with SIGINT (exit 130) far from here, and nothing connects the two.
     pkill -INT -f "qadenad"
 
     # check if qadenad is dead after 2 seconds
@@ -181,7 +201,15 @@ if [[ $stop_enclave -eq 1 ]] ; then
     if use_real_enclave "$qadenabin/qadenad_enclave" ; then
       pkill -INT -f "ego-host.*qadenad_enclave"
     fi
-    pkill -INT -f "qadenad_enclave"
+    # Same two forms, same reasoning as the signer block below.  `pkill -f "qadenad_enclave"` bare
+    # matches any command line containing it -- including `go build .../cmd/qadenad_enclave` -- so a
+    # stop racing a build SIGINTs the compiler and surfaces as an unexplained build error.
+    #   -x   catches the debug process, whose NAME is qadenad_enclave.
+    #   -f   catches the SGX form `ego-host <path>/qadenad_enclave`, whose name is ego-host so -x
+    #        cannot see it.  Ungated for the same reason as the signer: use_real_enclave reads the
+    #        INSTALLED binary, not the running one.
+    pkill -INT -x qadenad_enclave
+    pkill -INT -f "ego-host.*qadenad_enclave"
 
     # SIGNALLING IS NOT STOPPING, and for an SGX enclave the gap is tens of seconds.
     #
@@ -202,20 +230,20 @@ if [[ $stop_enclave -eq 1 ]] ; then
     # So wait for it, and escalate rather than wait forever -- exactly what the chain block above
     # already does with its SIGINT -> SIGKILL.
     for i in {1..60}; do
-        pgrep -f "qadenad_encla[v]e" > /dev/null 2>&1 || break
+        enclave_running qadenad_enclave || break
         sleep 1
     done
-    if pgrep -f "qadenad_encla[v]e" > /dev/null 2>&1 ; then
+    if enclave_running qadenad_enclave ; then
         echo "stop_qadena.sh: the enclave did not exit on SIGINT after 60s, escalating to SIGKILL"
         if use_real_enclave "$qadenabin/qadenad_enclave" ; then
           pkill -KILL -f "ego-host.*qadenad_enclave"
         fi
-        pkill -KILL -f "qadenad_enclave"
+        pkill -KILL -x qadenad_enclave
         sleep 2
     fi
-    if pgrep -f "qadenad_encla[v]e" > /dev/null 2>&1 ; then
+    if enclave_running qadenad_enclave ; then
         echo "stop_qadena.sh: Error: the enclave is STILL running after SIGKILL"
-        pgrep -af "qadenad_encla[v]e" | sed "s/^/    /"
+        { pgrep -ax qadenad_enclave; pgrep -af "ego-host.*qadenad_enclave"; } | sed "s/^/    /"
         stop_failed=1
     fi
 fi
@@ -226,7 +254,32 @@ if [[ $stop_signer_enclave -eq 1 ]] ; then
     if use_real_enclave "$qadenabin/signer_enclave" ; then
       pkill -KILL -f "ego-host.*signer_enclave"
     fi
-    pkill -INT -f "signer_enclave"
+    # NEVER `pkill -f "signer_enclave"` BARE.  -f matches whole command lines, and
+    # buildscripts/build_signer_enclave.sh CONTAINS that substring -- so this line SIGINTed the very
+    # script that called it, five levels up:
+    #
+    #   build.sh -> build_signer_enclave.sh -> install.sh --signer-enclave
+    #            -> ensure_stopped_for_binaries -> stop_qadena.sh --all -> here
+    #
+    # The victim died with 130 (SIGINT) AFTER doing its work and printing "Install done.", and
+    # build.sh reported only an anonymous "$TITLE ERROR" -- so every signal said the build had
+    # failed for an unknown reason.  It cost the 2026-08-30 fleet bringup.
+    #
+    # It needed BOTH halves to appear: 1a3a5edd stopped this script short-circuiting on a stopped
+    # node when a systemd unit exists, so only a systemd-managed box (M1) reaches these kills with
+    # nothing running.  M2-M4 still exit early and never see it.
+    #
+    # BOTH FORMS ARE STILL ATTEMPTED, which is the point of the paragraph above this block: which
+    # one is RUNNING depends on how the enclave was started, not on what is installed now.
+    #   debug -- the process really is `signer_enclave`, so -x (exact NAME) matches it and cannot
+    #            match a script whose filename merely embeds the name.
+    #   SGX   -- the process is `ego-host <path>/signer_enclave`, whose NAME is ego-host, so -x can
+    #            never match it; the pair must be matched with -f.  Deliberately NOT gated on
+    #            use_real_enclave: that inspects the INSTALLED binary, so a rebuild between start
+    #            and stop would otherwise strand a live ego-hosted enclave.  No build command line
+    #            contains "ego-host", so this form cannot self-match.
+    pkill -INT -x signer_enclave
+    pkill -INT -f "ego-host.*signer_enclave"
 fi
 
 # stop rotatelogs
