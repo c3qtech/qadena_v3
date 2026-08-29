@@ -266,7 +266,18 @@ fi
 #
 # Best effort: we are the ones who just stopped the enclave, so if we cannot remove it, say so and
 # name the command that will -- do not fail the stop over it.
-for sock in /tmp/qadena_*.sock ; do
+# THE (N) IS LOAD-BEARING -- it is zsh's NULL_GLOB qualifier.  Without it an unmatched glob is a
+# FATAL ERROR in zsh (NOMATCH), not the literal pattern bash would hand through: the `for` line
+# dies at expansion time, the loop body never runs, and the script ABORTS HERE with status 1.
+#
+# So this script failed precisely when it SUCCEEDED.  A node that stopped cleanly has already
+# released /tmp/qadena_*.sock, so the glob matches nothing and the stop reports failure -- which is
+# the opposite of the promise three lines above ("do not fail the stop over it").  The `[[ -e ]]`
+# guard below reads like it covers this; it is the bash idiom and zsh never reaches it.
+#
+# It cost a whole fleet bringup on 2026-08-30: init.sh -> build.sh -> install.sh calls this, and
+# the run died with "FINAL BUILD ERROR" and no other diagnosis.
+for sock in /tmp/qadena_*.sock(N) ; do
     [[ -e $sock ]] || continue
     if ! rm -f "$sock" 2>/dev/null; then
         # `stat -c` is GNU, `stat -f` is BSD/macOS; try both rather than print "?" on a Mac.

@@ -116,6 +116,21 @@ is a baseline.
 
 ## The same run on SGX1 + SGX2
 
+
+```sh
+./testscripts/fleet_bringup_with_tests.sh \
+  --primary alvillarica@192.168.86.120 \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_reshare_audit.sh" \
+  --joiner alvillarica@192.168.86.140 \
+    --test "./testscripts/test_ss_reshare_audit.sh" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/run_regression_continually.sh" 
+```
+
 The schedule truncated to two nodes.  Same shape, same order, same reason -- there are
 simply two positions instead of four.
 
