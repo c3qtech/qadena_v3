@@ -17,7 +17,7 @@ var (
 	ErrPioneerNotExists              = sdkerrors.Register(ModuleName, 1106, "Pioneer does not exist")
 	ErrPubKIDNotExists               = sdkerrors.Register(ModuleName, 1107, "PubKID does not exist")
 	ErrInvalidDstEWalletID           = sdkerrors.Register(ModuleName, 1108, "Invalid destination EWalletID")
-	ErrGenericTreasury               = sdkerrors.Register(ModuleName, 1109, "Treasury generic error")
+	ErrGenericIncentivePool          = sdkerrors.Register(ModuleName, 1109, "Incentive pool generic error")
 	ErrGenericEncryption             = sdkerrors.Register(ModuleName, 1110, "Encryption generic error")
 	ErrGenericPedersen               = sdkerrors.Register(ModuleName, 1111, "Pedersen generic error")
 

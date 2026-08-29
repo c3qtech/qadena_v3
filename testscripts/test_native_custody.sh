@@ -3,7 +3,7 @@
 # Native custody follow-ups: the paths the Phase A suite left unproven.
 #
 # Everything here uses CORE Cosmos SDK modules only -- no CosmWasm, and no x/group (which moved to
-# enterprise/ under a paid licence in SDK v0.54).  See tokenomics/qadena-native-brief.md.
+# enterprise/ under a paid licence in SDK v0.54).  See tokenomics/qadena-master-brief.md.
 #
 # The centrepiece is a multisig vesting account whose tokens are GENUINELY STILL LOCKED.  An earlier
 # run used a backdated single-period schedule that had already fully elapsed, so its "delegation of

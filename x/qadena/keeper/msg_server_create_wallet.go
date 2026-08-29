@@ -133,10 +133,10 @@ func (k msgServer) CreateWallet(goCtx context.Context, msg *types.MsgCreateWalle
 		// how much we will transfer into the new wallet (incentive)
 
 		c.ContextDebug(ctx, "transfer from Treasury to QADENA module for encrypted amount "+c.PrettyPrint(incentiveCoin))
-		err = k.lockAccountAmount(ctx, k.getTreasuryAddress(ctx), incentiveCoin)
+		err = k.lockAccountAmount(ctx, k.getIncentivePoolAddress(ctx), incentiveCoin)
 		if err != nil {
 			c.ContextError(ctx, "err transfer (lockAccountAmount) "+err.Error())
-			return nil, types.ErrGenericTreasury
+			return nil, types.ErrGenericIncentivePool
 		}
 		c.ContextDebug(ctx, "coins locked for encrypted amount")
 
@@ -145,7 +145,7 @@ func (k msgServer) CreateWallet(goCtx context.Context, msg *types.MsgCreateWalle
 
 		if err != nil {
 			c.ContextError(ctx, "err transfer (distributeIncentives) "+err.Error())
-			return nil, types.ErrGenericTreasury
+			return nil, types.ErrGenericIncentivePool
 		}
 
 		c.ContextDebug(ctx, "distributed incentive coins")
@@ -162,10 +162,10 @@ func (k msgServer) CreateWallet(goCtx context.Context, msg *types.MsgCreateWalle
 		// how much we will transfer into the new wallet (incentive)
 
 		c.ContextDebug(ctx, "transfer from Treasury to QADENA module for encrypted amount "+c.PrettyPrint(ephemeralIncentiveCoin))
-		err = k.lockAccountAmount(ctx, k.getTreasuryAddress(ctx), ephemeralIncentiveCoin)
+		err = k.lockAccountAmount(ctx, k.getIncentivePoolAddress(ctx), ephemeralIncentiveCoin)
 		if err != nil {
 			c.ContextError(ctx, "err transfer (lockAccountAmount) "+err.Error())
-			return nil, types.ErrGenericTreasury
+			return nil, types.ErrGenericIncentivePool
 		}
 		c.ContextDebug(ctx, "coins locked for encrypted amount")
 
@@ -174,7 +174,7 @@ func (k msgServer) CreateWallet(goCtx context.Context, msg *types.MsgCreateWalle
 
 		if err != nil {
 			c.ContextError(ctx, "err transfer (distributeIncentives) "+err.Error())
-			return nil, types.ErrGenericTreasury
+			return nil, types.ErrGenericIncentivePool
 		}
 
 		c.ContextDebug(ctx, "distributed incentive coins")
@@ -182,10 +182,10 @@ func (k msgServer) CreateWallet(goCtx context.Context, msg *types.MsgCreateWalle
 		c.ContextDebug(ctx, "wallet type is WalletTypeCheckTx")
 
 		c.ContextDebug(ctx, "CHECKTX:  transfer from Treasury to QADENA module for encrypted amount "+c.PrettyPrint(incentiveCoin))
-		err = k.lockAccountAmount(ctx, k.getTreasuryAddress(ctx), incentiveCoin)
+		err = k.lockAccountAmount(ctx, k.getIncentivePoolAddress(ctx), incentiveCoin)
 		if err != nil {
 			c.ContextError(ctx, "CHECKTX:  err transfer (lockAccountAmount) "+err.Error())
-			return nil, types.ErrGenericTreasury
+			return nil, types.ErrGenericIncentivePool
 		}
 		c.ContextDebug(ctx, "CHECKTX:  coins locked for encrypted amount")
 
@@ -194,7 +194,7 @@ func (k msgServer) CreateWallet(goCtx context.Context, msg *types.MsgCreateWalle
 
 		if err != nil {
 			c.ContextError(ctx, "CHECKTX:  err transfer (distributeIncentives) "+err.Error())
-			return nil, types.ErrGenericTreasury
+			return nil, types.ErrGenericIncentivePool
 		}
 
 		c.ContextDebug(ctx, "CHECKTX:  distributed incentive coins")

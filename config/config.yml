@@ -425,9 +425,14 @@ genesis:
         - pubKID: pioneer1PubKID
           nodeType: pioneer
           nodeID: pioneer1
+        # The account create_wallet incentives are paid FROM.  Renamed from "treasury" to the ROLE
+        # name: the chain's incentive pool is a different thing from the Foundation Treasury bucket
+        # and from a deployment's sec-treasury, and the collision cost real confusion.
+        # nodeID/nodeType are STATE KEY bytes -- changing them moves the entry, so this had to land
+        # before mainnet genesis.  On the test chain it still points at the `treasury` key.
         - pubKID: treasuryPubKID
-          nodeType: treasury
-          nodeID: treasury
+          nodeType: incentive-pool
+          nodeID: incentive-pool
         # No srv-prv entries: every service provider is registered by a MsgAddServiceProvider
         # governance proposal at onboarding time -- see the note above the client: section
     pricefeed:

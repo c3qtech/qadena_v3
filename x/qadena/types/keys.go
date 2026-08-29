@@ -54,7 +54,10 @@ const (
 	JarNodeType             = "jar"
 	AnonymizerNodeType      = "anonymizer"
 	SSNodeType              = "ss"
-	TreasuryNodeType        = "treasury"
+	// The account the chain pays create_wallet incentives FROM.  Named for the ROLE, not for
+	// whichever bucket funds it -- genesis points it at an address, and that address may change.
+	// NOTE: this value is part of the IntervalPublicKeyID state key; changing it moves the entry.
+	IncentivePoolNodeType   = "incentive-pool"
 	RegulatorNodeType       = "regulator"
 	ServiceProviderNodeType = "srv-prv"
 )
@@ -74,7 +77,7 @@ const (
 
 const (
 	SSNodeID       = "ss"
-	TreasuryNodeID = "treasury"
+	IncentivePoolNodeID = "incentive-pool"
 )
 
 const (

@@ -25,37 +25,41 @@ func (k Keeper) getSSIntervalPubK(ctx sdk.Context) (string, string) {
 	return ssWalletIntervalPubKID.PubKID, ssWalletIntervalPubK.PubK
 }
 
-func (k Keeper) getTreasuryPubKID(ctx sdk.Context) string {
-	treasuryWalletIntervalPubKID, found := k.GetIntervalPublicKeyID(ctx, types.TreasuryNodeID, types.TreasuryNodeType)
+// getIncentivePoolPubKID returns the PubKID of the account that funds create_wallet incentives.
+// The PubKID IS the bech32 address (see getIncentivePoolAddress).  Genesis must carry an
+// intervalPublicKeyIDList entry with nodeID and nodeType both "incentive-pool", or every wallet
+// creation PANICS here.
+func (k Keeper) getIncentivePoolPubKID(ctx sdk.Context) string {
+	incentivePoolIntervalPubKID, found := k.GetIntervalPublicKeyID(ctx, types.IncentivePoolNodeID, types.IncentivePoolNodeType)
 	if found {
-		c.ContextDebug(ctx, "treasuryWalletIntervalPubKID "+treasuryWalletIntervalPubKID.PubKID)
+		c.ContextDebug(ctx, "incentivePoolIntervalPubKID "+incentivePoolIntervalPubKID.PubKID)
 	} else {
-		c.ContextError(ctx, "Couldn't find treasury pubkid "+types.ErrGenericTreasury.Error())
-		panic(types.ErrGenericTreasury.Error())
+		c.ContextError(ctx, "Couldn't find incentive-pool pubkid "+types.ErrGenericIncentivePool.Error())
+		panic(types.ErrGenericIncentivePool.Error())
 	}
 
-	return treasuryWalletIntervalPubKID.PubKID
+	return incentivePoolIntervalPubKID.PubKID
 }
 
-func (k Keeper) getTreasuryAddress(ctx sdk.Context) (treasury sdk.AccAddress) {
-	treasuryPubKID := k.getTreasuryPubKID(ctx)
-	c.ContextDebug(ctx, "treasuryPubKID "+treasuryPubKID)
-	treasuryAddress, err := sdk.AccAddressFromBech32(treasuryPubKID)
+func (k Keeper) getIncentivePoolAddress(ctx sdk.Context) (incentivePool sdk.AccAddress) {
+	incentivePoolPubKID := k.getIncentivePoolPubKID(ctx)
+	c.ContextDebug(ctx, "incentivePoolPubKID "+incentivePoolPubKID)
+	incentivePoolAddress, err := sdk.AccAddressFromBech32(incentivePoolPubKID)
 
 	if err != nil {
 		c.ContextError(ctx, err.Error())
 		panic(err.Error())
 	}
 
-	c.ContextDebug(ctx, "treasuryAddress "+treasuryAddress.String())
-	return treasuryAddress
+	c.ContextDebug(ctx, "incentivePoolAddress "+incentivePoolAddress.String())
+	return incentivePoolAddress
 }
 
 func (k Keeper) distributeIncentives(ctx sdk.Context, accountAddress sdk.AccAddress, coin sdk.Coin) (err error) {
 	coin = sdk.NormalizeCoin(coin)
 	c.ContextDebug(ctx, "distributeIncentives "+coin.String())
 
-	err = k.bankKeeper.SendCoinsFromAccountToModule(ctx, k.getTreasuryAddress(ctx), types.ModuleName, sdk.NewCoins(coin))
+	err = k.bankKeeper.SendCoinsFromAccountToModule(ctx, k.getIncentivePoolAddress(ctx), types.ModuleName, sdk.NewCoins(coin))
 
 	if err != nil {
 		c.ContextError(ctx, "Temp transfer to module:  SendCoinsFromAccountToModule err "+err.Error())

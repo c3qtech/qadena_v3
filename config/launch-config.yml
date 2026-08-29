@@ -588,9 +588,25 @@ genesis:
         - pubKID: pioneer1PubKID
           nodeType: pioneer
           nodeID: pioneer1
-        - pubKID: treasuryPubKID
-          nodeType: treasury
-          nodeID: treasury
+        # THE INCENTIVE POOL -- the account the chain debits for create_wallet incentives
+        # (500 + 500 per wallet, 50 per ephemeral wallet; ~100M QDN per 100k users).
+        #
+        # It points at the ADOPTION PROGRAMS bucket, whose stated purpose in allocations.csv is
+        # exactly this: "Merchant incentives, DID onboarding, loyalty, gas subsidies".  That
+        # resolves what looked like a conflict with the brief's "zero external addresses at
+        # genesis" rule -- no eleventh account is needed, and the onboarding budget comes from the
+        # bucket that was always meant to fund it rather than from an allocation nobody sized.
+        #
+        # The pool NEVER SIGNS: x/qadena debits it with SendCoinsFromAccountToModule from the
+        # keeper (helpers.go lockAccountAmount), so a native multisig works here.  UNTESTED --
+        # verify a multisig actually serves as this identity before genesis.
+        #
+        # nodeID/nodeType are STATE KEY bytes and the lookup constants are hardcoded
+        # (types.IncentivePoolNodeID / NodeType).  They must match exactly or every wallet
+        # creation PANICS.
+        - pubKID: TODO_ADDR_ADOPTION
+          nodeType: incentive-pool
+          nodeID: incentive-pool
 
     # -----------------------------------------------------------------------------------------
     # PRICEFEED

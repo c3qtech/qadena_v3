@@ -105,12 +105,12 @@ remaining way locked principal might become spendable early. **It does not.**
 | # | Limit | Evidence / consequence |
 |---|---|---|
 | 1 | **No on-chain proposal or vote record for a bucket spend.** Signatures are collected OFF chain | The price of excluding `x/group`. Mitigation below |
-| 2 | **A multisig's address derives from its member set + threshold** | Rotation costs a transfer and a new whitelist entry (§10) |
+| 2 | **A multisig's address derives from its member set + threshold** | Rotation costs a transfer and a new whitelist entry (LATE ARRIVAL §B1) |
 | 3 | **A vesting account can never be migrated** — locked coins cannot move | A vesting multisig's membership is **frozen for the schedule's duration** |
 | 4 | **Never pre-fund an address destined to become a vesting account** | `account … already exists` (`x/auth/vesting/msg_server.go:192`). **Unrecoverable** |
 | 5 | **No plain-key account can send until whitelisted or an eKYC wallet** | code **1159** — multisigs, contracts, group policies alike |
 | 6 | **A fully locked account cannot pay ANY fee**, including the fee to delegate its own principal | N1's first run produced NO delegation, **silently**, at `spendable = 0` |
-| 7 | **A multisig cannot be made an eKYC wallet via the supported path** | `create-wallet` mints from a fresh mnemonic and overrides `--from`. **Not proven impossible** — §11 |
+| 7 | **A multisig cannot be made an eKYC wallet via the supported path** | `create-wallet` mints from a fresh mnemonic and overrides `--from`. **Not proven impossible** — LATE ARRIVAL §A |
 | 8 | Staking rewards on locked stake are liquid **immediately** | N2. A "locked" bucket yields spendable income. Disclose deliberately |
 | 9 | Every transfer is AML-scanned and threshold-reported even when whitelisted | Whitelisting removes the *identity* requirement, not the scan |
 | 10 | A threshold, once chosen, cannot be changed | No native `update-decision-policy`. Choose for churn up front |
@@ -134,7 +134,7 @@ unbonding (N3). *Cost:* membership frozen for the schedule; needs its own whitel
 gas float (limit 6).
 
 **Pattern B — liquid escrow.** A plain n-of-m holds liquid funds and issues Pattern-A grants.
-Membership can rotate (§10). *Cost:* the bucket's own schedule is policy, not physics.
+Membership can rotate (LATE ARRIVAL §B1). *Cost:* the bucket's own schedule is policy, not physics.
 
 **Pattern C — community pool.** Funds move by `MsgCommunityPoolSpend` governance proposals. Fully
 on-chain and permanent — the only native way to get real vote records. *Cost:* control passes to
@@ -182,3 +182,651 @@ removes all launch-day governance.
 11. **Whitelist before funding, always.** The wrong order fails inside the block, having spent the fee.
 12. **Choose thresholds for churn at creation.** They are immutable; for locked accounts so is the
     membership.
+
+---
+
+# PHASE A — GATING TESTS (COMPLETE)
+
+Run on devnet `qadena_4828-1`. Full evidence in `gating-findings.md`.
+
+**A1–A8, the CosmWasm design: 4 PASS, 3 FAIL, 1 NOT-EXERCISED — it does not pass.**
+
+| # | Test | Verdict |
+|---|---|---|
+| A1 | cw3-flex carrying `MsgCreatePeriodicVestingAccount` | **FAIL** — the released binary cannot represent the message (§3) |
+| A2 | Native 2-of-3 multisig receives a grant, then withdraws | **FAIL** — receives fine, **cannot spend** without a whitelist entry; fix verified |
+| A3 | cw3 delegating; rewards withdrawal | **FAIL** — same artifact cause |
+| A4 | Vesting grant to a non-eKYC recipient vs the AML ante | **PASS** — allowed; this is **AML gap #2** |
+| A5 | Whitelisted cw3 → non-whitelisted recipient | **PASS** |
+| A6 | Feegrant, zero-balance account, non-zero gas price | **PASS** — sponsor really paid 122,466,500,000,000 aqdn |
+| A7 | AML ante on fee payment vs execution | **PASS** — does not gate a sponsored tx |
+| A8 | Genesis balance to a wasm contract address | NOT-EXERCISED — informational |
+
+**N1–N6, the native design: 5 PASS, 1 NOT-EXERCISED, 0 FAIL.** N1 locked-principal delegation;
+N2 rewards liquid; N3 unbonding returns locked; N4 threshold-signed authz grant; N5
+`StakeAuthorization` delegates without spend power; N6 multisig-eKYC unsettled (LATE ARRIVAL §A).
+
+**Also record:** wasmd exposes `iterator, staking, stargate, cosmwasm_1_1…2_2`
+(`wasmkeeper.BuiltInCapabilities()`); cw-plus v2.0.0 **unaudited**; DAO DAO cw-vesting v2.7.1
+**Oak-audited**, and ships as `-staking` / `-no_staking` variants differing by exactly
+`requires_staking`.
+
+---
+
+# PHASE B — GENESIS PIPELINE
+
+## Deliverables — none of these exist yet
+
+```
+tokenomics/
+  allocations.csv          # human-owned
+  build_genesis.py         # CSV -> genesis.json
+  verify_genesis.py        # assertions, exit 1 on failure
+  export_unlock_schedule.py
+  README.md                # SHA256, conventions, findings refs
+```
+
+## allocations.csv
+
+Columns: `bucket_id,bucket_name,pct,tokens_qdn,genesis_type,genesis_address,permanent_home,
+cliff_days,vest_months,cliff_release_pct,stakes,circulating,custody_final,notes`
+
+- `tokens_qdn` is whole QDN. Convert ONCE at load: `aqdn = qdn * 10**18`.
+- Rows sharing a `bucket_id` are one bucket (Node Ops = reserve + N validator rows). Percentages are
+  per-bucket; token sums are per-row.
+- `genesis_type`: `native_msig` → plain BaseAccount at the multisig address; `base` → plain
+  BaseAccount (validator operators).
+- **No vesting accounts and no contracts exist at genesis.** All schedules are applied post-launch.
+  `cliff_days`/`vest_months` describe the terms grants must carry.
+- Never emit module accounts.
+- `bucket_id` **08 and 11 are intentionally absent.** Ten buckets, not twelve.
+
+> **The `permanent_home` and `custody_final` columns still describe the superseded cw3/cw-vesting
+> design.** Under this brief the destinations are native multisigs (Patterns A/B, §5). The CSV is
+> human-owned (HARD RULE 1), so it is flagged here rather than edited.
+
+## Genesis contents
+
+1. 10 bucket BaseAccounts at **native multisig addresses** + 1 validator BaseAccount (1,100 QDN:
+   1,000 gentx self-bond + 100 gas — but see §14, both are reducible).
+2. One gentx — single genesis validator; the set grows one by one post-launch via D2.
+3. **`scannedContractWhitelistList` entries for all ten buckets plus the validator:**
+   ```yaml
+   scannedContractWhitelistList:
+     - address: <bucket address>
+       codeID: 0
+       reason: "<bucket name> genesis custody"
+   ```
+   Without these the chain launches with buckets that **cannot move a single token** until ten
+   governance proposals run.
+4. Denom metadata (exponents explicit, symbol uppercase):
+   ```json
+   { "description": "The native token of the Qadena network",
+     "base": "aqdn", "display": "qdn",
+     "name": "Qadena Token", "symbol": "QDN",
+     "denom_units": [ {"denom":"aqdn","exponent":0},
+                      {"denom":"qdn","exponent":18} ] }
+   ```
+5. Mint params: `mint_denom: aqdn`, `inflation_min = inflation_max = "0.010000000000000000"`,
+   `inflation_rate_change: "0"`, `blocks_per_year` from **measured** block time.
+6. **`intervalPublicKeyIDList` must carry an `incentive-pool` entry** whose `nodeID` and `nodeType`
+   are both exactly `incentive-pool`, pointing at the Adoption Programs bucket address. The lookup
+   constants are hardcoded and the chain **panics on the first wallet creation** without it.
+7. **No contract addresses, no code IDs, no cw-* anything, no `x/group` state.**
+
+## verify_genesis.py — hard assertions
+
+1. distinct-bucket pct sum == 100 (integer)
+2. all-row `tokens_qdn` sum == 4_000_000_000
+3. per bucket: row sum == `4_000_000_000 * pct // 100`
+4. total aqdn across accounts == `4000000000000000000000000000` == bank.supply
+5. no duplicate addresses; all bech32-valid with the chain prefix
+6. no module-account names present
+7. denom metadata: base aqdn, display qdn, symbol QDN, exponents 0 and 18 explicit
+8. no amount field anywhere uses `qdn` as denom
+9. every amount is a JSON string
+10. mint: `inflation_min == inflation_max == 0.01`, `blocks_per_year` non-default
+11. no second emission path (grep for epoch hooks / BeginBlocker transfers to `fee_collector`)
+12. exactly one validator row of exactly 1,100 QDN, matching exactly one gentx
+13. every `native_msig` row has a non-placeholder address before a mainnet build (placeholder
+    allowed in dev builds; an assert flag distinguishes)
+14. **every bucket address and the genesis validator address appears in
+    `scannedContractWhitelistList` with `codeID: 0`**
+15. **`intervalPublicKeyIDList` contains an entry with `nodeID == nodeType == "incentive-pool"`**,
+    and its `pubKID` is the Adoption Programs bucket address and is bech32-valid (the PubKID *is*
+    the address). Without it wallet creation panics.
+16. **chain_id matches `<name>_<eip155>-<epoch>`** and the numeric part is the intended EIP-155 ID
+    (HARD RULE 7 — the parse fails silently otherwise)
+
+Then `qadenad validate-genesis`, then boot a throwaway devnet from the file and assert: every
+account spendable == its genesis balance (nothing locked at genesis), `q bank total` matches
+assertion 4, the single validator produces blocks, and `eth_chainId` returns the expected value.
+
+## export_unlock_schedule.py
+
+Monthly CSV from TGE to month 120: per-bucket unlocked amounts (from the terms columns, as if grants
+are issued at TGE — label this assumption), cumulative circulating (driven by the `circulating`
+column), and projected minted supply at 1%. State circulating % against the moving total. TGE
+circulating should be ~56.0M + validator floats (~1.4%); if far off, report, don't adjust.
+
+---
+
+# PHASE C — WEEK 1
+
+No code deployment, no instantiation, no migrate admins, no code IDs.
+
+If Phase B step 3 was done, **there is nothing to do for the eight Pattern-B buckets** — already
+funded, already whitelisted, already spendable by their thresholds.
+
+1. Verify each bucket balance to the aqdn against `allocations.csv`.
+2. Verify each bucket address is on the whitelist:
+   `qadenad query qadena scanned-contract-whitelist`.
+3. For the two Pattern-A locked buckets (LTR 600M, Foundation 504M), **in this order**:
+   a. create the fresh custody multisig (4-of-7 recommended);
+   b. AML-whitelist it by `x/gov`;
+   c. `MsgCreatePeriodicVestingAccount` from the genesis escrow to it.
+   **Never fund the address first** (HARD RULE 9).
+4. **Send each locked account a gas float**, then delegate the locked 504M across member validators
+   (N1). Record per-validator amounts.
+
+   > A fully locked account has `spendable = 0` and cannot pay the fee to submit its own delegation.
+   > Without a float or standing feegrant **the 504M never bonds and the ~7.9% staker APR behind the
+   > 1% inflation rate does not materialise.**
+5. Split Foundation: 56M liquid in its genesis multisig, 504M to step 3.
+6. Optionally issue `StakeAuthorization` grants (N5) so a delegation manager can run the validator
+   programme with no spending power.
+7. Publish: address map, thresholds and signer sets, the unlock schedule, genesis SHA256, and the
+   decision-record scheme (§4).
+
+Pattern-A genesis escrows are now empty scaffolding. **Pattern-B bucket multisigs are not** — they
+remain the live custody accounts.
+
+---
+
+# PHASE D — OPERATING RUNBOOKS
+
+### D1. Vesting grant
+1. Recipient supplies a **brand-new** `eth_secp256k1` address, never funded. For a large grant, a
+   personal n-of-m multisig — but settle the custody choice in LATE ARRIVAL §A first.
+2. Owning bucket: collect threshold signatures on `MsgCreatePeriodicVestingAccount`.
+   `start_time` = TGE for founders/backers (backdated); grant date for personnel/partners. First
+   period is the cliff; the final period absorbs the rounding remainder; periods sum EXACTLY.
+3. **Whitelist the recipient by `x/gov`** — required for a multisig, not required for an eKYC wallet.
+4. THEN send the gas float. Never before (limit 4), and never omit it (limit 6).
+5. Log in the public grants register with the decision reference from §4.
+
+### D2. Node onboarding
+
+nodeops bucket grants the operator a token self-bond (see NODE ONBOARDING AT MINIMUM COST), operator runs `MsgCreateValidator`,
+foundation delegates a tranche, commission is operator compensation. `min_commission_rate` is 5%, so
+a node is self-funding from month one.
+
+#### Undelegation and slashing — the timing rule that matters
+
+**The foundation can undelegate at any time.** `MsgUndelegate` has no timing gate. Three practical
+limits:
+
+- `max_entries` (7 on this chain) concurrent unbonding entries per (delegator, validator) pair — the
+  8th is refused until one matures;
+- tokens take the full `unbonding_time` (21 days at mainnet settings) to become liquid;
+- for the locked 504M this is safe: **unbonding returns the principal still locked** (N3, TESTED).
+
+**But undelegating does NOT escape a slash.** This corrects the natural reading of "misbehaving node
+→ foundation redelegates away". Slashing is keyed to the **infraction height**, and
+`x/staking/keeper/slash.go` spares an unbonding entry only under two conditions:
+
+```go
+if entry.CreationHeight < infractionHeight { continue }  // you left BEFORE it happened
+if entry.IsMature(now) && !entry.OnHold()  { continue }  // unbonding already completed
+```
+
+So:
+
+| when the foundation leaves | slashed? |
+|---|---|
+| Undelegated **before** the infraction | **No** — that stake did not contribute |
+| Undelegated **after** the infraction, still unbonding | **YES** — on `InitialBalance`, at the full slash factor |
+| Unbonding already **matured** | No — and an infraction older than an unbonding period is not actionable (`Slash()` CONTRACT) |
+
+**Redelegation is caught identically** — `SlashRedelegation` carries the same two conditions. Moving
+the stake instantly to another validator does not move it out of reach.
+
+The consequence for the member agreement: **redelegating away on the news is not a remedy.** A
+double-sign is typically discovered after the fact, so the infraction height precedes the
+foundation's reaction and the slash lands regardless. Redelegation limits *future* exposure only.
+State this plainly — the operator's self-bond is small (see NODE ONBOARDING AT MINIMUM COST), so the foundation absorbs
+substantially all of any penalty, and it cannot opt out after the event.
+
+> **Untested and potentially significant.** The 504M is a **vesting account's** delegation. When a
+> vesting account is slashed, `delegated_vesting` / `delegated_free` must be adjusted, and whether
+> that accounting stays correct — i.e. whether a slash can leave locked tokens spendable, or
+> over-lock the account — was not exercised here. Test before the 504M is delegated in anger.
+
+### D3. Agency deployment economics (SEC PH / VERITAS) — how to minimise their tokens
+
+Derived from `testscripts/setup_veritas.sh` and `veritas_scripts/step_1..3.sh`. The test deployment
+funds, per run: `sec-treasury` **2,000,000 QDN**, plus `provideramount` / `signeramount` /
+`createwalletsponsoramount` of **100,000 QDN each**, the last two split across `count+1` = 31
+accounts. (The 10M pioneer stake and the 2×10M governance deposits in that script are test scaffolding
+and refundable — not part of an agency's allocation.)
+
+Almost all of that is reducible. There are exactly **four** cost categories, and only one of them
+resists sponsorship.
+
+#### 1. Wallet creation — ALREADY toll-free, but the grant is unbounded
+
+`tx qadena create-wallet` issues a feegrant automatically. `tx_create_wallet.go:105` builds an
+`AllowedMsgAllowance` from the `create-wallet-sponsor` to the newly minted wallet, restricted to:
+
+```
+/qadena.qadena.MsgAddPublicKey
+/qadena.qadena.MsgCreateWallet
+```
+
+So a VERITAS-platform user never needs tokens to *get* a wallet. **Nothing to build here.**
+
+> **Fix before mainnet.** The inner allowance is a bare `BasicAllowance{}` — **no spend limit and no
+> expiration**. Every wallet ever created holds a permanent, unlimited claim on the sponsor for those
+> two message types. One misbehaving client can drain the sponsor by re-sending them. Set a
+> `SpendLimit` and an `Expiration` sized to one onboarding.
+
+#### 2. Document signing — CAN be fully toll-free, and TODAY IT IS NOT
+
+**VERITAS does not use CosmWasm.** Signing runs through the chain's own **`x/dsvs`** module
+(Digital Signature Verification Service), which the appsvr imports directly as
+`dsvstypes "github.com/c3qtech/qadena_v3/x/dsvs/types"` (`api/handlers/document.go:15`).
+
+The message types (`proto/qadena/dsvs/tx.proto`, package `qadena.dsvs`):
+
+```
+/qadena.dsvs.MsgCreateDocument
+/qadena.dsvs.MsgSignDocument
+/qadena.dsvs.MsgRegisterAuthorizedSignatory
+/qadena.dsvs.MsgRemoveDocument
+```
+
+**These are gas-only.** `bankKeeper` appears in `x/dsvs/keeper/keeper.go` as a struct field and is
+never used by any dsvs message server — no `SendCoins`, no in-message fee. Unlike credentials (§3),
+nothing is debited from the signer beyond the transaction fee. **So signing is fully sponsorable.**
+
+**The gap.** The appsvr already issues feegrants (`api/handlers/fee_grant.go:50`), but its
+`AllowedMessages` list is:
+
+```
+/qadena.qadena.MsgAddPublicKey          /qadena.qadena.MsgUpdateCredential
+/qadena.qadena.MsgCreateWallet          /qadena.qadena.MsgClaimUpdatedCredential
+/qadena.nameservice.MsgBindCredential   /qadena.nameservice.MsgUnbindCredential
+```
+
+**No dsvs message is on it.** So a wallet created through the VERITAS platform is toll-free to
+onboard and to manage its credential — and then must hold QDN to sign anything. That is exactly the
+step users actually perform, and it is the only one they pay for.
+
+**The fix is three lines** in `api/handlers/fee_grant.go`. Add to `AllowedMessages`:
+
+```go
+"/qadena.dsvs.MsgCreateDocument",
+"/qadena.dsvs.MsgSignDocument",
+"/qadena.dsvs.MsgRegisterAuthorizedSignatory",   // only if signatories self-register
+```
+
+After that a VERITAS signing wallet needs **zero QDN, ever**. This is the single highest-value
+change in this section, and it removes the reason to pre-fund signer accounts at all — the tested
+layout funds 31 of them by direct bank send.
+
+> A6 proved the mechanism end to end on this chain: a **zero-balance** account executed a sponsored
+> transaction at a forced real gas price and the sponsor's balance fell. A6 used
+> `MsgExecuteContract`; the allowance mechanism is message-type agnostic, so the same construction
+> works for dsvs messages. **The dsvs case itself is untested** — verify before rollout.
+
+#### 3. Credential issuance — CANNOT be made toll-free by feegrant
+
+This is the one that resists, and it is worth understanding precisely.
+
+`msg_server_create_credential.go:289`:
+
+```go
+k.bankKeeper.SendCoinsFromAccountToModule(ctx, creatorAddress, types.ModuleName, totalIncentivesCoin)
+```
+
+The fee is **debited from the creator's own balance inside the message**, then redistributed to the
+eKYC app, the identity owner, and any reused identity provider. **A feegrant pays gas; it does not
+pay this.** The account issuing credentials must actually hold QDN.
+
+Current params (`config/config.yml:284`):
+
+| param | value |
+|---|---|
+| `create_credential_fee` | `30php` |
+| `create_bulk_credentials_fee` | `10php` |
+| `update_credential_fee` | `30php` |
+
+Fiat-denominated and converted through the pricefeed, so the QDN cost moves with `cn:qdn:php`.
+
+Three levers, in order of preference:
+
+1. **Use bulk issuance.** `10php` against `30php` is a 3× reduction for onboarding runs, which is
+   what an agency deployment mostly does.
+2. **Note that the fee largely returns.** It is an incentive redistribution, not a burn. Where the
+   agency owns *both* the identity provider and the eKYC app, most of each fee circulates back to
+   accounts it controls. Size the float for throughput, not for cumulative spend.
+3. **Lower the params by governance** for a launch period, if the incentive flow is internal anyway.
+   These are module params, so it is an `x/gov` proposal, not a code change.
+
+**Do not** try to solve this with a feegrant. It will appear to work — the transaction succeeds —
+while the fee comes from the creator regardless.
+
+#### 4. Direct funding — replace with sponsorship
+
+`step_3.sh` funds providers and users by `tx bank send` from `sec-treasury`, which is why that
+treasury needs an AML whitelist entry (`setup_veritas.sh` whitelists it before step 3). Every one of
+those sends is scanned and threshold-reported.
+
+Replace with feegrants wherever the account only ever *executes* — that removes the transfer, the
+scan, the report, and the balance.
+
+#### Recommended minimal agency layout
+
+| account | tested | recommended | why |
+|---|---|---|---|
+| `sec-treasury` | 2,000,000 QDN | **credential-fee float only** | Sized to expected credential volume × current `qdn:php`, not to a round number |
+| identity / dsvs providers | 100,000 QDN each | **credential-fee float** | They are the `creator` that pays §3 |
+| create-wallet-sponsor | 100,000 QDN | **small gas float** | Only pays gas for two message types; bound the allowance |
+| signer accounts (×30) | 100,000 QDN split | **ZERO** | Feegrant the `x/dsvs` messages instead — §2 |
+| end-user wallets | — | **ZERO** | Already covered by the built-in create-wallet feegrant |
+
+**Only the credential-fee float is irreducible.** Everything else is gas, and gas is sponsorable.
+
+> **VERITAS is not a CosmWasm application.** It is a Flutter client (`veritasff/`) plus a Go
+> appsvr (`api/`) talking to the chain's native `x/dsvs`, `x/qadena` and `x/nameservice` modules.
+> The original brief's D3 said "VERITAS must be built on the CosmWasm/native path"; the native half
+> is what is actually built, and every message it sends is feegrantable. Feegrant still does not
+> cover `MsgEthereumTx`, so an EVM rebuild would need a relayer or paymaster — out of scope.
+
+**Untested:** a sponsored `x/dsvs` message (§2 — the mechanism is proven by A6, the message type is
+not), the bounded-allowance fix in §1, bulk credential issuance, and a sponsored `create-credential`
+(expected to pay gas but *not* the in-message fee — verify before relying on that distinction).
+
+---
+
+# NODE ONBOARDING AT MINIMUM COST
+
+D2 as written grants **1,100 QDN** per node (1,000 self-bond + 100 gas). Both halves are reducible,
+and one of them almost to zero.
+
+**There is no chain-wide minimum self-delegation.** The only checks are that the operator's declared
+`MinSelfDelegation` is positive (`x/staking/types/msg.go:76`) and that the initial self-bond is not
+below it (`ErrSelfDelegationBelowMinimum`). The operator chooses the number. A validator can
+therefore self-bond an amount far below 1,000 QDN and still be created.
+
+**Gas is sponsorable**, including validator creation. Grant an `AllowedMsgAllowance` covering:
+
+```
+/cosmos.staking.v1beta1.MsgCreateValidator
+/cosmos.staking.v1beta1.MsgEditValidator
+/cosmos.distribution.v1beta1.MsgWithdrawValidatorCommission
+```
+
+from a nodeops-funded native sponsor. The operator then needs **no gas float at all**.
+
+**Voting power comes from the foundation's delegation, not the self-bond** — which is already how
+D2 works. The self-bond's only real function is slashing exposure.
+
+So a minimal onboarding is: **a token self-bond + a feegrant**, and the foundation delegates the
+stake that actually matters. That reduces the 1,100 QDN grant to near zero.
+
+**The trade-off is a governance decision, not a technical one.** Self-bond is the operator's skin in
+the game. At 1,000 QDN they have something to lose; at 1 QDN they have nothing, and D2 already notes
+that **slashing hits foundation principal**. Driving the self-bond to the floor makes a consortium
+validator entirely free to misbehave, with the foundation absorbing every penalty. Recommend setting
+it by *intended* exposure and stating that intent in the member agreement — not by what the chain
+will tolerate.
+
+Note also `min_commission_rate` (5% on this chain): commission is the operator's income, so a node
+is self-funding from month one regardless of how small the self-bond is.
+
+**Untested:** a feegranted `MsgCreateValidator`, and validator creation at a self-bond below 1,000
+QDN. Both are expected to work from the code above; neither was exercised.
+
+---
+
+---
+
+# LATE ARRIVAL — founders, council members, operators
+
+Almost nobody's address is known at genesis. This section is the complete answer to what that costs.
+
+**There are two distinct problems and they have opposite answers.** Conflating them is the mistake
+to avoid: one is routine and fully solved, the other contains the single irreversible decision in
+the whole design.
+
+---
+
+## A. A GRANT RECIPIENT arrives late — solved, this is the designed case
+
+Founders, backers, personnel, partners. `allocations.csv` already encodes it: the bucket exists at
+genesis, the recipient does not.
+
+**What happens:** the owning bucket collects threshold signatures on
+`MsgCreatePeriodicVestingAccount` to the new address whenever it arrives. Backdate `start_time` to
+TGE for founders and backers so everyone shares one clock regardless of when they actually appear.
+
+**Four options for the recipient**, best first:
+
+| option | whitelist needed? | trade |
+|---|---|---|
+| **Escrow now, grant later, whitelist at grant time** | yes — one `x/gov` proposal | The intended shape. TESTED |
+| **Recipient uses an eKYC'd single-key wallet** | **no** | Spends immediately; single-key custody, total loss on key loss |
+| **Sponsor them instead** (feegrant) | **no** | Only works if they never move value by bank send — an agency, not a holder. TESTED (A6/A7) |
+| Pre-generate addresses into cold storage, seed at genesis | no — seeded | Forbidden by HARD RULE 5; concentrates key-generation risk. Small fixed sets only |
+
+**Cannot:** add to the **genesis** whitelist after launch. Genesis is immutable; afterwards there is
+only `x/gov`, one proposal per address.
+
+### The custody choice you must settle before their address is generated
+
+**Multisig custody and eKYC spending are currently mutually exclusive** (§4 limit 7), and this cannot
+be changed afterwards.
+
+| | multisig custody | eKYC single-key wallet |
+|---|---|---|
+| key loss | survivable (n-of-m) | **total loss** |
+| can spend | only after a governance whitelist | immediately |
+| foundation involvement | approves the whitelist once | none |
+| rotation during vesting | **frozen** (§4 limit 3) | n/a |
+
+**Not proven impossible.** `create-wallet` mints from a fresh mnemonic and overrides `--from`, so the
+CLI cannot target an existing address — but `msg_server_create_wallet.go` sets
+`walletID := msg.Creator`, i.e. the signer, so a hand-crafted `MsgCreateWallet` signed by a multisig
+is untested. A separate obstacle may bite first: a credential encodes a **person's** residency and
+citizenship, so attaching one to an n-of-m account asserts a group has a nationality. **Resolve this
+before the consortium agreement fixes founder custody terms.**
+
+---
+
+## B. A COUNCIL MEMBER arrives late, or leaves — this is the hard one
+
+Three sub-cases, by what the account is.
+
+### B1. A Pattern-B liquid bucket — possible, costly, repeatable
+
+The address derives from the member pubkeys and threshold, so any change yields a **new address**:
+
+```
+create new multisig -> x/gov whitelist it -> transfer the full balance
+                    -> verify to the aqdn -> retire the old address
+```
+
+Cost per change, per bucket: one governance proposal, one large transfer, one AML report, and a
+window where both addresses hold funds. Workable. Not something to do casually, and it is **per
+bucket** — reseating one council across eight buckets is eight of these.
+
+### B2. A Pattern-A locked vesting account — **IMPOSSIBLE**
+
+Locked coins cannot be transferred, so the account can never be migrated (§4 limit 3). **The signer
+set is frozen for the entire schedule: 10 years for the LTR, 6 for the Foundation tranche.**
+
+There is no workaround. Not authz, not governance, not a migration. If a signer dies, leaves, or
+loses a key, the remaining members must still meet the threshold for the rest of the term.
+
+**This is the one irreversible decision in the design.** Everything else can be corrected later.
+
+Mitigate at creation, because you cannot mitigate afterwards:
+- **Wide thresholds.** 4-of-7 tolerates three simultaneous absences over a decade; 2-of-3 tolerates
+  one. Never use 2-of-3 for a Pattern-A account.
+- **Roles, not individuals**, where custody is institutional — a role's key can be handed on inside
+  the organisation without touching the chain.
+- **Put anything that might need to change behind `x/authz`** from the account, not in the signer set.
+
+### B3. Operational authority only — free, and the address never moves
+
+`x/authz` grant and revoke. The custody multisig stays fixed forever, so its address and whitelist
+entry never change; operators come and go. TESTED (N4): the multisig's 2-of-3 signed a `MsgGrant`,
+and a brand-new operator key — **no eKYC, no whitelist entry of its own** — then spent from the
+multisig. Onboarding an operator costs nothing: no whitelist, no eKYC, no governance.
+
+| authorization | bounds |
+|---|---|
+| `SendAuthorization` | spend limit (auto-decrementing) + recipient allow-list |
+| `StakeAuthorization` | delegate / undelegate / redelegate, validator allow or deny list, max amount |
+| `GenericAuthorization` | any message of one type URL — the blunt one; prefer the others |
+
+All accept an **expiration**. Use it; an unexpiring grant is a standing key.
+
+---
+
+## What `x/authz` does NOT give you
+
+It is the workhorse of B3, and it is **not** a substitute for `x/group`. Mapped against the six
+things `x/group` demonstrably provided (all TESTED, findings §14):
+
+| x/group property | x/authz |
+|---|---|
+| Execution from a stable account address | **yes** — the granter is the fixed multisig |
+| Change who may **act** without moving the address | **partial** — changes who executes, not who approves |
+| On-chain proposal object, recorded votes, tally | **no** — there is no proposal and no vote |
+| Chain-enforced **threshold per action** | **no** — a grant is unilateral, effectively 1-of-1 |
+| Change the threshold without moving the address | **no** — there is no decision policy to change |
+| Weighted votes | **no** |
+
+**N4 demonstrates the limitation without having been designed to:** a single operator key, acting
+alone, moved funds out of a 2-of-3 multisig. That is authz working correctly, and it means
+
+> **`x/authz` moves the threshold from "every action" to "granting the authority".**
+
+Once granted, the operator acts alone within its bounds until revoked. You keep n-of-m over *who
+gets authority* and lose it over *each use*. Spend limits, allow-lists and expiry are the
+containment — not the multisig. Keep grant creation and revocation behind the threshold; that is
+where the n-of-m still bites.
+
+### The irreducible gap
+
+**"Per-action threshold AND an on-chain record, for a named council" has no native answer.**
+
+- Native multisig — per-action threshold, but signatures collected **off chain**
+- `x/gov` / Pattern C — on-chain proposals and votes, but **stake-weighted**, not a named council
+- `x/group` — both, and **licence-blocked** (§3)
+
+If on-chain vote records for routine disbursement turn out to be a hard requirement — from a
+regulator or the consortium agreement — native custody is not sufficient and there are three honest
+routes: **Pattern C** (community pool); **buy the Cosmos Enterprise licence** for `x/group`, which
+demonstrably works; or **DAO DAO contracts** (`dao-proposal-single` + `dao-voting-cw4`), Oak-audited
+and built *with* the stargate feature so unlike cw-plus they can carry vesting grants — though they
+do not declare `requires_staking`, so the 504M stays a native vesting multisig regardless.
+
+Otherwise: **native, with the B3 mechanism and wide thresholds**, and the §4 limit-1 audit trail.
+
+---
+
+# OUT OF SCOPE — ask the human
+
+- Any change to percentages, token counts, cliffs, vest durations, thresholds, or the inflation rate
+- TGE date; genesis validator count/operators
+- The AML/EVM asymmetry fix (separate workstream)
+- Legal/securities questions (bucket wording, backer terms, Howey posture)
+- Real keys, real addresses, any mainnet execution
+
+---
+
+# OPEN QUESTIONS — these block work
+
+### 1. The genesis account-set conflict — RESOLVED for `treasury`, open for `pioneer1`
+
+**What it was.** §2 says "zero external addresses at genesis except genesis validator operators" and
+specifies 11 accounts. But `x/qadena` has a **built-in incentive account** it panics without:
+
+```go
+// x/qadena/keeper/helpers.go
+incentivePoolIntervalPubKID, found := k.GetIntervalPublicKeyID(ctx, types.IncentivePoolNodeID, types.IncentivePoolNodeType)
+if !found { panic(types.ErrGenericIncentivePool.Error()) }   // not an error return
+```
+
+`MsgCreateWallet` debits it on **every wallet creation** — 500 + 500 per wallet, 50 per ephemeral
+wallet, so ~100M QDN per 100k users (`launch-config.yml`). The PubKID **is** the bech32 address, so
+the genesis entry literally names the paying account. It was never an optional bootstrap identity.
+
+**Resolution — no eleventh account is needed.** It now points at the **Adoption Programs bucket**,
+whose stated purpose in `allocations.csv` is exactly this: *"Merchant incentives, DID onboarding,
+loyalty, gas subsidies."* The onboarding budget therefore comes from the bucket that was always
+meant to fund it, rather than from an allocation nobody sized. The pool **never signs** — the keeper
+debits it via `SendCoinsFromAccountToModule` — so a native multisig serves.
+
+**Also renamed, because it had to happen before genesis.** `nodeID`/`nodeType` are **state key
+bytes** (`IntervalPublicKeyIDKey` concatenates them), so the value was changeable only while genesis
+was still unwritten. `treasury` → **`incentive-pool`**, naming the ROLE rather than the funder:
+"treasury" collided three ways — this account, the Foundation Treasury bucket (03, 560M), and a
+deployment's `sec-treasury`. Naming it `adoption` was rejected as it would couple a chain constant
+to the token design and become a lie if funding ever moved.
+
+Changed: `types.IncentivePoolNodeID` / `IncentivePoolNodeType`, `ErrGenericIncentivePool`,
+`getIncentivePoolPubKID` / `getIncentivePoolAddress`, and the `intervalPublicKeyIDList` entries in
+both `config/config.yml` and `config/launch-config.yml`. The `Treasury` **query RPC keeps its proto
+name** — renaming that is a breaking API change and a separate decision.
+
+**Consequences to action:**
+- **Every existing chain must be re-genesised** — the state key moved. Devnet `qadena_4828-1` and the
+  M1–M4 / SGX fleet. An old-genesis chain on a new binary **panics on the first wallet creation**.
+- **UNTESTED:** that a multisig actually serves as this identity. The code says it must (keeper-side
+  debit, no signature), but that is a read, not a run. **Verify before mainnet genesis.**
+
+**Still open: `pioneer1`.** It needs `publicKeyList` entries (transaction *and* credential pubK) and
+an `intervalPublicKeyIDList` entry with nodeType `pioneer`. It is a node identity with credential
+keys, not a funding account, so it does not resolve the same way — but it is arguably **already in
+scope** under §2's "except genesis validator operators" exception. Confirm that reading, or decide
+otherwise.
+
+### 2. `allocations.csv` end-states are stale
+
+`permanent_home` and `custody_final` still name `cw3-*` and `cw-vesting` destinations from the
+superseded design. Under this brief they are native multisigs (§5). The file is human-owned
+(HARD RULE 1) so it has not been edited.
+
+### 3. Whether a multisig can hold an eKYC credential
+
+Unsettled — see the custody-choice note above. Worth resolving **before** the consortium agreement
+fixes founder custody terms.
+
+---
+
+# WHAT IS STILL NOT TESTED
+
+1. **A full bucket lifecycle end to end** — genesis multisig, fund, pay out, rotate, whitelist,
+   transfer, pay out again. Each leg is tested; the sequence is not.
+2. **Multisig rotation as one operation** (§9 mechanism 1) against a funded bucket.
+3. **Slashing a vesting account's delegation** — whether `delegated_vesting`/`delegated_free`
+   accounting survives a slash correctly. Directly affects the 504M. See D2.
+4. **`authz revoke`** — never exercised, and it is the half of mechanism 2 that matters when someone
+   leaves. **Items 2 and 3 together are the highest-value remaining work**: they are the two halves
+   of "how does a council actually change".
+4. **A hand-crafted `MsgCreateWallet` signed by a multisig** (LATE ARRIVAL §A). Would overturn limit 7 if it
+   works.
+5. **Thresholds beyond 2-of-3.** The design uses 3-of-5 to 5-of-7 and recommends 4-of-7 for locked
+   accounts; nothing suggests they differ, but they were not exercised.
+6. **Grants from a locked vesting account over only its vested tranche** — N4's granter had a gas
+   float.
+7. **`MsgWithdrawDelegatorReward` across multiple validators** — N2 used one; the 504M spans many.
+8. **Pattern C** (community pool) entirely.
+9. **A3's rewards leg via a contract**, and the cw-vesting contracts, were never instantiated —
+   irrelevant if native is adopted, but the original brief's Phase C depends on them.
+10. Single chain, single run, single validator, no SGX. `unbonding_time` was reduced to 120s by
+    governance for N3; mainnet's 21 days is untested at that duration.

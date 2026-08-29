@@ -7,8 +7,7 @@ README says what is here, what has been verified, and what is still open.
 
 | file | status |
 |---|---|
-| `qadena-native-brief.md` | **The all-native custody design — read this first.** Core-SDK only: no contracts, no licensed modules. Supersedes the cw3/cw4/cw-vesting custody model. |
-| `qadena-master-brief.md` | The original brief. Token economics still authoritative; its cw3/cw4/cw-vesting custody model is superseded. |
+| `qadena-master-brief.md` | **The brief — one document, read this.** All-native custody on core SDK only. Economics, Phase A results, Phases B–D, runbooks, hard rules, open questions. |
 | `allocations.csv` | **Human-owned.** Never edited by tooling. A missing value stops work and asks. |
 | `gating-findings.md` | Phase A results, with pasted output. |
 
@@ -63,7 +62,7 @@ operator who needs no eKYC and no whitelist; a `StakeAuthorization` holder can d
 spend.
 
 **Conclusion: the native design does everything the token model needs, and the contract design does
-not.** See `qadena-native-brief.md` §2 for the tested capability list and §3 for the limits.
+not.** See `qadena-master-brief.md` §4 for the tested capability list and the limits.
 
 ## Where the chain disagrees with the brief
 

@@ -611,7 +611,7 @@ mandatory (A1, A3) do not exist in a native design, and the one that looked like
 > already decided to remove buys you a live-chain migration later — here, of accounts holding
 > 4,000,000,000 QDN, some of it locked.
 >
-> The design therefore uses native multisigs. See `qadena-native-brief.md` §"x/group is EXCLUDED".
+> The design therefore uses native multisigs. See `qadena-master-brief.md` §3.
 > v0.54 moves for the record: **enterprise/** `x/group`, `x/poa`; **contrib/** `x/circuit`, `x/nft`,
 > `x/crisis`. `x/authz`, `x/feegrant`, `x/auth`, `x/bank`, `x/staking`, `x/gov`, `x/distribution`
 > remain core.
@@ -638,7 +638,7 @@ instantiate; `x/group` can (`update-group-policy-decision-policy`).
 So the A1 and A3 failures are **not** properties of this chain. They are properties of the cw-plus
 artifacts — the same operations succeed through core-SDK message types. That conclusion survives the
 licence problem: it is the *module wrapper* that is unusable, not the underlying capability, and the
-native-multisig design in `qadena-native-brief.md` reaches the same operations without it.
+native-multisig design in `qadena-master-brief.md` reaches the same operations without it.
 
 ### The one hard limit
 
@@ -654,7 +654,7 @@ account exists from the moment the policy is created. A lock must therefore be c
 **fresh** address — which can be a native multisig (A2), giving threshold custody plus a real lock,
 at the cost of frozen membership for the schedule's duration.
 
-That trade-off is the subject of `qadena-native-brief.md`.
+That trade-off is the subject of `qadena-master-brief.md` §5.
 
 ---
 
