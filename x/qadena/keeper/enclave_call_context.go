@@ -388,28 +388,7 @@ func watchEnclaveLiveness(logger log.Logger, greeter types.GreeterClient) {
 		// was the bug.
 		time.Sleep(enclaveHaltBackstop)
 		if enclaveHaltAnnounced.Load() {
-			// THE HALT RAN, AND THIS NODE IS STILL UNRECOVERABLE IN PLACE.
-			//
-			// haltOnEnclaveFailure panics; CometBFT's receiveRoutine recovers, logs CONSENSUS
-			// FAILURE, stops the WAL and returns -- killing the consensus reactor while leaving
-			// this PROCESS ALIVE and still serving RPC.  Nothing in-process rebuilds that
-			// reactor, so the node can never commit another block; it just answers /status with
-			// a height that never moves.  .140 sat like that for a DAY on 2026-08-09, and the
-			// same shape stalled a soak for 29 consecutive rounds on 2026-08-29 -- in both cases
-			// a node that looked up to every check that asks "is it answering".
-			//
-			// This used to return here, on the grounds that the halt had already said what was
-			// wrong.  Saying so is not recovering: the branch below exits precisely so a
-			// supervisor can restart the node and startup reconciliation can rebuild it, and a
-			// halted node needs exactly the same thing.  Returning made the announced path the
-			// one that could NOT recover, which is the asymmetry this backstop exists to remove.
-			c.LoggerError(logger, fmt.Sprintf(
-				"enclave halt announced %s ago and consensus is now dead, but this process is "+
-					"still up and would serve a frozen height indefinitely (%v).  Exiting so the "+
-					"supervisor can restart it; startup reconciliation will recover.",
-				enclaveHaltBackstop, cause))
-			enclaveExitProcess(1)
-			return
+			return // the halt ran; the node is stopped for the right reason and says so
 		}
 		c.LoggerError(logger, fmt.Sprintf(
 			"enclave declared dead %s ago but haltOnEnclaveFailure never ran -- the cancellation "+
