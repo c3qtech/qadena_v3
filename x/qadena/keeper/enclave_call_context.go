@@ -249,6 +249,48 @@ var (
 // is invisible from inside the watchdog otherwise.
 var enclaveHaltAnnounced atomic.Bool
 
+// WHAT THE WATCHDOG COULD NOT SEE.  enclaveHaltAnnounced is one bit, and its FALSE is ambiguous
+// across four different situations: no call ever existed; a call existed and is still stuck; a
+// call unblocked but nobody halted for it; or the halt is simply a moment away.  The backstop used
+// to report all four as "no in-flight call existed to halt", which is true of exactly one of them
+// -- and false, in the most misleading possible way, for the 4h11m wedge of 2026-08-25.
+//
+// These two counters make the difference measurable rather than assumed.  They are maintained by
+// EnclaveInFlightInterceptor, which every dial must install, and are read ONCE by the watchdog
+// when it declares the enclave dead.  Nothing reads them on the happy path and nothing logs
+// per-call: a line per enclave RPC would be the log-volume problem all over again.
+var (
+	enclaveCallsInFlight         atomic.Int64
+	enclaveCallsFailedPostCancel atomic.Int64
+)
+
+// EnclaveInFlightInterceptor counts enclave RPCs and how they ended.  EXPORTED because the real
+// SGX dialler lives in cmd/qadenad and must install it too -- see the warning on that call site.
+//
+// STRICTLY PASS-THROUGH, and that is not a style preference.  This runs inside deterministic
+// execution, so anything here that could change WHEN a call returns or WHAT it returns is a fork
+// waiting to happen -- that is the height-34,025 lesson, where a two-second deadline in this path
+// turned one node's successful transaction into a failed one and ejected it from the network.  Two
+// atomic adds cannot change what a block computes.  A timeout, a retry, or an error rewrite could.
+// Do not add any.
+func EnclaveInFlightInterceptor(
+	ctx context.Context, method string, req, reply any,
+	cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption,
+) error {
+	enclaveCallsInFlight.Add(1)
+	err := invoker(ctx, method, req, reply, cc, opts...)
+	enclaveCallsInFlight.Add(-1)
+
+	// "Unblocked with an error AFTER the enclave was declared dead" is the signal that separates a
+	// call the cancellation/close actually reached from one still wedged.  Checked against the root
+	// rather than the call's own context, because a call that missed the enclaveAlive invariant --
+	// exactly the one worth counting -- has a context that was never cancelled.
+	if err != nil && EnclaveAliveContext().Err() != nil {
+		enclaveCallsFailedPostCancel.Add(1)
+	}
+	return err
+}
+
 // enclaveExitProcess is os.Exit, indirected so the watchdog tests can drive the backstop without
 // killing the test binary.  Nothing but a test may replace it.
 var enclaveExitProcess = os.Exit
@@ -395,6 +437,18 @@ func watchEnclaveLiveness(logger log.Logger, greeter types.GreeterClient) {
 			continue
 		}
 
+		// SAMPLED BEFORE THE CANCEL, and the ordering is the whole point.  The interceptor
+		// decrements when the invoker RETURNS, which happens BEFORE haltOnEnclaveFailure is
+		// called -- so between the cancel and the halt there is a window where the counter reads
+		// 0 and the flag is still false, even though a call was in flight and the halt is
+		// microseconds away.  Reading it after the cancel would see that window and conclude
+		// "idle" about a node that was mid-block.
+		//
+		// Sampling here is sound: against a dead enclave, calls block and never complete, so
+		// nothing decrements until we cancel.  Whatever this reads is the true in-flight set.
+		inFlightAtCancel := enclaveCallsInFlight.Load()
+		failedBefore := enclaveCallsFailedPostCancel.Load()
+
 		// One-way door: unblock every in-flight execution call so the halt path runs.  The
 		// cause is what haltOnEnclaveFailure reports instead of a bare "context canceled".
 		cause := fmt.Errorf(
@@ -444,19 +498,63 @@ func watchEnclaveLiveness(logger log.Logger, greeter types.GreeterClient) {
 		// The halt is reactive, so give the unblocked call a moment to unwind into the panic and
 		// set the flag.
 		time.Sleep(enclaveHaltBackstop)
-		if enclaveHaltAnnounced.Load() {
-			return // halted: consensus dead, process up, named cause and height in the log
-		}
 
-		// Nothing unblocked, so there was genuinely no in-flight call -- the node was idle when its
-		// enclave died.  Nothing can panic on its behalf, so there is no halt to be had at any
-		// price.  The root is cancelled and irreversible, so this node can never execute another
-		// block; exit and let the supervisor restart it.
-		c.LoggerError(logger, fmt.Sprintf(
-			"enclave declared dead and the transport was closed, but no in-flight call existed to "+
-				"halt (%v).  Exiting so the supervisor can restart it; startup reconciliation "+
-				"will recover.", cause))
-		enclaveExitProcess(1)
+		// THIS NODE DOES NOT EXIT, and that is deliberate.  It used to, so a supervisor would
+		// restart it -- but the restart destroys the evidence.  Twice on 2026-08-29 systemd
+		// restarted this node within 5s of the exit, each time erasing the state that would have
+		// explained WHY the halt never ran, and each time breaking the suite mid-run.  A restart
+		// is recovery of availability at the cost of the only forensics there are.
+		//
+		// A halted node is not invisible unless your monitoring was already wrong: this project's
+		// own rule is that "processes being up is not health -- the height must be seen to
+		// ADVANCE".  A stopped height is exactly what this state produces.
+		//
+		// The operator restarts it when they have what they need.  What they need is the line
+		// below, which says WHICH of four states this is -- the distinction the single
+		// enclaveHaltAnnounced bit could never make on its own.
+		inFlightNow := enclaveCallsInFlight.Load()
+		unblocked := enclaveCallsFailedPostCancel.Load() - failedBefore
+
+		switch {
+		case enclaveHaltAnnounced.Load():
+			// The common, healthy-mechanism case: a call was reached and halted for it.
+			c.LoggerError(logger, fmt.Sprintf(
+				"enclave dead (%v). in-flight at cancel: %d, unblocked with errors: %d, "+
+					"halt announced: YES -- consensus is stopped and this process stays up for "+
+					"inspection.  Restart it when you are done; startup reconciliation recovers.",
+				cause, inFlightAtCancel, unblocked))
+
+		case inFlightAtCancel == 0:
+			// Genuinely idle when the enclave died.  Nothing could panic on its behalf, so there
+			// is no named halt to be had -- which is why this line has to say so out loud.  The
+			// root is cancelled and irreversible, so the next block cannot execute either.
+			c.LoggerError(logger, fmt.Sprintf(
+				"enclave dead (%v). in-flight at cancel: 0, halt announced: no -- the node was "+
+					"IDLE, so there was no call to halt and consensus stopped without a block.  "+
+					"This node will not produce again; restart it when you are ready.", cause))
+
+		case unblocked > 0:
+			// The calls DID come back with errors, and still nothing halted.  That is not a wedge:
+			// it is a call site that swallowed the error instead of calling haltOnEnclaveFailure.
+			// Previously indistinguishable from "idle", and so never once diagnosed.
+			c.LoggerError(logger, fmt.Sprintf(
+				"enclave dead (%v). in-flight at cancel: %d, unblocked with errors: %d, "+
+					"halt announced: NO -- the calls returned but NOTHING HALTED FOR THEM.  A call "+
+					"site is swallowing the error instead of calling haltOnEnclaveFailure; find it "+
+					"with the %d method(s) still counted below.",
+				cause, inFlightAtCancel, unblocked, inFlightNow))
+
+		default:
+			// Still stuck after both the cancellation and the transport close.  This is the real
+			// wedge -- 2026-08-25, 4h11m on ONE block with a healthy enclave and nothing in the
+			// log.  It is the case the old message actively misreported as "no in-flight call".
+			c.LoggerError(logger, fmt.Sprintf(
+				"enclave dead (%v). in-flight at cancel: %d, unblocked with errors: 0, still in "+
+					"flight: %d, halt announced: NO -- WEDGED: neither the cancellation nor the "+
+					"transport close reached those calls.  Capture goroutine state before "+
+					"restarting; this is the case that has no other evidence.",
+				cause, inFlightAtCancel, inFlightNow))
+		}
 		return
 	}
 }

@@ -250,10 +250,10 @@ func (k Keeper) InitEnclave() bool {
 
 				c.LoggerDebug(k.logger, "Will connect to QadenaDEnclave (unix domain socket)", addr, "signerID", signerID, "uniqueID", uniqueID)
 
-				conn, err = grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithTimeout(time.Duration(5)*time.Second))
+				conn, err = grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithTimeout(time.Duration(5)*time.Second), grpc.WithChainUnaryInterceptor(EnclaveInFlightInterceptor))
 			} else if EnclaveDialEnclave == nil {
 				c.LoggerDebug(k.logger, "Will connect to QadenaDEnclave (not secure)", addr)
-				conn, err = grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithTimeout(time.Duration(5)*time.Second))
+				conn, err = grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithTimeout(time.Duration(5)*time.Second), grpc.WithChainUnaryInterceptor(EnclaveInFlightInterceptor))
 			} else {
 				c.LoggerDebug(k.logger, "Will connect to QadenaDEnclave (secure) "+addr+" signerID "+signerID+" uniqueID "+uniqueID)
 				conn, err = EnclaveDialEnclave(k.logger, addr, signerID, uniqueID)

@@ -241,24 +241,46 @@ func TestWatchdog_TransientStallRecoversWithoutHalting(t *testing.T) {
 // state, with a healthy enclave logging memstats throughout; three of thirty-six stalls in that log
 // ended the same way.  The watchdog declared the enclave dead and then simply returned.
 //
-// So the property is: having declared it dead, the watchdog must ensure the node actually stops.
-func TestWatchdog_WedgedNodeExitsWhenTheHaltNeverRuns(t *testing.T) {
+// So the property is: having declared it dead, the watchdog must SAY WHICH STATE THIS IS.
+//
+// IT MUST NOT EXIT.  It used to, so a supervisor would restart the node -- but the restart is what
+// destroys the evidence.  Twice on 2026-08-29 systemd restarted this node within 5s of that exit,
+// each time erasing the state that would have explained why the halt never ran.  A node that is
+// silently restarted is not diagnosable; a halted one is, and a stopped height is what monitoring
+// is supposed to watch anyway ("processes being up is not health").
+//
+// So the exit seam stays wired here PRECISELY so this test can prove the exit never happens: if
+// someone reintroduces one, this fails.
+func TestWatchdog_WedgedNodeStaysUpAndNamesTheState(t *testing.T) {
 	compressWatchdogTime(t, 50*time.Millisecond)
 
 	// No EndBlock in flight, so the cancellation has nothing to unblock and the halt cannot run.
 	exited := make(chan int, 1)
 	enclaveExitProcess = func(code int) { exited <- code }
 
-	go watchEnclaveLiveness(log.NewNopLogger(), &fakeGreeter{healthy: false})
+	var buf bytes.Buffer
+	go watchEnclaveLiveness(log.NewLogger(&buf), &fakeGreeter{healthy: false})
+
+	// Long enough for the grace, the transport close and the compressed backstop to all elapse.
+	time.Sleep(2 * time.Second)
 
 	select {
 	case code := <-exited:
-		if code != 1 {
-			t.Fatalf("the backstop must exit non-zero so the supervisor restarts the node; got %d", code)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the watchdog cancelled the alive-root and returned, leaving the node unable to " +
-			"execute a block while still running and silent -- the backstop did not fire")
+		t.Fatalf("the watchdog must NOT exit -- the operator needs the process alive to capture "+
+			"state before restarting; it exited %d", code)
+	default:
+	}
+
+	// Silence is the failure this whole backstop exists to prevent, so the line is the contract.
+	out := buf.String()
+	if !strings.Contains(out, "enclave dead") {
+		t.Fatalf("the watchdog declared the enclave dead and said nothing an operator could act "+
+			"on; a wedged node with an empty log is the 4h11m incident.  got: %q", out)
+	}
+	// With nothing in flight this is the IDLE classification, not the wedge -- and the whole point
+	// of the counters is that those two must no longer read the same.
+	if !strings.Contains(out, "IDLE") {
+		t.Fatalf("no call was in flight, so this must be reported as IDLE rather than as a wedge; got: %q", out)
 	}
 }
 

@@ -70,8 +70,17 @@ func dialRealEnclave(logger log.Logger, addr string, signerID string, uniqueID s
 	c.LoggerDebug(logger, "tlsConfig", tlsConfig)
 
 	// Set up a connection to the server.
+	//
+	// EVERY DIAL TO THE ENCLAVE MUST CARRY EnclaveInFlightInterceptor, this one included -- it is
+	// the REAL SGX path, so a node in production without it is the one case that matters.  The
+	// interceptor is what lets the watchdog say whether calls were in flight when the enclave
+	// died, which is the difference between reporting a wedge and reporting an idle node.  Missing
+	// it here would reproduce exactly the opt-in fragility the transport close exists to fix: a
+	// single dial site that skipped the invariant, invisible until the incident.
 	cred := credentials.NewTLS(tlsConfig)
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(cred))
+	conn, err := grpc.Dial(addr,
+		grpc.WithTransportCredentials(cred),
+		grpc.WithChainUnaryInterceptor(keeper.EnclaveInFlightInterceptor))
 
 	return conn, err
 }
