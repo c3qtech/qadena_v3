@@ -11,6 +11,45 @@ set -e
 unset providername
 unset serviceProviderType
 
+# Empty means the ORIGINAL behaviour: fund each wallet by bank send from $treasury.  Set by
+# --fee-granter to switch to toll-free, where the wallets are granted fees and hold nothing.
+feegranter=""
+
+# The message types a VERITAS provider/signer wallet broadcasts.  MUST stay in step with the same
+# list in veritas_scripts/step_3.sh and with the app-server's allowlist -- a type missing from any
+# one of the three fails closed at the operation that needs it, not at grant time.
+VERITAS_APPSVR_MSGS="/qadena.dsvs.MsgCreateDocument,/qadena.dsvs.MsgRemoveDocument,/qadena.dsvs.MsgSignDocument,/qadena.qadena.MsgCreateCredential,/qadena.qadena.MsgRemoveCredential,/qadena.qadena.MsgSignRecoverPrivateKey,/qadena.qadena.MsgAddPublicKey,/qadena.qadena.MsgCreateWallet,/cosmos.feegrant.v1beta1.MsgGrantAllowance"
+
+# fund_wallet <address> -- give this wallet the means to transact, however this deployment does it.
+# Emits the tx JSON on stdout either way, so both callers keep their existing code/hash checks.
+fund_wallet() {
+    local qadena_addr="$1"
+    if [ -z "$feegranter" ]; then
+        echo "Sending $per_account_amount to $qadena_addr from treasury $treasury" >&2
+        qadenad_alias tx bank send $treasury $qadena_addr $per_account_amount \
+            --from $treasury --yes --output json \
+            --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment
+        return
+    fi
+    # WIDEN THE GRANT create-wallet ALREADY MADE.  tx_create_wallet.go's grantFee() has the sponsor
+    # fee-grant every new wallet, but only for /qadena.qadena.MsgAddPublicKey and MsgCreateWallet --
+    # enough to bootstrap a wallet, nowhere near enough for a provider that must write documents,
+    # issue credentials and sign.  A grantee holds at most ONE allowance per granter, so a second
+    # grant does not stack: it fails with "fee allowance already exists".  Revoke, then re-grant the
+    # wider set, which is a superset of the two above and so loses nothing.
+    echo "Widening the sponsor's fee grant for $qadena_addr from $feegranter (toll-free: no tokens moved)" >&2
+    qadenad_alias tx feegrant revoke "$feegranter" "$qadena_addr" \
+        --from "$feegranter" --yes --output json \
+        --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment > /dev/null 2>&1 || true
+    # The revoke is broadcast async, so let it land before the grant that replaces it -- otherwise
+    # the grant races the revoke and hits "already exists" again, intermittently.
+    sleep 3
+    qadenad_alias tx feegrant grant "$feegranter" "$qadena_addr" \
+        --allowed-messages "$VERITAS_APPSVR_MSGS" \
+        --from "$feegranter" --yes --output json \
+        --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment
+}
+
 
 # Extract both positional parameters first
 pos_args=()
@@ -46,6 +85,13 @@ while [[ $# -gt 0 ]]; do
             ;;
         --provider-amount)
             provideramount="$2"
+            shift 2
+            ;;
+        # TOLL-FREE.  When set, the provider and its eph wallets are given a FEE GRANT instead of
+        # tokens, so they never hold a balance and no AML-scanned transfer is made on their behalf.
+        # $provideramount is then unused -- that is the point, not an oversight.
+        --fee-granter)
+            feegranter="$2"
             shift 2
             ;;
         --count)
@@ -105,8 +151,7 @@ echo "$providername Create wallet"
 echo "-------------------------"
 qadenad_alias tx qadena create-wallet $providername $pioneer $treasury --account-mnemonic="$providermnemonic"  --yes
 qadena_addr=$(qadenad_alias keys show $providername --address)
-echo "Sending $provideramount to $qadena_addr from treasury"
-result=$(qadenad_alias tx bank send $treasury $qadena_addr  $per_account_amount --from $treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+result=$(fund_wallet "$qadena_addr")
 echo "Result: $result"
 # get tx hash
 tx_hash=$(echo $result | jq -r .txhash)
@@ -127,8 +172,7 @@ if [ $count -gt 0 ]; then
         qadenad_alias tx qadena create-wallet $providername-eph$i $pioneer $treasury --link-to-real-wallet $providername --account-mnemonic="$providermnemonic" --eph-account-index "$i" --yes
         # transfer funds to eph wallet
         qadena_addr=$(qadenad_alias keys show $providername-eph$i --address)
-        echo "Sending $per_account_amount to $qadena_addr from treasury $treasury"
-        result=$(qadenad_alias tx bank send $treasury $qadena_addr  $per_account_amount --from $treasury --yes --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+        result=$(fund_wallet "$qadena_addr")
         echo "Result: $result"
         # get tx hash
         tx_hash=$(echo $result | jq -r .txhash)

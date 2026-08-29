@@ -35,6 +35,25 @@ echo "dsvsprovidermnemonic: $dsvsprovidermnemonic"
 
 
 
+# TOLL-FREE.  In feegrant mode there is NO SEC treasury: sec-treasury is never funded, so the wait
+# below would spin for ever on a condition this mode deliberately never creates.
+#
+# The fix is to REPOINT $treasuryname at the foundation account rather than to skip the wait -- the
+# foundation IS funded, so the check still runs and still means something.  Skipping it would have
+# removed the one guard that catches "the deployment forgot to fund the payer".
+#
+# It is repointed rather than dropped because create-wallet takes it as the SPONSOR -- a message
+# field, not a fee, so it cannot be fee-granted.  The foundation plays that role too, which is what
+# makes sec-treasury unnecessary rather than merely unfunded.
+: ${VERITAS_FUND_MODE:=banksend}
+: ${VERITAS_FOUNDATION_APPSVR:=foundation-appsvr}
+feegrant_args=()
+if [ "$VERITAS_FUND_MODE" = "feegrant" ]; then
+    echo "toll-free: $VERITAS_FOUNDATION_APPSVR sponsors and grants; sec-treasury is not used"
+    treasuryname="$VERITAS_FOUNDATION_APPSVR"
+    feegrant_args=(--fee-granter "$VERITAS_FOUNDATION_APPSVR")
+fi
+
 # wait until there are funds in $treasuryname
 echo "Waiting for funds in $treasuryname"
 while [ "$(qadenad_alias query bank balances $treasuryname --output json | jq -r ".balances[0].amount // empty")" = "" ] || [ "$(qadenad_alias query bank balances $treasuryname --output json | jq -r ".balances[0].amount")" = "null" ] || [ "$(qadenad_alias query bank balances $treasuryname --output json | jq -r ".balances[0].amount")" = "0" ]; do
@@ -49,7 +68,7 @@ echo "-------------------------"
 echo "Setting up $identityprovidername provider"
 echo "-------------------------"
 
-$qadenaproviderscripts/setup_provider_base.sh $identityprovidername identity --pioneer $pioneer --treasury $treasuryname --provider-mnemonic $identityprovidermnemonic --provider-amount $provideramount --count $count
+$qadenaproviderscripts/setup_provider_base.sh $identityprovidername identity --pioneer $pioneer --treasury $treasuryname --provider-mnemonic $identityprovidermnemonic --provider-amount $provideramount --count $count "${feegrant_args[@]}"
 
 # load proposal id from identity.proposal_id
 identityproposal_id=$(cat $qadenaproviderscripts/proposals/$identityprovidername.proposal_id)
@@ -62,7 +81,7 @@ echo "-------------------------"
 echo "Setting up  $dsvsprovidername provider"
 echo "-------------------------"
 
-$qadenaproviderscripts/setup_provider_base.sh $dsvsprovidername dsvs --pioneer $pioneer --treasury $treasuryname --provider-mnemonic $dsvsprovidermnemonic --provider-amount $provideramount --count $count
+$qadenaproviderscripts/setup_provider_base.sh $dsvsprovidername dsvs --pioneer $pioneer --treasury $treasuryname --provider-mnemonic $dsvsprovidermnemonic --provider-amount $provideramount --count $count "${feegrant_args[@]}"
 
 # load proposal id from dsvssrvprv.proposal_id
 dsvsproposal_id=$(cat $qadenaproviderscripts/proposals/$dsvsprovidername.proposal_id)

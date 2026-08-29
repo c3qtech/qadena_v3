@@ -30,6 +30,16 @@ provideramount="100000qdn"
 signeramount="100000qdn"
 createwalletsponsoramount="100000qdn"
 
+# What each foundation account is seeded with.  Sized well above the amounts above because these
+# accounts pay FEES for many wallets rather than endowing a few, and credential issuance is by far
+# the most expensive operation (measured at ~5.9e19 aqdn against ~3.2e14 for a document signature).
+foundationamount="2000000qdn"
+foundation_appsvr="foundation-appsvr"
+foundation_users="foundation-users"
+
+# feegrant (no SEC treasury) or banksend (the original).  See the funding block below.
+fund_mode="feegrant"
+
 pioneer="pioneer1"
 
 # accept 1 parameter, the pioneer name
@@ -41,13 +51,17 @@ while [[ $# -gt 0 ]]; do
             pioneer="$2"
             shift 2
             ;;
+        --fund-mode)
+            fund_mode="$2"
+            shift 2
+            ;;
         --help)
-            echo "Usage: $0 [--pioneer <pioneer>]"
+            echo "Usage: $0 [--pioneer <pioneer>] [--fund-mode feegrant|banksend]"
             exit 0
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--pioneer <pioneer>]"
+            echo "Usage: $0 [--pioneer <pioneer>] [--fund-mode feegrant|banksend]"
             exit 1
             ;;
     esac
@@ -66,20 +80,58 @@ $qadenatestscripts/gov_stake_from_treasury.sh $pioneer 10000000qdn
 
 $veritasscripts/step_1.sh --count $count --provideramount $provideramount --signeramount $signeramount --createwalletsponsoramount $createwalletsponsoramount --pioneer $pioneer --treasurymnemonic $sectreasurymnemonic --signermnemonic $signermnemonic --createwalletsponsormnemonic $createwalletsponsormnemonic --identityprovidermnemonic $identityprovidermnemonic --dsvsprovidermnemonic $dsvsprovidermnemonic
 
-# grants 2M qdn from "treasury" to "sec-treasury"
-echo "-------------------------"
-echo "Granting 2M qdn from treasury to sec-treasury"
-echo "-------------------------"
-$qadenatestscripts/grant_from_treasury.sh sec-treasury 2000000qdn
+# FUNDING.  Two shapes, selected by $fund_mode.
+#
+# feegrant (default) -- NO SEC TREASURY AT ALL.  The Qadena foundation pays, by fee grant, and SEC
+#   holds no tokens.  Two foundation accounts rather than one, because the two populations behave
+#   differently and separating them is worth more than the extra account:
+#
+#     foundation-appsvr  SEC's own operational wallets.  A FIXED set, known at deployment, so they
+#                        are granted directly, once, here.  No delegation and no key of SEC's can
+#                        spend the foundation's money -- only present these grants.
+#     foundation-users   citizen wallets.  These appear continuously (every onboarding, QR scan and
+#                        key rotation mints one), so the app-server issues their grants at runtime
+#                        via authz.  That delegation is unbounded by nature, and keeping it on a
+#                        separate account confines it to the user float.
+#
+#   It also makes usage independently observable: appsvr burn tracks SEC's processing, users burn
+#   tracks citizen activity, and a divergence between them is a real anomaly signal.
+#
+# banksend -- the original: 2M qdn moved into a sec-treasury, an AML whitelist exemption so that
+#   treasury can make direct bank sends at all, and a fan-out of one transfer per wallet.  Kept
+#   because a deployment mid-migration may still need it.
+if [ "$fund_mode" = "banksend" ]; then
+    echo "-------------------------"
+    echo "Granting 2M qdn from treasury to sec-treasury"
+    echo "-------------------------"
+    $qadenatestscripts/grant_from_treasury.sh sec-treasury 2000000qdn
 
-# step_3.sh funds providers and users with `tx bank send` FROM sec-treasury.  Those sends are
-# AML-scanned like any other, and a treasury is not a wallet, so without an exemption every one of
-# them is refused.  Must land before step_3.sh runs.
-echo "-------------------------"
-echo "Whitelisting sec-treasury for direct bank sends"
-echo "-------------------------"
-$qadenatestscripts/whitelist_bank_send.sh sec-treasury \
-    "veritas deployment treasury: funds providers and users by direct bank send"
+    # Those sends are AML-scanned like any other, and a treasury is not a wallet, so without an
+    # exemption every one of them is refused.  Must land before step_3.sh runs.
+    echo "-------------------------"
+    echo "Whitelisting sec-treasury for direct bank sends"
+    echo "-------------------------"
+    $qadenatestscripts/whitelist_bank_send.sh sec-treasury \
+        "veritas deployment treasury: funds providers and users by direct bank send"
+else
+    echo "-------------------------"
+    echo "Toll-free: funding two foundation accounts, no sec-treasury"
+    echo "-------------------------"
+    for f in "$foundation_appsvr" "$foundation_users"; do
+        if qadenad_alias keys show "$f" > /dev/null 2>&1; then
+            echo "$f already exists"
+        else
+            echo "creating $f"
+            qadenad_alias keys add "$f" --algo eth_secp256k1 > /dev/null 2>&1
+        fi
+        $qadenatestscripts/grant_from_treasury.sh "$f" "$foundationamount"
+    done
+    # NOTE: no whitelist_bank_send.sh here, deliberately.  The exemption existed only because a
+    # treasury making direct transfers looks exactly like the pattern the AML scanner is there to
+    # catch.  Fee grants are not bank sends, so the hole is not needed and is not opened.
+    export VERITAS_FUND_MODE=feegrant
+    export VERITAS_FOUNDATION_APPSVR="$foundation_appsvr"
+fi
 
 $veritasscripts/step_2.sh
 

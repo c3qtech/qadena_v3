@@ -164,6 +164,37 @@ a_cred=$(tx_result "A-create-cred" tx qadena create-credential "$A" "$BF" email-
 [ "$a_cred" = "0" ] && record "A-CREATE-CREDENTIAL" "PASS" "identity provider issued a credential" \
                     || record "A-CREATE-CREDENTIAL" "FAIL" "code $a_cred: $(tx_rawlog A-create-cred)"
 
+# A3 -- SEC signs a document itself, from the secdsvs-eph* pool (DocumentSigningQueue).
+# Distinct from a citizen signing: this is SEC as a signatory, and it is the third SEC key set.
+SECD=$(addr_of secdsvs-eph1)
+secd_before=$(bal "$SECD")
+c=$(tx_result "A-grant-secdsvs" tx feegrant grant "$FA" "$SECD" \
+    --allowed-messages "$APPSVR_MSGS" --spend-limit 100000000000000000000000aqdn \
+    --expiration "$expiry" --from "$fa_key")
+[ "$c" = "0" ] || fail "grant to secdsvs-eph1 failed: $(tx_rawlog A-grant-secdsvs)"
+sd_email=$(jq -r '.[]|select(.name=="secdsvs")|.email' "$qadenatestdata/users.json")
+sd_phone=$(jq -r '.[]|select(.name=="secdsvs")|.phone' "$qadenatestdata/users.json")
+printf 'phase A sec-sign %s v1\n' "$run_id" > "$workdir/as1.txt"
+printf 'phase A sec-sign %s v2\n' "$run_id" > "$workdir/as2.txt"
+c=$(tx_result "A-secdoc" tx dsvs create-document "tollfree-Asec-$run_id" ByLaws "C3Q Technologies, Inc." \
+    "$workdir/as1.txt" "$sd_email" "$sd_phone" --from testdsvssrvprv --fee-granter "$FA")
+[ "$c" = "0" ] || fail "sec-signable document failed: $(tx_rawlog A-secdoc)"
+c=$(tx_result "A-secsign" tx dsvs sign-document "$workdir/as1.txt" "$workdir/as2.txt" \
+    "$sd_email" "$sd_phone" --from secdsvs-eph1 --fee-granter "$FA")
+secd_after=$(bal "$SECD")
+if [ "$c" = "0" ] && [ "$(delta $secd_before $secd_after)" = "0" ]; then
+    record "A-SEC-SIGN-DOCUMENT" "PASS" "secdsvs-eph1 signed, its own balance unmoved"
+else
+    record "A-SEC-SIGN-DOCUMENT" "FAIL" "code $c, secdsvs-eph1 spent $(delta $secd_before $secd_after): $(tx_rawlog A-secsign)"
+fi
+
+# A4 -- remove a document.  Only an UNSIGNED document can be removed (a fully signed one is
+# permanent by design, proved in test_dsvs.sh), so this removes the one A-CREATE-DOCUMENT made and
+# nobody signed -- which also tidies up after the run.
+c=$(tx_result "A-remove-doc" tx dsvs remove-document "$docid" --from testdsvssrvprv --fee-granter "$FA")
+[ "$c" = "0" ] && record "A-REMOVE-DOCUMENT" "PASS" "unsigned document removed, paid by foundation-appsvr" \
+               || record "A-REMOVE-DOCUMENT" "FAIL" "code $c: $(tx_rawlog A-remove-doc)"
+
 sleep 4
 sp_after=$(bal $SP); idp_after=$(bal $IDP); fa_mid=$(bal $FA)
 sp_d=$(delta $sp_before $sp_after); idp_d=$(delta $idp_before $idp_after); fa_d=$(delta $fa_before $fa_mid)

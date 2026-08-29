@@ -369,16 +369,23 @@ needs_root_if_real_enclave() {
 # what is wrong and the single command that fixes it.
 user_log_path() {
     local base="$1"
-    local path="${TMPDIR:-/tmp}/${base}.$(id -un).log"
-    rm -f "$path" 2>/dev/null
-    if ! : > "$path" 2>/dev/null; then
-        print -u2 "cannot write $path (owner $(stat -c %U "$path" 2>/dev/null || echo unknown); /tmp is sticky)."
+    # `logfile`, NOT `path`.  In zsh `path` is the array form of PATH, so `local path=...` replaces
+    # the command search path with that one string for the rest of the call and every EXTERNAL
+    # command returns 127 -- while builtins keep working, so the function still returns a sensible
+    # value and looks fine.  Here that silently disabled the `rm -f` below, which is the one thing
+    # this helper exists to guarantee: a stale file of the same name is exactly what makes a command
+    # that never ran look like one that ran and failed.  `stat` in the error path died the same way,
+    # reporting every owner as "unknown".
+    local logfile="${TMPDIR:-/tmp}/${base}.$(id -un).log"
+    rm -f "$logfile" 2>/dev/null
+    if ! : > "$logfile" 2>/dev/null; then
+        print -u2 "cannot write $logfile (owner $(stat -c %U "$logfile" 2>/dev/null || echo unknown); /tmp is sticky)."
         print -u2 "A redirect that fails means the command never runs, while a stale file of the same"
         print -u2 "name makes it look like it did.  Remove it and re-run:"
-        print -u2 "    sudo rm -f $path"
+        print -u2 "    sudo rm -f $logfile"
         return 1
     fi
-    print -r -- "$path"
+    print -r -- "$logfile"
 }
 
 # A KILLABLE UNIT FOR A SCRIPT-STARTED ENCLAVE.
