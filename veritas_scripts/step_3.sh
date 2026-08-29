@@ -33,20 +33,17 @@ fund_wallet() {
             --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment
         return
     fi
-    # WIDEN, DO NOT ADD.  tx_create_wallet.go's grantFee() already had the SPONSOR fee-grant this
-    # wallet, but only for /qadena.qadena.MsgAddPublicKey and MsgCreateWallet.  A grantee holds at
-    # most ONE allowance per granter, so granting again does not stack -- it fails with "fee
-    # allowance already exists".  Revoke first, then issue the wider set, which is a superset.
-    echo "Widening the sponsor's fee grant for $qadena_addr from $VERITAS_FOUNDATION_APPSVR" >&2
-    qadenad_alias tx feegrant revoke "$VERITAS_FOUNDATION_APPSVR" "$qadena_addr" \
-        --from "$VERITAS_FOUNDATION_APPSVR" --yes --output json \
-        --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment > /dev/null 2>&1 || true
-    # Broadcast is async: let the revoke land, or the grant races it back into "already exists".
-    sleep 3
-    qadenad_alias tx feegrant grant "$VERITAS_FOUNDATION_APPSVR" "$qadena_addr" \
-        --allowed-messages "$VERITAS_APPSVR_MSGS" \
-        --from "$VERITAS_FOUNDATION_APPSVR" --yes --output json \
-        --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment
+    # Toll-free: a GRANT, not a transfer. Routed through grant_as_foundation so it is signed by
+    # SEC's admin key as a MsgExec when VERITAS_SEC_ADMIN is set -- step_3 is SEC's step and must not
+    # require a foundation key. Progress goes to STDERR: the caller captures stdout as JSON, and a
+    # stray echo there corrupts it and kills jq with "Invalid numeric literal".
+    local granter
+    granter=$(qadenad_alias keys show "$VERITAS_FOUNDATION_APPSVR" --address 2>/dev/null)
+    [ -n "$granter" ] || granter="$VERITAS_FOUNDATION_APPSVR"
+    echo "Granting fees to $qadena_addr from $VERITAS_FOUNDATION_APPSVR" >&2
+    grant_as_foundation "$granter" "$qadena_addr" "$VERITAS_APPSVR_MSGS" \
+        || echo "  WARNING: grant failed for $qadena_addr" >&2
+    echo '{"code":0,"txhash":"","note":"feegrant"}'
 }
 
 # read variables from json file

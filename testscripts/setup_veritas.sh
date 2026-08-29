@@ -37,6 +37,20 @@ foundationamount="2000000qdn"
 foundation_appsvr="foundation-appsvr"
 foundation_users="foundation-users"
 
+# FIXED MNEMONICS so the two foundation addresses are the SAME on every re-init, the way the SEC
+# mnemonics above already are. Without this each init produced fresh random accounts and the two
+# addresses had to be copied by hand into .env after every rebuild.
+#
+#   foundation-users  qadena1j75rmpk86n2ln27p9c42qa2qkw4zy4zkgrzpjm
+#   foundation-appsvr qadena13vvrf5879hfgrv3krucpkpgmph549gnzv923vq
+#
+# TEST KEYS ONLY. They are in a public repo, so anyone can spend from them. A real deployment's
+# foundation accounts belong to the Qadena Foundation and their addresses go into the production and
+# staging SSM parameters instead -- never these. The addresses above are safe to bake into the dev
+# env files precisely because the money behind them is worthless.
+foundationusersmnemonic="airport south group aerobic august arm source candy tilt damp stage fork mention clerk plunge garbage nut blood fall flight indoor season broken fog"
+foundationappsvrmnemonic="angle unknown bean lunch base vague awful together dismiss swallow climb common upgrade jelly machine plunge paper vote maple frog junk brisk bind weekend"
+
 # feegrant (no SEC treasury) or banksend (the original).  See the funding block below.
 fund_mode="feegrant"
 
@@ -121,8 +135,9 @@ else
         if qadenad_alias keys show "$f" > /dev/null 2>&1; then
             echo "$f already exists"
         else
-            echo "creating $f"
-            qadenad_alias keys add "$f" --algo eth_secp256k1 > /dev/null 2>&1
+            echo "recovering $f from its fixed mnemonic"
+            if [ "$f" = "$foundation_users" ]; then mn="$foundationusersmnemonic"; else mn="$foundationappsvrmnemonic"; fi
+            echo "$mn" | qadenad_alias keys add "$f" --recover --algo eth_secp256k1 > /dev/null 2>&1
         fi
         $qadenatestscripts/grant_from_treasury.sh "$f" "$foundationamount"
     done
@@ -150,3 +165,19 @@ $qadenaproviderscripts/query_service_provider_proposal.sh $secidentityproposal_i
 $qadenaproviderscripts/query_service_provider_proposal.sh $secdsvsproposal_id --wait
 
 $veritasscripts/step_3.sh
+
+
+# ---------------------------------------------------------------------------------------------
+# STEP 4 -- the FOUNDATION's final action.
+#
+# Extracted into veritas_scripts/step_4.sh rather than inlined, because in a real deployment this is
+# NOT SEC's to run: every grant it issues is signed by the foundation, and authz cannot be
+# sub-delegated, so SEC could not do it even with the step_1 authorisation. Inlining it here would
+# have hidden that -- this harness holds every key in one keyring and so cannot tell the difference.
+#
+# The harness calls it because it plays both roles; SEC's real procedure stops after step_3 and waits
+# for the foundation to run this and return the two addresses.
+if [ "$fund_mode" != "banksend" ]; then
+    $veritasscripts/step_4.sh --foundation-users "$foundation_users" \
+        --foundation-appsvr "$foundation_appsvr" --count "$count"
+fi

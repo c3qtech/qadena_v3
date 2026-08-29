@@ -295,7 +295,42 @@ func envDuration(name string, def time.Duration) time.Duration {
 // per process (app/app.go panics if it fails), so there is exactly one watchdog.
 func startEnclaveWatchdog(logger log.Logger, conn *grpc.ClientConn) {
 	announceDebugOverrides(logger)
+	// RETAINED so the backstop can close the TRANSPORT.  Cancelling enclaveAlive only reaches
+	// calls that derive from it; closing the connection unblocks every in-flight call whatever
+	// context it holds.  See the backstop in watchEnclaveLiveness.
+	enclaveConn.Store(conn)
 	go watchEnclaveLiveness(logger, types.NewGreeterClient(conn))
+}
+
+// The live connection to the enclave, retained ONLY so the watchdog's backstop can close it.
+// atomic.Pointer rather than a plain var because the watchdog goroutine reads what InitEnclave's
+// goroutine wrote.
+var enclaveConn atomic.Pointer[grpc.ClientConn]
+
+// closeEnclaveTransport unblocks every in-flight enclave call by tearing down the connection they
+// are all waiting on, so the exec-path call that is stuck can return an error and reach
+// haltOnEnclaveFailure.
+//
+// This is the escape hatch for the invariant the backstop exists to catch: cancellation is OPT-IN
+// per call site (the context must descend from enclaveAlive), and a single call site that missed
+// it hangs forever.  Closing the transport is not opt-in -- gRPC fails every RPC on a closed
+// ClientConn -- so it does not depend on any call site being written correctly.
+//
+// Safe to call after the enclave has been declared dead: the cancel above is irreversible, so this
+// node can never execute another block, and nothing is lost by dropping the connection to a process
+// that has already stopped answering.
+func closeEnclaveTransport(logger log.Logger) bool {
+	conn := enclaveConn.Load()
+	if conn == nil {
+		c.LoggerError(logger, "backstop: no enclave connection retained, cannot unblock by closing the transport")
+		return false
+	}
+	if err := conn.Close(); err != nil {
+		c.LoggerError(logger, "backstop: closing the enclave transport failed: "+err.Error())
+		return false
+	}
+	c.LoggerError(logger, "backstop: closed the enclave transport to unblock any call the cancellation did not reach")
+	return true
 }
 
 // announceDebugOverrides screams once, at startup, if any env knob has this node off its
@@ -379,22 +414,48 @@ func watchEnclaveLiveness(logger log.Logger, greeter types.GreeterClient) {
 		// tier does too -- but "supposed to be" is an invariant across many call sites, and a single
 		// path that missed it turns a declared-dead enclave into a silent hang forever.
 		//
-		// So: having declared the enclave dead, verify the consequence rather than assume it.  The
-		// cancel is irreversible (context.WithCancelCause cannot be un-cancelled), so every future
-		// enclaveExecContext is born cancelled and this node can never execute another block.  It is
-		// already unrecoverable at this point; the only question is whether it says so.  Exiting
-		// non-zero lets the supervisor restart it and startup reconciliation recover -- exactly what
-		// monitorChild already does for a crashed enclave.  The asymmetry between those two paths
-		// was the bug.
+		// So: having declared the enclave dead, do not WAIT to find out whether the cancellation
+		// reached anything -- make it reach everything, immediately, by closing the transport too.
+		// The cancel is irreversible (context.WithCancelCause cannot be un-cancelled), so every
+		// future enclaveExecContext is born cancelled and this node can never execute another
+		// block.  It is already unrecoverable at this point; the only question is whether it says
+		// so, and closing the transport is what makes it say so reliably.
+		//
+		// ONE MECHANISM, NOT TWO.  There is no longer a "normal" and an "abnormal" path here:
+		// every declared-dead enclave is handled the same way, and the only thing that varies is
+		// whether a call existed to halt.
+		//
+		// The cancel above records WHY and shuts the one-way door.  On its own it is opt-in per
+		// call site -- the blocked goroutine must be sitting on a context descended from
+		// enclaveAlive -- and a single call site that missed that invariant hangs forever
+		// (2026-08-25: wedged 4h11m on ONE block, healthy enclave, nothing in the log).
+		//
+		// Closing the transport is not opt-in.  gRPC fails every RPC on a closed ClientConn, so
+		// the stuck call unblocks whatever context it holds, returns an error, and reaches
+		// haltOnEnclaveFailure -- which reports the CAUSE recorded above rather than the bare
+		// "connection closed" it would otherwise see.  That is why the cancel comes first and the
+		// close immediately after: the cancel supplies the reason, the close supplies the
+		// guarantee.
+		//
+		// This does not touch the enclave process.  Only our client side goes; the enclave keeps
+		// running and keeps serving its socket, so a restarted node still ADOPTS it warm.
+		closeEnclaveTransport(logger)
+
+		// The halt is reactive, so give the unblocked call a moment to unwind into the panic and
+		// set the flag.
 		time.Sleep(enclaveHaltBackstop)
 		if enclaveHaltAnnounced.Load() {
-			return // the halt ran; the node is stopped for the right reason and says so
+			return // halted: consensus dead, process up, named cause and height in the log
 		}
+
+		// Nothing unblocked, so there was genuinely no in-flight call -- the node was idle when its
+		// enclave died.  Nothing can panic on its behalf, so there is no halt to be had at any
+		// price.  The root is cancelled and irreversible, so this node can never execute another
+		// block; exit and let the supervisor restart it.
 		c.LoggerError(logger, fmt.Sprintf(
-			"enclave declared dead %s ago but haltOnEnclaveFailure never ran -- the cancellation "+
-				"reached no in-flight call, so this node is wedged rather than halted (%v). "+
-				"Exiting so the supervisor can restart it; startup reconciliation will recover.",
-			enclaveHaltBackstop, cause))
+			"enclave declared dead and the transport was closed, but no in-flight call existed to "+
+				"halt (%v).  Exiting so the supervisor can restart it; startup reconciliation "+
+				"will recover.", cause))
 		enclaveExitProcess(1)
 		return
 	}

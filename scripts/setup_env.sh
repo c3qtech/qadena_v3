@@ -388,6 +388,65 @@ user_log_path() {
     print -r -- "$logfile"
 }
 
+# ISSUE A FEE GRANT THAT BELONGS TO THE FOUNDATION, WITHOUT HOLDING THE FOUNDATION'S KEY.
+#
+#   grant_as_foundation <granter-addr> <grantee-addr> <allowed-messages-csv> [signer-key]
+#
+# A fee grant is signed by its GRANTER, so a grant drawn on the foundation must be signed by the
+# foundation. That is fine in this harness, where one keyring holds every key -- and wrong in a real
+# deployment, where SEC runs steps 1-3 and must never hold a foundation key. The three-step structure
+# exists precisely to keep those apart.
+#
+# authz closes the gap: the foundation authorises SEC's admin key ONCE for
+# /cosmos.feegrant.v1beta1.MsgGrantAllowance, and SEC then wraps each grant in a MsgExec. The
+# allowance is the foundation's, the signature is SEC's, and SEC holds a revocable permission rather
+# than a key.
+#
+#   VERITAS_SEC_ADMIN set   -> wrap in MsgExec, signed by that key, foundation pays for the MsgExec
+#   unset                   -> sign directly as the granter (harness only; needs the granter's key)
+#
+# --generate-only on the inner message is not optional: authz resolves the grant on the INNER
+# message's signer, so a message built with --from <sec key> names SEC as granter, matches no
+# authorisation, and is rejected with ErrNoAuthorizationFound.
+grant_as_foundation() {
+    local granter="$1" grantee="$2" msgs="$3" signer="${4:-${VERITAS_SEC_ADMIN:-}}"
+    local gasflags=(--gas-prices "$minimum_gas_prices" --gas "$gas_auto" --gas-adjustment "$gas_adjustment")
+    local out hash code tmp
+
+    # Revoke first: a grantee holds at most ONE allowance per granter, so a wider grant cannot be
+    # layered over a narrower one already left by create-wallet's own grantFee.
+    if [ -n "$signer" ]; then
+        tmp=$(mktemp)
+        qadenad_alias tx feegrant revoke "$granter" "$grantee" --from "$granter" --generate-only \
+            > "$tmp" 2>/dev/null || true
+        [ -s "$tmp" ] && qadenad_alias tx authz exec "$tmp" --from "$signer" --fee-granter "$granter" \
+            --yes --output json "${gasflags[@]}" >/dev/null 2>&1 || true
+        rm -f "$tmp"
+    else
+        qadenad_alias tx feegrant revoke "$granter" "$grantee" --from "$granter" \
+            --yes --output json "${gasflags[@]}" >/dev/null 2>&1 || true
+    fi
+    sleep 3
+
+    if [ -n "$signer" ]; then
+        tmp=$(mktemp)
+        qadenad_alias tx feegrant grant "$granter" "$grantee" --allowed-messages "$msgs" \
+            --from "$granter" --generate-only > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+        out=$(qadenad_alias tx authz exec "$tmp" --from "$signer" --fee-granter "$granter" \
+              --yes --output json "${gasflags[@]}" 2>&1); rm -f "$tmp"
+    else
+        out=$(qadenad_alias tx feegrant grant "$granter" "$grantee" --allowed-messages "$msgs" \
+              --from "$granter" --yes --output json "${gasflags[@]}" 2>&1)
+    fi
+
+    hash=$(echo "$out" | grep '^{' | tail -1 | jq -r '.txhash // ""' 2>/dev/null)
+    [ -n "$hash" ] || { echo "grant_as_foundation: no txhash for $grantee: $(echo "$out" | tail -1)" >&2; return 1; }
+    qadenad_alias query wait-tx "$hash" --timeout 60s >/dev/null 2>&1 || true
+    code=$(qadenad_alias query tx "$hash" --output json 2>/dev/null | jq -r '.code // "?"')
+    [ "$code" = "0" ] || { echo "grant_as_foundation: $grantee failed on chain (code $code)" >&2; return 1; }
+    return 0
+}
+
 # A KILLABLE UNIT FOR A SCRIPT-STARTED ENCLAVE.
 #
 # `ego run` is a launcher: it forks /opt/ego/bin/ego-host, and the enclave lives inside THAT.  A

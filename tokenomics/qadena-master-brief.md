@@ -1,259 +1,184 @@
 # QADENA Token Launch — Master Brief
 
-Single source for the token launch implementation. **Supersedes**
+**The single source for the token launch.** Supersedes the earlier CosmWasm-custody master brief,
 `qadena-genesis-brief.md`, `qadena-build-brief.md`, and the genesis portions of
-`qadena-dev-mode-brief.md`.
+`qadena-dev-mode-brief.md`. There is no separate native brief — this is it.
 
-Work in phase order. Phase A gates everything.
+Custody, vesting, staking, delegated authority and fee sponsorship are **all core Cosmos SDK**. No
+smart contracts, no licensed modules.
+
+Every capability claim is marked **TESTED** with its evidence or flagged untested. Transaction
+hashes, heights and result codes live in `gating-findings.md`; harnesses are
+`testscripts/test_token_gating.sh` (A1–A8) and `testscripts/test_native_custody.sh` (N1–N6).
 
 ---
 
-## CONFIRMED ENVIRONMENT (do not re-derive)
+## 1. CONFIRMED ENVIRONMENT (do not re-derive)
 
-Established by testing on devnet `qadena_4444-1`:
+Established on devnet `qadena_4828-1`:
 
 - Cosmos SDK v0.53.5 · CosmWasm present · Cosmos EVM v0.5.1 (pre-audit, v0.x)
-- Base denom `aqdn`, 18 decimals. Display `qdn` — never in an on-chain amount.
+- Base denom `aqdn`, 18 decimals. Display `qdn` — **never** in an on-chain amount.
 - `x/bank` stores full-precision aqdn; `x/precisebank` is a passthrough. Ignore.
 - Vesting: vanilla `cosmos-sdk/x/auth/vesting`.
-- **Vesting locks hold against the EVM** — EVM balance reads resolve to
-  `SpendableCoin()`. Verified at the exact boundary. Re-test if any precompile
-  is ever activated (`active_static_precompiles` currently `[]`).
-- Locked tokens CAN be delegated; principal returns still-locked. Staking
-  rewards are LIQUID immediately (disclosure item).
+- **Vesting locks hold against the EVM** — EVM balance reads resolve to `SpendableCoin()`. Verified
+  at the exact boundary. Re-test if any precompile is activated (`active_static_precompiles` is `[]`).
+- Locked tokens CAN be delegated; **unbonding returns them still locked** (N3). Staking rewards are
+  LIQUID immediately (disclosure item).
 - Backdated vesting `start_time` is accepted; elapsed periods become spendable.
-- A fully locked account cannot pay EVM gas at a real base fee.
-- **AML gate (code 1159)** blocks Cosmos bank sends between non-eKYC parties,
-  but does NOT gate EVM transfers. The asymmetry is a separate workstream; its
-  interactions are tested in Phase A.
+- **A fully locked account cannot pay ANY fee** — see §4 limit 6.
+- **AML gate (code 1159)** blocks Cosmos bank sends between unidentifiable parties but does NOT gate
+  EVM transfers. The asymmetry is a separate workstream.
 - Recipient keys: `--algo eth_secp256k1`, brand-new, never funded.
 
-## DESIGN SUMMARY
+## 2. DESIGN SUMMARY
 
-- **4,000,000,000 QDN initial supply** (uncapped — inflation on; never write
-  "total/max/capped supply").
-- **Inflation: 1.00% fixed** (`inflation_min == inflation_max == 0.01`).
-  Rationale: provisions = rate x total supply paid to bonded stake only;
-  bonded stake is ~504M (foundation's locked tranche delegated), so 1% -> ~7.9%
-  staker APR. Higher rates pay absurd yield to a tiny bonded set.
-- **10 buckets** per `allocations.csv`. Genesis holds each bucket in a
-  temporary native 2-of-3 multisig of the operator's own keys. Permanent
-  custody (cw3/cw-vesting) is deployed in week 1 on the live chain.
-- **Zero external addresses at genesis** except genesis validator operators.
-  Founders and backers are escrowed; all individual grants are post-launch.
-- Consortium model: foundation delegates its locked 504M to member validators;
-  validator commission is operator compensation; governance is
-  foundation-controlled and disclosed as such.
+- **4,000,000,000 QDN initial supply** (uncapped — inflation on; never write "total/max/capped
+  supply").
+- **Inflation: 1.00% fixed** (`inflation_min == inflation_max == 0.01`). Provisions = rate × total
+  supply paid to bonded stake only; bonded stake is ~504M, so 1% → ~7.9% staker APR. Higher rates
+  pay absurd yield to a tiny bonded set. `goal_bonded` and `inflation_rate_change` become inert.
+- **10 buckets** per `allocations.csv`. Genesis holds each in a native multisig of operator keys.
+- **Zero external addresses at genesis** except genesis validator operators — **but see §16, this
+  conflicts with `x/qadena`'s own requirements and is unresolved.**
+- Consortium model: foundation delegates its locked 504M to member validators; validator commission
+  is operator compensation; governance is foundation-controlled and disclosed as such.
 
 ---
 
-## HARD RULES
+## 3. WHY NATIVE — the two findings that closed off contracts
 
-1. `allocations.csv` is human-owned. Never edit, never invent values. Missing
-   value -> stop and ask.
+**cw-plus cannot do the job.** In `cosmwasm-std` the `CosmosMsg` variants are feature-gated:
+`Bank`/`Wasm` always exist, `Staking`/`Distribution` sit behind `feature = "staking"`, `Any` behind
+`feature = "cosmwasm_2_0"`. cw-plus has exactly two releases (v1.1.2, v2.0.0) and **both pin
+`cosmwasm-std` with no features**. A stock `cw3-flex-multisig` can emit bank sends and nothing else —
+no vesting grants (A1 FAIL), no delegation (A3 FAIL). That is also why A5 passed. The remedy would
+be a **custom build of an unaudited contract** holding 4B QDN. (cw-plus is explicitly unaudited;
+cw-vesting, from DAO DAO, is Oak-audited — the *unaudited* pair is what would custody everything.)
+
+**`x/group` is licence-blocked.** It is the SDK's native cw3+cw4 equivalent, it works here, and it
+solves membership cleanly — tested: proposals, votes, execution, delegation, vesting grants, and
+membership changes that leave the policy address byte-identical (§14 of the findings). But in **SDK
+v0.54.0 it moved to `enterprise/`** under a **Source Available Evaluation License** — production
+requires a paid Cosmos Enterprise licence (`sales@cosmoslabs.io`, no public pricing) — and it is
+outside the SDK Bug Bounty programme.
+
+This chain runs v0.53.5 where `x/group` is still core and Apache-2.0, which is precisely the trap.
+`config/launch-config.yml:437` already states the principle for `x/crisis`, and it binds harder here
+because **`x/group` would hold the funds**: launching on it means that at the next SDK major upgrade
+you either buy a licence or migrate every bucket on a live chain — including accounts that **cannot
+be migrated at all** (§4 limit 3).
+
+v0.54 moves for the record: **enterprise/** `x/group`, `x/poa`; **contrib/** (deprecated)
+`x/circuit`, `x/nft`, `x/crisis`. Everything used here — `x/auth`, `x/auth/vesting`, `x/bank`,
+`x/staking`, `x/distribution`, `x/gov`, `x/authz`, `x/feegrant` — **remains core**.
+
+---
+
+## 4. WHAT YOU CAN AND CANNOT DO
+
+### CAN — all TESTED
+
+| # | Capability | Evidence |
+|---|---|---|
+| 1 | n-of-m threshold custody: sign, combine, broadcast | A2 |
+| 2 | A multisig **receives** a chain-enforced vesting grant | A2 |
+| 3 | A multisig **spends**, once AML-whitelisted | code 0 @ 3732 |
+| 4 | **Delegate genuinely LOCKED principal** from a multisig | N1 — `delegated_vesting` 8,000 QDN, `delegated_free` 0 |
+| 5 | **Undelegate returns the principal STILL LOCKED** | N3 |
+| 6 | Withdraw rewards on locked stake; immediately spendable | N2 |
+| 7 | **Threshold-sign an authz `MsgGrant`**; an operator then spends | N4 — operator had no eKYC, no whitelist |
+| 8 | **Delegate without granting spend power** (`StakeAuthorization`) | N5 |
+| 9 | Pay a brand-new non-eKYC address from a whitelisted bucket | A5 |
+| 10 | Issue a vesting grant to a recipient with **no eKYC** | A4 — allowed; AML gap #2 |
+| 11 | A **zero-balance** account transacts on a sponsor's fee | A6 |
+| 12 | Whitelist a plain address at genesis **or** by `x/gov` (`codeID: 0`) | genesis `config.yml`; proposals 17, 20 |
+| 13 | Vesting locks hold against the EVM | `evm-vesting-handoff.md` |
+
+Items 4–6 are the load-bearing set: threshold custody **plus** a real lock **plus** the ability to
+stake it **plus** a lock that survives the round trip through staking. N3 closes the one path that
+could have unwound everything — `evm-vesting-handoff.md` flagged delegate → undelegate → spend as the
+remaining way locked principal might become spendable early. **It does not.**
+
+### CANNOT
+
+| # | Limit | Evidence / consequence |
+|---|---|---|
+| 1 | **No on-chain proposal or vote record for a bucket spend.** Signatures are collected OFF chain | The price of excluding `x/group`. Mitigation below |
+| 2 | **A multisig's address derives from its member set + threshold** | Rotation costs a transfer and a new whitelist entry (§10) |
+| 3 | **A vesting account can never be migrated** — locked coins cannot move | A vesting multisig's membership is **frozen for the schedule's duration** |
+| 4 | **Never pre-fund an address destined to become a vesting account** | `account … already exists` (`x/auth/vesting/msg_server.go:192`). **Unrecoverable** |
+| 5 | **No plain-key account can send until whitelisted or an eKYC wallet** | code **1159** — multisigs, contracts, group policies alike |
+| 6 | **A fully locked account cannot pay ANY fee**, including the fee to delegate its own principal | N1's first run produced NO delegation, **silently**, at `spendable = 0` |
+| 7 | **A multisig cannot be made an eKYC wallet via the supported path** | `create-wallet` mints from a fresh mnemonic and overrides `--from`. **Not proven impossible** — §11 |
+| 8 | Staking rewards on locked stake are liquid **immediately** | N2. A "locked" bucket yields spendable income. Disclose deliberately |
+| 9 | Every transfer is AML-scanned and threshold-reported even when whitelisted | Whitelisting removes the *identity* requirement, not the scan |
+| 10 | A threshold, once chosen, cannot be changed | No native `update-decision-policy`. Choose for churn up front |
+
+**Mitigating limit 1 — the audit trail.** Put the decision reference in the transaction memo
+(`--note "<bucket>-<decision-id>"`) pointing at a published, numbered decision record; publish the
+signer set and signed payloads; route anything constitutional through `x/gov`, which *is* on-chain.
+**Do not describe this publicly as "on-chain multisig governance".** It is off-chain authorisation
+with an on-chain audit reference, and the difference matters to anyone assessing the treasury.
+
+---
+
+## 5. THE THREE CUSTODY PATTERNS
+
+Limits 3 and 4 force the choice: a lock must be created at a **fresh** address, and once created that
+address can never change hands.
+
+**Pattern A — chain-enforced lock.** `escrow → MsgCreatePeriodicVestingAccount → <fresh n-of-m
+multisig>`. The chain enforces the schedule; the account can delegate (N1) and its lock survives
+unbonding (N3). *Cost:* membership frozen for the schedule; needs its own whitelist entry; needs a
+gas float (limit 6).
+
+**Pattern B — liquid escrow.** A plain n-of-m holds liquid funds and issues Pattern-A grants.
+Membership can rotate (§10). *Cost:* the bucket's own schedule is policy, not physics.
+
+**Pattern C — community pool.** Funds move by `MsgCommunityPoolSpend` governance proposals. Fully
+on-chain and permanent — the only native way to get real vote records. *Cost:* control passes to
+stake-weighted governance, not a named council, and every payment waits a voting period. Untested.
+
+| bucket | pattern |
+|---|---|
+| Long-Term Reserve (600M, 10yr) | **A** — its purpose is a credible lock; 4-of-7 or wider |
+| Foundation locked tranche (504M, 6yr) | **A** — must be provably locked **and** delegated (N1, N3) |
+| Foundation liquid (56M) | B |
+| Adoption, Grants, Personnel, Backers, Founders, Contingency, PubSec, NodeOps | **B** — escrows that *issue* locked grants; the locks live in the grants |
+
+Founder, backer and personnel **grants** are always Pattern A.
+
+---
+
+## 6. AML — read before funding anything
+
+Code **1159** (`ErrBankSendNotScannable`) refuses a transfer where a party can be neither identified
+nor whitelisted. The enclave has **no fallback for an unidentifiable sender**, deliberately —
+otherwise holding no credential would be the cheapest way to get the most permissive threshold.
+
+Despite the name the list takes **any address** with `codeID: 0`; treasury, a plain account, is
+seeded that way at genesis. TESTED at genesis and at runtime via `x/gov`.
+
+**Seed every address you know at genesis.** It costs nothing, is verifiable in the genesis hash, and
+removes all launch-day governance.
+
+---
+
+## 7. HARD RULES
+
+1. `allocations.csv` is human-owned. Never edit, never invent. Missing value → stop and ask.
 2. `genesis.json` is a build artifact. Never hand-edit.
-3. Integer arithmetic only (Python `int`). No floats anywhere near amounts.
+3. Integer arithmetic only (Python `int`). No floats near amounts.
 4. Every JSON amount is a **string**.
-5. Never generate/commit real keys or mnemonics. Addresses arrive as CSV strings.
+5. Never generate or commit real keys or mnemonics. Addresses arrive as CSV strings.
 6. Verification exits non-zero on first failure, naming the bucket.
-7. Devnet/testnet chain-ids only (`qadena-dev-*`). Never a mainnet command.
-8. If a Phase A test fails, STOP and report. Do not redesign around it.
-
----
-
-# PHASE A — GATING TESTS
-
-Run on a throwaway devnet. All results with pasted output into
-`gating-findings.md`. **Phases B–D assume these pass.**
-
-| # | Test | Why it gates |
-|---|------|--------------|
-| A1 | cw3-flex-multisig proposal carrying `MsgCreatePeriodicVestingAccount` (Stargate/Any msg), executed at threshold | Every escrow->grant flow (founders, backers, personnel) runs through this |
-| A2 | Native 2-of-3 multisig address as RECIPIENT of `MsgCreatePeriodicVestingAccount`; then post-cliff 2-of-3 withdrawal | Founder custody recommendation depends on it |
-| A3 | cw3 executing `StakingMsg::Delegate`; rewards withdrawal via proposal | Whether contract-held buckets can ever stake |
-| A4 | `MsgCreatePeriodicVestingAccount` to a NON-eKYC recipient vs AML ante | If blocked: every grant needs eKYC first (workflow). If allowed: document as AML gap #2 |
-| A5 | AML-whitelisted cw3 bank-send to non-whitelisted recipient | Exact shape of every future grant payout |
-| A6 | Feegrant end-to-end: sponsor issues `PeriodicAllowance` + `AllowedMsgAllowance` to an account with ZERO balance; that account executes `MsgExecuteContract` at a **non-zero gas price** (set min-gas-price; devnet's ~0 base fee masks failures) | SEC PH toll-free architecture |
-| A7 | AML vs sponsored tx: does the ante fire on fee payment or execution for non-eKYC signers? | Agency addresses may need whitelisting before any demo |
-| A8 | Genesis balance assignment to a wasm contract address (InitGenesis ordering) — only if Phase C is ever moved into genesis | Currently informational; week-1 plan avoids it |
-
-Also record: wasmd feature flags (staking, stargate), cw-plus / cw3 / cw4 /
-cw-vesting versions and their audit status.
-
----
-
-# PHASE B — GENESIS PIPELINE
-
-## Deliverables
-
-```
-tokenomics/
-  allocations.csv          # human-owned
-  build_genesis.py         # CSV -> genesis.json
-  verify_genesis.py        # assertions, exit 1 on failure
-  export_unlock_schedule.py
-  README.md                # SHA256, conventions, findings refs
-```
-
-## allocations.csv
-
-Columns: `bucket_id,bucket_name,pct,tokens_qdn,genesis_type,genesis_address,
-permanent_home,cliff_days,vest_months,cliff_release_pct,stakes,circulating,
-custody_final,notes`
-
-- `tokens_qdn` is whole QDN. Convert ONCE at load: `aqdn = qdn * 10**18`.
-- Rows sharing a `bucket_id` are one bucket (Node Ops = reserve + N validator
-  rows). Percentages are per-bucket; token sums are per-row.
-- `genesis_type`: `native_msig` -> plain BaseAccount at the multisig address
-  (2-of-3 of operator keys); `base` -> plain BaseAccount (validator operators).
-- **No vesting accounts and no contracts exist at genesis.** All schedules are
-  applied post-launch (Phase C/D). `cliff_days`/`vest_months` columns describe
-  the terms grants must carry, for the schedule exporter and runbooks.
-- Never emit module accounts.
-
-## Genesis contents
-
-1. 10 bucket BaseAccounts + 1 validator BaseAccount (1,100 QDN: 1,000 gentx
-   self-bond + 100 gas)
-2. One gentx — single genesis validator; the set grows one by one post-launch via D2
-3. Denom metadata (exponents explicit, symbol uppercase):
-
-```json
-{ "description": "The native token of the Qadena network",
-  "base": "aqdn", "display": "qdn",
-  "name": "Qadena Token", "symbol": "QDN",
-  "denom_units": [ {"denom":"aqdn","exponent":0},
-                   {"denom":"qdn","exponent":18} ] }
-```
-
-4. Mint params: `mint_denom: aqdn`, `inflation_min = inflation_max =
-   "0.010000000000000000"`, `inflation_rate_change: "0"`, `blocks_per_year`
-   computed from MEASURED devnet block time (record the measurement).
-
-## verify_genesis.py — hard assertions
-
-1. distinct-bucket pct sum == 100 (integer)
-2. all-row `tokens_qdn` sum == 4_000_000_000
-3. per bucket: row sum == `4_000_000_000 * pct // 100`
-4. total aqdn across accounts == `4000000000000000000000000000` == bank.supply
-5. no duplicate addresses; all bech32-valid with chain prefix
-6. no module-account names present
-7. denom metadata: base aqdn, display qdn, symbol QDN, exponents 0 and 18 explicit
-8. no amount field anywhere uses `qdn` as denom
-9. every amount is a JSON string
-10. mint: `inflation_min == inflation_max == 0.01`, `blocks_per_year` non-default
-11. no second emission path (grep for epoch hooks / BeginBlocker transfers to
-    `fee_collector`)
-12. exactly one validator row of exactly 1,100 QDN, matching exactly one gentx
-13. every `native_msig` row has a non-placeholder address before mainnet build
-    (placeholder allowed in dev builds; assert flag distinguishes)
-
-Then `qadenad validate-genesis`, then boot `qadena-dev-2` from the file and
-assert: every account spendable == its genesis balance (nothing locked at
-genesis), `q bank total` matches assertion 4, the single validator produces blocks.
-
-## export_unlock_schedule.py
-
-Monthly CSV from TGE to month 120: per-bucket unlocked amounts (from the terms
-columns, as if grants are issued at TGE — label this assumption), cumulative
-circulating (driven by the `circulating` column), and projected minted supply
-at 1%. State circulating % against the moving total. TGE circulating should be
-~56.0M + validator floats (~1.4%); if far off, report, don't adjust.
-
----
-
-# PHASE C — WEEK-1 RUNBOOK (post-launch, human-executed; produce scripts + checklist)
-
-Order matters.
-
-1. Deploy code: `cw4-group`, `cw3-flex-multisig`, `cw-vesting`. Record code IDs.
-2. Instantiate `cw4-group` (council; operator keys initially; admin = operator
-   for now).
-3. Instantiate cw3s against the one cw4, thresholds from `custody_final`:
-   adoption 3/5, ltr 4/5, foundation 3/5, grants 3/5, personnel 3/5,
-   backers 3/5, founders 3/5, contingency 2/5, pubsec 5/7, nodeops 3/5.
-4. Instantiate cw-vesting instances: LTR 600M/10yr linear -> recipient
-   cw3-ltr; Foundation 504M/6yr -> recipient cw3-foundation.
-5. **Set every contract's migrate admin to governance or none.** A team-key
-   migrate admin can swap code and drain the reserve.
-6. **AML-whitelist every contract address** (scanned-contract whitelist) BEFORE
-   any funding transfer, or the transfers bounce with code 1159.
-7. Fund: one bank send per bucket from its genesis msig to its permanent home
-   (foundation splits 56M -> cw3 liquid, 504M -> its cw-vesting). Verify each
-   balance to the aqdn.
-8. Foundation delegation program: delegate the locked 504M across member
-   validators (locked delegation confirmed working). Record per-validator
-   amounts.
-9. Publish: contract address map, code checksums, thresholds, the unlock
-   schedule, and the SHA256 of genesis.
-10. Later, on council formation: `update_members` to seat real members, then
-    `update_admin` on the cw4 to the appropriate cw3 (self-governing).
-
-Genesis msigs are now empty scaffolding; note them as retired.
-
----
-
-# PHASE D — OPERATING RUNBOOKS (produce as scripts + docs)
-
-## D1. Vesting grant (founders, backers, team, advisors, partners)
-
-1. Recipient supplies a **brand-new** `eth_secp256k1` address (personal 2-of-3
-   multisig advised for large grants — A2 must have passed). No prior receipts.
-2. If A4 showed AML gating: recipient completes eKYC FIRST.
-3. Owning cw3: propose -> vote -> execute `MsgCreatePeriodicVestingAccount`.
-   `start_time` = TGE for founders/backers (backdated; elapsed periods unlock
-   immediately — same clock for everyone). `start_time` = grant date for
-   personnel/partners. First period = cliff; final period absorbs rounding
-   remainder; periods sum EXACTLY to total.
-4. THEN send 100 QDN gas float (never before — breaks the fresh-address rule;
-   and a fully locked account cannot pay EVM gas).
-5. Log grant in the public grants register.
-
-Worked example (founder, 100M, 18mo cliff @12.5%, 42mo):
-cliff `12500000000000000000000000` (length 46656000), 41x monthly
-`2083333333333333333333333` (length 2592000), final
-`2083333333333333333333347`.
-
-## D2. Node onboarding
-
-1. cw3-nodeops grants 1,100 QDN liquid to operator's fresh address
-   (A5 result governs AML handling).
-2. Operator: `MsgCreateValidator`, self-bond 1,000, commission per consortium
-   standard (e.g. 10%).
-3. Foundation delegates its tranche (e.g. ~24M) to the new validator.
-4. Operator income = commission on delegated stake (liquid, self-funding after
-   month 1). Misbehaving/exiting node -> foundation redelegates away.
-5. Note in member agreement: slashing hits foundation principal.
-
-## D3. Agency toll-free (SEC PH / VERITAS)
-
-1. Fund a **native** gas-sponsor multisig account from cw3-pubsec (keep the
-   sponsor native — contract-issued feegrants are unverified).
-2. Per agency address: `PeriodicAllowance` (e.g. 2,000 QDN/month) combined with
-   `AllowedMsgAllowance` restricted to `MsgExecuteContract`.
-3. If A7 showed AML gating sponsored txs: whitelist agency addresses first.
-4. **VERITAS must be built on the CosmWasm/native path.** Feegrant does not
-   cover `MsgEthereumTx`; an EVM app would need a relayer/paymaster (out of
-   scope).
-5. Revoke allowances on engagement end.
-
----
-
-## OUT OF SCOPE — ask the human
-
-- Any change to percentages, token counts, cliffs, vest durations, thresholds,
-  or the inflation rate
-- TGE date; genesis validator count/operators
-- The AML/EVM asymmetry fix (separate workstream)
-- Legal/securities questions (bucket wording, backer terms, Howey posture)
-- Real keys, real addresses, any mainnet execution
-
-## DEFINITION OF DONE
-
-- `gating-findings.md` complete, every test with pasted output
-- `verify_genesis.py` exit 0; `validate-genesis` passes; dev-2 boot checks pass
-- Unlock schedule generated and sanity-checked
-- Phase C and D delivered as reviewed scripts + checklists (not executed)
-- README: regeneration steps, genesis SHA256, block-time measurement,
-  period-length convention (30-day months, ~5 day/yr calendar drift)
-- A second person reproduces an identical genesis SHA256 from the repo
+7. Chain-ids must match `<name>_<eip155>-<epoch>` — the EVM chain ID is **parsed** from it and a
+   mismatch **fails silently**. Devnet `qadena_4828-1`, testnet `qadena_4824-1`, mainnet
+   `qadena_482-1`. (4444 is Htmlcoin Mainnet — a live replay risk, not a naming clash.)
+8. A gating failure is reported, not designed around.
+9. **Never pre-fund an address due to become a vesting account.** Unrecoverable.
+10. **Every locked account needs a gas float or feegrant before it can act.** The failure is silent.
+11. **Whitelist before funding, always.** The wrong order fails inside the block, having spent the fee.
+12. **Choose thresholds for churn at creation.** They are immutable; for locked accounts so is the
+    membership.
