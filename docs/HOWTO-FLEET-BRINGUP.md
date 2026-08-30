@@ -114,8 +114,10 @@ is a baseline.
 
 ---
 
-## The same run on SGX1 + SGX2
+## SGX1 + SGX2 -- NOT the growth test
 
+The schedule below is the one you will reach for, and it is the WRONG one for SGX.  It is
+kept here only so the reason is attached to it:
 
 ```sh
 ./testscripts/fleet_bringup_with_tests.sh \
@@ -131,31 +133,52 @@ is a baseline.
     --test "./testscripts/run_regression_continually.sh" 
 ```
 
-The schedule truncated to two nodes.  Same shape, same order, same reason -- there are
-simply two positions instead of four.
+**DO NOT RUN THE GROWTH TEST ON SGX -- IT CANNOT EXECUTE THERE.**  Both halves of it are
+debug-only and are refused when `--realenclave` is set:
+
+| command | driven by | on real SGX |
+|---|---|---|
+| `update-ss-interval-key` | `test_ss_key_rotation.sh` | refused -- `SKIPPED: the enclave refused a forced key rotation` |
+| `audit-ss-keys` | `test_ss_reshare_audit.sh` | refused -- `SKIPPED: this is a real SGX enclave` |
+
+So every `--test` entry in the schedule above is a NO-OP on SGX.  The run finishes green
+having exercised none of the SS machinery it appears to test.  The suites skip loudly and
+say what was lost -- that part is working -- but the SCHEDULE is the lie: it reads like the
+M1-M4 growth test and is an empty shell here.  Observed 2026-08-30, eight scheduled tests,
+eight skips.
+
+The re-share machinery is covered on a debug enclave (M1-M4) and by the unit tests around
+`planSSReshare`, plus `x/qadena/common/vshare_test.go` and
+`x/qadena/keeper/interval_public_key_i_d_test.go`.
+
+**What an SGX run is actually for**, and it is not nothing -- every one of these had never
+been exercised before 2026-08-27:
+
+- the reproducible SGX build, and an ego-signed MRENCLAVE that matches genesis
+- the joiner's measurement matching the primary's enclave
+- a state-sync join that seeds the joiner's enclave store from a snapshot, then agrees on
+  the app hash
+- a real regression soak against SGX hardware
+
+So schedule the soak and nothing else.  The empty-schedule trap still applies -- a bringup
+with no `--test` at all also skips `wait_addressable` -- so keep exactly one:
 
 ```sh
 ./testscripts/fleet_bringup_with_tests.sh \
   --primary alvillarica@192.168.86.120 \
-    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
-    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
-    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
-    --test "./testscripts/test_ss_reshare_audit.sh" \
   --joiner alvillarica@192.168.86.140 \
-    --test "./testscripts/test_ss_reshare_audit.sh" \
-    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
-    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/run_regression_continually.sh" \
   --block-sync
 ```
 
-**What two nodes reach, and what they do not.**  SGX2 is position M2, so the audit
-after it joins is the first that can fail meaningfully -- it must heal the size-1 keys
-1 -> 2.  What a two-node fleet **cannot** reach is the M4 row above: the threshold
-never crosses 1 -> 2, so **`shamir.Split` never runs**.  For that, use M1-M4.
+**Two nodes reach none of the audit rows, and that is a property of SGX, not of the count.**
+It is tempting to read SGX2 as "position M2" and expect it to heal the size-1 keys 1 -> 2.
+It cannot: the audit is refused on this hardware, so there is no row to reach.  Even the
+count argument only applies on a debug fleet, where a two-node run genuinely stops short of
+the M4 threshold crossing and `shamir.Split` never runs.  For any of it, use M1-M4.
 
-**Do not omit the `--test` entries** -- see *an empty schedule is a deploy* under
-*Traps this has already hit*.
+**On SGX, keep the one soak `--test` above** -- see *an empty schedule is a deploy* under
+*Traps this has already hit* for why a schedule with none at all is worse still.
 
 ### Real SGX changes three things
 
