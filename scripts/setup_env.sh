@@ -894,16 +894,65 @@ increment_version() {
 # The -x checks need no bracketing: they match the executable NAME exactly, so a shell can never
 # satisfy them.  Output goes to /dev/null on every branch -- these two used to print their
 # matches, which is how a false positive looked like real evidence of a running node.
+# The unit's ActiveState, or "absent" when this node is not systemd-managed.  One word, so callers
+# can print it or compare it without parsing systemctl's prose.
+qadena_unit_state() {
+  qadena_systemd_managed || { echo "absent"; return 0; }
+  command -v systemctl >/dev/null 2>&1 || { echo "absent"; return 0; }
+  systemctl show -p ActiveState --value qadena 2>/dev/null || echo "unknown"
+}
+
+# What every start/stop/restart message should carry, so an operator can tell at a glance whether
+# systemd will have opinions about what they just did -- notably Restart=on-failure, which can
+# bring a node back seconds after a direct kill "worked".
+qadena_supervision_tag() {
+  if qadena_systemd_managed; then
+    echo "(systemd supervised: qadena.service $(qadena_unit_state))"
+  else
+    echo "(not systemd supervised)"
+  fi
+}
+
+# THE RETURN VALUE IS PROCESS TRUTH, DELIBERATELY, AND SYSTEMD ONLY INFORMS THE MESSAGE.
+#
+# It is tempting to answer this with `systemctl is-active`, and that would be wrong in both
+# directions.  A node can run OUTSIDE the unit -- restart_qadena.sh and run.sh start one directly,
+# and the unit may be installed while a node is already up -- so an inactive unit does not mean an
+# idle box.  And run.sh calls this as the unit's OWN ExecStart on its way out (see its "belt and
+# braces" block), where the unit is still active and a systemd-based answer would have the node
+# detect itself and try to stop the service currently executing the line.
+#
+# So: pgrep decides, systemd explains.  The disagreement cases are the ones worth naming out loud,
+# because they are exactly the states that make a stop or start look like it misbehaved.
 is_qadena_running() {
+  local unit procs=1
+  unit=$(qadena_unit_state)
   if pgrep -x qadenad >/dev/null ||
      pgrep -x qadenad_enclave >/dev/null ||
      pgrep -af '[e]go-host.*qadenad_enclave' >/dev/null ||
      pgrep -af '[e]go-host.*signer_enclave' >/dev/null ||
      pgrep -x signer_enclave >/dev/null; then
-    echo "Qadena is running"
+    procs=0
+  fi
+
+  if [[ $procs -eq 0 ]]; then
+    case "$unit" in
+      absent)   echo "Qadena is running (not systemd supervised)" ;;
+      active)   echo "Qadena is running (systemd supervised)" ;;
+      # Processes with no active unit: they escaped the cgroup, or were started by hand.  systemd
+      # will NOT stop these for you, which is why the direct kills below it still exist.
+      *)        echo "Qadena is running OUTSIDE the systemd unit (qadena.service $unit)" ;;
+    esac
     return 0
   else
-    echo "Qadena is not running"
+    case "$unit" in
+      absent)   echo "Qadena is not running" ;;
+      # An active unit with no processes is a node between restarts -- Restart=on-failure is very
+      # likely about to start one, so "not running" is true only for this instant.
+      active|activating)
+                echo "Qadena is not running, but qadena.service is $unit (it may come back)" ;;
+      *)        echo "Qadena is not running (systemd supervised: qadena.service $unit)" ;;
+    esac
     return 1
   fi
 }

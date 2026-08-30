@@ -41,7 +41,7 @@ needs_root_if_real_enclave "restart_qadena.sh" "$qadenabin/qadenad_enclave"
 
 if [[ $skip_stop -eq 0 ]]; then
     if is_qadena_running; then
-      echo "restart_qadena.sh: Stopping Qadena"
+      echo "restart_qadena.sh: Stopping Qadena $(qadena_supervision_tag)"
       $qadenascripts/stop_qadena.sh --all
     fi
 fi

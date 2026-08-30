@@ -18,6 +18,14 @@ if ! qadena_systemd_managed && ! is_qadena_running; then
     exit 0
 fi
 
+# How long to wait for the node to finish exiting before calling the stop a failure.  See the poll
+# below for why this is a deadline rather than a fixed sleep.
+STOP_VERIFY_TIMEOUT=${STOP_VERIFY_TIMEOUT:-60}
+
+# Set when `systemctl stop` is confirmed to have taken every qadena process with it, which makes
+# the direct kills below redundant -- see the verification loop in the systemd block.
+unit_took_everything=0
+
 # get argument "--enclave-only"
 stop_enclave=0
 stop_qadena=0
@@ -90,12 +98,38 @@ fi
 # unit at an upgrade height: stopping the unit from within it would tear down the very upgrade it
 # was invoked to perform.  Same reason run.sh's post-exit mop-up uses --enclaves-only.
 if qadena_systemd_managed && [[ $enclaves_only -eq 0 ]]; then
-    echo "stop_qadena.sh: systemd unit present -- stopping qadena.service"
+    echo "stop_qadena.sh: systemd unit present (qadena.service $(qadena_unit_state)) -- stopping qadena.service"
     sudo systemctl stop qadena || echo "stop_qadena.sh: WARNING: systemctl stop qadena failed; continuing with direct kills"
+
+    # DID THE UNIT ACTUALLY TAKE EVERYTHING?  Checked in a short bounded loop rather than assumed,
+    # and rather than looked at once.  `systemctl stop` returns when the CGROUP is empty, so for a
+    # node the unit owns the answer is yes and every kill below is a no-op -- but a node started
+    # outside the unit (restart_qadena.sh, run.sh, or a unit installed while a node was already up)
+    # is in no cgroup systemd knows about and survives untouched.
+    #
+    # Five checks, a second apart, because a process signalled a moment ago may still be unwinding
+    # and "not dead in the same instant" is not "refused to die".
+    typeset -i tries
+    for (( tries = 1; tries <= 5; tries++ )); do
+        is_qadena_running > /dev/null || { unit_took_everything=1; break }
+        (( tries < 5 )) && sleep 1
+    done
+
+    if (( unit_took_everything )); then
+        echo "stop_qadena.sh: qadena.service stopped and no qadena processes remain -- the unit took"
+        echo "stop_qadena.sh: the whole cgroup, so the direct kills are skipped"
+    else
+        # WORTH SAYING OUT LOUD.  Anything still alive here is outside the unit's cgroup, which is a
+        # finding about how this node was started -- not routine.  The kills below are what will
+        # actually stop it.
+        echo "stop_qadena.sh: processes survived the unit stop -- they are running OUTSIDE the"
+        echo "stop_qadena.sh: cgroup (started by hand, or before the unit was installed).  Falling"
+        echo "stop_qadena.sh: through to direct kills."
+    fi
 fi
 
 echo "stop_qadena.sh: -----------"
-echo "stop_qadena.sh: STOP QADENA"
+echo "stop_qadena.sh: STOP QADENA $(qadena_supervision_tag)"
 echo "stop_qadena.sh: -----------"
 
 stop_failed=0
@@ -127,7 +161,7 @@ enclave_running() {
 # (substring), so the chain block below takes the enclave down with the chain -- which is fine,
 # and the dedicated blocks after it mop up whatever form is left.
 
-if [[ $stop_qadena -eq 1 ]] ; then
+if [[ $stop_qadena -eq 1 && $unit_took_everything -eq 0 ]] ; then
     echo "stop_qadena.sh: Stopping Qadena"
     # THE COSMOVISOR PARENT FIRST, when there is one.  `pkill -f "qadenad"` matches the CHILD (its
     # argv carries .../cosmovisor/current/bin/qadenad) but not the parent, whose argv is
@@ -159,7 +193,7 @@ if [[ $stop_qadena -eq 1 ]] ; then
     # failure is remembered and reported at the end, after everything else has been stopped.
 fi
 
-if [[ $stop_enclave -eq 1 ]] ; then
+if [[ $stop_enclave -eq 1 && $unit_took_everything -eq 0 ]] ; then
     echo "stop_qadena.sh: Stopping Qadena Enclave"
 
     # FIRST CHOICE: THE RECORDED PROCESS GROUP.  run_enclave_standalone.sh starts the enclave as the
@@ -248,7 +282,7 @@ if [[ $stop_enclave -eq 1 ]] ; then
     fi
 fi
 
-if [[ $stop_signer_enclave -eq 1 ]] ; then
+if [[ $stop_signer_enclave -eq 1 && $unit_took_everything -eq 0 ]] ; then
     echo "stop_qadena.sh: Stopping Qadena Signer Enclave"
     # same reasoning as above; gated on the signer binary, which is built independently
     if use_real_enclave "$qadenabin/signer_enclave" ; then
@@ -293,9 +327,42 @@ if [[ $enclaves_only -eq 0 ]]; then
         pkill -f "rotatelogs.*qadena"
     fi
 
-    sleep 5
+    # A NODE THAT IS STILL EXITING IS NOT A NODE THAT REFUSED TO STOP.  This was a fixed `sleep 5`
+    # and a single check, and it reported "Error: Qadena is still running" on a stop that had in
+    # fact worked: systemd had already deactivated the unit, but qadenad was mid-shutdown and
+    # outlived the five seconds.  The operator looked a moment later and found nothing running.
+    #
+    # So the script failed precisely when it SUCCEEDED -- the same class of bug as the NOMATCH glob
+    # below, and it teaches the same wrong lesson: that a clean stop needs investigating.  A cosmos
+    # node flushing its DB and tearing down an enclave routinely takes longer than five seconds,
+    # and how much longer is not a constant worth guessing at.
+    #
+    # Poll instead, and only call it a failure once the deadline actually passes.  Observed on M1
+    # (debug enclave, 4-validator fleet) on 2026-08-30.
+    #
+    # BOTH CONDITIONS, because either alone can lie.  Processes can outlive an inactive unit (they
+    # escaped the cgroup, or were started outside it), and an active unit with no processes is a
+    # node that Restart=on-failure is about to bring straight back -- reporting "stopped" there
+    # would be wrong within seconds.
+    typeset -i waited=0
+    while (( waited < STOP_VERIFY_TIMEOUT )); do
+        if ! is_qadena_running > /dev/null; then
+            case "$(qadena_unit_state)" in
+                absent|inactive|failed) break ;;
+            esac
+        fi
+        sleep 1
+        (( ++waited ))
+    done
     if is_qadena_running; then
-        echo "stop_qadena.sh: Error: Qadena is still running"
+        echo "stop_qadena.sh: Error: Qadena is still running ${STOP_VERIFY_TIMEOUT}s after it was told to stop"
+        exit 1
+    fi
+    unit_now=$(qadena_unit_state)
+    if [[ "$unit_now" != (absent|inactive|failed) ]]; then
+        echo "stop_qadena.sh: Error: no qadena processes remain, but qadena.service is $unit_now"
+        echo "stop_qadena.sh:        ${STOP_VERIFY_TIMEOUT}s on -- systemd is likely restarting it.  Stop the UNIT:"
+        echo "stop_qadena.sh:            sudo systemctl stop qadena"
         exit 1
     fi
 else
