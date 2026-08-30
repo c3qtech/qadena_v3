@@ -51,7 +51,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 [[ -n "$PRIMARY" && -n "$JOINER" && -n "$FROM_REF" && -n "$TO_REF" ]] \
-    || { print -u2 "--primary, --joiner, --from-ref and --to-ref are all required"; exit 1 }
+    || { print -u2 -- "--primary, --joiner, --from-ref and --to-ref are all required"; exit 1 }
 
 [[ -n "$RUN_DIR" ]] || RUN_DIR="$HOME/qadena-fleet-runs/cosmovisor-$(date -u +%Y%m%d-%H%M%S)"
 mkdir -p "$RUN_DIR" || exit 1

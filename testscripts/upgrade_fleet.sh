@@ -369,7 +369,7 @@ restart_node() {
 # quiesce_node stops a node's continuous-regression loop and waits for any in-flight run to end.
 #
 # Copied from nth_node_bringup.sh's --quiesce, for a reason that applies MORE here than there: the
-# regression's enclave-rollback, enclave-crash and enclave-upgrade suites STOP AND RESTART the node
+# regression's enclave-rollback and enclave-crash suites STOP AND RESTART the node
 # they run on.  During a roll that is a second node down while this script already has one down --
 # on five validators that can cross the 1/3 line and halt the chain, which is backlog 108.
 #
@@ -500,7 +500,7 @@ else
         rn=$(rsh "$n" 'pgrep -cf "[r]egression" 2>/dev/null; true' 2>/dev/null | tr -d '\r' | head -1)
         if [[ "${rn:-0}" -ne 0 ]]; then
             say "  WARNING: $n is running regression ($rn process(es))"
-            say "           enclave-rollback, enclave-crash and enclave-upgrade STOP AND RESTART the"
+            say "           enclave-rollback and enclave-crash STOP AND RESTART the"
             say "           node they run on.  A second node down while this roll has one down can"
             say "           halt the chain (backlog 108), and enclave-crash leaves it wedged about"
             say "           one time in twelve.  Re-run with --quiesce, or --skip those suites."

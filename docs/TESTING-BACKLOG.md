@@ -1408,7 +1408,7 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
 84. **A fleet bringup should be able to BLOCK-SYNC the joiner instead of waiting for state-sync to
     become eligible.**  State-sync cannot start until the primary is past the snapshot interval AND
     has actually written a snapshot -- 2000 blocks at this chain's 1.5s `timeout_commit`, so roughly
-    50 minutes of waiting during which nothing is being tested.  `full_fleet_bringup.sh` spends that
+    50 minutes of waiting during which nothing is being tested.  `fleet_bringup_with_tests.sh` spends that
     time in its snapshot-wait stage, and it is by far the longest stage in the sequence on ARM, where
     the build itself is about three minutes.
 
@@ -1460,7 +1460,7 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
       alongside the existing `go`/`git`/`ego`/`docker` probes.  Phase 1 is the designated home for
       "can this machine do the job at all", and it currently answers a weaker question than its name
       claims.  It also benefits everyone running the script directly, which is the common case.
-    - `full_fleet_bringup.sh`: run the per-node preflight (`--only 1`) for every host BEFORE its own
+    - `fleet_bringup_with_tests.sh`: run the per-node preflight (`--only 1`) for every host BEFORE its own
       stage A, which archives each joiner's `~/qadena`.  Today it does that destructive move first
       and discovers an unbuildable primary afterwards -- on the first of these runs it archived a
       1.2G tree for a run that then failed at stage B.
@@ -1468,7 +1468,7 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     The split worth keeping: NODE-level checks (toolchain currency, tree cleanliness, disk) belong in
     `1st_node_bringup` phase 1 where any caller gets them; FLEET-level checks that a single-node
     script cannot know about -- architecture agreement across primary and joiners, reachability of
-    every host, SGX consistency -- stay in `full_fleet_bringup`.  The rule in both: NOTHING
+    every host, SGX consistency -- stay in `fleet_bringup_with_tests`.  The rule in both: NOTHING
     destructive until every cheap check has passed on every host.
 
     Fix this WITH item 83, which is the other half of the same phase 3: 83 is the ref it resolves

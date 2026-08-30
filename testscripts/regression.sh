@@ -29,7 +29,6 @@
 #   replenish     al's ENCRYPTED balance is topped back up before anything spends it
 #   peer-agreement   every peer computed the SAME app hash -- i.e. no fork
 #   reclaim       the TRANSPARENT balance the suites accumulated goes back to the treasury
-#   enclave-upgrade  a new enclave measurement takes over the sealed state (--with-enclave-upgrade)
 #
 # Everything except the genesis/chain layers is IDEMPOTENT -- safe to repeat against the
 # same chain.  They achieve that in different ways depending on what the module allows: delta
@@ -59,11 +58,6 @@
 #
 #   --from-genesis   DESTRUCTIVE.  init.sh deletes $QADENAHOME outright -- chain data AND the
 #                    keyring.  Everything is rebuilt from config/config.yml.
-#   --with-enclave-upgrade  registers a new enclave identity on chain PERMANENTLY, then stops the
-#                    node, swaps the enclave binary and restarts.  Runs last, after credentials,
-#                    because nothing after it would be measuring the same process -- and because it
-#                    needs reports already on record to prove the migrated keys still read them.
-#                    NOT implied by --from-genesis: it is slow and leaves the chain on a new enclave.
 #                    It restores the tracked version files on exit, so it leaves no diff behind.
 #   --with-sgx       REQUIRES REAL SGX HARDWARE (Ubuntu), ego and docker, and FAILS if they are
 #                    absent rather than skipping.  Builds the enclave twice with --build-sgx and
@@ -83,7 +77,6 @@
 # Usage:
 #   regression.sh                     the repeatable suite against a running chain
 #   regression.sh --from-genesis      wipe, rebuild, and run everything
-#   regression.sh --with-enclave-upgrade  also upgrade the enclave to a new measurement, last
 #   regression.sh --with-sgx          also verify the SGX build is signed and reproducible (SGX hw only)
 #   regression.sh --stop-on-fail      stop at the first failure
 #   regression.sh --skip a,b,c        do not run these suites
@@ -99,11 +92,12 @@
 # and is skipped when they are all present.  --skip setup suppresses it.  There is deliberately no
 # way to force a re-run; see the detection block further down for why forcing cannot repair anything.
 #
-# --skip exists for runs that must not lose the chain.  enclave-rollback, enclave-crash and
-# enclave-upgrade STOP AND RESTART the node by design, which is correct when the suite is the only
-# thing using it and disastrous when it is not: a joining node sees the primary's RPC vanish for
-# minutes, and snapshot accumulation restarts.  For a continuous run alongside a second node, use
-#   --skip enclave-rollback,enclave-crash,enclave-upgrade
+# --skip exists for runs that must not lose the chain.  enclave-rollback and enclave-crash STOP AND
+# RESTART the node by design, which is correct when the suite is the only thing using it and
+# disastrous when it is not: a joining node sees the primary's RPC vanish for minutes, and snapshot
+# accumulation restarts.  For a continuous run alongside a second node, use
+#   --skip enclave-rollback,enclave-crash
+# The auto-skip below decides this on evidence when nothing was passed.
 #
 # ONE --skip NAME IS NOT A SUITE:  `recovery` drops the key-recovery cases (6, 6a, 6b) from INSIDE
 # the credentials suite while the rest of it still runs.  They run by default now -- they became
@@ -116,26 +110,66 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# THE CHAIN-RESTARTING SUITES ARE UNSAFE ON SOME NODES, and this used to have no guard at all.
+# enclave-rollback and enclave-crash stop and restart the node; on a fleet whose primary holds >= 1/3
+# of the voting power that halts the whole chain, and a bare `regression.sh` did it without asking.
+# The soak has refused this since it learned to, on the same evidence -- so the answer lives in
+# setup_env.sh and both callers ask it.
+#
+# ANYTHING PASSED EXPLICITLY WINS: --skip is the operator saying what they want, and --no-auto-skip
+# is "I know what enclave-crash does to this fleet".  The guard only fills a silence.
+# PEERS FIRST, and this distinction is the whole correctness of the guard.  topology_skips answers
+# "would stopping this node halt the chain", and on a SOLO node the answer is trivially yes -- it is
+# 100% of the voting power.  But nothing else is watching: the suite stops it, the suite starts it,
+# and the chain carries on.  Skipping there would delete real coverage, and it is coverage that
+# demonstrably works -- a from-genesis primary runs enclave-rollback and enclave-crash green today,
+# and that run is the last chance to exercise them before joiners arrive and make them unsafe.
+#
+# So the guard engages only once this node has PEERS, which is precisely when a self-stop stops
+# being its own business.
+if [ $auto_skip -eq 1 ] && [ -z "$skip_list" ]; then
+    _peers=$(curl -s --max-time 5 localhost:26657/net_info 2>/dev/null | jq -r '.result.n_peers // 0' 2>/dev/null)
+    [ -n "$_peers" ] || _peers=0
+    if [ "$_peers" -gt 0 ]; then
+        echo "auto-skip: $_peers peer(s) -- inspecting this node's place in the chain"
+        skip_list=$(topology_skips)
+        if [ -n "$skip_list" ]; then
+            echo "auto-skip: skipping $skip_list  (override with --no-auto-skip)"
+        else
+            echo "auto-skip: nothing to skip -- every suite is safe on this node"
+        fi
+    else
+        echo "auto-skip: no peers -- this node is alone, so a self-stop costs nothing.  Running everything."
+    fi
+    unset _peers
+fi
+
 # NOTE: no `set -e` here.  This script's job is to run every test and report, so a failing test must
 # not abort the runner.  Each test script has its own set -e.
 
 function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 from_genesis=false
-with_enclave_upgrade=false
 with_sgx=false
 stop_on_fail=false
 skip_list=""
+auto_skip=1
 advertise_ip=""
 json_out=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --from-genesis)     from_genesis=true; shift ;;
-        --with-enclave-upgrade) with_enclave_upgrade=true; shift ;;
+        --with-enclave-upgrade)
+            print -u2 "regression.sh: --with-enclave-upgrade is gone.  The live-swap upgrade it drove was"
+            print -u2 "               retired (ab839b3c); an enclave change is a governance plan now."
+            print -u2 "               Use testscripts/test_fleet_upgrade.sh, or the fleet bringup's"
+            print -u2 "               --test-fleet-upgrade, which upgrades every node at one height."
+            exit 1 ;;
         --with-sgx)         with_sgx=true; shift ;;
         --stop-on-fail)     stop_on_fail=true; shift ;;
         --skip)             skip_list="$2"; shift 2 ;;
+        --no-auto-skip)     auto_skip=0; shift ;;
         --json)             json_out="$2"; shift 2 ;;
         --advertise-ip-address) advertise_ip="$2"; shift 2 ;;
         --help)
@@ -152,7 +186,7 @@ while [[ $# -gt 0 ]]; do
                 | fold -s -w 72 | sed 's/^/  /'
             echo ""
             echo "  genesis-init, genesis-check and chain-start exist only under --from-genesis,"
-            echo "  sgx-build only under --with-sgx, enclave-upgrade only under --with-enclave-upgrade."
+            echo "  sgx-build only under --with-sgx."
             echo ""
             echo "  Plus one name that is NOT a suite: recovery -- see above."
             exit 0
@@ -242,7 +276,7 @@ run_test() {
 # Hand the build tree back to the user who invoked sudo.
 #
 # Under sudo every suite writes as root, so a run leaves root-owned files across the tree -- and,
-# because the enclave-upgrade suite makes a temporary commit, inside .git itself.  The next plain
+# because an upgrade run makes a temporary commit, inside .git itself.  The next plain
 # `git pull` then fails with
 #
 #     fatal: failed to write object / unpack-objects failed
@@ -1254,10 +1288,10 @@ run_test "pf-expiry"   "$qadenatestscripts/test_pricefeed_expiry.sh"
 run_test "transfers"   "$qadenatestscripts/test_transfers.sh"
 if [ "$with_sgx" = "true" ]; then
     # FIRST among the functional suites, for two reasons.  A broken or non-reproducible SGX build
-    # should fail before an hour of chain tests runs on top of it; and it must come before
-    # enclave-upgrade, which leaves the installed enclave at a measurement NEWER than the committed
-    # source -- a --build-sgx after that would install the older measurement as main and the node
-    # would then find no sealed params matching it.
+    # should fail before an hour of chain tests runs on top of it; and it must come before anything
+    # that leaves the installed enclave at a measurement NEWER than the committed source (the fleet
+    # upgrade does exactly that) -- a --build-sgx after that would install the older measurement as
+    # main and the node would then find no sealed params matching it.
     run_test "sgx-build"   "$qadenatestscripts/test_sgx_build.sh"
 fi
 
@@ -1323,23 +1357,10 @@ run_test "enclave-crash"     "$qadenatestscripts/test_enclave_crash_recovery.sh"
 # suites above left this node disagreeing with a peer.
 run_test "peer-agreement" "$qadenatestscripts/test_peer_agreement.sh"
 
-# AFTER every suite that spends, and before the opt-in one.  --with-enclave-upgrade is excluded
-# deliberately: it stops the node, swaps the enclave binary and restarts it, so reclaiming after it
-# would be transacting against a chain this run has just finished disturbing.  It is not part of a
-# repeat run, which is the case that needed the treasury back.
+# AFTER every suite that spends.  The enclave upgrade that used to run after this is gone: it was a
+# live swap, and an enclave change is a governance plan at a height now.  Upgrading is therefore a
+# FLEET operation and cannot run from inside a single-node suite -- see testscripts/test_fleet_upgrade.sh.
 run_test "reclaim" reclaim_funds
-
-
-if [ "$with_enclave_upgrade" = "true" ]; then
-    # LAST OF ALL, and after credentials.  It stops the node, swaps the enclave binary and restarts,
-    # so anything after it would be measuring a different process; and it needs reports already on
-    # record, which the suites above produce.
-    # RETIRED with the live-swap enclave upgrade it exercised.  An enclave change is a governance
-    # plan now: the measurement is registered, promoted to active, and the attested handover runs
-    # from the at-height hook on every node at once.  That path is covered end to end by
-    # testscripts/test_cosmovisor_upgrade.sh, which needs a fleet and so does not belong here.
-    :
-fi
 
 summarize
 [ $failed -eq 0 ]

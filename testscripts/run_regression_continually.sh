@@ -80,7 +80,7 @@ floor_qdn=50000000
 
 # FORWARDED TO EVERY regression.sh RUN.
 #
-# --skip is the one that matters here: enclave-rollback, enclave-crash and enclave-upgrade STOP AND
+# --skip is the one that matters here: enclave-rollback and enclave-crash STOP AND
 # RESTART the node by design.  That is fine when the suite owns the chain and disastrous when it does
 # not -- a joining node sees the primary's RPC vanish for minutes and dies on it, and an interrupted
 # crash suite can leave the enclave SIGSTOPped with the chain frozen behind it.  This loop is exactly
@@ -126,7 +126,7 @@ while [[ $# -gt 0 ]]; do
             echo "AUTO-SKIP.  By default this loop inspects the chain and drops what this node"
             echo "cannot run safely, so you rarely need --skip by hand:"
             echo ""
-            echo "  >1/3 of bonded stake   enclave-rollback, enclave-crash and enclave-upgrade stop"
+            echo "  >1/3 of bonded stake   enclave-rollback and enclave-crash stop"
             echo "                         the node, and above a third that halts the whole chain."
             echo "  any peers              enclave-rollback takes its networked branch, which"
             echo "                         asserts against an unset \$bal_after (backlog 101)."
@@ -141,7 +141,7 @@ done
 
 # AUTO-SKIP WHAT THIS TOPOLOGY CANNOT RUN SAFELY.
 #
-# Three tests -- enclave-rollback, enclave-crash, enclave-upgrade -- STOP AND RESTART the node by
+# Two tests -- enclave-rollback and enclave-crash -- STOP AND RESTART the node by
 # design.  Whether that is safe is not a property of the test, it is a property of the CHAIN THIS
 # NODE IS PART OF, and until now the operator had to know that and pass --skip by hand.  Nobody
 # does, so the loop ran them on a shared fleet and the failures got read as product bugs.
@@ -157,55 +157,6 @@ done
 #      on a 4-validator fleet: the networked branch compares against $bal_after, which the script
 #      never assigns, so it can only ever fail.  Skipping it here is a stopgap and NOT a fix; the
 #      assertion is broken and should be repaired rather than routed around forever.
-#
-# --no-auto-skip turns all of this off, because a deliberate "I want to run the disruptive suite on
-# this fleet, I know what it does" has to remain expressible.
-topology_skips() {
-    local n_peers total mine pct out=()
-
-    n_peers=$(curl -s --max-time 5 localhost:26657/net_info 2>/dev/null | jq -r '.result.n_peers // 0' 2>/dev/null)
-    [ -n "$n_peers" ] || n_peers=0
-
-    # ASK COMETBFT WHAT THIS NODE IS, rather than matching monikers against the staking list.
-    #
-    # /status reports validator_info.voting_power for THIS node: 0 means it is a full node, and a
-    # full node cannot halt anything by stopping itself.  An earlier version looked this node up in
-    # the bonded set by moniker, which was wrong twice over -- config.toml's moniker need not equal
-    # the validator's description.moniker, and a FULL NODE is absent from that list entirely, so
-    # "not found" fell into the unknown branch and skipped every disruptive test on a node where
-    # all of them are safe.  "I am not a validator" and "I could not tell" are different answers
-    # and only the second one should fail closed.
-    mine=$(curl -s --max-time 5 localhost:26657/status 2>/dev/null \
-           | jq -r '.result.validator_info.voting_power // empty' 2>/dev/null)
-    total=$(curl -s --max-time 5 localhost:26657/validators 2>/dev/null \
-            | jq -r '[.result.validators[]?.voting_power | tonumber] | add // empty' 2>/dev/null)
-
-    if [ -z "$mine" ]; then
-        echo "  could not read this node's voting power; assuming it matters and skipping the disruptive tests" >&2
-        out+=(enclave-rollback enclave-crash enclave-upgrade)
-    elif [ "$mine" = "0" ]; then
-        echo "  this node is a FULL NODE (voting power 0) -- stopping it cannot halt the chain" >&2
-    elif [ -z "$total" ] || [ "$total" = "0" ]; then
-        echo "  this node is a validator but the total voting power could not be read; assuming it matters" >&2
-        out+=(enclave-rollback enclave-crash enclave-upgrade)
-    else
-        pct=$(echo "scale=4; $mine * 100 / $total" | bc 2>/dev/null)
-        if [ "$(echo "$pct > 33.4" | bc 2>/dev/null)" = "1" ]; then
-            echo "  this node holds ${pct}% of voting power -- stopping it HALTS the chain" >&2
-            out+=(enclave-rollback enclave-crash enclave-upgrade)
-        else
-            echo "  this node holds ${pct}% of voting power -- below 1/3, a self-stop costs only this node" >&2
-        fi
-    fi
-
-    if [ "$n_peers" -gt 0 ]; then
-        echo "  $n_peers peer(s): enclave-rollback would take its networked branch, which asserts against an unset \$bal_after" >&2
-        out+=(enclave-rollback)
-    fi
-
-    # dedupe, comma-join
-    printf '%s\n' "${out[@]}" | sort -u | paste -sd, -
-}
 
 # Not under --summary: that reports on runs already archived and must not query the chain, so that
 # it stays usable on a node whose chain is down -- which is one of the times you most want to read
@@ -270,8 +221,6 @@ if [ $dry_run -eq 1 ]; then
                 printf "  %-22s -    (only with --from-genesis)\n" "$label" ;;
             sgx-build)
                 printf "  %-22s -    (only with --with-sgx)\n" "$label" ;;
-            enclave-upgrade)
-                printf "  %-22s -    (only with --with-enclave-upgrade)\n" "$label" ;;
             *)
                 if print -r -- ",$effective," | grep -q ",$label,"; then
                     printf "  %-22s SKIP\n" "$label"

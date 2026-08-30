@@ -68,9 +68,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n "$PRIMARY"  ]] || { print -u2 "--primary is required"; exit 1 }
-[[ -n "$JOINER"   ]] || { print -u2 "--joiner is required";  exit 1 }
-[[ -n "$FROM_REF" ]] || { print -u2 "--from-ref is required"; exit 1 }
+[[ -n "$PRIMARY"  ]] || { print -u2 -- "--primary is required"; exit 1 }
+[[ -n "$JOINER"   ]] || { print -u2 -- "--joiner is required";  exit 1 }
+[[ -n "$FROM_REF" ]] || { print -u2 -- "--from-ref is required"; exit 1 }
 
 [[ -n "$RUN_DIR" ]] || RUN_DIR="$HOME/qadena-fleet-runs/replay-$(date -u +%Y%m%d-%H%M%S)"
 mkdir -p "$RUN_DIR" || exit 1

@@ -109,13 +109,27 @@ fi
 
 RES=$?
 
-# kill the old enclave
-# Matches how the old enclave was actually STARTED above, not how it would be judged now.
+# KILL THE OLD ENCLAVE BY PID, NOT BY PATTERN.
+#
+# `pkill -INT -f "$OLD_BIN"` MATCHED THIS SCRIPT ITSELF and SIGINTed it.  cosmovisor_preupgrade.sh
+# invokes us as
+#     upgrade_enclave.sh --from-enclave-unique-id unique061 --old-bin <...>/qadenad_enclave ...
+# so $OLD_BIN is a substring of our OWN command line; pkill -f tests every process's full argv,
+# found ours, and killed the shell before it reached `exit $RES` two lines below.  The handoff had
+# already SUCCEEDED -- the params were ferried and enclave_params_<new>.json written with the keys
+# intact -- and the script still exited 130 (128+SIGINT).  cosmovisor_preupgrade.sh read that as
+# "the params handoff failed", refused the swap, and the node stayed down on the old binaries while
+# systemd crash-looped it to StartLimitBurst.  A whole fleet sat halted at the plan height for three
+# hours on a handoff that had worked.  Observed on M1, 2026-08-30, plan v1.1.29.
+#
+# The PID has been sitting in $pid since we started it; use it.  Same family as d74fb99b
+# (stop_qadena.sh SIGINTing the build that called it) and the bracket-class rule in setup_env.sh.
 if [[ $old_is_sgx -eq 1 ]] ; then
-    pkill -INT -f "/opt/ego/bin/ego-host"
+    # ego run spawns ego-host as a CHILD, so $pid is the wrapper and signalling it is not enough.
+    # Bracket-classed so this pattern cannot match the command line that carried it here either.
+    pkill -INT -f "/opt/ego/bin/ego-hos[t]"
 else
-    # kill by the path we actually exec'd -- with --old-bin that is not the versioned name
-    pkill -INT -f "$OLD_BIN"
+    kill -INT "$pid" 2>/dev/null
 fi
 
 exit $RES

@@ -1,10 +1,11 @@
 # Shared helpers for the fleet bringup scripts.  Sourced, never executed.
 #
-# WHY THIS FILE EXISTS.  full_fleet_bringup.sh and fleet_bringup_with_tests.sh drive the same
-# machines the same way and differ only in WHAT THEY RUN AND WHEN.  Everything below is the part
-# that must not differ: each function here encodes a failure that has already cost a fleet run, and
-# two copies of that knowledge is two places for it to rot.  A trap that drifts is one that has
-# stopped protecting.
+# WHY THIS FILE EXISTS.  It was factored out when there were two bringup scripts driving the same
+# machines the same way, differing only in WHAT THEY RAN AND WHEN; two copies of this knowledge was
+# two places for it to rot.  One of those scripts is gone and fleet_bringup_with_tests.sh is now the
+# only caller, but the reason to keep this separate has not changed: each function below encodes a
+# failure that has already cost a fleet run, and the next bringup-shaped script must inherit them
+# rather than reinvent them.  A trap that drifts is one that has stopped protecting.
 #
 # WHAT THE CALLER MUST SET before calling into here:
 #   RUN_DIR       directory for collected logs          (sync_log)

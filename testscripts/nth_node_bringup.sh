@@ -521,7 +521,7 @@ else
     n=$(ssh "$PRIMARY" 'pgrep -cf "[r]egression.sh" 2>/dev/null; true' | tr -d '\r' | head -1)
     if [[ -n "${loop_pids// /}" || "${n:-0}" -ne 0 ]]; then
         info "WARNING: the primary is running regression${loop_pids:+ (continuous loop pids: ${loop_pids% })}"
-        info "         enclave-rollback, enclave-crash and enclave-upgrade RESTART the chain, and a"
+        info "         enclave-rollback and enclave-crash RESTART the chain, and a"
         info "         joiner cannot survive its primary's RPC vanishing mid-join."
         info "         Re-run with --quiesce to stop the loop and wait it out, or --skip those suites."
     else

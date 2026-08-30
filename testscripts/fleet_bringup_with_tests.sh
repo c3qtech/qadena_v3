@@ -1,15 +1,25 @@
 #!/bin/zsh
 # Bring up a fleet and run WHAT YOU ASK FOR, WHERE YOU ASK FOR IT.  Nothing is tested by default.
 #
-# full_fleet_bringup.sh answers "is this fleet good?" -- it builds, regression-tests, packages,
-# installs, joins, and leaves a soak running, in a fixed order.  This script answers a different
-# question: "what happens to the chain AS THE FLEET GROWS?"  That needs tests interleaved between
-# joins rather than bracketing them, and it needs the operator to choose which.
+# THE ONLY FLEET BRINGUP.  It replaced full_fleet_bringup.sh, which ran a fixed order -- build,
+# regression, package, install, soak, join -- and could express none of what is scheduled here.
+# Everything that script did is a schedule this one accepts: its regression is a --test before the
+# first --joiner, its soak is a --test last.  Its two behaviours that are NOT reproducible here were
+# the reasons it went:
+#   - it started the soak BEFORE the joins, and the soak and the joins both spend from the treasury.
+#     That is an account-sequence collision, and it failed a real run mid-join ("expected 143, got
+#     142") after surviving the two joins before it.  The soak may only be scheduled LAST here.
+#   - it joined --until 5, leaving joiners unbonded.  An unbonded node never proposes, so it never
+#     publishes an external address, is never addressable, never becomes an SS key owner, and is
+#     invisible to the re-share audit -- and phase 7's peer agreement never ran at all.
+#
+# The question it answers: "what happens to the chain AS THE FLEET GROWS?"  That needs tests
+# interleaved between joins rather than bracketing them, and it needs the operator to choose which.
 #
 #   ./fleet_bringup_with_tests.sh --primary m1 --joiner m2 --joiner m3 --joiner m4 \
-#       --after-primary "./testscripts/test_ss_key_rotation.sh --key-added-only" \
-#       --after-join    "./testscripts/test_ss_key_rotation.sh --key-added-only" \
-#       --at-end        "./testscripts/run_regression_continually.sh --skip enclave-crash"
+#       --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+#       --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+#       --test "./testscripts/run_regression_continually.sh --skip enclave-crash"
 #
 # runs as:  primary up -> test -> package -> install -> m2 -> test -> m3 -> test -> m4 -> test -> soak
 #
@@ -26,35 +36,35 @@
 # owner, then 2, then 3 -- so the audit has genuine work and the threshold crossing (1 -> 2, where
 # shamir.Split runs for the first time) actually happens.
 #
-# "WAIT UNTIL ADDRESSABLE" IS LOAD-BEARING, and is why --after-join does not simply run when the
+# "WAIT UNTIL ADDRESSABLE" IS LOAD-BEARING, and is why a joiner's --test does not simply run when the
 # join returns.  A joined node is INVISIBLE to the audit until updateIsValidator publishes its
 # external address, and that happens on its FIRST PROPOSED BLOCK AFTER BONDING -- not when it joins.
 # Rotating before then mints a key that silently excludes the node you just added, and the test then
 # measures the wrong thing while looking like it worked.
 #
 # ---------------------------------------------------------------------------------------------
-# NOTHING RUNS BY DEFAULT, and that is the difference from full_fleet_bringup.sh.  No regression, no
-# soak, no enclave upgrade unless a --after-* / --at-end flag asks for it.  A bringup that quietly
+# NOTHING RUNS BY DEFAULT, and that is deliberate -- the bringup it replaced always ran a fixed
+# regression and always left a soak.  No regression, no soak, no enclave upgrade unless a --test
+# asks for it.  A bringup that quietly
 # tested nothing is worse than one that tested nothing loudly, so the summary names what ran.
 #
 # WHERE THEY RUN: on the PRIMARY, always.  The scheduled commands are chain-level tests; the primary
 # is the node with the keyring, the treasury and the enclave that can force a rotation.
 #
-# A FAILED SCHEDULED COMMAND HALTS THE RUN, exactly like a red regression in full_fleet_bringup:
-# nothing is packaged, installed or joined off a failure.
+# A FAILED SCHEDULED COMMAND HALTS THE RUN: nothing is packaged, installed or joined off a failure.
 #
 # ORDER GUARDS.  Two commands cannot go just anywhere, and the script refuses rather than letting a
 # run produce a misleading result:
-#   - run_regression_continually.sh only in --at-end.  It never exits, so anywhere else it would
-#     either block the run forever or share the chain with the next suite (full_fleet_bringup trap
-#     3: they contend for ann, pioneer1 and the treasury, and the collisions read as chain bugs).
-#   - regression.sh --with-enclave-upgrade only in --after-primary.  It registers a new measurement
-#     and leaves the primary running it; anywhere later means the package in stage D measured the
-#     OLD enclave and every joiner is refused (full_fleet_bringup trap 1).
+#   - run_regression_continually.sh only as the LAST --test.  It never exits, so anywhere else it would
+#     either block the run forever or share the chain with the next suite -- they contend for ann,
+#     pioneer1 and the treasury, and the collisions read as chain bugs.
+#   - --test-fleet-upgrade only AFTER the last --joiner.  It rolls a new measurement to the nodes
+#     that exist when it runs, so a joiner added afterwards would be installed from the stage-D
+#     package -- which measures the OLD enclave -- and the chain would refuse it.
 #
 # Everything else -- the ordering traps, the login-shell build path, ssh -f, the height-advancing
-# health gate -- is shared with full_fleet_bringup.sh via fleet_lib.sh and documented there and in
-# that script's header.  Read those before changing anything here.
+# health gate -- lives in fleet_lib.sh and is documented there.  Read it before changing anything
+# here.
 
 set -u
 
@@ -135,7 +145,7 @@ wait_addressable() {   # host, expected-count
 
 # Every scheduled command runs HERE: on the primary, synchronously, output mirrored into the run
 # directory, and a non-zero status halts the run.  Nothing is packaged, installed or joined off a
-# failed test -- the same rule full_fleet_bringup applies to its regression.
+# failed test.
 run_scheduled() {   # slot-label, log-tag, command
     local slot="$1" tag="$2" cmd="$3" log="$RUN_DIR/$tag.log"
     info ""
@@ -186,6 +196,9 @@ while [[ $# -gt 0 ]]; do
         --primary)       PRIMARY="$2"; shift 2 ;;
         --joiner)        JOINERS+=("$2"); SCHEDULE+=("joiner:$2"); shift 2 ;;
         --test)          SCHEDULE+=("test:$2"); shift 2 ;;
+        # POSITIONAL, like --test and --joiner, because the schedule IS the command line and an
+        # upgrade has exactly one correct place in it: after every joiner is in, before the soak.
+        --test-fleet-upgrade) SCHEDULE+=("upgrade:"); shift ;;
         --ref)           REF="$2"; shift 2 ;;
         --build-sgx)     BUILD_SGX="yes"; shift ;;
         --no-build-sgx)  BUILD_SGX="no"; shift ;;
@@ -195,7 +208,7 @@ while [[ $# -gt 0 ]]; do
         --skip-regression|--no-loop|--after-primary|--after-join|--at-end)
             print -u2 "FAIL: $1 does not exist here -- nothing runs by default, and tests are"
             print -u2 "      scheduled positionally with --test:"
-            print -u2 "        --primary m1 --test \"./testscripts/regression.sh --with-enclave-upgrade\" \\"
+            print -u2 "        --primary m1 --test \"./testscripts/regression.sh\" \\"
             print -u2 "        --joiner m2 --test \"./testscripts/test_ss_key_rotation.sh --key-added-only\" \\"
             print -u2 "        --joiner m3 --test \"./testscripts/run_regression_continually.sh\""
             exit 1 ;;
@@ -208,7 +221,7 @@ while [[ $# -gt 0 ]]; do
             print "                             [--run-dir <dir>] [--ref <git-ref>]"
             print "                             [--build-sgx | --no-build-sgx] [--pioneer-prefix <n>]"
             print "                             [--snapshot-interval N] [--addressable-wait MIN]"
-            print "                             [--after-primary <cmd>]... [--after-join <cmd>]... [--at-end <cmd>]..."
+            print "                             [--test <cmd>]... [--test-fleet-upgrade]"
             print "                             [--block-sync] [--from <stage>]"
             print ""
             print "  --joiner            REPEATABLE.  Joiners are installed and joined serially."
@@ -235,6 +248,14 @@ while [[ $# -gt 0 ]]; do
             print "                      silently excludes it (TESTING-BACKLOG 107)."
             print "                      run_regression_continually.sh must be the LAST --test; it"
             print "                      never exits, so it runs detached and nothing may follow."
+            print "  --test-fleet-upgrade  POSITIONAL.  Bumps the enclave identity and both versions"
+            print "                      on the primary and rolls the release to EVERY node by"
+            print "                      governance, then asserts each one swapped and that the"
+            print "                      sealed keys survived.  Must come after every --joiner: a"
+            print "                      node joining afterwards would be installed from a package"
+            print "                      measuring the OLD enclave and the chain would refuse it."
+            print "                      Runs from HERE, not on the primary -- it has to reach"
+            print "                      every node, and the primary cannot ssh to them."
             print "  --addressable-wait  minutes to wait for a joiner to become addressable (20)."
             print "  --from <stage>      resume at a stage (A0 A B C D E F G H) instead of the top."
             print "                      For recovering from a late failure without repeating work"
@@ -279,21 +300,34 @@ for e in "${SCHEDULE[@]}"; do
     (( _i++ ))
     case "$e" in
         joiner:*) _seen_joiner=1 ;;
+        upgrade:*)
+            # AFTER EVERY JOINER.  The upgrade rolls the release to the nodes that exist WHEN IT
+            # RUNS; a joiner added afterwards would be installed from the stage-D package, which
+            # measures the OLD enclave, and its join would be refused against the upgraded chain.
+            _rest=0
+            for _f in "${SCHEDULE[@]:$_i}"; do [[ "$_f" == joiner:* ]] && (( _rest++ )); done
+            (( _rest == 0 )) || {
+                print -u2 "FAIL: --test-fleet-upgrade must come after every --joiner: $_rest joiner(s)"
+                print -u2 "      still follow it.  Rolling before they join would install them from a"
+                print -u2 "      package that measures the OLD enclave, and the chain would refuse them."
+                exit 1 }
+            ;;
         test:*)
             _cmd="${e#test:}"
             # The soak never exits.  Anywhere but last it blocks the run, or shares the chain with
-            # whatever is scheduled next -- full_fleet_bringup trap 3: they contend for ann,
+            # whatever is scheduled next -- they contend for ann,
             # pioneer1 and the treasury, and the collisions read as chain bugs.
             [[ "$_cmd" == *run_regression_continually* ]] && (( _i != _n )) && {
                 print -u2 "FAIL: run_regression_continually.sh never exits, so it must be the LAST"
                 print -u2 "      --test on the command line.  It is currently entry $_i of $_n."
                 exit 1 }
-            # A new measurement must be registered and running BEFORE stage D packages it, or every
-            # joiner is refused against a package that measured the old enclave (trap 1).
-            [[ "$_cmd" == *--with-enclave-upgrade* ]] && (( _seen_joiner )) && {
-                print -u2 "FAIL: regression.sh --with-enclave-upgrade registers a NEW measurement and"
-                print -u2 "      leaves the primary running it, so it must be scheduled BEFORE the"
-                print -u2 "      first --joiner -- otherwise the package measures the old enclave."
+            # CAUGHT HERE RATHER THAN HALFWAY THROUGH A BRINGUP.  regression.sh refuses this flag
+            # too, but by then a build and a genesis wipe have already happened.
+            [[ "$_cmd" == *--with-enclave-upgrade* ]] && {
+                print -u2 "FAIL: regression.sh --with-enclave-upgrade no longer exists -- the live-swap"
+                print -u2 "      upgrade it drove was retired (ab839b3c), and an enclave change is a"
+                print -u2 "      governance plan across the whole fleet now.  Use --test-fleet-upgrade,"
+                print -u2 "      scheduled after the last --joiner."
                 exit 1 }
             ;;
     esac
@@ -469,9 +503,8 @@ stage "A. quiesce the primary, then archive each joiner's previous install"
 # failing, and its failures then interleave with this run's scheduled tests (trap 3: they contend
 # for ann, pioneer1 and the treasury, and the collisions read as chain bugs).
 #
-# EARLIER THAN full_fleet_bringup DOES IT, deliberately.  That script stops the loop in stage C,
-# which is AFTER the wipe in stage B -- fine there because stage C is the first thing that shares
-# the chain, but this script must be clean from genesis for the growth test to mean anything.
+# BEFORE THE WIPE, deliberately.  Stopping the loop after stage B would be too late: this run must
+# be clean from genesis for the growth test to mean anything.
 n=$(rsh_user "$PRIMARY" 'pgrep -f "run_regression_continuall[y]" | wc -l' | tr -d '[:space:]')
 if [[ "$n" != "0" ]]; then
     info "a continuous loop is running on the primary; stopping it by PID and draining the in-flight run"
@@ -658,6 +691,34 @@ if [[ "$e" == test:* ]]; then
     continue
 fi
 
+# THE ONE ENTRY THAT RUNS FROM HERE RATHER THAN ON THE PRIMARY.  --test commands are chain-level and
+# run on the primary; a fleet upgrade has to reach every node, and the primary cannot ssh to them.
+if [[ "$e" == upgrade:* ]]; then
+    (( tcount++ ))
+    # Same gate as a --test: a node that has not proposed since bonding is not really in the fleet
+    # yet, and upgrading around it would prove less than it appears to.
+    if (( tcount == 1 )); then
+        info "waiting for ${PIONEER_PREFIX}${n} to become addressable (first proposed block after bonding)"
+        wait_addressable "$PRIMARY" "$n"
+    fi
+    info ""
+    info "[fleet upgrade] test_fleet_upgrade.sh across ${#JOINED[@]} joiner(s) + the primary"
+    note "fleet upgrade: starting"
+    _up=()
+    for _j in "${JOINED[@]}"; do _up+=(--joiner "$_j"); done
+    "$SCRIPT_DIR/test_fleet_upgrade.sh" --primary "$PRIMARY" "${_up[@]}" --run-dir "$RUN_DIR/fleet-upgrade" \
+        2>&1 | tee "$RUN_DIR/stage-G-fleet-upgrade.log"
+    if (( ${pipestatus[1]} == 0 )); then
+        info "[fleet upgrade] passed"
+        note "fleet upgrade: passed"
+    else
+        tail -30 "$RUN_DIR/stage-G-fleet-upgrade.log" | while read -r l; do info "$l"; done
+        fail "[fleet upgrade] FAILED -- see $RUN_DIR/stage-G-fleet-upgrade.log"
+    fi
+    assert_advancing "$PRIMARY" "[fleet upgrade] after the roll"
+    continue
+fi
+
 [[ "$e" == joiner:* ]] || continue
     j="${e#joiner:}"
     seen_joiner=1
@@ -677,7 +738,7 @@ fi
     # case: a state-synced joiner IMPORTED the enclave-private tables from a snapshot, a block-synced
     # one replayed history and never touched that path.  $SYNC_KIND and $sync_arg are resolved once
     # at the top of this stage, so the header and this line cannot disagree.
-    # THROUGH PHASE 7, NOT 5 -- the difference is the whole growth test.  full_fleet_bringup stops
+    # THROUGH PHASE 7, NOT 5 -- the difference is the whole growth test.  The old bringup stopped
     # at 5 deliberately ("stops short of converting it to a validator"), because converting re-splits
     # stake and is worth watching.  But a node that is not a VALIDATOR never proposes a block, and
     # updateIsValidator publishes a pioneer's external address ONLY under IsProposer -- so an
@@ -714,17 +775,18 @@ for e in "${SCHEDULE[@]}"; do
     case "$e" in
         joiner:*) _h="${e#joiner:}"; print "                     joiner  $_h" ;;
         test:*)   print "                       test  ${e#test:}" ;;
+        upgrade:*) print "             fleet upgrade  test_fleet_upgrade.sh (all nodes, by governance)" ;;
     esac
 done
 print "  archives       : ~/qadena.pre-bringup.$STAMP.bak on each joiner (delete once satisfied)"
 print ""
-# WHAT THIS SCRIPT DID AND DID NOT DO -- and it must describe THIS script.  This block used to be a
-# copy of full_fleet_bringup's, which stops at phase 5 and says so; here the joiners are bonded by
+# WHAT THIS SCRIPT DID AND DID NOT DO -- and it must describe THIS script.  This block was once a
+# copy of the old bringup's, which stopped at phase 5 and said so; here the joiners are bonded by
 # phase 7, so the text told the operator to go and re-run a conversion that had already happened.
 print "Joiners WERE converted to validators: nth_node_bringup ran --from 1 --until 7, so each one is"
 print "bonded, has proposed a block, and is therefore addressable, an SS key owner and visible to the"
-print "re-share audit.  (full_fleet_bringup stops at phase 5 and leaves them unbonded; this script"
-print "must not, or every audit sits at target=1 healing nothing.  See the stage G comment.)"
+print "re-share audit.  Stopping at phase 5 instead would leave them unbonded, and every audit would"
+print "sit at target=1 healing nothing.  See the stage G comment."
 # (I) is the INDEX of the last match, 0 when there is none -- so this asks "was any --test
 # scheduled?" without a loop.  A plain `print ... || print ...` chain would have made only the
 # FIRST line of each group conditional and printed the rest unconditionally.

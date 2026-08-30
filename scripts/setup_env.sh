@@ -867,6 +867,64 @@ increment_version() {
   echo "$NEW_VERSION"
 }
 
+# WHICH CHAIN-RESTARTING SUITES ARE UNSAFE ON THIS NODE, decided on evidence rather than by flag.
+#
+# SHARED, because both regression.sh and run_regression_continually.sh need the same answer and a
+# second copy is a second place for it to drift.  A bare regression.sh used to have no guard at all:
+# on a fleet whose primary holds >= 1/3 of voting power, enclave-crash stopped the only node that
+# could keep the chain committing and halted it -- while the soak, running the same suites, refused
+# for exactly that reason.
+#
+#
+# --no-auto-skip turns all of this off, because a deliberate "I want to run the disruptive suite on
+# this fleet, I know what it does" has to remain expressible.
+topology_skips() {
+    local n_peers total mine pct out=()
+
+    n_peers=$(curl -s --max-time 5 localhost:26657/net_info 2>/dev/null | jq -r '.result.n_peers // 0' 2>/dev/null)
+    [ -n "$n_peers" ] || n_peers=0
+
+    # ASK COMETBFT WHAT THIS NODE IS, rather than matching monikers against the staking list.
+    #
+    # /status reports validator_info.voting_power for THIS node: 0 means it is a full node, and a
+    # full node cannot halt anything by stopping itself.  An earlier version looked this node up in
+    # the bonded set by moniker, which was wrong twice over -- config.toml's moniker need not equal
+    # the validator's description.moniker, and a FULL NODE is absent from that list entirely, so
+    # "not found" fell into the unknown branch and skipped every disruptive test on a node where
+    # all of them are safe.  "I am not a validator" and "I could not tell" are different answers
+    # and only the second one should fail closed.
+    mine=$(curl -s --max-time 5 localhost:26657/status 2>/dev/null \
+           | jq -r '.result.validator_info.voting_power // empty' 2>/dev/null)
+    total=$(curl -s --max-time 5 localhost:26657/validators 2>/dev/null \
+            | jq -r '[.result.validators[]?.voting_power | tonumber] | add // empty' 2>/dev/null)
+
+    if [ -z "$mine" ]; then
+        echo "  could not read this node's voting power; assuming it matters and skipping the disruptive tests" >&2
+        out+=(enclave-rollback enclave-crash)
+    elif [ "$mine" = "0" ]; then
+        echo "  this node is a FULL NODE (voting power 0) -- stopping it cannot halt the chain" >&2
+    elif [ -z "$total" ] || [ "$total" = "0" ]; then
+        echo "  this node is a validator but the total voting power could not be read; assuming it matters" >&2
+        out+=(enclave-rollback enclave-crash)
+    else
+        pct=$(echo "scale=4; $mine * 100 / $total" | bc 2>/dev/null)
+        if [ "$(echo "$pct > 33.4" | bc 2>/dev/null)" = "1" ]; then
+            echo "  this node holds ${pct}% of voting power -- stopping it HALTS the chain" >&2
+            out+=(enclave-rollback enclave-crash)
+        else
+            echo "  this node holds ${pct}% of voting power -- below 1/3, a self-stop costs only this node" >&2
+        fi
+    fi
+
+    if [ "$n_peers" -gt 0 ]; then
+        echo "  $n_peers peer(s): enclave-rollback would take its networked branch, which asserts against an unset \$bal_after" >&2
+        out+=(enclave-rollback)
+    fi
+
+    # dedupe, comma-join
+    printf '%s\n' "${out[@]}" | sort -u | paste -sd, -
+}
+
 # function to detect if all of the qadena processes are running
 
 # BRACKET-CLASS THE -f PATTERNS, OR THIS MATCHES THE COMMAND THAT CALLED IT.
@@ -882,7 +940,7 @@ increment_version() {
 # `[e]go-host` matches the string "ego-host" but the literal text "[e]go-host" in a command line
 # does not match it, so the pattern can no longer find ITSELF -- which covers the case that bit us,
 # an ssh command or script carrying this very pgrep.  Same trap and same fix as
-# 1st_node_bringup.sh:35 and full_fleet_bringup.sh trap 8.
+# 1st_node_bringup.sh:35, and trap 8 of the fleet bringup.
 #
 # WHAT THIS STILL DOES NOT FIX: a command line that contains "ego-host" and "qadenad_enclave" for
 # unrelated reasons -- a deploy one-liner naming both -- would still match, because -f tests the

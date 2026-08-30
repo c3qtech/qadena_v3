@@ -1,14 +1,24 @@
 # Bringing up a fleet (M1-M4, or SGX1-SGX2), and the re-share growth test
 
-Two scripts bring up a fleet.  They differ in what they are asking.
+One script brings up a fleet: `testscripts/fleet_bringup_with_tests.sh`.  It tests
+**nothing** unless you schedule it, and the schedule is the command line.
 
-| | asks | tests |
-|---|---|---|
-| `testscripts/full_fleet_bringup.sh` | *is this fleet good?* | fixed: full regression, then a soak |
-| `testscripts/fleet_bringup_with_tests.sh` | *what happens as the fleet grows?* | **nothing** unless you schedule it |
+It replaced `full_fleet_bringup.sh`, which ran a fixed order (build, regression,
+package, install, soak, join).  Everything that script did is a schedule this one
+accepts -- its regression is a `--test` before the first `--joiner`, its soak is a
+`--test` last.  Two of its behaviours are deliberately **not** reproducible here, and
+they are why it went:
 
-Both share `testscripts/fleet_lib.sh`, which holds the helpers and the traps.  Read
-that and `full_fleet_bringup.sh`'s header before changing either.
+- **it started the soak before the joins.**  The soak and the joins both spend from the
+  treasury, so they collide on the account sequence.  That failed a real run mid-join
+  (`expected 143, got 142`) after surviving the two joins before it.  Here the soak may
+  only be scheduled last.
+- **it joined `--until 5`, leaving joiners unbonded** -- so they never proposed, never
+  became addressable, never became SS key owners, and phase 7's peer agreement never ran
+  at all.  Here every joiner goes through phase 7.
+
+`testscripts/fleet_lib.sh` holds the helpers and the traps.  Read it before changing
+the bringup.
 
 ---
 
@@ -111,6 +121,87 @@ seeding its enclave store from a snapshot.
 
 The audit after M2 is the first one that can fail meaningfully.  Everything before it
 is a baseline.
+
+---
+
+## The full M1-M4 run: growth, then regression, then an upgrade, then a soak
+
+The growth schedule above proves the audit heals as the fleet grows.  This one adds the
+three things that only mean anything once the fleet is complete: a full regression with
+the chain-restarting suites, a governance upgrade of every node, and a soak.
+
+```sh
+./testscripts/fleet_bringup_with_tests.sh \
+  --primary alvillarica@192.168.86.162 \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_reshare_audit.sh" \
+  --joiner alvillarica@192.168.86.154 \
+    --test "./testscripts/test_ss_reshare_audit.sh" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+  --joiner alvillarica@192.168.86.52 \
+    --test "./testscripts/test_ss_reshare_audit.sh" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+  --joiner alvillarica@192.168.86.136 \
+    --test "./testscripts/test_ss_reshare_audit.sh" \
+    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
+    --test "./testscripts/regression.sh" \
+  --test-fleet-upgrade \
+    --test "./testscripts/run_regression_continually.sh"
+```
+
+### Why the tail is in that order
+
+**`regression.sh` with no `--skip`, and only here.**  `enclave-rollback` and
+`enclave-crash` stop and restart the node they run on, so they are only safe once the
+fleet can survive losing this one.  After a four-way bond M1 holds about **31%** of the
+voting power, leaving ~69% against the 66.7% a quorum needs -- so the chain keeps
+committing while M1 restarts.  Do not move this earlier: on a two-node fleet the primary
+holds ~50% and the same command halts the chain.  You do not have to remember that --
+`regression.sh` now runs the same auto-skip the soak does and will refuse the disruptive
+suites when this node's stake matters, saying so.  `--no-auto-skip` overrides it.
+
+**`--test-fleet-upgrade` after every joiner, never before.**  It bumps the enclave
+identity and both versions on the primary, commits that temporarily, and rolls the
+release to *every* node by governance -- then asserts each one swapped and that the
+sealed keys survived.  A node joining after it would be installed from the stage-D
+package, which measures the OLD enclave, and the chain would refuse it.  The script
+refuses that ordering rather than letting it produce a confusing failure.
+
+It is the one entry that runs **from your workstation** rather than on the primary: a
+`--test` runs on the primary, and the primary cannot ssh to the other nodes.
+
+**The soak last**, because it never exits.  Anywhere else it either blocks the run or
+shares the chain with whatever follows, and the collisions read as chain bugs.
+
+### What the upgrade actually changes
+
+Three files, via `increment_id` / `increment_version` in `scripts/setup_env.sh`, which
+write with `echo -n` -- these files carry **no trailing newline**, and
+`test_unique_id.txt` is `//go:embed`-ed, so one added byte changes the measurement:
+
+| file | now | after |
+|---|---|---|
+| `cmd/qadenad_enclave/test_unique_id.txt` | `unique061` | `unique062` |
+| `cmd/qadenad_enclave/version.txt` | `1.1.23` | `1.1.24` |
+| `cmd/qadenad/version.txt` | `1.1.28` | `1.1.29` |
+
+The **chain** version is the one that makes the upgrade real: the governance plan is
+named `v<chain version>`, and a plan whose name the running binary already handles is a
+silent no-op -- no halt, no swap.  The enclave version must move because the attested
+handover requires strictly greater.
+
+`test_signer_id.txt` is deliberately **not** touched.  In a debug build the signer and
+unique ids *are* the sealing keys; bumping the signer once moved `signer051 -> signer052`
+and the upgraded enclave panicked in `getPrivKCache` with "Couldn't unseal, unrecognized
+prefix", while the handover reported success.
+
+The bump is committed on the primary and reset on exit -- `upgrade_fleet.sh` refuses a
+tree that matches no commit, and an SGX build's `git clean -fd` would discard an
+uncommitted bump and rebuild the identical measurement while looking like it worked.
 
 ---
 
@@ -291,9 +382,10 @@ G  join each joiner: nth_node_bringup --from 1 --until 7, then wait until
 
 ## Traps this has already hit
 
-**Joiners must be bonded, phase 6.**  `full_fleet_bringup` joins `--from 1 --until 5`
-and stops deliberately, because converting re-splits stake.  For a growth test that is
-wrong: a node that is not a validator never proposes a block, `updateIsValidator`
+**Joiners must be bonded, phase 6.**  It is tempting to join `--from 1 --until 5` and
+stop there, because converting re-splits stake -- the old bringup did exactly that.  For
+a growth test it is wrong: a node that is not a validator never proposes a block,
+`updateIsValidator`
 publishes an external address **only under `IsProposer`**, so an unbonded joiner never
 becomes addressable, never becomes an SS key owner, and every audit stays quiescent --
 the suite goes green having healed nothing.  This script uses `--until 7`.
