@@ -972,6 +972,16 @@ joiner_errors=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qad
     | grep -avE "failed to fetch block .*is not available, lowest height is" \
     | grep -avE "got an already committed block" \
     | grep -avE "ss-reconstruct: no address for pioneer" \
+    `# A BLOCKSYNC PEER THAT WENT QUIET, not a node problem.  CometBFT's blocksync reactor gives a
+     # peer 15s to answer a block request; if it does not, the reactor logs SendTimeout, DROPS that
+     # peer and asks another.  Recovering from a slow peer is the mechanism working, and on a fleet
+     # where three joiners catch up in sequence it is ordinary traffic -- M4 hit exactly one on
+     # 2026-08-30 and failed an otherwise clean join.
+     #
+     # Scoped to the blocksync module and that reason string on purpose: a SendTimeout from
+     # consensus, or any other reason text, still fails the run.  Peers going quiet during CONSENSUS
+     # is the two-validator-fork shape this check exists to catch.` \
+    | grep -avE 'SendTimeout module=blocksync .*peer did not send us anything' \
     | grep -avE "$CV_HALT_RE" \
       | grep -avE "ss-reconstruct: LAZY PATH")
 

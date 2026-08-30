@@ -265,27 +265,30 @@ genesis:
           - "aqdn"
     qadena:
       params:
-        # ALL FOUR INCENTIVES ARE ZERO ON PURPOSE, so that a wallet has NO WAY to pay its own fees.
+        # THESE ARE THE NORMAL VALUES.  They were zeroed on 2026-08-29 for toll-free testing and
+        # restored on 2026-08-30, because setup_veritas.sh cannot complete against a zero endowment:
+        # step_3 dies with "spendable balance 0aqdn is smaller than 1000000aqdn: insufficient funds"
+        # at the first operation the fee grant does not cover.  A chain nobody can set up is not a
+        # useful test chain.
         #
-        # A new wallet used to arrive with 500 qdn (real) or 50 qdn (ephemeral). That is a second,
-        # invisible funding source: an operation its fee grant does not cover still succeeds,
-        # silently drawing on the endowment, and only starts failing once the endowment runs out --
-        # on a wallet with no way to ask for a new grant. Four message types were missing from the
-        # app-server's allowlist for exactly this reason and nothing failed.
+        # WHY ZEROING IS STILL WORTH DOING, DELIBERATELY AND TEMPORARILY.  A new wallet arrives with
+        # 500 qdn (real) or 50 qdn (ephemeral), and that is a SECOND, INVISIBLE FUNDING SOURCE: an
+        # operation its fee grant does not cover still succeeds, silently drawing on the endowment,
+        # and only starts failing once the endowment runs out -- on a wallet with no way to ask for a
+        # new grant.  Four message types were missing from the app-server's allowlist for exactly
+        # that reason and nothing failed anywhere.
         #
-        # At zero, an ungranted operation fails immediately with insufficient funds, at the step
-        # that needs it. The toll-free design does not depend on the endowment -- the sponsor pays
-        # for everything -- so a correctly granted wallet is unaffected.
-        #
-        # RESTORE THESE BEFORE ANY DEPLOYMENT WHERE USERS ARE MEANT TO HOLD TOKENS. This is a
-        # test-chain setting that makes gaps in fee-grant coverage loud.
+        # At zero, an ungranted operation fails immediately at the step that needs it.  So zero is
+        # the right setting for auditing fee-grant COVERAGE, and the wrong setting for a chain that
+        # also has to run setup_veritas.sh -- which is the conflict that produced this note.  Zero
+        # them for a coverage run, restore them here, and never ship zero where users hold tokens.
         # main wallet granted by sponsor upon wallet creation (encrypted)
         create_wallet_incentive:
-          amount: "0"
+          amount: "500"
           denom: "qdn"
         # main wallet granted by sponsor upon wallet creation (transparent)
         create_wallet_transparent_incentive:
-          amount: "0"
+          amount: "500"
           denom: "qdn"
         # sub wallet granted by sponsor upon sub wallet creation (encrypted)
         create_ephemeral_wallet_incentive:
@@ -293,7 +296,7 @@ genesis:
           denom: "qdn"
         # sub wallet granted by sponsor upon sub wallet creation (transparent)
         create_ephemeral_wallet_transparent_incentive:
-          amount: "0"
+          amount: "50"
           denom: "qdn"
         create_credential_fee: "30php"
         create_bulk_credentials_fee: "10php"
