@@ -110,39 +110,6 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
-# THE CHAIN-RESTARTING SUITES ARE UNSAFE ON SOME NODES, and this used to have no guard at all.
-# enclave-rollback and enclave-crash stop and restart the node; on a fleet whose primary holds >= 1/3
-# of the voting power that halts the whole chain, and a bare `regression.sh` did it without asking.
-# The soak has refused this since it learned to, on the same evidence -- so the answer lives in
-# setup_env.sh and both callers ask it.
-#
-# ANYTHING PASSED EXPLICITLY WINS: --skip is the operator saying what they want, and --no-auto-skip
-# is "I know what enclave-crash does to this fleet".  The guard only fills a silence.
-# PEERS FIRST, and this distinction is the whole correctness of the guard.  topology_skips answers
-# "would stopping this node halt the chain", and on a SOLO node the answer is trivially yes -- it is
-# 100% of the voting power.  But nothing else is watching: the suite stops it, the suite starts it,
-# and the chain carries on.  Skipping there would delete real coverage, and it is coverage that
-# demonstrably works -- a from-genesis primary runs enclave-rollback and enclave-crash green today,
-# and that run is the last chance to exercise them before joiners arrive and make them unsafe.
-#
-# So the guard engages only once this node has PEERS, which is precisely when a self-stop stops
-# being its own business.
-if [ $auto_skip -eq 1 ] && [ -z "$skip_list" ]; then
-    _peers=$(curl -s --max-time 5 localhost:26657/net_info 2>/dev/null | jq -r '.result.n_peers // 0' 2>/dev/null)
-    [ -n "$_peers" ] || _peers=0
-    if [ "$_peers" -gt 0 ]; then
-        echo "auto-skip: $_peers peer(s) -- inspecting this node's place in the chain"
-        skip_list=$(topology_skips)
-        if [ -n "$skip_list" ]; then
-            echo "auto-skip: skipping $skip_list  (override with --no-auto-skip)"
-        else
-            echo "auto-skip: nothing to skip -- every suite is safe on this node"
-        fi
-    else
-        echo "auto-skip: no peers -- this node is alone, so a self-stop costs nothing.  Running everything."
-    fi
-    unset _peers
-fi
 
 # NOTE: no `set -e` here.  This script's job is to run every test and report, so a failing test must
 # not abort the runner.  Each test script has its own set -e.
@@ -194,6 +161,47 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown option: $1"; echo "try: $0 --help"; exit 1 ;;
     esac
 done
+
+# PLACED AFTER THE ARGUMENT LOOP, and that is not cosmetic.  This block reads auto_skip, skip_list
+# and from_genesis; sitting above their declarations it evaluated `[ $auto_skip -eq 1 ]` with an
+# EMPTY variable, which zsh reports as
+#     regression.sh:130: unknown condition: -eq
+# on stderr and then carries on.  The guard silently never ran, skip_list stayed empty, and
+# enclave-rollback executed on a fleet with peers -- the exact case it exists to prevent.
+# Observed 2026-08-31.
+# THE CHAIN-RESTARTING SUITES ARE UNSAFE ON SOME NODES, and this used to have no guard at all.
+# enclave-rollback and enclave-crash stop and restart the node; on a fleet whose primary holds >= 1/3
+# of the voting power that halts the whole chain, and a bare `regression.sh` did it without asking.
+# The soak has refused this since it learned to, on the same evidence -- so the answer lives in
+# setup_env.sh and both callers ask it.
+#
+# ANYTHING PASSED EXPLICITLY WINS: --skip is the operator saying what they want, and --no-auto-skip
+# is "I know what enclave-crash does to this fleet".  The guard only fills a silence.
+# PEERS FIRST, and this distinction is the whole correctness of the guard.  topology_skips answers
+# "would stopping this node halt the chain", and on a SOLO node the answer is trivially yes -- it is
+# 100% of the voting power.  But nothing else is watching: the suite stops it, the suite starts it,
+# and the chain carries on.  Skipping there would delete real coverage, and it is coverage that
+# demonstrably works -- a from-genesis primary runs enclave-rollback and enclave-crash green today,
+# and that run is the last chance to exercise them before joiners arrive and make them unsafe.
+#
+# So the guard engages only once this node has PEERS, which is precisely when a self-stop stops
+# being its own business.
+if [ $auto_skip -eq 1 ] && [ -z "$skip_list" ]; then
+    _peers=$(curl -s --max-time 5 localhost:26657/net_info 2>/dev/null | jq -r '.result.n_peers // 0' 2>/dev/null)
+    [ -n "$_peers" ] || _peers=0
+    if [ "$_peers" -gt 0 ]; then
+        echo "auto-skip: $_peers peer(s) -- inspecting this node's place in the chain"
+        skip_list=$(topology_skips)
+        if [ -n "$skip_list" ]; then
+            echo "auto-skip: skipping $skip_list  (override with --no-auto-skip)"
+        else
+            echo "auto-skip: nothing to skip -- every suite is safe on this node"
+        fi
+    else
+        echo "auto-skip: no peers -- this node is alone, so a self-stop costs nothing.  Running everything."
+    fi
+    unset _peers
+fi
 
 logdir="$qadenabuild/logs/regression"
 mkdir -p "$logdir"

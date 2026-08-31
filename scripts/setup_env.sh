@@ -916,10 +916,18 @@ topology_skips() {
         fi
     fi
 
-    if [ "$n_peers" -gt 0 ]; then
-        echo "  $n_peers peer(s): enclave-rollback would take its networked branch, which asserts against an unset \$bal_after" >&2
-        out+=(enclave-rollback)
-    fi
+    # ENCLAVE-ROLLBACK IS NOT SKIPPED FOR HAVING PEERS, and that is deliberate.
+    #
+    # It used to be, on the grounds that "the networked branch asserts against an unset $bal_after".
+    # That was true and it was a TEST BUG, not a property of the chain: the rollback and the
+    # re-convergence both worked, and the assertion compared the correct re-synced balance against
+    # an empty variable that was never assigned.  Skipping routed around it, so the branch that
+    # matters most on a fleet had never run once.  $bal_after is now captured in
+    # test_enclave_rollback.sh; a minority node must be able to roll back on its own and catch back
+    # up, and this is where that gets proven.
+    #
+    # The voting-power rule above still applies: at >= 1/3 the suite is skipped with enclave-crash,
+    # because rolling back a node the quorum needs and restarting it alone manufactures a fork.
 
     # dedupe, comma-join
     printf '%s\n' "${out[@]}" | sort -u | paste -sd, -

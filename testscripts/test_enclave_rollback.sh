@@ -178,6 +178,19 @@ else
     echo "tx $txhash landed at height $h_tx (SGX enclave: contents not readable, using store hashes only)"
 fi
 
+# THE POST-TRANSACTION BALANCE, captured while the transaction is still in this node's history.
+#
+# The networked branch at the bottom compares against this to prove the node re-synced INTO the
+# block rather than erasing it.  It was referenced there and never assigned anywhere -- so that
+# branch compared the correct re-synced balance against an empty string and failed every time,
+# reporting "re-sync did not restore the transaction: expected , got 8999999897...".  The rollback
+# and the re-convergence had both worked.  A minority node rolling back and catching up is the
+# whole point of that branch, and it had never once been exercised.  Observed 2026-08-31.
+bal_after=$(pioneer_balance)
+[ -n "$bal_after" ] || fail "cannot read pioneer1's balance after the transaction"
+[ "$bal_after" != "$bal_before" ] \
+    || fail "the balance did not move across the transaction ($bal_before) -- the post-rollback comparison would be vacuous"
+
 # a bank send moves wallet state, so the enclave's mirrors must have moved with it.  If they did
 # not, the comparison after the rollback would be vacuous -- it would "match" because nothing
 # ever changed, and the suite would pass without testing anything.
