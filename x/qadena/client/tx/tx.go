@@ -322,24 +322,36 @@ func withDiscoveredFeeGranter(clientCtx client.Context, msgs ...sdk.Msg) client.
 	// AllowedMsgAllowance is the restricted shape; Basic and Periodic carry no message list and
 	// cover anything.  Unknown shapes are treated as not covering, because guessing wrong here
 	// fails the transaction outright.
-	if !allowanceCovers(clientCtx, res.Allowances[0].Allowance, msgs) {
+	if !allowanceCovers(res.Allowances[0].Allowance, msgs) {
 		return clientCtx
 	}
 	return clientCtx.WithFeeGranterAddress(granter)
 }
 
 // allowanceCovers reports whether every message in this transaction is payable under the allowance.
-func allowanceCovers(clientCtx client.Context, allowance *codectypes.Any, msgs []sdk.Msg) bool {
+//
+// DECODED FROM THE Any DIRECTLY, NOT THROUGH THE INTERFACE REGISTRY.  The first version used
+// clientCtx.InterfaceRegistry.UnpackAny, which is correct in a CLI binary and useless in the one
+// place this feature exists for: qadenad_enclave builds a MINIMAL registry (enccodec, auth, qadena
+// types, evm) and never registers feegrant, so UnpackAny always failed, the function answered "not
+// covered", and every sponsored broadcast fell back to a wallet holding 0aqdn.  It looked exactly
+// like the granter had never been found.  Observed 2026-08-31.
+//
+// The type URL alone answers the question: only AllowedMsgAllowance restricts messages, and its
+// bytes unmarshal without any registry at all.
+const allowedMsgAllowanceTypeURL = "/cosmos.feegrant.v1beta1.AllowedMsgAllowance"
+
+func allowanceCovers(allowance *codectypes.Any, msgs []sdk.Msg) bool {
 	if allowance == nil {
 		return false
 	}
-	var inner feegrant.FeeAllowanceI
-	if err := clientCtx.InterfaceRegistry.UnpackAny(allowance, &inner); err != nil {
-		return false
+	// Basic and Periodic carry no message list, so they cover anything.
+	if allowance.TypeUrl != allowedMsgAllowanceTypeURL {
+		return true
 	}
-	restricted, ok := inner.(*feegrant.AllowedMsgAllowance)
-	if !ok {
-		return true // Basic/Periodic: no message restriction
+	var restricted feegrant.AllowedMsgAllowance
+	if err := restricted.Unmarshal(allowance.Value); err != nil {
+		return false
 	}
 	allowed := make(map[string]struct{}, len(restricted.AllowedMessages))
 	for _, m := range restricted.AllowedMessages {
