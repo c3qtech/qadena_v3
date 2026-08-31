@@ -34,10 +34,17 @@
 #   `--join-only` gives the narrow, expiring, three-message grant, for a node that will be funded
 #   normally afterwards.
 #
-#   NOT SPONSORED: the validator self-bond.  add_full_node.sh mentions 110,000 QDN for a validator;
-#   that is `add_validator.sh`'s self-bond, a stake and not a fee.  An operator's stake is their own
-#   skin in the game -- and since slashing is keyed to the infraction height, a foundation that
-#   sponsored the bond would absorb every penalty with the operator risking nothing.
+#   THE SELF-BOND IS FUNDED, NOT SPONSORED, and the distinction is the whole point.  --self-bond
+#   SENDS QDN to the node; it does not fee-grant a stake.  On this chain QDN originates only from
+#   the foundation, so an operator's stake necessarily came from there -- refusing to send it does
+#   not create skin in the game, it just makes validators impossible.
+#
+#   What preserves skin in the game is that a TRANSFER is final: once sent, the tokens are the
+#   operator's, they are what gets bonded, and slashing burns THEM.  The foundation keeps no
+#   exposure.  That is exactly unlike a fee grant, where the foundation goes on paying for every
+#   message forever -- which is why fees are granted and the bond is transferred.  An earlier
+#   version of this note refused the self-bond outright on slashing grounds; that argument was
+#   about ongoing exposure and does not reach a one-off transfer.
 #
 # WHY authz, NOT THE FOUNDATION KEY ON EVERY BOX
 #
@@ -55,6 +62,7 @@ node_addr=""
 granter="${QADENA_FOUNDATION_NODES:-foundation-nodes}"
 expiration=""
 spend_limit=""
+self_bond=""
 join_only="false"
 # 30 days of budget, refilled every 30 days, forever.  Sized well above a node's actual burn: SS
 # rotation is a handful of messages per interval, not per block.
@@ -68,6 +76,7 @@ while [[ $# -gt 0 ]]; do
         --expiration)  expiration="$2"; shift 2 ;;
         --spend-limit) spend_limit="$2"; shift 2 ;;
         --join-only)   join_only="true"; shift ;;
+        --self-bond)   self_bond="$2"; shift 2 ;;
         --period)      period="$2"; shift 2 ;;
         --period-limit) period_limit="$2"; shift 2 ;;
         --help)
@@ -90,7 +99,11 @@ while [[ $# -gt 0 ]]; do
             echo "messages a node broadcasts over its life (join + SS rotation + re-share)."
             echo "Bounded three ways: per-period budget, message allow-list, and optional total cap."
             echo ""
-            echo "It does NOT sponsor a validator self-bond, which is the operator's own stake."
+            echo "  --self-bond <amount>  ALSO send that stake to the node (e.g. 10000qdn), so it can"
+            echo "                        self-delegate.  A fee grant cannot supply staked principal;"
+            echo "                        only a transfer can.  Once sent the tokens are the operator's"
+            echo "                        and slashing burns them -- the foundation keeps no exposure."
+            echo "                        Must be at least config.yml's min-self-delegation."
             exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -199,6 +212,32 @@ else
     code=$(qadenad_alias query tx "$hash" --output json 2>/dev/null | jq -r '.code // "?"')
     [ "$code" = "0" ] || { echo "  FAILED on chain (code $code): $(qadenad_alias query tx "$hash" --output json 2>/dev/null | jq -r '.raw_log' | head -c 200)"; exit 1; }
     echo "  ok: fee grant issued ($hash)"
+fi
+
+# THE STAKE, IF ASKED FOR.  Deliberately AFTER the grant: the send itself costs a fee, and with the
+# grant already in place the node could pay for its own later messages even if this step failed
+# half-way.  A transfer, not a grant -- x/feegrant separates who signs from who pays fees, and
+# staked principal is neither.
+if [ -n "$self_bond" ]; then
+    echo ""
+    echo "Sending the self-bond $self_bond to $node_addr (a transfer; these tokens become the node's own)"
+    if [ -n "${QADENA_NODE_ADMIN:-}" ]; then
+        tmp=$(mktemp)
+        qadenad_alias tx bank send "$granter_addr" "$node_addr" "$self_bond" --from "$granter_addr" \
+            --generate-only > "$tmp" 2>/dev/null \
+            || { rm -f "$tmp"; echo "  FAILED to build the send"; exit 1; }
+        out=$(qadenad_alias tx authz exec "$tmp" --from "$QADENA_NODE_ADMIN" \
+              --fee-granter "$granter_addr" --yes --output json "${gasflags[@]}" 2>&1); rm -f "$tmp"
+    else
+        out=$(qadenad_alias tx bank send "$granter" "$node_addr" "$self_bond" \
+              --from "$granter" --yes --output json "${gasflags[@]}" 2>&1)
+    fi
+    hash=$(echo "$out" | grep '^{' | tail -1 | jq -r '.txhash // ""' 2>/dev/null)
+    [ -n "$hash" ] || { echo "  FAILED to broadcast: $(echo "$out" | tail -2)"; exit 1; }
+    qadenad_alias query wait-tx "$hash" --timeout 60s >/dev/null 2>&1 || true
+    code=$(qadenad_alias query tx "$hash" --output json 2>/dev/null | jq -r '.code // "?"')
+    [ "$code" = "0" ] || { echo "  FAILED on chain (code $code): $(qadenad_alias query tx "$hash" --output json 2>/dev/null | jq -r '.raw_log' | head -c 200)"; exit 1; }
+    echo "  ok: self-bond sent ($hash)"
 fi
 
 echo ""

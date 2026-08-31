@@ -153,9 +153,32 @@ OLD_PARAMS=$(rsh_user "$PRIMARY" "ls -t $PHOME/qadena/enclave_config/enclave_par
 OLD_REGULATOR=""
 if [[ "$BASE_UID" == unique<-> ]]; then CAN_READ_SEALED=1; else CAN_READ_SEALED=0; fi
 if [[ -n "$OLD_PARAMS" ]]; then
-    OLD_REGULATOR=$(rsh_user "$PRIMARY" "sed 's/^[^{]*//' $OLD_PARAMS 2>/dev/null | jq -r '.SharedEnclaveParams.RegulatorPrivK' 2>/dev/null" | tr -d '\r')
+    # PLAINTEXT IS PROVED, NOT SAMPLED ONCE.
+    #
+    # The old test was "did jq print something non-empty".  That is not the same question, and it
+    # was wrong in BOTH directions: empty is also what a missing file, an absent jq or a dropped
+    # ssh produces, and a non-empty print is not proof the document is readable.  Measured on
+    # SGX1 2026-08-31: the same unchanged file (mtime 10:13:57) read as "readable" at 02:15:06Z
+    # and as ciphertext 25 seconds later -- the probe is not deterministic, so a single sample
+    # cannot carry a security assertion.
+    #
+    # Two gates instead.  A sealed file NEVER parses as JSON, so require the whole document to
+    # parse before believing anything read out of it; then read the key twice and require the two
+    # to agree, so a one-off flake cannot decide the run.
+    regulator_key_of() {
+        rsh_user "$PRIMARY" "sed 's/^[^{]*//' $OLD_PARAMS 2>/dev/null | jq -er '.SharedEnclaveParams.RegulatorPrivK // empty' 2>/dev/null" | tr -d '\r'
+    }
     readable=0
-    [[ -n "$OLD_REGULATOR" && "$OLD_REGULATOR" != "null" ]] && readable=1
+    OLD_REGULATOR=""
+    if rsh_user "$PRIMARY" "sed 's/^[^{]*//' $OLD_PARAMS 2>/dev/null | jq -e . >/dev/null 2>&1"; then
+        _a=$(regulator_key_of); _b=$(regulator_key_of)
+        if [[ -n "$_a" && "$_a" == "$_b" ]]; then
+            OLD_REGULATOR="$_a"
+            readable=1
+        elif [[ -n "$_a" || -n "$_b" ]]; then
+            info "NOTE: the params read is UNSTABLE ($((${#_a})) vs $((${#_b})) bytes) -- treating as sealed"
+        fi
+    fi
     if (( CAN_READ_SEALED )); then
         (( readable )) \
             || fail "$BASE_UID is a DEBUG identity, so $OLD_PARAMS should be plaintext, but RegulatorPrivK could not be read from it.  Something is wrong with the read (file, jq, path) -- not with sealing.  Do not treat this as 'sealed'."

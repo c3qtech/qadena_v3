@@ -287,6 +287,10 @@ TRUST_OFFSET_ARG=" --trust-height-offset ${TRUST_HEIGHT_OFFSET:-10}"
 # die on "parameter not set".  Harmless to pass either way -- add_full_node.sh only reads it when a
 # second seed makes the trust block run at all.
 
+# Passed to convert_to_validator.sh so the create-validator tx is fee-granted.  Unconditional for
+# the same reason as TRUST_OFFSET_ARG: `set -u` is on and phase 6 interpolates it either way.
+if (( SPONSORED )); then SPONSOR_CV_ARG=" --foundation-sponsored"; else SPONSOR_CV_ARG=""; fi
+
 # SECOND_IP_ARG -- the extra seed that turns statesync on.  Computed here rather than inside phase
 # 4, because phase 3 now drives add_full_node.sh too and the two must agree: a key minted for a
 # block-sync join and then resumed as a state-sync one would rewrite config.toml mid-flight.
@@ -1198,7 +1202,38 @@ fi
 if run_phase 6; then
 phase "6. convert to validator and split the stake"
 
-ssh "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./convert_to_validator.sh --validator-stake $VALIDATOR_STAKE'" 2>&1 | tail -5 | sed 's/^/  /'
+# THE SELF-BOND IS SENT BY THE FOUNDATION, because on this chain there is nowhere else it can come
+# from -- QDN originates only from the foundation, so an operator's stake necessarily did too.
+#
+# It is a TRANSFER, not a grant, and that is what keeps the risk in the right place: once sent the
+# tokens are the node's own, they are what gets bonded, and slashing burns them.  A fee grant could
+# not do this job anyway -- it separates who signs from who pays FEES, and staked principal is
+# neither.  foundation_sponsor_node.sh --self-bond owns this so the rule lives with the grant logic
+# rather than being re-implemented here.
+if (( SPONSORED )); then
+    jaddr=$(ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+    [[ -n "$jaddr" ]] || fail "phase 6: cannot resolve $PIONEER_NAME's address on $JOINER to fund its self-bond"
+    # THE AMOUNT COMES FROM config.yml, not from --stake, and it must match what
+    # convert_to_validator.sh will bond: sponsored, it bonds exactly min-self-delegation, so sending
+    # anything else either strands QDN on the node or leaves its balance poll waiting forever.
+    # ONE SOURCE OF TRUTH -- read from the joiner's own config.yml, the same file the script reads.
+    floor=$(ssh "$JOINER" "dasel -f \$HOME/qadena/config/config.yml 'validators.first().app.min-self-delegation' 2>/dev/null" | tr -d '\r')
+    [[ -n "$floor" && "$floor" != "null" ]] \
+        || fail "phase 6: no validators.first().app.min-self-delegation in $JOINER's config.yml -- cannot size the self-bond"
+    info "sponsored: sending the $floor self-bond to $jaddr (fees stay on the grant)"
+    ssh "$PRIMARY" "${SUDO_P}~/qadena/scripts/foundation_sponsor_node.sh --node $jaddr --granter $SPONSOR_GRANTER --self-bond $floor" \
+        2>&1 | tail -4 | sed 's/^/    /'
+    # convert_to_validator.sh polls for the balance to land, so nothing sleeps here.
+fi
+
+# ${pipestatus[1]}, NOT the pipeline's status.  A pipeline exits with its LAST command -- here sed,
+# which always succeeds -- so convert_to_validator.sh's `exit 1` was thrown away and the phase
+# reported success on a node that never bonded.  The run then spent its full twenty-minute
+# wait_addressable timeout on a node that could never propose a block, and the real message
+# ("Couldn't find balance") scrolled past five lines earlier.  Same trap fleet_bringup_with_tests.sh
+# documents in run_scheduled.  Observed 2026-08-31 on pioneer2.
+ssh "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./convert_to_validator.sh --validator-stake $VALIDATOR_STAKE$SPONSOR_CV_ARG'" 2>&1 | tail -5 | sed 's/^/  /'
+(( ${pipestatus[1]} == 0 )) || fail "phase 6: convert_to_validator.sh failed on $JOINER -- see the lines above. The node is NOT a validator, so it will never propose a block and never become addressable."
 sleep 20
 
 # setup_prerequisites splits the treasury delegation across ALL bonded validators, so it has to run

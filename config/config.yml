@@ -43,6 +43,16 @@ validators:
   bonded: 100000qdn
   app:
     minimum-gas-prices: "500000000aqdn"
+    # THE VALIDATOR SELF-BOND FLOOR, in QDN.  Read by scripts/convert_to_validator.sh, which converts
+    # it to aqdn -- MsgCreateValidator takes min_self_delegation as an integer in the BASE unit, so
+    # a bare "10000" here would mean 10000aqdn, a floor of 0.00000000000001 QDN.  That unit is a
+    # long-standing source of confusion (cosmos-sdk#9386) and the reason this is spelled in QDN and
+    # converted in one place.
+    #
+    # It is a PROMISE, not an entry fee: if self-delegation ever falls below it the validator is
+    # permanently unbonded, so it is chosen deliberately rather than set as high as possible.  It
+    # lived hardcoded as "1" in convert_to_validator.sh before, which made the floor meaningless.
+    min-self-delegation: "10000qdn"
     pruning: "default"
     pruning-keep-recent: "0"
     pruning-interval: "0"
