@@ -63,6 +63,7 @@ granter="${QADENA_FOUNDATION_NODES:-foundation-nodes}"
 expiration=""
 spend_limit=""
 self_bond=""
+bond_only="false"
 join_only="false"
 # 30 days of budget, refilled every 30 days, forever.  Sized well above a node's actual burn: SS
 # rotation is a handful of messages per interval, not per block.
@@ -77,6 +78,7 @@ while [[ $# -gt 0 ]]; do
         --spend-limit) spend_limit="$2"; shift 2 ;;
         --join-only)   join_only="true"; shift ;;
         --self-bond)   self_bond="$2"; shift 2 ;;
+        --bond-only)   bond_only="true"; shift ;;
         --period)      period="$2"; shift 2 ;;
         --period-limit) period_limit="$2"; shift 2 ;;
         --help)
@@ -99,6 +101,10 @@ while [[ $# -gt 0 ]]; do
             echo "messages a node broadcasts over its life (join + SS rotation + re-share)."
             echo "Bounded three ways: per-period budget, message allow-list, and optional total cap."
             echo ""
+            echo "  --bond-only           skip the fee grant and ONLY send --self-bond.  For a node"
+            echo "                        already sponsored: re-granting costs two more treasury"
+            echo "                        transactions and can collide with whatever else the"
+            echo "                        treasury is signing."
             echo "  --self-bond <amount>  ALSO send that stake to the node (e.g. 10000qdn), so it can"
             echo "                        self-delegate.  A fee grant cannot supply staked principal;"
             echo "                        only a transfer can.  Once sent the tokens are the operator's"
@@ -193,7 +199,14 @@ revoke_first() {
     sleep 3
 }
 
-if [ "$join_only" = "true" ] && [ -z "$spend_limit" ] && typeset -f grant_as_foundation > /dev/null 2>&1; then
+# --bond-only: THE GRANT ALREADY EXISTS, so re-issuing it is not free.  revoke+grant is two more
+# treasury transactions, and the treasury is rarely idle -- phase 6 runs straight after the
+# delegation re-split, so the re-grant collided with it and (before the guards above) died without
+# a word, leaving the node unfunded and the poll waiting six minutes for a transfer that was never
+# attempted.  Observed on pioneer3, 2026-08-31.
+if [ "$bond_only" = "true" ]; then
+    echo "  --bond-only: leaving the existing fee grant alone"
+elif [ "$join_only" = "true" ] && [ -z "$spend_limit" ] && typeset -f grant_as_foundation > /dev/null 2>&1; then
     grant_as_foundation "$granter_addr" "$node_addr" "$MSGS" "${QADENA_NODE_ADMIN:-}" \
         && echo "  ok: join-only fee grant issued"
 else
@@ -214,10 +227,10 @@ else
             --from "$granter_addr" --generate-only > "$tmp" 2>/dev/null \
             || { rm -f "$tmp"; echo "  FAILED to build the grant"; exit 1; }
         out=$(qadenad_alias tx authz exec "$tmp" --from "$QADENA_NODE_ADMIN" \
-              --fee-granter "$granter_addr" --yes --output json "${gasflags[@]}" 2>&1); rm -f "$tmp"
+              --fee-granter "$granter_addr" --yes --output json "${gasflags[@]}" 2>&1) || true; rm -f "$tmp"
     else
         out=$(qadenad_alias tx feegrant grant "$granter_addr" "$node_addr" "${grantflags[@]}" \
-              --from "$granter" --yes --output json "${gasflags[@]}" 2>&1)
+              --from "$granter" --yes --output json "${gasflags[@]}" 2>&1) || true
     fi
 
     hash=$(echo "$out" | grep '^{' | tail -1 | jq -r '.txhash // ""' 2>/dev/null)
@@ -241,10 +254,10 @@ if [ -n "$self_bond" ]; then
             --generate-only > "$tmp" 2>/dev/null \
             || { rm -f "$tmp"; echo "  FAILED to build the send"; exit 1; }
         out=$(qadenad_alias tx authz exec "$tmp" --from "$QADENA_NODE_ADMIN" \
-              --fee-granter "$granter_addr" --yes --output json "${gasflags[@]}" 2>&1); rm -f "$tmp"
+              --fee-granter "$granter_addr" --yes --output json "${gasflags[@]}" 2>&1) || true; rm -f "$tmp"
     else
         out=$(qadenad_alias tx bank send "$granter" "$node_addr" "$self_bond" \
-              --from "$granter" --yes --output json "${gasflags[@]}" 2>&1)
+              --from "$granter" --yes --output json "${gasflags[@]}" 2>&1) || true
     fi
     hash=$(echo "$out" | grep '^{' | tail -1 | jq -r '.txhash // ""' 2>/dev/null)
     [ -n "$hash" ] || { echo "  FAILED to broadcast: $(echo "$out" | tail -2)"; exit 1; }

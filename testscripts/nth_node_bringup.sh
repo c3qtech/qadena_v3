@@ -1224,8 +1224,15 @@ if (( SPONSORED )); then
     [[ "$floor" == <-> ]] \
         || fail "phase 6: validators.first().app.min-self-delegation on $JOINER is \"$floor\", not a bare aqdn integer -- cannot size the self-bond"
     info "sponsored: sending the ${floor}aqdn self-bond to $jaddr (fees stay on the grant)"
-    ssh "$PRIMARY" "${SUDO_P}~/qadena/scripts/foundation_sponsor_node.sh --node $jaddr --granter $SPONSOR_GRANTER --self-bond ${floor}aqdn" \
-        2>&1 | tail -4 | sed 's/^/    /'
+    # --bond-only: phase 3 already granted this node.  Re-granting here is two extra treasury
+    # transactions at the worst moment -- setup_prerequisites has just re-split the delegation, so
+    # the treasury is mid-signing and the grant collides with it.
+    #
+    # tail -12, not -4: the sponsor script prints its header first, so a short tail showed only the
+    # banner and hid the actual result.  A failure that scrolls past is a failure nobody can debug.
+    ssh "$PRIMARY" "${SUDO_P}~/qadena/scripts/foundation_sponsor_node.sh --node $jaddr --granter $SPONSOR_GRANTER --bond-only --self-bond ${floor}aqdn" \
+        2>&1 | tail -12 | sed 's/^/    /'
+    (( ${pipestatus[1]} == 0 )) || fail "phase 6: could not send the self-bond to $jaddr -- convert_to_validator.sh would wait six minutes for a transfer that never happened."
     # convert_to_validator.sh polls for the balance to land, so nothing sleeps here.
 fi
 
