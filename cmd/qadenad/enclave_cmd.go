@@ -14,6 +14,7 @@ import (
 
 	"cosmossdk.io/log"
 	"github.com/cosmos/cosmos-sdk/client"
+	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -268,7 +269,7 @@ func newCheckEnclaveCmd() *cobra.Command {
 }
 
 func newSyncEnclaveCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "sync-enclave [PioneerID] [Advertise-IP-Address] [SeedNodeURI]",
 		Short: "Sync enclave for use by new full/validator nodes",
 		Args:  cobra.ExactArgs(3),
@@ -334,10 +335,26 @@ func newSyncEnclaveCmd() *cobra.Command {
 			return fmt.Errorf("sync enclave failed (the enclave refused; see its log for why)")
 		},
 	}
+	// TX FLAGS ARE REGISTERED BECAUSE THIS COMMAND ASKS FOR A TX CONTEXT.
+	//
+	// RunE calls client.GetClientTxContext(cmd), which reads --from, --fees, --fee-granter and the
+	// rest off this command.  They were never registered, so cobra rejected the flag outright:
+	//
+	//     unknown flag: --fee-granter
+	//     Failed to synchronize my enclave with the Pioneer/Enclave on <primary>
+	//
+	// That is what made a --foundation-sponsored join impossible -- add_full_node.sh passes
+	// --fee-granter so the FOUNDATION pays for the messages SyncEnclave broadcasts, and the node
+	// being joined holds no coins by design.  A comment there asserted "the enclave RootCmd carries
+	// the standard tx flags, so this is honoured"; it did not, and nothing checked.  Observed on M2,
+	// 2026-08-31.  Registering them is also what makes GetClientTxContext meaningful here at all:
+	// without the flags it could only ever read zero values.
+	flags.AddTxFlagsToCmd(cmd)
+	return cmd
 }
 
 func newInitEnclaveCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "init-enclave [PioneerID] [Advertise-IP-Address] [JarID] [RegulatorID]",
 		Short: "Initialize enclave for use by the genesis node",
 		Args:  cobra.ExactArgs(4),
@@ -389,6 +406,22 @@ func newInitEnclaveCmd() *cobra.Command {
 			return fmt.Errorf("init enclave failed")
 		},
 	}
+	// TX FLAGS ARE REGISTERED BECAUSE THIS COMMAND ASKS FOR A TX CONTEXT.
+	//
+	// RunE calls client.GetClientTxContext(cmd), which reads --from, --fees, --fee-granter and the
+	// rest off this command.  They were never registered, so cobra rejected the flag outright:
+	//
+	//     unknown flag: --fee-granter
+	//     Failed to synchronize my enclave with the Pioneer/Enclave on <primary>
+	//
+	// That is what made a --foundation-sponsored join impossible -- add_full_node.sh passes
+	// --fee-granter so the FOUNDATION pays for the messages SyncEnclave broadcasts, and the node
+	// being joined holds no coins by design.  A comment there asserted "the enclave RootCmd carries
+	// the standard tx flags, so this is honoured"; it did not, and nothing checked.  Observed on M2,
+	// 2026-08-31.  Registering them is also what makes GetClientTxContext meaningful here at all:
+	// without the flags it could only ever read zero values.
+	flags.AddTxFlagsToCmd(cmd)
+	return cmd
 }
 
 func newExportPrivateKeyCmd() *cobra.Command {

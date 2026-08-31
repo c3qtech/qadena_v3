@@ -601,6 +601,15 @@ for i in {1..2400}; do
     if (( ! funds )) && grep -aq "Are you done sending funds" $LOG; then
         print y; funds=1; sleep 2; continue
     fi
+    # THE SPONSORED TWIN OF THE PROMPT ABOVE.  --foundation-sponsored replaces "send coins and tell
+    # me when you are done" with "has the foundation issued the fee grant", and a feeder that only
+    # knows the funding wording answers NEITHER: add_full_node.sh blocks on the PTY forever, the
+    # run sits with no output, and nothing says why.  Observed 2026-08-31 on M2 -- the grant had
+    # been issued and confirmed on chain minutes earlier, so 'y' was true the whole time it hung.
+    # Shares the `funds` latch: exactly one of the two wordings can appear in a given run.
+    if (( ! funds )) && grep -aq "issued the fee grant" $LOG; then
+        print y; funds=1; sleep 2; continue
+    fi
     # THE ONE THAT MATTERS: decline the in-script start, so phase 5 starts it standalone.
     if (( ! start )) && grep -aq "start the new qadena" $LOG; then
         print n; start=1; sleep 5; break
