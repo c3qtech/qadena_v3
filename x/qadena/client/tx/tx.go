@@ -17,6 +17,7 @@ import (
 	"cosmossdk.io/x/feegrant"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/input"
+	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
@@ -252,6 +253,25 @@ func queryMinGasPrice(clientCtx client.Context, fallback string) string {
 	return ret.String() + "aqdn"
 }
 
+// OFF UNLESS A BINARY ASKS FOR IT, and the enclave is the only one that does.
+//
+// This helper has 28 call sites and only 6 are the enclave -- the rest are CLI commands
+// (x/qadena, x/nameservice, x/dsvs) and the ekyc server, all of which sign as ordinary funded
+// accounts and must keep paying their own way.  Discovering a granter for those is not a harmless
+// optimisation: a grant that does not cover the message makes the chain REJECT the whole
+// transaction, so an account holding a narrow grant loses the ability to send anything outside it.
+// Turning this on globally broke wallet creation for eleven users via tx_create_wallet.go, on a
+// fleet whose only grants were the pioneers' join allow-lists.  Observed 2026-08-31.
+//
+// So the blast radius is a binary, not a library: qadenad_enclave opts in at startup, qadenad
+// never does.
+var feeGranterDiscovery bool
+
+// EnableFeeGranterDiscovery opts this process into looking up a fee granter for the signer when the
+// caller has not set one.  Call it once, at startup, from a binary whose signing account is
+// deliberately unfunded -- see the note above.
+func EnableFeeGranterDiscovery() { feeGranterDiscovery = true }
+
 // A NODE THAT HOLDS NO COINS CAN STILL PAY, IF SOMEONE GRANTED IT FEES.
 //
 // A foundation-sponsored node is deliberately never sent QDN: it signs its own messages (the
@@ -273,8 +293,8 @@ func queryMinGasPrice(clientCtx client.Context, fallback string) string {
 // EXPLICIT ALWAYS WINS -- if a caller set a granter, use theirs and do not query.  A failed lookup
 // is not an error: it means "no sponsorship", which is the normal case, so we carry on unsponsored
 // and let the chain reject it if the signer genuinely cannot pay.
-func withDiscoveredFeeGranter(clientCtx client.Context) client.Context {
-	if clientCtx.FeeGranter != nil || clientCtx.FromAddress == nil {
+func withDiscoveredFeeGranter(clientCtx client.Context, msgs ...sdk.Msg) client.Context {
+	if !feeGranterDiscovery || clientCtx.FeeGranter != nil || clientCtx.FromAddress == nil {
 		return clientCtx
 	}
 
@@ -290,11 +310,51 @@ func withDiscoveredFeeGranter(clientCtx client.Context) client.Context {
 	if err != nil {
 		return clientCtx
 	}
+
+	// A GRANT THAT DOES NOT COVER THESE MESSAGES IS WORSE THAN NO GRANT.
+	//
+	// Attaching one that exists but excludes the message does not fall back to self-payment -- the
+	// chain REJECTS the whole transaction with "<granter> does not allow to pay fees for <grantee>".
+	// So an account holding a narrow grant became unable to send anything outside it, including
+	// transactions it could have paid for itself.  That broke wallet creation for eleven users on a
+	// fleet where the only grants were the pioneers' join allow-lists.  Observed 2026-08-31.
+	//
+	// AllowedMsgAllowance is the restricted shape; Basic and Periodic carry no message list and
+	// cover anything.  Unknown shapes are treated as not covering, because guessing wrong here
+	// fails the transaction outright.
+	if !allowanceCovers(clientCtx, res.Allowances[0].Allowance, msgs) {
+		return clientCtx
+	}
 	return clientCtx.WithFeeGranterAddress(granter)
 }
 
+// allowanceCovers reports whether every message in this transaction is payable under the allowance.
+func allowanceCovers(clientCtx client.Context, allowance *codectypes.Any, msgs []sdk.Msg) bool {
+	if allowance == nil {
+		return false
+	}
+	var inner feegrant.FeeAllowanceI
+	if err := clientCtx.InterfaceRegistry.UnpackAny(allowance, &inner); err != nil {
+		return false
+	}
+	restricted, ok := inner.(*feegrant.AllowedMsgAllowance)
+	if !ok {
+		return true // Basic/Periodic: no message restriction
+	}
+	allowed := make(map[string]struct{}, len(restricted.AllowedMessages))
+	for _, m := range restricted.AllowedMessages {
+		allowed[m] = struct{}{}
+	}
+	for _, m := range msgs {
+		if _, ok := allowed[sdk.MsgTypeURL(m)]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func GenerateOrBroadcastTxCLISync(clientCtx client.Context, flagSet *pflag.FlagSet, op string, msgs ...sdk.Msg) (error, *sdk.TxResponse) {
-	clientCtx = withDiscoveredFeeGranter(clientCtx)
+	clientCtx = withDiscoveredFeeGranter(clientCtx, msgs...)
 
 	// array of timeouts, exponentially increasing
 	normalTimeouts := []time.Duration{

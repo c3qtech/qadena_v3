@@ -10659,6 +10659,12 @@ func main() {
 
 	flags.AddTxFlagsToCmd(RootCmd)
 
+	// THIS BINARY SIGNS AS A NODE THAT MAY HOLD NO COINS.  A foundation-sponsored pioneer never
+	// receives QDN beyond its self-bond, yet it must broadcast its join, its key rotations and the
+	// audit's re-shares -- all signed by itself, all paid by a fee grant.  Opting in here rather than
+	// in the shared helper keeps every CLI binary paying its own way; see EnableFeeGranterDiscovery.
+	qadenatx.EnableFeeGranterDiscovery()
+
 	RootCmd.Flags().Set(flags.FlagChainID, *chainID)
 
 	var err error
