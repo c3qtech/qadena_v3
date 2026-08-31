@@ -254,6 +254,22 @@ sgx_state() { ssh -o ConnectTimeout=10 "$1" "$SGX_PROBE" >/dev/null 2>&1; print 
 ADVERTISE_J="${JOINER##*@}"
 ADVERTISE_P="${PRIMARY##*@}"
 
+# THE TRUST ANCHOR SITS 10 BLOCKS BACK ON A TEST FLEET, not the 2000 add_full_node.sh defaults to.
+#
+# 2000 is right for a mainnet-length chain and wrong for every chain this harness builds: joiners
+# arrive around height 2300, so latest-2000 lands near 325 -- under add_full_node.sh's own
+# "trust height is too low" gate, which SILENTLY falls back to block-sync.  The run would come up
+# green having never exercised state-sync, which is the one thing --state-sync exists to test.
+#
+# 10 is enough to fix what the offset is actually for: the second seed corroborates the anchor at
+# the SAME height, and asking it for the tip fails whenever it is a block behind -- which aborted a
+# join on 2026-08-30 with "couldn't get it" on a fleet that was perfectly healthy.
+TRUST_OFFSET_ARG=" --trust-height-offset ${TRUST_HEIGHT_OFFSET:-10}"
+# UNCONDITIONAL, and it has to be: `set -u` is on and both add_full_node.sh call sites interpolate
+# this, including the block-sync path.  Defining it only under STATE_SYNC made every block-sync join
+# die on "parameter not set".  Harmless to pass either way -- add_full_node.sh only reads it when a
+# second seed makes the trust block run at all.
+
 # SECOND_IP_ARG -- the extra seed that turns statesync on.  Computed here rather than inside phase
 # 4, because phase 3 now drives add_full_node.sh too and the two must agree: a key minted for a
 # block-sync join and then resumed as a state-sync one would rewrite config.toml mid-flight.
@@ -599,7 +615,7 @@ if [[ ! "$addr" =~ ^qadena1 ]]; then
 exec script -qec "$JOINER_HOME/qadena/scripts/add_full_node.sh \
   --pioneer $PIONEER_NAME \
   --advertise-ip-address $ADVERTISE_J \
-  --genesis-pioneer-first-ip-address $ADVERTISE_P$SECOND_IP_ARG \
+  --genesis-pioneer-first-ip-address $ADVERTISE_P$SECOND_IP_ARG$TRUST_OFFSET_ARG \
   --stop-for-funding" /dev/null
 PREP
     scp -q /tmp/tnb_feed.sh /tmp/tnb_prep.sh "$JOINER":/tmp/ 2>/dev/null \
@@ -742,7 +758,7 @@ cat > /tmp/tnb_join.sh <<FEED
 exec script -qec "$JOINER_HOME/qadena/scripts/add_full_node.sh \
   --pioneer $PIONEER_NAME \
   --advertise-ip-address $ADVERTISE_J \
-  --genesis-pioneer-first-ip-address $ADVERTISE_P$SECOND_IP_ARG" /dev/null
+  --genesis-pioneer-first-ip-address $ADVERTISE_P$SECOND_IP_ARG$TRUST_OFFSET_ARG" /dev/null
 FEED
 scp -q /tmp/tnb_feed.sh /tmp/tnb_join.sh "$JOINER":/tmp/ || fail "cannot copy join drivers"
 ssh "$JOINER" 'chmod +x /tmp/tnb_feed.sh /tmp/tnb_join.sh'

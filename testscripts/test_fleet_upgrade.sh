@@ -199,14 +199,33 @@ stage "D. every node must be on the new measurement and the new generation"
 # upgrade_fleet.sh has its own per-node check; this one is independent and asserts the things THIS
 # test promised: the measurement moved, cosmovisor swapped generation, and the node is still making
 # progress.  "Processes are up" is not health -- a halted node looks perfectly healthy from ps.
+# THE MEASUREMENT IS READ FROM THE NODES, NOT ASSUMED FROM THE FILE.
+#
+# $NEW_UID is what increment_id wrote into test_unique_id.txt, and on a DEBUG enclave that string
+# IS the identity, so comparing against it works.  On real SGX it is not: measurement_of returns the
+# 64-hex MRENCLAVE that ego computed from the signed binary, and this assertion would compare a
+# hash against "unique062" and fail on every node of a perfectly good upgrade.  So ask the primary
+# what it actually runs, require it to have MOVED, and require every other node to match it.
+NEW_MEASURED=$(measurement_of "$PRIMARY")
+[[ -n "$NEW_MEASURED" ]] || fail "could not read the primary's measurement after the upgrade"
+[[ "$NEW_MEASURED" != "$BASE_UID" ]] \
+    || fail "the primary still measures $BASE_UID after the upgrade -- nothing was swapped"
+# On a debug enclave the identity is the embedded string, so it must equal what we bumped it to.
+# On SGX there is nothing to compare it against but itself, and the != above is the whole check.
+if [[ "$BASE_UID" == unique<-> ]]; then
+    [[ "$NEW_MEASURED" == "$NEW_UID" ]] \
+        || fail "debug enclave measures $NEW_MEASURED but test_unique_id.txt was bumped to $NEW_UID"
+fi
+info "new measurement: $NEW_MEASURED"
+
 for h in "${ALL[@]}"; do
     u=$(measurement_of "$h")
-    [[ "$u" == "$NEW_UID" ]] || fail "$h measures $u, expected $NEW_UID -- it did not take the upgrade"
+    [[ "$u" == "$NEW_MEASURED" ]] || fail "$h measures $u, expected $NEW_MEASURED -- it did not take the upgrade"
     cur=$(cosmovisor_current_of "$h")
     [[ "$cur" == *"upgrades/v$NEW_CHAIN_VER"* ]] \
         || fail "$h's cosmovisor current -> '$cur', expected upgrades/v$NEW_CHAIN_VER"
     assert_advancing "$h" "after the upgrade"
-    info "$h: $NEW_UID, current -> $cur, advancing"
+    info "$h: $NEW_MEASURED, current -> $cur, advancing"
 done
 
 # ---------------------------------------------------------------------------------------------
@@ -266,7 +285,7 @@ restore_primary_tree
 
 print ""
 print "FLEET UPGRADE: PASSED"
-print "  $BASE_UID -> $NEW_UID   on ${#ALL[@]} node(s)"
+print "  $BASE_UID -> $NEW_MEASURED   on ${#ALL[@]} node(s)"
 print "  chain v$BASE_CHAIN_VER -> v$NEW_CHAIN_VER   (governance plan v$NEW_CHAIN_VER)"
 print "  logs: $RUN_DIR"
 exit 0

@@ -149,7 +149,11 @@ the chain-restarting suites, a governance upgrade of every node, and a soak.
     --test "./testscripts/test_ss_reshare_audit.sh" \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/regression.sh" \
-  --test-fleet-upgrade \
+  --test-local "./testscripts/test_fleet_upgrade.sh \
+      --primary alvillarica@192.168.86.162 \
+      --joiner alvillarica@192.168.86.154 \
+      --joiner alvillarica@192.168.86.52 \
+      --joiner alvillarica@192.168.86.136" \
     --test "./testscripts/run_regression_continually.sh"
 ```
 
@@ -164,15 +168,41 @@ holds ~50% and the same command halts the chain.  You do not have to remember th
 `regression.sh` now runs the same auto-skip the soak does and will refuse the disruptive
 suites when this node's stake matters, saying so.  `--no-auto-skip` overrides it.
 
-**`--test-fleet-upgrade` after every joiner, never before.**  It bumps the enclave
+**The upgrade entry goes after every joiner, never before.**  It bumps the enclave
 identity and both versions on the primary, commits that temporarily, and rolls the
 release to *every* node by governance -- then asserts each one swapped and that the
 sealed keys survived.  A node joining after it would be installed from the stage-D
 package, which measures the OLD enclave, and the chain would refuse it.  The script
 refuses that ordering rather than letting it produce a confusing failure.
 
-It is the one entry that runs **from your workstation** rather than on the primary: a
-`--test` runs on the primary, and the primary cannot ssh to the other nodes.
+It is the one entry that runs **from your workstation** rather than on the primary.  That
+distinction is the whole reason it is a flag of its own: `--test` is defined as *runs on
+the primary* (`run_scheduled` -> `rsh_build "$PRIMARY"`), and the primary cannot ssh to the
+joiners --
+
+```
+M1->154: Permission denied (publickey,password)
+```
+
+-- so `--test "./testscripts/test_fleet_upgrade.sh …"` would die in its own preflight with
+`cannot ssh to <joiner>`.
+
+`--test-local "<cmd>"` is the general form used above: same positional ordering, same
+halt-on-failure, but run **here** instead of on the primary.
+
+**The one cost of spelling it out** is that the fleet is typed twice -- once as
+`--primary`/`--joiner` for the bringup, once inside the `--test-local` string.  Those two
+lists must match.  If they drift you upgrade a different set of nodes than the run built,
+and it surfaces much later as a joiner refused on a measurement mismatch rather than as
+anything that looks like a typo.  `--test-fleet-upgrade` exists as sugar that takes the
+membership straight from the run and cannot drift:
+
+```sh
+  --test-fleet-upgrade \
+```
+
+Both go through the same executor, so they run, log and fail identically.  Use the sugar
+unless you need the fleet in the string to differ from the fleet being built.
 
 **The soak last**, because it never exits.  Anywhere else it either blocks the run or
 shares the chain with whatever follows, and the collisions read as chain bugs.
@@ -205,38 +235,21 @@ uncommitted bump and rebuild the identical measurement while looking like it wor
 
 ---
 
-## SGX1 + SGX2 -- NOT the growth test
+## SGX1 + SGX2
 
-The schedule below is the one you will reach for, and it is the WRONG one for SGX.  It is
-kept here only so the reason is attached to it:
-
-```sh
-./testscripts/fleet_bringup_with_tests.sh \
-  --primary alvillarica@192.168.86.120 \
-    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
-    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
-    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
-    --test "./testscripts/test_ss_reshare_audit.sh" \
-  --joiner alvillarica@192.168.86.140 \
-    --test "./testscripts/test_ss_reshare_audit.sh" \
-    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
-    --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
-    --test "./testscripts/run_regression_continually.sh" 
-```
-
-**DO NOT RUN THE GROWTH TEST ON SGX -- IT CANNOT EXECUTE THERE.**  Both halves of it are
-debug-only and are refused when `--realenclave` is set:
+**The growth test does not belong here and is not written out for this fleet**, because
+copying it is the mistake.  Both halves of it are debug-only and are refused when
+`--realenclave` is set:
 
 | command | driven by | on real SGX |
 |---|---|---|
 | `update-ss-interval-key` | `test_ss_key_rotation.sh` | refused -- `SKIPPED: the enclave refused a forced key rotation` |
 | `audit-ss-keys` | `test_ss_reshare_audit.sh` | refused -- `SKIPPED: this is a real SGX enclave` |
 
-So every `--test` entry in the schedule above is a NO-OP on SGX.  The run finishes green
-having exercised none of the SS machinery it appears to test.  The suites skip loudly and
-say what was lost -- that part is working -- but the SCHEDULE is the lie: it reads like the
-M1-M4 growth test and is an empty shell here.  Observed 2026-08-30, eight scheduled tests,
-eight skips.
+So a growth schedule pointed at SGX is a NO-OP: the run finishes green having exercised
+none of the SS machinery it appears to test.  The suites skip loudly and say what was lost
+-- that part is working -- but the SCHEDULE would be the lie, reading like the M1-M4 growth
+test while being an empty shell.  Observed 2026-08-30: eight scheduled tests, eight skips.
 
 The re-share machinery is covered on a debug enclave (M1-M4) and by the unit tests around
 `planSSReshare`, plus `x/qadena/common/vshare_test.go` and
@@ -251,16 +264,57 @@ been exercised before 2026-08-27:
   the app hash
 - a real regression soak against SGX hardware
 
-So schedule the soak and nothing else.  The empty-schedule trap still applies -- a bringup
-with no `--test` at all also skips `wait_addressable` -- so keep exactly one:
+### The full SGX1 + SGX2 run
+
+The M1-M4 tail works here; only the SS positions are dropped, because they are the ones
+that cannot execute:
 
 ```sh
 ./testscripts/fleet_bringup_with_tests.sh \
   --primary alvillarica@192.168.86.120 \
   --joiner alvillarica@192.168.86.140 \
-    --test "./testscripts/run_regression_continually.sh" \
-  --block-sync
+    --test "./testscripts/regression.sh" \
+  --test-local "./testscripts/test_fleet_upgrade.sh \
+      --primary alvillarica@192.168.86.120 \
+      --joiner alvillarica@192.168.86.140" \
+    --test "./testscripts/run_regression_continually.sh"
 ```
+
+Three things differ from the M1-M4 run, and all three are properties of this fleet rather
+than of the schedule:
+
+**`regression.sh` gets less than it does on M1-M4, and correctly so.**  With two nodes the
+primary holds ~50% of the voting power, so its auto-skip refuses `enclave-rollback` and
+`enclave-crash` -- stopping the only node that can keep the chain committing would halt it.
+On M1-M4 the primary sits near 31% and both suites run.  You will see the reason printed:
+
+```
+this node holds 49.9510% of voting power -- stopping it HALTS the chain
+auto-skip: skipping enclave-crash,enclave-rollback  (override with --no-auto-skip)
+```
+
+**The upgrade is measured differently.**  `test_fleet_upgrade.sh` bumps the same three
+files, but on SGX the identity is not the embedded string -- it is the MRENCLAVE ego
+computes from the signed binary, which moves because `version.txt` is embedded and the
+bytes change.  The test reads the measurement from each node rather than assuming the
+bumped value, so it works on both kinds of enclave; on SGX you will see a 64-hex
+measurement where M1-M4 shows `unique062`.
+
+**Its sealed-state check inverts.**  On a debug enclave the params file is readable, so the
+regulator key is compared byte-for-byte and every pre-upgrade report is decrypted.  On SGX
+that file is ciphertext to everyone including the test, so it asserts the opposite -- that
+the file really *is* opaque -- and reports plainly that decryption was not verified.  A
+readable params file under a real enclave would mean every private key on the node is
+exposed on disk, and this is the one place positioned to notice.
+
+**Budget about two hours.**  The bringup build is ~41 minutes on these 2-core boxes, and
+the upgrade entry does a second full build of its own.
+
+If you only want the fleet up and soaking, drop the middle two entries and keep the soak --
+but keep *at least one* `--test`: a bringup with none also skips `wait_addressable`, and
+that gate is what proves a joiner is a real SS key owner.  `--block-sync` is worth adding
+while iterating; leave it off for a run that counts, since state-sync is the path that
+seeds the joiner's enclave store from a snapshot.
 
 **Two nodes reach none of the audit rows, and that is a property of SGX, not of the count.**
 It is tempting to read SGX2 as "position M2" and expect it to heal the size-1 keys 1 -> 2.
@@ -301,6 +355,70 @@ distinguishes the two paths after the fact:
 ```sh
 curl -s localhost:26657/status | jq -r '.result.sync_info.earliest_block_height'
 ```
+
+---
+
+## Stopping and cleaning a fleet
+
+`testscripts/stop_fleet.sh` stops every node, verifies it stayed stopped, and removes only
+what you ask it to.
+
+```sh
+./testscripts/stop_fleet.sh \
+  --node alvillarica@192.168.86.162 \
+  --node alvillarica@192.168.86.154 \
+  --node alvillarica@192.168.86.52 \
+  --node alvillarica@192.168.86.136 \
+  --purge --reap-archives --clean-logs --immediate
+```
+
+**Nothing is deleted by default.**  Stopping is safe and repeatable; deleting is neither, so
+each kind of removal is opt-in:
+
+| flag | removes | what that costs |
+|---|---|---|
+| *(none)* | nothing | stop, verify, report disk |
+| `--purge` | `~/qadena` | chain data **and the keyring** -- on a joiner, the only copy of its pioneer key.  Takes `~/qadena/logs` with it, which is the large one (540M on M1) |
+| `--reap-archives` | `~/qadena.pre-bringup.*.bak` | nothing, and it is the one to reach for on its own -- see below |
+| `--clean-logs` | `~/<repo>/logs` contents | **includes `regression-history`** -- `suites.tsv`/`history.tsv`, i.e. where *"no failures in 147 scored runs"* comes from |
+| `--immediate` | -- | ends an in-flight regression now instead of waiting it out |
+
+**`--reap-archives` earns its place.**  Stage A of a bringup *archives* each joiner's old
+`~/qadena` rather than deleting it, and nothing else ever reaps those.  A full clean of
+M1-M4 on 2026-08-30 reclaimed about 11G: ~8.7G of node homes and ~2.5G of stale `.bak`
+directories, roughly 830M per joiner per previous run.
+
+**`--clean-logs` destroys a soak's accumulated verdict**, not just noise.  It is right
+before a clean-chain run and wrong if you have not read the last result yet.  `/logs` is
+gitignored, so emptying it does not dirty the checkout -- which matters, because the
+bringup preflight refuses a dirty tree.
+
+### What it protects you from
+
+Each of these has cost a run:
+
+- **every host is preflighted before any is touched.**  With `--purge` armed, an
+  unreachable host aborts with `nothing has been stopped` -- rather than leaving half the
+  fleet purged and half running.
+- **the soak is stopped before the node.**  A continuous regression left running through a
+  teardown does not stop, it starts *failing* against a chain being deleted underneath it,
+  and those failures resurface in the next run's logs looking like chain bugs.
+- **systemd is asked where a unit exists.**  "Nothing is running" is not "nothing will
+  run": `Restart=on-failure` brings a node back seconds after a direct kill appears to
+  work.
+- **the start-limit lockout is cleared.**  A node that crash-looped leaves its unit
+  `failed`, and `StartLimitBurst=5` makes the *next* start fail with "Start request
+  repeated too quickly" -- so a later bringup fails to start a node that is perfectly fine.
+  M1 needed exactly this on 2026-08-30.
+- **nothing is removed on a host that is not verified stopped.**  Deleting under a live
+  node leaves processes whose binaries no longer exist, and every later diagnosis then
+  describes a machine that cannot be reasoned about.
+
+Related: `testscripts/stop_regression.sh` stops just the continuous-regression loop, on one
+host (`--host`) or locally.  `stop_fleet.sh` calls it per node.  Its `--immediate` ends the
+in-flight run now rather than waiting for it to finish -- and resumes any enclave a killed
+test left `SIGSTOP`ped, without which the option would manufacture the wedge it exists to
+avoid.
 
 ---
 

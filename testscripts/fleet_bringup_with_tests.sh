@@ -191,13 +191,38 @@ run_test_entry() {   # slot-label, log-tag, command
 }
 
 
+# EVERY DRIVER-SIDE ENTRY GOES THROUGH HERE, so --test-local and --test-fleet-upgrade cannot drift
+# apart in how they are run, logged or judged.  $1 slot label, $2 log tag, rest the command.
+run_local_entry() {   # slot, tag, command...
+    local slot="$1" tag="$2"; shift 2
+    local log="$RUN_DIR/$tag.log"
+    info ""
+    info "[$slot] (here, not on the primary) $*"
+    note "$slot: $*"
+    "$@" 2>&1 | tee "$log"
+    if (( ${pipestatus[1]} == 0 )); then
+        info "[$slot] passed"
+        note "$slot: passed"
+    else
+        tail -30 "$log" | while read -r l; do info "$l"; done
+        fail "[$slot] FAILED -- see $log"
+    fi
+    assert_advancing "$PRIMARY" "[$slot] after it"
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --primary)       PRIMARY="$2"; shift 2 ;;
         --joiner)        JOINERS+=("$2"); SCHEDULE+=("joiner:$2"); shift 2 ;;
         --test)          SCHEDULE+=("test:$2"); shift 2 ;;
-        # POSITIONAL, like --test and --joiner, because the schedule IS the command line and an
-        # upgrade has exactly one correct place in it: after every joiner is in, before the soak.
+        # RUNS HERE, NOT ON THE PRIMARY.  --test is defined as "on the primary" (run_scheduled ->
+        # rsh_build "$PRIMARY"), which is right for chain-level tests and wrong for anything that
+        # has to reach the whole fleet: the primary cannot ssh to the joiners.
+        --test-local)    SCHEDULE+=("local:$2"); shift 2 ;;
+        # Sugar for --test-local of test_fleet_upgrade.sh.  It stays a flag of its own because the
+        # upgrade needs the FLEET MEMBERSHIP, which this script already knows -- spelled as a
+        # --test-local string you would retype --primary/--joiner and the two lists could drift,
+        # silently upgrading a different set of nodes than the run built.
         --test-fleet-upgrade) SCHEDULE+=("upgrade:"); shift ;;
         --ref)           REF="$2"; shift 2 ;;
         --build-sgx)     BUILD_SGX="yes"; shift ;;
@@ -221,7 +246,7 @@ while [[ $# -gt 0 ]]; do
             print "                             [--run-dir <dir>] [--ref <git-ref>]"
             print "                             [--build-sgx | --no-build-sgx] [--pioneer-prefix <n>]"
             print "                             [--snapshot-interval N] [--addressable-wait MIN]"
-            print "                             [--test <cmd>]... [--test-fleet-upgrade]"
+            print "                             [--test <cmd>]... [--test-local <cmd>]... [--test-fleet-upgrade]"
             print "                             [--block-sync] [--from <stage>]"
             print ""
             print "  --joiner            REPEATABLE.  Joiners are installed and joined serially."
@@ -248,6 +273,11 @@ while [[ $# -gt 0 ]]; do
             print "                      silently excludes it (TESTING-BACKLOG 107)."
             print "                      run_regression_continually.sh must be the LAST --test; it"
             print "                      never exits, so it runs detached and nothing may follow."
+            print "  --test-local <cmd>  REPEATABLE, POSITIONAL.  Like --test, but runs the command"
+            print "                      HERE (this workstation) instead of on the primary.  For"
+            print "                      anything that must reach the whole fleet: --test commands"
+            print "                      run on the primary, and the primary cannot ssh to the"
+            print "                      joiners.  Same ordering rules and same halt-on-failure."
             print "  --test-fleet-upgrade  POSITIONAL.  Bumps the enclave identity and both versions"
             print "                      on the primary and rolls the release to EVERY node by"
             print "                      governance, then asserts each one swapped and that the"
@@ -312,8 +342,17 @@ for e in "${SCHEDULE[@]}"; do
                 print -u2 "      package that measures the OLD enclave, and the chain would refuse them."
                 exit 1 }
             ;;
-        test:*)
-            _cmd="${e#test:}"
+        test:*|local:*)
+            _cmd="${e#*:}"
+            # A driver-side entry that IS the fleet upgrade obeys the upgrade rule above.
+            [[ "$e" == local:* && "$_cmd" == *test_fleet_upgrade* ]] && {
+                _rest=0
+                for _f in "${SCHEDULE[@]:$_i}"; do [[ "$_f" == joiner:* ]] && (( _rest++ )); done
+                (( _rest == 0 )) || {
+                    print -u2 "FAIL: test_fleet_upgrade.sh must come after every --joiner: $_rest joiner(s)"
+                    print -u2 "      still follow it.  Rolling before they join would install them from a"
+                    print -u2 "      package that measures the OLD enclave, and the chain would refuse them."
+                    exit 1 } }
             # The soak never exits.  Anywhere but last it blocks the run, or shares the chain with
             # whatever is scheduled next -- they contend for ann,
             # pioneer1 and the treasury, and the collisions read as chain bugs.
@@ -566,9 +605,13 @@ stage "C. scheduled --test commands before the first joiner"
 C_COUNT=0
 for e in "${SCHEDULE[@]}"; do
     [[ "$e" == joiner:* ]] && break
-    [[ "$e" == test:* ]] || continue
-    (( C_COUNT++ ))
-    run_test_entry "primary $C_COUNT" "stage-C-primary-$C_COUNT" "${e#test:}"
+    case "$e" in
+        test:*)  (( C_COUNT++ ))
+                 run_test_entry "primary $C_COUNT" "stage-C-primary-$C_COUNT" "${e#test:}" ;;
+        local:*) (( C_COUNT++ ))
+                 run_local_entry "primary $C_COUNT" "stage-C-local-$C_COUNT" ${=${e#local:}} ;;
+        *)       continue ;;
+    esac
 done
 if (( C_COUNT == 0 )); then
     info "none scheduled.  NOTHING HAS PROVED THIS CHAIN WORKS, and with no enclave upgrade here"
@@ -693,6 +736,17 @@ fi
 
 # THE ONE ENTRY THAT RUNS FROM HERE RATHER THAN ON THE PRIMARY.  --test commands are chain-level and
 # run on the primary; a fleet upgrade has to reach every node, and the primary cannot ssh to them.
+if [[ "$e" == local:* ]]; then
+    (( tcount++ ))
+    if (( tcount == 1 )); then
+        info "waiting for ${PIONEER_PREFIX}${n} to become addressable (first proposed block after bonding)"
+        wait_addressable "$PRIMARY" "$n"
+    fi
+    run_local_entry "local after ${PIONEER_PREFIX}${n} #$tcount" "stage-G-local-${PIONEER_PREFIX}${n}-$tcount" \
+        ${=${e#local:}}
+    continue
+fi
+
 if [[ "$e" == upgrade:* ]]; then
     (( tcount++ ))
     # Same gate as a --test: a node that has not proposed since bonding is not really in the fleet
@@ -701,21 +755,12 @@ if [[ "$e" == upgrade:* ]]; then
         info "waiting for ${PIONEER_PREFIX}${n} to become addressable (first proposed block after bonding)"
         wait_addressable "$PRIMARY" "$n"
     fi
-    info ""
-    info "[fleet upgrade] test_fleet_upgrade.sh across ${#JOINED[@]} joiner(s) + the primary"
-    note "fleet upgrade: starting"
+    # The fleet list comes from JOINED, not from anything the operator retyped -- that is the whole
+    # reason this is a flag rather than a --test-local string.
     _up=()
     for _j in "${JOINED[@]}"; do _up+=(--joiner "$_j"); done
-    "$SCRIPT_DIR/test_fleet_upgrade.sh" --primary "$PRIMARY" "${_up[@]}" --run-dir "$RUN_DIR/fleet-upgrade" \
-        2>&1 | tee "$RUN_DIR/stage-G-fleet-upgrade.log"
-    if (( ${pipestatus[1]} == 0 )); then
-        info "[fleet upgrade] passed"
-        note "fleet upgrade: passed"
-    else
-        tail -30 "$RUN_DIR/stage-G-fleet-upgrade.log" | while read -r l; do info "$l"; done
-        fail "[fleet upgrade] FAILED -- see $RUN_DIR/stage-G-fleet-upgrade.log"
-    fi
-    assert_advancing "$PRIMARY" "[fleet upgrade] after the roll"
+    run_local_entry "fleet upgrade" "stage-G-fleet-upgrade" \
+        "$SCRIPT_DIR/test_fleet_upgrade.sh" --primary "$PRIMARY" "${_up[@]}" --run-dir "$RUN_DIR/fleet-upgrade"
     continue
 fi
 
@@ -775,6 +820,7 @@ for e in "${SCHEDULE[@]}"; do
     case "$e" in
         joiner:*) _h="${e#joiner:}"; print "                     joiner  $_h" ;;
         test:*)   print "                       test  ${e#test:}" ;;
+        local:*)  print "                 test-local  ${e#local:}   (runs here, not on the primary)" ;;
         upgrade:*) print "             fleet upgrade  test_fleet_upgrade.sh (all nodes, by governance)" ;;
     esac
 done

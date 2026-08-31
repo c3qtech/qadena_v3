@@ -303,8 +303,15 @@ height_of() { rsh "$1" '~/qadena/bin/qadenad status 2>/dev/null' 2>/dev/null \
 # being caught up are DIFFERENT CLAIMS, and conflating them is what require_advancing got wrong.
 catching_up_of() { rsh "$1" '~/qadena/bin/qadenad status 2>/dev/null' 2>/dev/null \
                 | tr ',' '\n' | grep -oE '"catching_up":(true|false)' | grep -oE '(true|false)' | head -1 }
+# READS BOTH IDENTITY FORMATS.  `grep -oE 'unique[0-9]+'` matched only the DEBUG identity; a real
+# SGX enclave measures as a 64-hex MRENCLAVE, so on SGX this matched nothing, grep exited 1, and
+# under `setopt PIPE_FAIL` (line 254) that became the pipeline's status.  Every caller but one had
+# `|| true`; the one that did not -- live_uniq at 2h -- therefore tripped ERR_EXIT and killed the
+# roll SILENTLY, after a 17-minute build, with the log ending mid-step at the 2h banner.  Observed
+# on SGX1/SGX2 2026-08-31.  jq reads the field itself, so it yields uniqueNNN on debug and the hex
+# on SGX -- one read correct for both, and it exits 0 either way.
 measure_of() { rsh "$1" '~/qadena/bin/qadenad q qadena enclave-measurement -o json 2>/dev/null' 2>/dev/null \
-                | grep -oE 'unique[0-9]+' | head -1 }
+                | jq -r '.uniqueID // empty' 2>/dev/null | head -1 }
 identity_status() { rsh "${NODES[1]}" "~/qadena/bin/qadenad q qadena show-enclave-identity $1 -o json 2>/dev/null" 2>/dev/null \
                 | grep -oE '"status":"[a-z]+"' | head -1 | cut -d'"' -f4 }
 
@@ -812,7 +819,7 @@ fi
 
 step "2h. one proposal: schedule $PLAN$( [[ -n "$NEW_UNIQUE" ]] && print -n ", register $NEW_UNIQUE" )"
 encl_args=""
-live_uniq=$(measure_of "${NODES[1]}")
+live_uniq=$(measure_of "${NODES[1]}") || true
 if [[ -n "$NEW_UNIQUE" && "$NEW_UNIQUE" != "$live_uniq" ]]; then
     say "  enclave changes: $live_uniq -> $NEW_UNIQUE (identity message rides in the proposal)"
     encl_args="--unique-id $NEW_UNIQUE --signer-id $NEW_SIGNER"
@@ -828,11 +835,11 @@ if [[ -n "$encl_args" ]]; then
     # restarting one node on its OLD binaries is the existing trigger (same as the live roll).
     restart_node "${NODES[1]}"
     for i in {60..1}; do
-        st=$(identity_status "$NEW_UNIQUE")
+        st=$(identity_status "$NEW_UNIQUE") || true
         [[ "$st" == "active" ]] && break
         sleep 6
     done
-    st=$(identity_status "$NEW_UNIQUE")
+    st=$(identity_status "$NEW_UNIQUE") || true
     [[ "$st" == "active" ]] || die "$NEW_UNIQUE is '$st', not active -- the swap at H would start an enclave the chain refuses.  CANCEL THE PLAN (MsgCancelUpgrade) before the height."
     say "  $NEW_UNIQUE active"
 fi
@@ -877,7 +884,7 @@ for n in "${NODES[@]}"; do
     say "  $n: current -> $cur, version $ver"
 done
 for n in "${NODES[@]}"; do
-    h0=$(height_of "$n"); sleep 12; h1=$(height_of "$n"); cu=$(catching_up_of "$n")
+    h0=$(height_of "$n") || true; sleep 12; h1=$(height_of "$n") || true; cu=$(catching_up_of "$n") || true
     [[ -n "$h1" && "$h1" -gt "${h0:-0}" && "$cu" == "false" ]] \
         || die "$n: not live after the swap (h $h0->$h1, catching_up=$cu)"
     say "  $n advancing ($h0 -> $h1, caught up)"

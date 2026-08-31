@@ -62,6 +62,20 @@ GENESIS_PIONEER_FIRST_IP_ADDRESS=""
 # `q qadena enclave-measurement`.  Not for making an inconvenient refusal go away -- a genuine
 # mismatch cannot join, whatever this flag says.
 SKIP_ENCLAVE_CHECK=0
+# HOW FAR BEHIND THE TIP THE LIGHT-CLIENT TRUST ANCHOR SITS.
+#
+# trust_height/trust_hash are the anchor the light client verifies a snapshot AGAINST -- they are
+# not where syncing starts -- so the only thing recency buys is nothing, while the tip costs a lot:
+# it is by definition the block the SECOND seed is least likely to have committed yet, and the
+# corroboration below then fails with "couldn't get it" on a fleet that is perfectly healthy.
+# Observed 2026-08-30: seed 1 reported 2325, seed 2 was a block behind, the join aborted.
+#
+# 2000 is the ecosystem default (the state-sync snippet every chain publishes uses latest-2000).
+# SHORT-LIVED TEST CHAINS MUST OVERRIDE IT: the gate below refuses a trust height <= 1500 and
+# silently falls back to block-sync, so on a chain whose joiners arrive around height 2300 a 2000
+# offset lands at ~325 and every joiner quietly stops testing state-sync.  The fleet harness passes
+# --trust-height-offset 10 for exactly that reason.
+TRUST_HEIGHT_OFFSET=2000
 GENESIS_PIONEER_SECOND_IP_ADDRESS=""
 
 while [[ $# -gt 0 ]]; do
@@ -88,6 +102,16 @@ while [[ $# -gt 0 ]]; do
 		SKIP_ENCLAVE_CHECK=1
 		shift
 		;;
+
+	--trust-height-offset)
+      if [[ -n "$2" && "$2" != --* ]]; then
+        TRUST_HEIGHT_OFFSET="$2"
+        shift 2
+      else
+        echo "Error: --trust-height-offset requires an argument"
+        exit 1
+      fi
+      ;;
 
 	--genesis-pioneer-first-ip-address)
       if [[ -n "$2" && "$2" != --* ]]; then
@@ -116,7 +140,12 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --help)
-      echo "Usage: add_full_node.sh --pioneer <pioneer> --advertise-ip-address <advertise-ip-address> --genesis-pioneer-first-ip-address <genesis-pioneer-first-ip-address> [optional: --genesis-pioneer-second-ip-address <genesis-pioneer-second-ip-address>]"
+      echo "Usage: add_full_node.sh --pioneer <pioneer> --advertise-ip-address <advertise-ip-address> --genesis-pioneer-first-ip-address <genesis-pioneer-first-ip-address> [optional: --genesis-pioneer-second-ip-address <genesis-pioneer-second-ip-address>] [optional: --trust-height-offset <n>]"
+      echo "  --trust-height-offset <n>  anchor the light client n blocks behind the tip (default 2000)."
+      echo "                             The tip itself is a poor anchor: the second seed may not have"
+      echo "                             committed it yet and the cross-check then fails on a healthy"
+      echo "                             fleet.  Short test chains need a SMALL value -- a trust height"
+      echo "                             of 1500 or less falls back to block-sync (see below)."
 	  echo "Example 1 (adding the second node):  add_full_node.sh --pioneer pioneer2 --advertise-ip-address 192.168.86.133 --genesis-pioneer-first-ip-address 192.168.86.109"
 	  echo "Example 2 (adding the 3rd node):  add_full_node.sh --pioneer pioneer3 --advertise-ip-address 192.168.86.140 --genesis-pioneer-first-ip-address 192.168.86.109 --genesis-pioneer-second-ip-address 192.168.86.133"
 	  echo ""
@@ -504,7 +533,18 @@ else
 
 	if [[ $GENESIS_PIONEER_FIRST_IP_ADDRESS != "" && $GENESIS_PIONEER_SECOND_IP_ADDRESS != "" ]] ; then
 		echo "Getting trust height and trust hash for quicker 'statesync'..."
-		if curl --fail -k "http://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657/block" --output $QADENAHOME/config/block.1 > /dev/null 2> /dev/null ; then
+		# THE ANCHOR IS TAKEN $TRUST_HEIGHT_OFFSET BLOCKS BEHIND THE TIP, not at it.  See the note on
+		# TRUST_HEIGHT_OFFSET above for why the tip is the worst possible choice here.  Two calls
+		# rather than one: the tip tells us where the chain is, then we ask for the anchor's hash at
+		# a height both seeds have certainly committed.
+		if curl --fail -k "http://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657/block" --output $QADENAHOME/config/block.0 > /dev/null 2> /dev/null ; then
+		LATESTHEIGHT=`jq -r '.result.block.header.height' $QADENAHOME/config/block.0`
+		TRUSTHEIGHT=$(( LATESTHEIGHT - TRUST_HEIGHT_OFFSET ))
+		if [[ $TRUSTHEIGHT -lt 1 ]] ; then
+			TRUSTHEIGHT=1
+		fi
+		echo "latest height $LATESTHEIGHT, anchoring $TRUST_HEIGHT_OFFSET behind it at $TRUSTHEIGHT"
+		if curl --fail -k "http://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657/block?height=$TRUSTHEIGHT" --output $QADENAHOME/config/block.1 > /dev/null 2> /dev/null ; then
 		echo "...it's good."
 		TRUSTHEIGHT=`jq -r '.result.block.header.height' $QADENAHOME/config/block.1`
 		TRUSTHASH=`jq -r '.result.block_id.hash' $QADENAHOME/config/block.1`
@@ -547,14 +587,18 @@ else
 				exit 1
 			fi
 			else
-			echo "...couldn't get it"
+			echo "...couldn't get height $TRUSTHEIGHT from $GENESIS_PIONEER_SECOND_IP_ADDRESS (is it behind?)"
 			exit 1
 			fi
 		else
 			echo "Trust height is too low, we won't use state sync"
 		fi
 		else
-		echo "...couldn't get it"
+		echo "...couldn't get the anchor block at height $TRUSTHEIGHT from $GENESIS_PIONEER_FIRST_IP_ADDRESS"
+		exit 1
+		fi
+		else
+		echo "...couldn't get the latest block from $GENESIS_PIONEER_FIRST_IP_ADDRESS"
 		exit 1
 		fi
 	else
