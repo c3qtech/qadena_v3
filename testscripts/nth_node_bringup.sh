@@ -1217,11 +1217,14 @@ if (( SPONSORED )); then
     # convert_to_validator.sh will bond: sponsored, it bonds exactly min-self-delegation, so sending
     # anything else either strands QDN on the node or leaves its balance poll waiting forever.
     # ONE SOURCE OF TRUTH -- read from the joiner's own config.yml, the same file the script reads.
-    floor=$(ssh "$JOINER" "dasel -f \$HOME/qadena/config/config.yml 'validators.first().app.min-self-delegation' 2>/dev/null" | tr -d '\r')
-    [[ -n "$floor" && "$floor" != "null" ]] \
-        || fail "phase 6: no validators.first().app.min-self-delegation in $JOINER's config.yml -- cannot size the self-bond"
-    info "sponsored: sending the $floor self-bond to $jaddr (fees stay on the grant)"
-    ssh "$PRIMARY" "${SUDO_P}~/qadena/scripts/foundation_sponsor_node.sh --node $jaddr --granter $SPONSOR_GRANTER --self-bond $floor" \
+    # STORED IN aqdn AS A BARE INTEGER (ignite reads the same key and x/staking demands that), so
+    # the denom is appended here rather than assumed.  Sending anything other than what
+    # convert_to_validator.sh will bond either strands QDN on the node or leaves its poll waiting.
+    floor=$(ssh "$JOINER" "dasel -f \$HOME/qadena/config/config.yml 'validators.first().app.min-self-delegation' 2>/dev/null" | tr -d '\r"')
+    [[ "$floor" == <-> ]] \
+        || fail "phase 6: validators.first().app.min-self-delegation on $JOINER is \"$floor\", not a bare aqdn integer -- cannot size the self-bond"
+    info "sponsored: sending the ${floor}aqdn self-bond to $jaddr (fees stay on the grant)"
+    ssh "$PRIMARY" "${SUDO_P}~/qadena/scripts/foundation_sponsor_node.sh --node $jaddr --granter $SPONSOR_GRANTER --self-bond ${floor}aqdn" \
         2>&1 | tail -4 | sed 's/^/    /'
     # convert_to_validator.sh polls for the balance to land, so nothing sleeps here.
 fi

@@ -43,16 +43,22 @@ validators:
   bonded: 100000qdn
   app:
     minimum-gas-prices: "500000000aqdn"
-    # THE VALIDATOR SELF-BOND FLOOR, in QDN.  Read by scripts/convert_to_validator.sh, which converts
-    # it to aqdn -- MsgCreateValidator takes min_self_delegation as an integer in the BASE unit, so
-    # a bare "10000" here would mean 10000aqdn, a floor of 0.00000000000001 QDN.  That unit is a
-    # long-standing source of confusion (cosmos-sdk#9386) and the reason this is spelled in QDN and
-    # converted in one place.
+    # THE VALIDATOR SELF-BOND FLOOR, in aqdn -- a BARE INTEGER, no denom suffix.
+    #
+    # IGNITE READS THIS KEY.  It is not a passthrough to app.toml: ignite feeds it to pioneer1's
+    # gentx, and x/staking's CLI rejects anything that is not a positive integer --
+    #     failed to build create-validator message: minimum self delegation must be a positive integer
+    # -- which aborts `ignite chain build` and takes the whole bringup down at stage B.  Spelling it
+    # "10000qdn" did exactly that on 2026-08-31.
+    #
+    # So it is the BASE unit, as MsgCreateValidator wants: 10000000000000000000000 aqdn = 10,000 QDN.
+    # That unit is a long-standing trap (cosmos-sdk#9386) -- a bare "10000" here would be 10000aqdn,
+    # a floor of 0.00000000000001 QDN.  scripts/convert_to_validator.sh reads this same key so the
+    # genesis validator and every joiner share one floor.
     #
     # It is a PROMISE, not an entry fee: if self-delegation ever falls below it the validator is
-    # permanently unbonded, so it is chosen deliberately rather than set as high as possible.  It
-    # lived hardcoded as "1" in convert_to_validator.sh before, which made the floor meaningless.
-    min-self-delegation: "10000qdn"
+    # permanently unbonded, so it is chosen deliberately rather than set as high as possible.
+    min-self-delegation: "10000000000000000000000"
     pruning: "default"
     pruning-keep-recent: "0"
     pruning-interval: "0"

@@ -99,22 +99,24 @@ echo "PIONEER $PIONEER"
 
 PIONEERADDRESS=`qadenad_alias keys show $PIONEER -a --keyring-backend test`
 
-# THE FLOOR COMES FROM config.yml, AND IS CONVERTED HERE.
+# THE FLOOR COMES FROM config.yml, ALREADY IN aqdn.
 #
-# min_self_delegation is an integer in the BASE unit (aqdn).  config.yml spells it in QDN because
-# that is the unit humans reason in, and "10000" left unconverted would be 10000aqdn -- a floor of
-# 0.00000000000001 QDN, i.e. none at all.  That unit confusion is cosmos-sdk#9386 and it is exactly
-# the kind of mistake that looks like it worked.  Hardcoded "1" before this.
+# It is stored there as a bare integer in the BASE unit because IGNITE reads the same key for
+# pioneer1's gentx and x/staking's CLI rejects anything else.  So there is no conversion to do here
+# -- and no conversion to get wrong.  One value, one unit, read by ignite, by the genesis validator
+# and by every joiner.  Hardcoded "1" before this.
 #
 # Falls back to 1aqdn when the key is absent, so an older config.yml still converts a node rather
 # than failing -- the previous behaviour, not a new floor.
-min_self_delegation_qdn=`dasel -f $QADENAHOME/config/config.yml 'validators.first().app.min-self-delegation' 2>/dev/null | sed 's/qdn$//'`
-if [[ -z "$min_self_delegation_qdn" || "$min_self_delegation_qdn" == "null" ]] ; then
+min_self_delegation_aqdn=`dasel -f $QADENAHOME/config/config.yml 'validators.first().app.min-self-delegation' 2>/dev/null | tr -d '"'`
+if [[ -z "$min_self_delegation_aqdn" || "$min_self_delegation_aqdn" == "null" ]] ; then
     echo "convert_to_validator.sh: no validators.first().app.min-self-delegation in config.yml; using 1aqdn"
     validator_self_delegation="1"
+    min_self_delegation_qdn=""
 else
-    validator_self_delegation=`echo "$min_self_delegation_qdn * 1000000000000000000" | bc`
-    echo "convert_to_validator.sh: min self-delegation ${min_self_delegation_qdn}qdn (${validator_self_delegation}aqdn)"
+    validator_self_delegation="$min_self_delegation_aqdn"
+    min_self_delegation_qdn=`echo "$min_self_delegation_aqdn / 1000000000000000000" | bc`
+    echo "convert_to_validator.sh: min self-delegation ${min_self_delegation_aqdn}aqdn (${min_self_delegation_qdn}qdn)"
 fi
 
 # A SPONSORED NODE BONDS EXACTLY THE FLOOR, and no more.
