@@ -71,6 +71,12 @@ ONLY=""
 QUIESCE=0; QUIESCE_NOW=0
 VALIDATOR_STAKE="110000"
 FUND_QDN="200000"
+# TOLL-FREE JOIN.  With --foundation-sponsored the joiner is never sent coins: phase 3 issues a
+# bounded, recurring FEE GRANT instead, and phase 4 tells add_full_node.sh to wait for that grant
+# rather than for a balance.  The granter defaults to `treasury` because that is the key the primary
+# already holds and already funds with -- in a real deployment it is a foundation key.
+SPONSORED=0
+SPONSOR_GRANTER="treasury"
 PIONEER_NAME="pioneer2"
 STATE_SYNC=0
 SEED2=""
@@ -91,6 +97,9 @@ while [[ $# -gt 0 ]]; do
         --stake)   VALIDATOR_STAKE="$2"; shift 2 ;;
         --pioneer) PIONEER_NAME="$2"; shift 2 ;;
         --state-sync) STATE_SYNC=1; shift ;;
+        --foundation-sponsored)
+            SPONSORED=1
+            if [[ -n "$2" && "$2" != --* ]]; then SPONSOR_GRANTER="$2"; shift 2; else shift; fi ;;
         --seed2)   SEED2="$2"; shift 2 ;;
         --help)
             print "Usage: nth_node_bringup.sh --primary <ip> --joiner <ip> [--from N] [--until N] [--only N]"
@@ -112,6 +121,14 @@ while [[ $# -gt 0 ]]; do
             print "                THE CHAIN: add_full_node.sh refuses a name already registered, so"
             print "                a re-join after a wipe needs a fresh one -- the key is gone"
             print "                locally but the chain still remembers it."
+            print "  --foundation-sponsored [<granter-key>]"
+            print "                TOLL-FREE.  The joiner gets NO coins and needs no treasury of its"
+            print "                own.  Phase 3 issues a bounded recurring fee grant from <granter-key>"
+            print "                (default: treasury, the key the primary already holds) and phase 4"
+            print "                waits for that grant instead of a balance.  The grant covers the"
+            print "                five messages a node broadcasts for life -- join, SS rotation and"
+            print "                SS re-share -- so the node keeps working, not just joining."
+            print "                Does NOT sponsor a validator self-bond; --stake is unaffected."
             print "  --state-sync  join by STATE-SYNC instead of block-sync.  add_full_node.sh turns"
             print "                it on only when a SECOND genesis-pioneer IP is supplied and the"
             print "                two agree on the trust height and hash, so this passes the primary"
@@ -640,6 +657,33 @@ PREP
 fi
 if true; then
     info "joiner $PIONEER_NAME = $addr"
+    if (( SPONSORED )); then
+        # SPONSORED: no coins move.  Issue a fee grant from the granter to the joiner's pioneer key.
+        # The grant is bounded (per-period budget + message allow-list) and recurring, because SS
+        # rotation recurs for as long as the node runs -- a one-off grant would let the node join and
+        # then quietly stop re-sharing SS keys.  See scripts/foundation_sponsor_node.sh.
+        gaddr=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena keys show $SPONSOR_GRANTER -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+        [[ -n "$gaddr" ]] || fail "granter '$SPONSOR_GRANTER' is not in the primary's keyring"
+        existing=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query feegrant grants-by-grantee $addr --output json 2>/dev/null | jq -r '.allowances[0].granter // \"\"'" | tr -d '\r')
+        if [[ -n "$existing" ]]; then
+            info "already sponsored by $existing -- nothing to do"
+        else
+            ssh "$PRIMARY" "test -x ~/qadena/scripts/foundation_sponsor_node.sh" \
+                || fail "~/qadena/scripts/foundation_sponsor_node.sh is missing on the primary -- install the release package first"
+            info "sponsoring $addr from $SPONSOR_GRANTER ($gaddr) -- no coins are sent"
+            sp_out=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/scripts/foundation_sponsor_node.sh --node $addr --granter $SPONSOR_GRANTER" 2>&1) \
+                || fail "sponsorship failed: $(print -r -- "$sp_out" | tail -3)"
+            print -r -- "$sp_out" | grep -E "ok:|FAILED" | while read -r l; do info "  $l"; done
+            got=""
+            for _ in {1..20}; do
+                sleep 3
+                got=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query feegrant grants-by-grantee $addr --output json 2>/dev/null | jq -r '.allowances[0].granter // \"\"'" | tr -d '\r')
+                [[ -n "$got" ]] && break
+            done
+            [[ -n "$got" ]] || fail "the fee grant did not land for $addr -- $(print -r -- "$sp_out" | tail -3)"
+            info "fee grant confirmed on chain, granter $got"
+        fi
+    elif true; then
     bal=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
     if [[ "${bal:-0}" -gt 0 ]] 2>/dev/null; then
         info "already funded ($bal aqdn) -- nothing to do"
@@ -716,6 +760,7 @@ print(format(max(bf * 2, Decimal('0.025')), 'f'))
     fi
 fi
 fi
+fi
 
 # ---------------------------------------------------------------------------- 4. join
 if run_phase 4; then
@@ -753,12 +798,28 @@ fi
 ssh "$JOINER" "test -x $JOINER_HOME/qadena/scripts/add_full_node.sh" \
     || fail "$JOINER_HOME/qadena/scripts/add_full_node.sh is missing -- install the release package first"
 
+# SPONSORED JOIN: tell add_full_node.sh to wait for the FEE GRANT phase 3 issued, not for a
+# balance that will never arrive.  The granter address is passed so the joiner pins it rather than
+# accepting whatever grant happens to exist.
+SPONSOR_ARG=""
+if (( SPONSORED )); then
+    # Resolve the granter HERE too.  gaddr is set in phase 3, but --only/--from let phase 4 run on
+    # its own, and an unset gaddr would silently degrade to "any" -- accepting whatever grant
+    # happened to exist rather than the one we issued.
+    if [[ -z "${gaddr:-}" ]]; then
+        gaddr=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena keys show $SPONSOR_GRANTER -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+    fi
+    [[ -n "${gaddr:-}" ]] || fail "--foundation-sponsored: cannot resolve granter '$SPONSOR_GRANTER' on the primary"
+    SPONSOR_ARG=" --foundation-sponsored $gaddr"
+    info "joiner will wait for a fee grant from $SPONSOR_GRANTER ($gaddr), not for a balance"
+fi
+
 cat > /tmp/tnb_join.sh <<FEED
 #!/bin/zsh
 exec script -qec "$JOINER_HOME/qadena/scripts/add_full_node.sh \
   --pioneer $PIONEER_NAME \
   --advertise-ip-address $ADVERTISE_J \
-  --genesis-pioneer-first-ip-address $ADVERTISE_P$SECOND_IP_ARG$TRUST_OFFSET_ARG" /dev/null
+  --genesis-pioneer-first-ip-address $ADVERTISE_P$SECOND_IP_ARG$TRUST_OFFSET_ARG$SPONSOR_ARG" /dev/null
 FEED
 scp -q /tmp/tnb_feed.sh /tmp/tnb_join.sh "$JOINER":/tmp/ || fail "cannot copy join drivers"
 ssh "$JOINER" 'chmod +x /tmp/tnb_feed.sh /tmp/tnb_join.sh'

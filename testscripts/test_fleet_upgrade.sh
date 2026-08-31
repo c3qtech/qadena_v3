@@ -136,14 +136,36 @@ info "primary HEAD $ORIG_HEAD (restored on exit)"
 # is the security property, not a gap in the test: a debug enclave "seals" by prefixing an id onto
 # plaintext JSON, a real one seals with the hardware key and the same file is ciphertext to everyone.
 OLD_PARAMS=$(rsh_user "$PRIMARY" "ls -t $PHOME/qadena/enclave_config/enclave_params_*.json 2>/dev/null | head -1" | tr -d '\r')
-CAN_READ_SEALED=0
+# THE MODE COMES FROM THE MEASUREMENT, NOT FROM WHETHER A KEY READ CAME BACK EMPTY.
+#
+# This used to decide "debug or real SGX" by trying to read RegulatorPrivK and seeing whether
+# anything came out.  That conflates states that are not equivalent.  EMPTY meant "sealed", but
+# empty is equally what a missing file, an absent jq, a bad path or a dropped ssh produces -- a
+# BROKEN PROBE WAS INDISTINGUISHABLE FROM WORKING ENCRYPTION.  Non-empty meant "debug", so any
+# stray byte on that channel read as "the private key is on disk in the clear".  One ambiguous
+# string silently chose the verification strategy for the whole of stage E, and choosing wrong
+# skips the ONE assertion positioned to notice exposed keys.  Observed on SGX1 2026-08-31: a run
+# reported "debug sealing" against a params file that is provably ciphertext.
+#
+# measurement_of already answers the question authoritatively -- a debug identity is uniqueNNN, a
+# real SGX one is a 64-hex MRENCLAVE -- so ask that, then ASSERT the readability the mode implies.
+# A mismatch is now a loud failure instead of a quiet downgrade to the weaker path.
 OLD_REGULATOR=""
+if [[ "$BASE_UID" == unique<-> ]]; then CAN_READ_SEALED=1; else CAN_READ_SEALED=0; fi
 if [[ -n "$OLD_PARAMS" ]]; then
     OLD_REGULATOR=$(rsh_user "$PRIMARY" "sed 's/^[^{]*//' $OLD_PARAMS 2>/dev/null | jq -r '.SharedEnclaveParams.RegulatorPrivK' 2>/dev/null" | tr -d '\r')
-    if [[ -n "$OLD_REGULATOR" && "$OLD_REGULATOR" != "null" ]]; then
-        CAN_READ_SEALED=1
+    readable=0
+    [[ -n "$OLD_REGULATOR" && "$OLD_REGULATOR" != "null" ]] && readable=1
+    if (( CAN_READ_SEALED )); then
+        (( readable )) \
+            || fail "$BASE_UID is a DEBUG identity, so $OLD_PARAMS should be plaintext, but RegulatorPrivK could not be read from it.  Something is wrong with the read (file, jq, path) -- not with sealing.  Do not treat this as 'sealed'."
         info "debug sealing: regulator key readable, so decryption can be verified across the upgrade"
     else
+        # THE SECURITY ASSERTION, and it now runs at the baseline rather than only after the
+        # upgrade: if a real enclave ever wrote its params in the clear, every private key on the
+        # node is readable, and this is the first point positioned to notice.
+        (( readable )) \
+            && fail "$OLD_PARAMS is READABLE PLAINTEXT under a real SGX enclave ($BASE_UID) -- the private keys are exposed on disk"
         info "REAL SGX SEALING: $OLD_PARAMS is ciphertext, so keys cannot be compared across the upgrade"
     fi
 fi

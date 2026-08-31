@@ -78,6 +78,8 @@ SKIP_ENCLAVE_CHECK=0
 TRUST_HEIGHT_OFFSET=2000
 GENESIS_PIONEER_SECOND_IP_ADDRESS=""
 
+FOUNDATION_GRANTER=""
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --advertise-ip-address)
@@ -131,6 +133,17 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ;;
+    --foundation-sponsored)
+      # Optional argument: the granter address.  Without one we still run sponsored, and simply
+      # accept whichever granter the fee grant turns out to come from.
+      if [[ -n "$2" && "$2" != --* ]]; then
+        FOUNDATION_GRANTER="$2"
+        shift 2
+      else
+        FOUNDATION_GRANTER="any"
+        shift
+      fi
+      ;;
     --stop-for-funding)
       STOP_FOR_FUNDING="true"
       shift
@@ -160,6 +173,17 @@ while [[ $# -gt 0 ]]; do
 	  echo "                       A genuine mismatch still cannot join: the joiner bootstraps its"
 	  echo "                       trusted set from the seed and can only accept that from a seed"
 	  echo "                       running its own measurement."
+	  echo "  --foundation-sponsored [<granter-addr>]"
+	  echo "                       TOLL-FREE JOIN.  This node holds NO QDN and needs no treasury of"
+	  echo "                       its own: the foundation pays for sync-enclave by FEE GRANT, and"
+	  echo "                       this script waits for that grant instead of for a balance."
+	  echo "                       The foundation runs scripts/foundation_sponsor_node.sh (the exact"
+	  echo "                       command is printed below); the grant is bounded to the three"
+	  echo "                       messages sync-enclave actually sends, so it cannot fund anything"
+	  echo "                       else.  Pass the granter address to pin it, or omit it to accept"
+	  echo "                       whichever granter appears."
+	  echo "                       NOTE: this covers JOINING only.  Becoming a validator needs a"
+	  echo "                       real self-bond, which is the operator's own stake by design."
 	  echo "  --test-net           Print the ACTUAL command that funds this node, to run on a"
 	  echo "                       validator, instead of the email-us instructions.  On a test"
 	  echo "                       network whoever is standing this node up also holds the"
@@ -703,7 +727,24 @@ echo "This node is *almost* a Qadena 'full-node'"
 # development and CI network -- the person running this script can fund it themselves in one line.
 # These lines existed here commented out, which helped nobody: the reader still had to reconstruct
 # the flags.
-if [[ "$TEST_NET" == "true" ]] ; then
+if [[ -n "$FOUNDATION_GRANTER" ]] ; then
+	# TOLL-FREE.  Nothing is sent to this node.  The foundation issues a fee grant bounded to the
+	# three messages sync-enclave broadcasts (MsgPioneerAddPublicKey,
+	# MsgPioneerUpdateIntervalPublicKeyID, MsgPioneerUpdatePioneerJar -- see enclave.go SyncEnclave),
+	# so the grant cannot pay for anything else this key might be asked to sign.
+	echo "FOUNDATION-SPONSORED JOIN -- this node needs NO QDN and no treasury of its own."
+	echo ""
+	echo "Ask the foundation to run this (on a box holding the foundation key):"
+	echo ""
+	echo "    ~/qadena/scripts/foundation_sponsor_node.sh --node $PIONEERADDRESS"
+	echo ""
+	if [[ "$FOUNDATION_GRANTER" == "any" ]] ; then
+		echo "Waiting for a fee grant to $PIONEERADDRESS from any granter."
+	else
+		echo "Waiting for a fee grant to $PIONEERADDRESS from $FOUNDATION_GRANTER."
+	fi
+	echo ""
+elif [[ "$TEST_NET" == "true" ]] ; then
 	echo "Run ONE of these on a validator (it holds the treasury key):"
 	echo ""
 	echo "  full node:"
@@ -780,12 +821,47 @@ fi
 
 REPLY=""
 while [[ $REPLY != "y" && $REPLY != "n" ]]; do
-	read REPLY\?"Are you done sending funds to $PIONEERADDRESS ? (y/n) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
+	if [[ -n "$FOUNDATION_GRANTER" ]] ; then
+		read REPLY\?"Has the foundation issued the fee grant to $PIONEERADDRESS ? (y/n) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
+	else
+		read REPLY\?"Are you done sending funds to $PIONEERADDRESS ? (y/n) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
+	fi
 	if [[ $REPLY == "y" ]] ; then
 
+		IS_UP=0
+		if [[ -n "$FOUNDATION_GRANTER" ]] ; then
+		# WAIT FOR A FEE GRANT, NOT A BALANCE.  A sponsored node never holds coins, so polling the
+		# balance would wait forever for something nobody is going to send.
+		echo "I will attempt to detect a fee grant for $PIONEERADDRESS."
+		for i in {120..1}
+		do
+		GRANT_JSON=`qadenad_alias --node "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657" query feegrant grants-by-grantee $PIONEERADDRESS --output json 2>/dev/null`
+		if [[ "$FOUNDATION_GRANTER" == "any" ]] ; then
+			GRANTER=`echo $GRANT_JSON | jq -r '.allowances[0].granter // ""' 2>/dev/null`
+		else
+			GRANTER=`echo $GRANT_JSON | jq -r --arg g "$FOUNDATION_GRANTER" '.allowances[] | select(.granter==$g) | .granter' 2>/dev/null | head -1`
+		fi
+		if [[ -n "$GRANTER" && "$GRANTER" != "null" ]] ; then
+			echo "$PIONEER is sponsored by $GRANTER"
+			FOUNDATION_GRANTER="$GRANTER"
+			IS_UP=1
+			break
+		else
+			echo "No fee grant detected yet.  Waiting...$i"
+			sleep 3
+		fi
+		done
+
+		if [ $IS_UP -eq 0 ] ; then
+			echo "Couldn't find a fee grant for $PIONEERADDRESS"
+			echo "The foundation must run:  ~/qadena/scripts/foundation_sponsor_node.sh --node $PIONEERADDRESS"
+			echo "Stopping the enclave"
+			$qadenascripts/stop_qadena.sh --enclave > /dev/null
+			exit 1
+		fi
+		else
 		echo "I will attempt to detect when $PIONEERADDRESS has at least ${FULL}qdn."
 		
-		IS_UP=0
 		for i in {120..1}
 		do
 		BALANCE_JSON=`qadenad_alias --node "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657" query bank balances $PIONEERADDRESS --output json`
@@ -813,10 +889,19 @@ while [[ $REPLY != "y" && $REPLY != "n" ]]; do
 			$qadenascripts/stop_qadena.sh --enclave > /dev/null
 			show_manual_funding_instructions
 		fi
+		fi
 
 		# ask the enclave to sync with another enclave and get the necessary keys for a full-node to be able to sync with the chain
 		
-		qadenad_alias enclave sync-enclave $PIONEER $ADVERTISE_IP_ADDRESS "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657"
+		# --fee-granter makes the foundation, not this node, pay.  The qadena tx factory reads
+		# clientCtx.FeeGranter (x/qadena/client/tx/factory.go) and sets it on the tx, and the enclave
+		# RootCmd carries the standard tx flags, so this is honoured on the messages SyncEnclave
+		# broadcasts.
+		if [[ -n "$FOUNDATION_GRANTER" && "$FOUNDATION_GRANTER" != "any" ]] ; then
+			qadenad_alias enclave sync-enclave $PIONEER $ADVERTISE_IP_ADDRESS "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657" --fee-granter "$FOUNDATION_GRANTER"
+		else
+			qadenad_alias enclave sync-enclave $PIONEER $ADVERTISE_IP_ADDRESS "tcp://$GENESIS_PIONEER_FIRST_IP_ADDRESS:26657"
+		fi
 		
 		if [[ $? != 0 ]] ; then
 			echo "Failed to synchronize my enclave with the Pioneer/Enclave on $GENESIS_PIONEER_FIRST_IP_ADDRESS"

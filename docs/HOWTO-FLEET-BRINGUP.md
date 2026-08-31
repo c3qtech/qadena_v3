@@ -157,6 +157,9 @@ the chain-restarting suites, a governance upgrade of every node, and a soak.
     --test "./testscripts/run_regression_continually.sh"
 ```
 
+> Add `--foundation-sponsored` to any of these to run it **toll-free**: no joiner is
+> sent coins and none holds a treasury.  See "Choosing a funding mode" below.
+
 ### Why the tail is in that order
 
 **`regression.sh` with no `--skip`, and only here.**  `enclave-rollback` and
@@ -460,6 +463,71 @@ schedule names must be pushed or the fleet runs the old one.
 
 ---
 
+## Choosing a funding mode
+
+By default every joiner is **sent 200,000 QDN** by bank send from the primary's
+treasury (stage G, `nth_node_bringup` phase 3), and `add_full_node.sh` waits for that
+balance before it will run `sync-enclave`.
+
+`--foundation-sponsored [<granter-key>]` replaces that with a **fee grant**.  No coins
+move, the joiner never holds a balance, and it needs no treasury of its own.  The
+granter defaults to `treasury` because that is the key the primary already holds; in a
+real deployment it is a foundation key.
+
+```sh
+./testscripts/fleet_bringup_with_tests.sh \
+  --foundation-sponsored \
+  --primary alvillarica@192.168.86.162 \
+  --joiner alvillarica@192.168.86.154 \
+  ...
+```
+
+### What the grant covers, and why that matters
+
+A node does not stop spending after it joins.  `sync-enclave` broadcasts three
+messages, but `UpdateHeight` runs **per block** and drives SS rotation and re-share,
+which broadcast two more:
+
+```
+MsgPioneerAddPublicKey                join + SS rotation
+MsgPioneerUpdateIntervalPublicKeyID   join + SS rotation + InitEnclave
+MsgPioneerUpdatePioneerJar            join + InitEnclave
+MsgPioneerUpdatePublicKey             SS RE-SHARE
+MsgPioneerUpdateJarRegulator          InitEnclave
+```
+
+The grant is a **PeriodicAllowance** over all five, with a per-period budget that
+refills and **no expiry**.  Both parts are deliberate:
+
+- A join-only grant is a trap.  The node joins, runs, and then fails its first SS
+  rotation -- unable to pay for a message its grant does not list -- while still
+  looking healthy.  SS participation is consensus-relevant here, so that is not a
+  cosmetic failure.
+- An expiring grant is the same trap with a delay.  SS rotation recurs for as long as
+  the node runs, so the sponsorship has to as well.
+
+Bounded three ways regardless: per-period budget, message allow-list, and an optional
+total cap.  `scripts/foundation_sponsor_node.sh --join-only` gives the narrow expiring
+grant if you actually want it, and warns about exactly this.
+
+### What is NOT sponsored
+
+**Validator self-bonds.**  `--stake` is unaffected and still comes from the operator's
+own funds.  That is deliberate: slashing is keyed to the **infraction height**, so a
+foundation that sponsored the bond would absorb every penalty while the operator risked
+nothing -- and undelegating after the fact does not escape it.
+
+### Requirements
+
+- `scripts/foundation_sponsor_node.sh` must be on the **primary** (it ships in the
+  release package; stage G fails with "install the release package first" if not).
+- The granter key must be in the primary's keyring.
+
+Stage G's banner and the run-directory note both record which mode was used, so a run
+does not have to be reconstructed from a flag someone remembers passing.
+
+---
+
 ## Choosing a sync mode
 
 `--block-sync` skips stage F, where the primary must pass the snapshot interval
@@ -486,6 +554,8 @@ E  install that package on each joiner
 F  wait for the snapshot   (skipped by --block-sync)
 G  join each joiner: nth_node_bringup --from 1 --until 7, then wait until
    addressable, then its --test commands
+   (phase 3 funds the joiner -- by bank send, or by fee grant under
+    --foundation-sponsored, in which case no coins move at all)
 ```
 
 `--from <stage>` resumes.  Two things it does **not** do:

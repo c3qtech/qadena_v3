@@ -89,6 +89,11 @@ RUN_DIR=""
 SCHEDULE=()
 ADDRESSABLE_WAIT_MIN=20
 BLOCK_SYNC=0
+# TOLL-FREE JOINS.  With --foundation-sponsored no joiner is ever sent coins: each one gets a
+# bounded, recurring fee grant instead, and joins with no balance and no treasury of its own.
+# Passed straight through to nth_node_bringup.sh, which does the work in its phases 3 and 4.
+SPONSORED=0
+SPONSOR_GRANTER="treasury"
 # --from <stage>.  The sub-scripts have been phase-addressable all along; the fleet script was not,
 # so a failure at stage C meant redoing a ~24-minute SGX build that had already succeeded and whose
 # artifacts were still installed and healthy.  See TESTING-BACKLOG.md item 89.
@@ -238,6 +243,9 @@ while [[ $# -gt 0 ]]; do
             print -u2 "        --joiner m3 --test \"./testscripts/run_regression_continually.sh\""
             exit 1 ;;
         --block-sync)    BLOCK_SYNC=1; shift ;;
+        --foundation-sponsored)
+            SPONSORED=1
+            if [[ -n "$2" && "$2" != --* ]]; then SPONSOR_GRANTER="$2"; shift 2; else shift; fi ;;
         --cosmovisor)    shift ;;   # accepted and ignored: every node is cosmovisor-managed now
         --from)          FROM_STAGE="${2:u}"; shift 2 ;;
         --run-dir)       RUN_DIR="$2"; shift 2 ;;
@@ -293,6 +301,15 @@ while [[ $# -gt 0 ]]; do
             print "                      a flake at stage C should not cost it.  --from D or later"
             print "                      SKIPS THE REGRESSION and says so; stepping over that guard"
             print "                      should be a deliberate act, never a quiet one."
+            print "  --foundation-sponsored [<granter-key>]"
+            print "                      TOLL-FREE JOINS.  No joiner is sent coins and none holds a"
+            print "                      treasury of its own: each gets a bounded, recurring FEE GRANT"
+            print "                      from <granter-key> (default: treasury, the key the primary"
+            print "                      already holds).  The grant covers the five messages a node"
+            print "                      broadcasts for life -- join, SS rotation and SS re-share --"
+            print "                      so a sponsored node keeps working, not just joining."
+            print "                      Validator self-bonds are NOT sponsored; --stake is unaffected."
+            print ""
             print "  --block-sync        join by BLOCK-SYNC, skipping the wait for state-sync to"
             print "                      become eligible (~50 min for 2000 blocks at 1.5s).  Use it"
             print "                      when the point is to HAVE a second node quickly.  It is NOT"
@@ -710,7 +727,16 @@ if (( BLOCK_SYNC )); then
 else
     SYNC_KIND="state-sync"; sync_arg=(--state-sync)
 fi
-stage "G. join each node by $SYNC_KIND, in turn"
+# FUNDING KIND, recorded the same way and for the same reason as SYNC_KIND: the run directory is
+# the only record anyone reads afterwards, and "the joiners were sponsored" is exactly the sort of
+# thing that must not have to be inferred from a flag someone remembers passing.
+if (( SPONSORED )); then
+    FUND_KIND="foundation-sponsored (no coins to joiners)"; sponsor_arg=(--foundation-sponsored "$SPONSOR_GRANTER")
+else
+    FUND_KIND="funded by bank send from treasury"; sponsor_arg=()
+fi
+stage "G. join each node by $SYNC_KIND, $FUND_KIND, in turn"
+note "join mode: $SYNC_KIND; funding: $FUND_KIND"
 # WALK THE SCHEDULE, not the joiner list: a --test between two --joiner entries belongs to the
 # joiner BEFORE it, and only the schedule knows which.  The leading tests were already run in stage
 # C, so they are skipped here by only starting to honour test: entries once a joiner has been seen.
@@ -795,7 +821,7 @@ fi
     info "joining $j as $pioneer by $SYNC_KIND (through phase 7: join, bond, agree)"
     print "$j joined by: $SYNC_KIND (as $pioneer)" >> "$RUN_DIR/fleet.txt"
     "$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" \
-        --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" --from 1 --until 7 \
+        --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" "${sponsor_arg[@]}" --from 1 --until 7 \
         2>&1 | tee "$RUN_DIR/stage-G-join-${j##*@}.log"
     [[ ${pipestatus[1]} -eq 0 ]] || fail "join failed for $j; nth_node_bringup is phase-resumable (--from N). See $RUN_DIR/stage-G-join-${j##*@}.log"
     JOINED+=("$j")
