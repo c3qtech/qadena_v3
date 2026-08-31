@@ -178,18 +178,19 @@ else
     echo "tx $txhash landed at height $h_tx (SGX enclave: contents not readable, using store hashes only)"
 fi
 
-# THE POST-TRANSACTION BALANCE, captured while the transaction is still in this node's history.
-#
-# The networked branch at the bottom compares against this to prove the node re-synced INTO the
-# block rather than erasing it.  It was referenced there and never assigned anywhere -- so that
-# branch compared the correct re-synced balance against an empty string and failed every time,
-# reporting "re-sync did not restore the transaction: expected , got 8999999897...".  The rollback
-# and the re-convergence had both worked.  A minority node rolling back and catching up is the
-# whole point of that branch, and it had never once been exercised.  Observed 2026-08-31.
+# Recorded for the report only.  It is NOT the signal this suite turns on -- see the networked
+# branch below for why a balance cannot decide a create-wallet rollback.
 bal_after=$(pioneer_balance)
 [ -n "$bal_after" ] || fail "cannot read pioneer1's balance after the transaction"
-[ "$bal_after" != "$bal_before" ] \
-    || fail "the balance did not move across the transaction ($bal_before) -- the post-rollback comparison would be vacuous"
+
+# THE ENCLAVE'S ACCUMULATORS AT THE TRANSACTION HEIGHT -- the enclave's answer to an app hash.
+#
+# Per-store digests, and HEIGHT-ADDRESSABLE, which is what makes them usable here: after a rollback
+# and re-sync the chain has moved on, so a CURRENT fingerprint (store-hash) can never match and
+# tells you nothing.  Asking for the same height on both sides does.  Digest-only, so this works on
+# a real SGX enclave where contents are unreadable.
+acc_at_tx=$(as_enclave_owner "$qadenad_binary" --home "$QADENAHOME" enclave store-accumulators --height "$h_tx" 2>/dev/null | sort)
+[ -n "$acc_at_tx" ] || fail "cannot read the enclave's accumulators at height $h_tx"
 
 # a bank send moves wallet state, so the enclave's mirrors must have moved with it.  If they did
 # not, the comparison after the rollback would be vacuous -- it would "match" because nothing
@@ -248,10 +249,33 @@ before: $hash_before
 now:    $hash_now"
     echo "solo: tx at $h_tx erased, balance reverted to $bal_before, ENCLAVE store hashes match pre-transaction"
 else
-    # networked minority: the peers still hold the block, so we must have re-synced INTO it
-    [ "$bal_now" = "$bal_after" ] || fail "re-sync did not restore the transaction: expected $bal_after, got $bal_now
-(a minority node that rolled back must catch back up to the network, not erase its history)"
-    echo "networked: re-synced past $h_tx, transaction restored, balance back to $bal_after"
+    # networked minority: the peers still hold the block, so we must have re-synced INTO it.
+    #
+    # THE ENCLAVE'S STATE IS THE SIGNAL, NOT THE BALANCE.  This branch used to compare pioneer1's
+    # balance against $bal_after -- a variable that was never assigned, so it compared the correct
+    # re-synced balance against an empty string and failed every time on a fleet.  Assigning it was
+    # not the fix either: the transaction is a CREATE-WALLET paid by create-wallet-sponsor, so
+    # pioneer1's balance does not move across it at all.  Either comparison is vacuous; one of them
+    # merely fails loudly.  (The solo branch's balance line has the same emptiness, and is harmless
+    # only because the store-hash check beside it does the real work.)
+    #
+    # So assert what the rollback actually disturbed: the enclave dropped this wallet when it rolled
+    # back, and re-syncing must bring it back.  That is what "catch back up" means for a node whose
+    # peers still hold the block.
+    # THE ENCLAVE MUST HAVE RE-DERIVED THE SAME STATE AT THAT HEIGHT, digest for digest.
+    #
+    # The chain-level app-hash comparison below proves the CHAIN re-converged; it says nothing about
+    # the enclave, whose mirror stores sit outside consensus.  A node can match every peer's app
+    # hash while its enclave came back wrong -- which is the failure this suite exists to catch.
+    acc_now=$(as_enclave_owner "$qadenad_binary" --home "$QADENAHOME" enclave store-accumulators --height "$h_tx" 2>/dev/null | sort)
+    [ -n "$acc_now" ] || fail "cannot read the enclave's accumulators at height $h_tx after re-sync"
+    if [ "$acc_now" != "$acc_at_tx" ]; then
+        fail "the ENCLAVE did not re-derive its state at height $h_tx after rolling back and catching up
+(a minority node that rolled back must rebuild exactly what it destroyed, not merely resync the chain)
+before: $acc_at_tx
+now:    $acc_now"
+    fi
+    echo "networked: re-synced past $h_tx, enclave accumulators at $h_tx match digest-for-digest"
 
     # and our app hash at the rollback point must match what the peers published.
     #
