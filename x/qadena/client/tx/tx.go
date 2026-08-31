@@ -14,6 +14,7 @@ import (
 	gogogrpc "github.com/cosmos/gogoproto/grpc"
 	"github.com/spf13/pflag"
 
+	"cosmossdk.io/x/feegrant"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/input"
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
@@ -251,7 +252,50 @@ func queryMinGasPrice(clientCtx client.Context, fallback string) string {
 	return ret.String() + "aqdn"
 }
 
+// A NODE THAT HOLDS NO COINS CAN STILL PAY, IF SOMEONE GRANTED IT FEES.
+//
+// A foundation-sponsored node is deliberately never sent QDN: it signs its own messages (the
+// attestation report in MsgPioneerUpdateIntervalPublicKeyID binds the report to THIS pioneer's
+// address, so a different signer would invalidate it) while the foundation pays.  x/feegrant
+// exists for exactly that split, and the factory already honours clientCtx.FeeGranter.
+//
+// THE GRANTER IS DISCOVERED HERE RATHER THAN PASSED IN, and that is the point.  The CLI accepts
+// --fee-granter, but the transactions that need sponsoring are built and broadcast INSIDE the
+// enclave process, reached over a unix socket by a gRPC message (MsgSyncEnclave) whose five fields
+// carry no granter.  So a granter set on the CLI was silently dropped at the process boundary and
+// the broadcast fell back to the signer -- "spendable balance 0aqdn is smaller than 2500000aqdn"
+// on a node that is not supposed to have any.  Observed on M2, 2026-08-31.
+//
+// Looking it up covers every broadcast rather than just the join: rotations
+// (PioneerUpdateIntervalPublicKeyID), the audit's re-share messages and identity updates all come
+// from the same empty pioneer wallet and would each have hit the same wall.
+//
+// EXPLICIT ALWAYS WINS -- if a caller set a granter, use theirs and do not query.  A failed lookup
+// is not an error: it means "no sponsorship", which is the normal case, so we carry on unsponsored
+// and let the chain reject it if the signer genuinely cannot pay.
+func withDiscoveredFeeGranter(clientCtx client.Context) client.Context {
+	if clientCtx.FeeGranter != nil || clientCtx.FromAddress == nil {
+		return clientCtx
+	}
+
+	res, err := feegrant.NewQueryClient(clientCtx).Allowances(
+		context.Background(),
+		&feegrant.QueryAllowancesRequest{Grantee: clientCtx.FromAddress.String()},
+	)
+	if err != nil || res == nil || len(res.Allowances) == 0 {
+		return clientCtx
+	}
+
+	granter, err := sdk.AccAddressFromBech32(res.Allowances[0].Granter)
+	if err != nil {
+		return clientCtx
+	}
+	return clientCtx.WithFeeGranterAddress(granter)
+}
+
 func GenerateOrBroadcastTxCLISync(clientCtx client.Context, flagSet *pflag.FlagSet, op string, msgs ...sdk.Msg) (error, *sdk.TxResponse) {
+	clientCtx = withDiscoveredFeeGranter(clientCtx)
+
 	// array of timeouts, exponentially increasing
 	normalTimeouts := []time.Duration{
 		1 * time.Second,
