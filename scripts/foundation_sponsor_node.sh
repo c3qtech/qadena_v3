@@ -125,7 +125,21 @@ esac
 [ -n "$expiration" ] || expiration=$(( $(date +%s) + 2592000 ))
 
 # THE MESSAGE ALLOW-LIST.  Full lifecycle by default; the join subset under --join-only.
-JOIN_MSGS="/qadena.qadena.MsgPioneerAddPublicKey,/qadena.qadena.MsgPioneerUpdateIntervalPublicKeyID,/qadena.qadena.MsgPioneerUpdatePioneerJar"
+#
+# MsgCreateValidator IS ON IT, and it is the one entry that is not a qadena message.  Bonding is a
+# staking message, so a grant that omitted it failed with
+#     <granter> does not allow to pay fees for <grantee>
+# -- an allowance that exists but does not cover the message, which reads like a missing grant and
+# is not.  Observed on pioneer2, 2026-08-31.
+#
+# THE EXPOSURE IS ONE FEE PER NODE, EVER.  MsgCreateValidator can only succeed once for a given
+# operator address; after that the validator exists and every later change is MsgEditValidator or a
+# delegation, neither of which is listed here.  So this does not open a recurring cost, which is
+# the property the allow-list exists to protect.
+#
+# It sits in JOIN_MSGS rather than only in LIFE_MSGS because bonding happens during the join, and
+# --join-only is the shape used for a node that is funded normally afterwards.
+JOIN_MSGS="/qadena.qadena.MsgPioneerAddPublicKey,/qadena.qadena.MsgPioneerUpdateIntervalPublicKeyID,/qadena.qadena.MsgPioneerUpdatePioneerJar,/cosmos.staking.v1beta1.MsgCreateValidator"
 LIFE_MSGS="$JOIN_MSGS,/qadena.qadena.MsgPioneerUpdatePublicKey,/qadena.qadena.MsgPioneerUpdateJarRegulator"
 
 if [ "$join_only" = "true" ]; then
