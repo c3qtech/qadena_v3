@@ -1929,20 +1929,11 @@ func haltOnEnclaveFailure(sdkctx sdk.Context, step string, err error) {
 		return
 	}
 
-	// A cancelled call means the watchdog declared the enclave dead; report THAT.  Without this
-	// the operator sees "context canceled", which is true and useless.  Checked via the root's
-	// recorded cause rather than errors.Is(err, context.Canceled), because gRPC surfaces the
-	// cancellation as a status error (codes.Canceled) that does not unwrap to context.Canceled --
-	// and once the root is cancelled, EVERY exec-path call fails, so whenever a cause exists it
-	// is the reason this call failed.
-	if cause := context.Cause(EnclaveAliveContext()); cause != nil {
-		err = cause
-	}
-
-	// Tell the watchdog its cancellation actually landed.  Set BEFORE the panic, because the
-	// panic does not return here -- and the watchdog's backstop exits the process if this never
-	// gets set.  See watchEnclaveLiveness.
-	enclaveHaltAnnounced.Store(true)
+	// A cancelled call means the watchdog declared the enclave dead; report THAT -- without it the
+	// operator sees "context canceled", which is true and useless.  The same call tells the watchdog
+	// its cancellation actually landed, BEFORE the panic, because the panic does not return here.
+	// See AnnounceEnclaveHalt and watchEnclaveLiveness.
+	err = AnnounceEnclaveHalt(err)
 
 	c.ContextError(sdkctx, "enclave "+step+" failed during EndBlock: "+err.Error())
 	panic("qadena: enclave " + step + " failed during EndBlock at height " +

@@ -283,6 +283,19 @@ that cannot execute:
     --test "./testscripts/run_regression_continually.sh"
 ```
 
+```sh
+./testscripts/fleet_bringup_with_tests.sh \
+  --foundation-sponsored \
+  --block-sync \
+  --primary alvillarica@192.168.86.120 \
+  --joiner alvillarica@192.168.86.140 \
+    --test "./testscripts/regression.sh" \
+  --test-local "./testscripts/test_fleet_upgrade.sh \
+      --primary alvillarica@192.168.86.120 \
+      --joiner alvillarica@192.168.86.140" \
+    --test "./testscripts/run_regression_continually.sh"
+```
+
 Three things differ from the M1-M4 run, and all three are properties of this fleet rather
 than of the schedule:
 

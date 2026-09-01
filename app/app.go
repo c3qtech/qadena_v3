@@ -774,6 +774,15 @@ func (app *App) Commit() (*abci.ResponseCommit, error) {
 	// The block IS committed; only the enclave's watermark is behind.  That exact state is what
 	// startup reconciliation repairs (case B: confirm the prepared height) -- so halting here is
 	// safe, and continuing is not.
+	//
+	// ANNOUNCED, because this is a halt the watchdog has to be able to SEE.  It is deliberately not
+	// haltOnEnclaveFailure -- that one is EndBlock-scoped and exists to stop a fork in the app hash,
+	// and neither property holds here -- but it halts for the same cancellation, and the watchdog
+	// classifies on the bit alone.  Without this it reports "the calls returned but NOTHING HALTED
+	// FOR THEM" and blames a call site that is behaving correctly (2026-08-31, M1, height 11059).
+	// It also swaps the bare "context canceled" for the watchdog's recorded cause, so the panic says
+	// the enclave went silent rather than merely that a context ended.
+	cerr = qadenamodulekeeper.AnnounceEnclaveHalt(cerr)
 	panic("qadena: enclave ConfirmHeight failed after the chain committed height " +
 		fmt.Sprintf("%d", height) + ": " + cerr.Error() +
 		" -- halting; on restart, reconciliation confirms or rolls back as needed")

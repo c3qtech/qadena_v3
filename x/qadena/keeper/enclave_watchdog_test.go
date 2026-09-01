@@ -360,3 +360,77 @@ func TestEnvDurationFallsBackOnGarbage(t *testing.T) {
 		t.Fatalf("a valid duration must win, got %v", got)
 	}
 }
+
+// Property 5: A HALT THAT IS NOT haltOnEnclaveFailure MUST STILL COUNT AS A HALT.
+//
+// haltOnEnclaveFailure is EndBlock-scoped -- it takes an sdk.Context and exists to stop a fork in
+// the app hash.  It is not the only correct halt.  When the call the cancellation unblocks is
+// App.Commit's post-commit ConfirmHeight, the node halts just as deliberately with a different
+// message: the block is already durable, the app hash is already fixed, and the watermark it could
+// not advance is node-local, so there is no fork to name and borrowing EndBlock's wording would be
+// a lie in the log.
+//
+// While haltOnEnclaveFailure was the only writer of the announce bit, that halt was invisible here.
+// The watchdog fell through to the "unblocked with errors, nothing halted" branch and accused a
+// call site of swallowing the error -- a bug report about code that was behaving correctly.
+//
+// Observed 2026-08-31 on M1: a correct halt at height 11059 reported as a swallowed error, the
+// crash suite matching neither panic string, no restart, and the node left halted for 10h45m while
+// 17 further soak runs timed out against it.  So the property is about the BIT, not the function:
+// any path that halts announces, and the watchdog classifies on that.
+func TestWatchdog_HaltAnnouncedFromAnotherPathIsReportedAsHalted(t *testing.T) {
+	compressWatchdogTime(t, 50*time.Millisecond)
+
+	var buf syncBuffer
+	go watchEnclaveLiveness(log.NewLogger(&buf), &fakeGreeter{healthy: false})
+
+	// Stand in for App.Commit's ConfirmHeight panic: announce the moment the root is cancelled,
+	// which is precisely when that path's blocked call unblocks with an error.  The watchdog reads
+	// the bit once, enclaveHaltBackstop after the cancel, so this is the same window production
+	// relies on rather than a contrived one.
+	announced := make(chan error, 1)
+	go func() {
+		for i := 0; i < 5000; i++ {
+			if context.Cause(EnclaveAliveContext()) != nil {
+				announced <- AnnounceEnclaveHalt(fmt.Errorf("rpc error: code = Canceled desc = context canceled"))
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		announced <- nil
+	}()
+
+	var reported error
+	select {
+	case reported = <-announced:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the announce goroutine never returned")
+	}
+	if reported == nil {
+		t.Fatal("the root was never cancelled, so the halt path never ran")
+	}
+
+	// A bare "context canceled" is true and useless to whoever reads the panic; the halt must
+	// report WHY the enclave went away.
+	if !strings.Contains(reported.Error(), "enclave stopped responding") {
+		t.Fatalf("AnnounceEnclaveHalt must substitute the watchdog's recorded cause for a bare "+
+			"cancellation, or the operator reads \"context canceled\" and learns nothing; got %q", reported)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(buf.String(), "enclave dead") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the watchdog never declared the enclave dead; log so far:\n%s", buf.String())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "halt announced: YES") {
+		t.Fatalf("a halt announced from OUTSIDE haltOnEnclaveFailure must still classify as halted; got: %q", out)
+	}
+	if strings.Contains(out, "NOTHING HALTED FOR THEM") {
+		t.Fatalf("the watchdog accused a call site of swallowing the error when a halt had in fact "+
+			"announced itself -- this is the 2026-08-31 misdiagnosis; got: %q", out)
+	}
+}

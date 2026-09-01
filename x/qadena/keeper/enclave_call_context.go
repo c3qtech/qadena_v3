@@ -244,10 +244,43 @@ var (
 	enclaveHaltBackstop = 5 * time.Second
 )
 
-// enclaveHaltAnnounced records that haltOnEnclaveFailure actually ran.  It is the difference
-// between "the cancellation reached a blocked call" and "the cancellation reached nothing", which
-// is invisible from inside the watchdog otherwise.
+// enclaveHaltAnnounced records that A HALT RAN for the watchdog's cancellation.  It is the
+// difference between "the cancellation reached a blocked call" and "the cancellation reached
+// nothing", which is invisible from inside the watchdog otherwise.
+//
+// IT DOES NOT MEAN "haltOnEnclaveFailure RAN", and the distinction cost a fleet.  That function is
+// EndBlock-scoped: it takes an sdk.Context, names EndBlock in both strings it emits, and exists to
+// stop a fork in the app hash.  App.Commit's post-commit ConfirmHeight failure is a SECOND, equally
+// correct halt with none of those properties -- the block is already durable, the app hash is
+// already fixed, and the watermark it could not advance is node-local -- so it rightly panics on its
+// own terms rather than borrowing EndBlock's message and claiming a fork it cannot cause.
+//
+// While haltOnEnclaveFailure was the only writer, that second halt was invisible here.  The watchdog
+// fell through to the "unblocked with errors, nothing halted" branch and accused a call site of
+// swallowing the error -- sending an operator after a bug that did not exist.  Observed 2026-08-31
+// on M1: a correct halt at height 11059, misreported, and the crash suite that should have restarted
+// the node matched neither panic string and left it wedged for 10h45m.
+//
+// So it is set through AnnounceEnclaveHalt, from EVERY halt path rather than from one of them.
 var enclaveHaltAnnounced atomic.Bool
+
+// AnnounceEnclaveHalt tells the watchdog its cancellation landed, and returns the error the halt
+// should REPORT: the watchdog's recorded cause when one exists, because a bare "context canceled"
+// is true and useless to whoever reads the panic.
+//
+// Call it immediately BEFORE panicking, never after -- the panic does not return, and the watchdog
+// reads the bit once, enclaveHaltBackstop after it cancels.
+func AnnounceEnclaveHalt(err error) error {
+	// Checked via the root's recorded cause rather than errors.Is(err, context.Canceled), because
+	// gRPC surfaces the cancellation as a status error (codes.Canceled) that does not unwrap to
+	// context.Canceled -- and once the root is cancelled, EVERY exec-path call fails, so whenever a
+	// cause exists it is the reason this call failed.
+	if cause := context.Cause(EnclaveAliveContext()); cause != nil {
+		err = cause
+	}
+	enclaveHaltAnnounced.Store(true)
+	return err
+}
 
 // WHAT THE WATCHDOG COULD NOT SEE.  enclaveHaltAnnounced is one bit, and its FALSE is ambiguous
 // across four different situations: no call ever existed; a call existed and is still stuck; a

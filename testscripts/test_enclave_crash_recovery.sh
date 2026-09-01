@@ -1,7 +1,7 @@
 #!/bin/zsh
 #
 # Fault injection reproducing the 2026-08-09 incident shape: the enclave stops responding
-# mid-run.  The node must HALT (haltOnEnclaveFailure) rather than commit enclave-less blocks --
+# mid-run.  The node must HALT rather than commit enclave-less blocks --
 # on the real network the old behaviour finalised 31,675 blocks a healthy peer had rejected --
 # and after the enclave returns, a restart must reconcile and resume.
 #
@@ -17,14 +17,18 @@
 # with nothing yet in the log.  The WATCHDOG (x/qadena/keeper/enclave_call_context.go) is what
 # turns that freeze into the named halt: it probes SayHello off the consensus path, and once the
 # enclave has been silent past QADENA_ENCLAVE_HEALTH_GRACE (default 2m) it cancels the shared
-# alive-context, every blocked call unblocks, and haltOnEnclaveFailure panics with the cause.
+# alive-context, closes the transport, and every blocked call unblocks into a halt.  WHICH halt
+# depends on what was in flight: haltOnEnclaveFailure for an EndBlock sync, App.Commit's own panic
+# for a post-commit ConfirmHeight, or none at all if the node happened to be idle.  All three are
+# correct, which is why the assertion below reads the watchdog's verdict rather than panic text.
 # Freezing promptly and halting later are therefore SEPARATE properties, asserted separately
 # below.  (An earlier version of this comment claimed c.DebugTimeout failed the very next call;
 # that was true before the fork fix removed the deadline, and this suite failed silently for as
 # long as the comment outlived the mechanism.)
 #
-# DELIBERATELY FAILS rather than skips when the chain is not running.  Restarts the node; leaves
-# the chain running for the suites after it.
+# DELIBERATELY FAILS rather than skips when the chain is not running.  Restarts the node on EVERY
+# exit path -- a failed assertion included -- so a finding here costs one FAIL rather than every
+# suite that runs after it.
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
@@ -57,12 +61,42 @@ fi
 
 echo "stalling enclave pid $enclave_pid at chain height $h0"
 
-# RESUME ON EVERY EXIT PATH.  The SIGCONT used to sit after the assertions, so any `fail` between
-# the STOP and there left the enclave in state T for good -- not a lost test but a wedged machine:
-# with no deadline on execution calls the chain blocks forever, and every suite after this one
-# hangs too.  Observed 2026-08-16: one failed assertion, enclave stopped for 2.5 hours, the whole
-# regression stalled behind it.  The trap fires on normal exit, on `fail`, and on interruption.
-trap 'as_enclave_owner kill -CONT "$enclave_pid" 2>/dev/null || true' EXIT INT TERM
+# RECOVER ON EVERY EXIT PATH -- and that means the NODE, not just the enclave.
+#
+# The SIGCONT used to sit after the assertions, so any `fail` between the STOP and there left the
+# enclave in state T for good -- not a lost test but a wedged machine: with no deadline on
+# execution calls the chain blocks forever, and every suite after this one hangs too.  Observed
+# 2026-08-16: one failed assertion, enclave stopped for 2.5 hours, the whole regression stalled
+# behind it.  So it moved into a trap.
+#
+# THE RESTART NEEDED THE SAME TREATMENT AND DID NOT GET IT, and the second half of that lesson cost
+# more than the first.  By design a halted node does NOT exit: it keeps serving RPC with a dead
+# consensus reactor so an operator can inspect it (enclave_call_context.go says so in as many
+# words).  That state is invisible to systemd, to the RPC, and to `catching_up`, which still
+# answers false.  On 2026-08-31 the halt assertion below missed on a matching artefact, the script
+# exited before the restart, and M1 sat halted at height 11059 for 10h45m looking perfectly healthy
+# while the next 17 soak runs timed out against it -- 273 failures out of one skipped restart.
+#
+# A FAILED ASSERTION AND A WEDGED MACHINE ARE SEPARATE OUTCOMES.  This suite still FAILS loudly
+# when an assertion misses -- papering over that is how the ConfirmHeight halt path stayed
+# invisible for as long as it did -- but it hands the node back either way.  Idempotent, so the
+# happy path calls it inline for its return status and the trap is then a no-op.
+recovered=0
+recover_node() {
+    (( recovered )) && return 0
+    recovered=1
+    as_enclave_owner kill -CONT "$enclave_pid" 2>/dev/null || true
+    "$qadenascripts/stop_qadena.sh" --all > /dev/null 2>&1 || true
+    # The restarted node gets a SHORT watchdog grace, inherited through start_qadena.sh's
+    # environment.  It cannot speed up THIS run -- the node under test was started before this
+    # suite ran -- but the chain it leaves behind is the one the next cycle stalls, so every cycle
+    # after the first waits ~15s for the verdict instead of the 2m production default.
+    export QADENA_ENCLAVE_HEALTH_GRACE=15s
+    "$qadenascripts/start_qadena.sh" > /dev/null 2>&1
+}
+# Both call sites put it in a `||` context, which is also what keeps `set -e` from aborting the
+# script when a restart fails: the failure is reported, not silently fatal.
+trap 'recover_node || true' EXIT INT TERM
 
 # The log is cumulative across runs -- nothing rotates it -- so a halt message from a PREVIOUS
 # cycle of this very suite would satisfy the poll below instantly and falsely.  Everything this
@@ -106,51 +140,82 @@ advanced=$((h_final - h0))
 # and the halt must be the one we mean, not some unrelated stall.
 #
 # POLLED, not grepped once: the freeze is immediate (the blocked EndBlock stops commits within a
-# block) but the NAMED halt waits for the watchdog's grace.  The ceiling covers the 2m default
-# plus margin; a node started with a shorter QADENA_ENCLAVE_HEALTH_GRACE (see the restart below)
-# exits this loop as soon as the message lands.
-# TWO CORRECT OUTCOMES, and the suite must accept both.
+# block) but the watchdog's VERDICT waits for its grace plus enclaveHaltBackstop.  The ceiling
+# covers the 2m default plus margin; a node started with a shorter QADENA_ENCLAVE_HEALTH_GRACE
+# (see recover_node above) exits this loop as soon as the line lands.
 #
-#   halt      haltOnEnclaveFailure panics; consensus dies, the PROCESS STAYS UP.  This is the
-#             common path, because a stalled enclave usually has a call in flight to cancel.
+# MATCHED ON THE WATCHDOG'S VERDICT, NOT ON PANIC TEXT.  This used to poll for two panic strings,
+# and by 2026-08-31 NEITHER could match:
 #
-#   backstop  the watchdog declared the enclave dead but the cancellation reached NO IN-FLIGHT
-#             CALL, so haltOnEnclaveFailure never ran and the node is wedged rather than halted.
-#             enclave_call_context.go says so in as many words and exits non-zero on purpose,
-#             "so the supervisor can restart it".  Equally correct, and not rare: whether a call
-#             is in flight when SIGSTOP lands is a race, which is why this suite failed exactly
-#             once in 82 soak rounds (2026-08-28) and took the fleet down with it.
+#   "halting rather than committing a block without the enclave's state" belongs to
+#   haltOnEnclaveFailure, which is EndBlock-scoped -- it takes an sdk.Context and exists to stop a
+#   fork in the app hash.  When the call the cancellation unblocks is App.Commit's post-commit
+#   ConfirmHeight instead, the node halts just as correctly with a DIFFERENT message: the block is
+#   already durable and the watermark it cannot advance is node-local, so there is no fork to name.
 #
-# Accepting only the first reported the second as a bug in the node, when the node had in fact
-# detected a worse condition and said so.  What must still fail is NEITHER appearing.
-halted=0
-halt_kind=""
+#   "wedged rather than halted" was deleted from the Go source in 16a8bb05 ("ONE MECHANISM, NOT
+#   TWO"), which also removed the node-exits-for-the-supervisor behaviour.  It survived here alone
+#   -- an accepted outcome the binary could no longer produce.
+#
+# On M1 that pair declared "NEITHER halt message appeared" about a node that had halted exactly as
+# designed at height 11059, failed, and skipped the restart.  Panic text drifts every time a halt
+# path is added or refactored; the watchdog's own four-way verdict does not, and it is what this
+# suite actually wants to assert on.  So anchor on the one line it prints in every case.
+verdict=""
 for i in {1..90}; do
     if [ -f "$logfile" ]; then
-        tailed=$(tail -n "+$((log_start + 1))" "$logfile")
-        if print -r -- "$tailed" | grep -aq "halting rather than committing a block without the enclave's state"; then
-            halted=1; halt_kind="halt (haltOnEnclaveFailure ran)"; break
-        fi
-        if print -r -- "$tailed" | grep -aq "wedged rather than halted"; then
-            halted=1; halt_kind="backstop (no in-flight call to cancel; the node exited for the supervisor)"; break
-        fi
+        verdict=$(tail -n "+$((log_start + 1))" "$logfile" 2>/dev/null | grep -a "enclave dead (" | tail -1)
+        [ -n "$verdict" ] && break
     fi
     sleep 2
 done
-[ $halted -eq 1 ] || fail "the chain stopped, but NEITHER halt message appeared in 180s -- not haltOnEnclaveFailure's, and not the wedged-node backstop's.  The watchdog did not declare the enclave dead at all, which is the case this suite exists to catch."
+
+[ -n "$verdict" ] || fail "the chain stopped, but the watchdog never declared the enclave dead in 180s -- no \"enclave dead (\" line appeared at all.  The chain froze without the watchdog noticing, which is the case this suite exists to catch."
+
+# THE FOUR VERDICTS, and which of them are correct behaviour under this fault.  The branches are
+# enclave_call_context.go's, and the strings below are its own; note that the IDLE branch spells
+# its "no" in lower case while the other two spell it "NO".
+halt_kind=""
+case "$verdict" in
+    *"halt announced: YES"*)
+        halt_kind="halt announced (a blocked call unblocked and halted for the cancellation)" ;;
+
+    *"halt announced: no -- the node was IDLE"*)
+        # Legitimate, and not rare: whether a call is in flight when SIGSTOP lands is a race.  With
+        # nothing in flight there is no call to panic on the enclave's behalf, so there is no named
+        # halt to be had -- but the safety property still holds.  Consensus stopped, and the root is
+        # cancelled irreversibly, so this node cannot produce again.
+        halt_kind="idle at cancel (no call existed to halt; consensus stopped without a block)" ;;
+
+    *"NOTHING HALTED FOR THEM"*)
+        # A REAL FINDING NOW, where before it was this suite's own blind spot.  The calls returned
+        # errors and nothing halted for them, which means a halt path did not announce itself.
+        # Every halt is expected to go through AnnounceEnclaveHalt; App.Commit's ConfirmHeight panic
+        # was the one that did not, and that omission is what produced this verdict on 2026-08-31.
+        fail "the watchdog declared the enclave dead and the blocked calls RETURNED, but nothing halted for them -- a call site is swallowing the error, or halting without calling AnnounceEnclaveHalt.
+$verdict" ;;
+
+    *"WEDGED"*)
+        # The genuine wedge: neither the cancellation nor the transport close reached the blocked
+        # calls.  This is the 2026-08-25 shape (4h11m on ONE block, healthy enclave, empty log).
+        # The node keeps that state for inspection on purpose -- but this suite runs unattended in a
+        # soak, so recover_node has already been armed and the goroutine state will not survive the
+        # restart.  The verdict line below is the evidence that does.
+        fail "WEDGED: neither the cancellation nor the transport close reached the blocked calls.  Goroutine state is lost to this suite's recovery restart; the verdict line is the evidence.
+$verdict" ;;
+
+    *)
+        fail "the watchdog declared the enclave dead but its verdict matches none of the four known branches -- the message changed and this suite needs updating to match:
+$verdict" ;;
+esac
 echo "chain halted at $h_final ($advanced block(s) after the stall began) -- $halt_kind"
 
-as_enclave_owner kill -CONT "$enclave_pid" 2>/dev/null || true
-
 # ---- 2. recovery: restart everything, reconciliation sorts the watermarks out ----
-"$qadenascripts/stop_qadena.sh" --all > /dev/null 2>&1 || true
-
-# The restarted node gets a SHORT watchdog grace, inherited through start_qadena.sh's environment.
-# It cannot speed up THIS run -- the node under test was started before this suite ran -- but the
-# chain it leaves behind is the one the next cycle stalls, so every cycle after the first waits
-# ~15s for the named halt instead of the 2m production default.
-export QADENA_ENCLAVE_HEALTH_GRACE=15s
-"$qadenascripts/start_qadena.sh" > /dev/null 2>&1 || fail "start_qadena.sh failed"
+#
+# Called inline for its status; the trap makes it a no-op afterwards.  Every `fail` above has
+# already been through the trap, so the node is coming back either way -- what this call adds is a
+# failure message when the restart itself is what broke.
+recover_node || fail "start_qadena.sh failed"
 
 resumed=0
 for i in {1..150}; do
