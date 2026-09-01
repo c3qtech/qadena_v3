@@ -170,15 +170,21 @@ echo "Sponsoring a node"
 echo "-------------------------"
 echo "  node (grantee): $node_addr"
 echo "  granter:        $granter_addr ($granter)"
+# COUNTED FROM $MSGS, NEVER TYPED.  Both of these used to be literals, and by 2026-09-01 BOTH had
+# drifted: "3 msgs" while JOIN_MSGS held 4 (MsgCreateValidator was added for the self-bond) and
+# "5 msgs" while LIFE_MSGS held 7 (MsgVote was added so a sponsored fleet can be governed).  This
+# banner is what an operator reads to confirm the grant covers what they think it covers, so a
+# hand-maintained count is worse than none -- it is a number that looks checked and is not.
+msg_count=${#${(s:,:)MSGS}}
 if [ "$join_only" = "true" ]; then
-    echo "  scope:          JOIN ONLY (3 msgs) -- expires $(date -r "$expiration" 2>/dev/null || echo "$expiration")"
+    echo "  scope:          JOIN ONLY ($msg_count msgs) -- expires $(date -r "$expiration" 2>/dev/null || echo "$expiration")"
     echo ""
     echo "  WARNING: this does NOT cover SS re-share (MsgPioneerUpdatePublicKey).  When this node's"
     echo "           first SS rotation comes due it will fail to pay, and stop re-sharing while"
     echo "           still looking healthy.  Fund it another way before then, or re-run without"
     echo "           --join-only."
 else
-    echo "  scope:          FULL LIFECYCLE (5 msgs, incl. SS re-share)"
+    echo "  scope:          FULL LIFECYCLE ($msg_count msgs, incl. SS re-share and voting)"
     echo "  budget:         $period_limit per $period s, refilling, no expiry"
 fi
 [ -n "$spend_limit" ] && echo "  total cap:      $spend_limit"
