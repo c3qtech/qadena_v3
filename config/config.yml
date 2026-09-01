@@ -450,8 +450,8 @@ genesis:
         # nodeID/nodeType are STATE KEY bytes -- changing them moves the entry, so this had to land
         # before mainnet genesis.  On the test chain it still points at the `treasury` key.
         - pubKID: treasuryPubKID
-          nodeType: incentive-pool
-          nodeID: incentive-pool
+          nodeType: wallet-incentive-pool
+          nodeID: wallet-incentive-pool
         # No srv-prv entries: every service provider is registered by a MsgAddServiceProvider
         # governance proposal at onboarding time -- see the note above the client: section
     pricefeed:

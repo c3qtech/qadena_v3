@@ -43,6 +43,11 @@ Established on devnet `qadena_4828-1`:
   conflicts with `x/qadena`'s own requirements and is unresolved.**
 - Consortium model: foundation delegates its locked 504M to member validators; validator commission
   is operator compensation; governance is foundation-controlled and disclosed as such.
+- **Foundation-sponsored participation.** Nobody outside the foundation needs QDN to *use* the chain
+  — only to hold value or bond stake. Node joins and operation, agency deployments and citizen
+  wallets are all paid by fee grant from foundation sponsor accounts, funded by the buckets that
+  already name that purpose. See §7; it makes three buckets recurring-cost lines rather than
+  one-off grants.
 
 ---
 
@@ -165,7 +170,83 @@ removes all launch-day governance.
 
 ---
 
-## 7. HARD RULES
+## 7. THE SPONSORSHIP MODEL — how the foundation pays for everyone else
+
+Built and in the tree (`scripts/foundation_sponsor_node.sh`, `veritas_scripts/foundation_authorise_sec.sh`,
+`grant_as_foundation` in `scripts/setup_env.sh`). It changes what several buckets are actually
+spending on, so it belongs in the token design and not only in the runbooks.
+
+**The principle: nobody outside the foundation needs to hold QDN in order to USE the chain.** They
+need it only to hold value or to bond stake. Everything else — joining as a node, onboarding a
+citizen wallet, signing a document — is a fee, and fees can be sponsored.
+
+### Three sponsorship domains, each funded by the bucket that already names it
+
+| domain | sponsor identity | funded from | pays for |
+|---|---|---|---|
+| User onboarding incentives | the **`incentive-pool`** genesis identity | **Adoption Programs (01)** — *"DID onboarding, gas subsidies"* | `create_wallet` incentives. The chain debits this directly; it is not a fee grant |
+| Agency deployments (SEC PH / VERITAS) | `foundation-appsvr` + `foundation-users` | **Public Sector Programs (10)** — *"Funds feegrant sponsor account"* | gas for agency operations and for citizen wallets |
+| Node joins and operation | `foundation-nodes` (or `treasury` on a test fleet) | **Node Operations (12)** | gas for the join and for SS rotation / re-share, for the life of the node |
+
+The CSV already anticipated all three. What changed is the *shape*: fee grants from a sponsor
+account, not bank sends to each recipient.
+
+### Two properties that change how you budget
+
+**Sponsorship is a recurring operating cost, not a grant.** The allowances are `PeriodicAllowance`s
+that refill every period, forever. So the *authorised* total is unbounded over time and only the
+*per-period* spend is capped. **Budget these buckets by burn rate, not by a one-off figure** — and
+the burn rate is not yet measured (see WHAT IS STILL NOT TESTED).
+
+**Fee grants cannot be modified.** `x/feegrant` has only Grant, Revoke and Prune; re-granting over a
+live allowance is rejected with *"fee allowance already exists"*. Changing a budget means
+revoke-then-regrant, and the gap between them is a window in which the grantee is unsponsored. For a
+node that window can cost a full SS rotation interval (~555 blocks), silently. **Size generously up
+front** — an over-sized period limit costs nothing, because the money is authorised, not spent.
+
+### Two accounts per agency, not one
+
+For an agency deployment the sponsor is split, and the split is worth the extra account:
+
+- **`foundation-appsvr`** — the agency's own operational wallets. A *fixed* set, known at
+  deployment, granted directly and once.
+- **`foundation-users`** — citizen wallets, which appear continuously (every onboarding, QR scan and
+  key rotation mints one), so the app-server issues their grants at runtime via `x/authz`.
+
+That delegation is unbounded by nature, and keeping it on a separate account confines it to the user
+float. It also makes usage independently observable: appsvr burn tracks the agency's processing,
+users burn tracks citizen activity, and a divergence between them is a real anomaly signal.
+
+### The agency never holds a foundation key
+
+A fee grant is signed by its **granter**, so a grant drawn on the foundation must be signed by the
+foundation. `x/authz` closes that gap: the foundation authorises the agency's admin key ONCE for
+`/cosmos.feegrant.v1beta1.MsgGrantAllowance`, and the agency then wraps each grant in a `MsgExec`.
+The allowance is the foundation's, the signature is the agency's, and the agency holds a **revocable
+permission rather than a key**. Same pattern serves node sponsorship.
+
+### What sponsorship CANNOT cover
+
+- **In-message transfers.** `create_credential_fee` (30php; bulk 10php) is debited from the creator
+  *inside* the message (`msg_server_create_credential.go`), not taken as gas. A fee grant pays gas
+  and not this, so an identity provider must genuinely hold QDN. It is redistributed to the eKYC app
+  and identity owner, so where the agency owns both it largely circulates back — size the float for
+  throughput, not cumulative spend.
+- **Validator self-bonds.** A stake, not a fee. Deliberately unsponsored: slashing is keyed to the
+  infraction height, so a foundation that sponsored the bond would absorb every penalty while the
+  operator risked nothing.
+
+### Consequence for `allocations.csv`
+
+Bucket 12's note reads *"1000 self-bond + 100 gas per node"*. Under sponsorship **the 100 gas is no
+longer sent** — it is covered by the node's fee grant — and the 1,000 self-bond is a *policy* number,
+not a technical floor: the chain enforces only `MinSelfDelegation > 0`. Bucket 12 now funds a
+**sponsor float plus whatever self-bond policy requires**, which is a different and probably smaller
+shape. Flagged, not edited (HARD RULE 1).
+
+---
+
+## 8. HARD RULES
 
 1. `allocations.csv` is human-owned. Never edit, never invent. Missing value → stop and ask.
 2. `genesis.json` is a build artifact. Never hand-edit.
@@ -247,8 +328,10 @@ cliff_days,vest_months,cliff_release_pct,stakes,circulating,custody_final,notes`
 
 ## Genesis contents
 
-1. 10 bucket BaseAccounts at **native multisig addresses** + 1 validator BaseAccount (1,100 QDN:
-   1,000 gentx self-bond + 100 gas — but see §14, both are reducible).
+1. 10 bucket BaseAccounts at **native multisig addresses** + 1 validator BaseAccount (**10,100 QDN**:
+   10,000 gentx self-bond + 100 gas). The self-bond matches the `min-self-delegation` floor, so the
+   genesis validator and every later joiner share one number. **It is NOT sponsored** — it
+   bootstraps the chain, so both halves are real.
 2. One gentx — single genesis validator; the set grows one by one post-launch via D2.
 3. **`scannedContractWhitelistList` entries for all ten buckets plus the validator:**
    ```yaml
@@ -287,7 +370,8 @@ cliff_days,vest_months,cliff_release_pct,stakes,circulating,custody_final,notes`
 9. every amount is a JSON string
 10. mint: `inflation_min == inflation_max == 0.01`, `blocks_per_year` non-default
 11. no second emission path (grep for epoch hooks / BeginBlocker transfers to `fee_collector`)
-12. exactly one validator row of exactly 1,100 QDN, matching exactly one gentx
+12. exactly one validator row of exactly **10,100 QDN**, matching exactly one gentx, and its
+    self-bond portion (10,000 QDN) equal to the `min-self-delegation` policy floor
 13. every `native_msig` row has a non-placeholder address before a mainnet build (placeholder
     allowed in dev builds; an assert flag distinguishes)
 14. **every bucket address and the genesis validator address appears in
@@ -355,11 +439,65 @@ remain the live custody accounts.
 4. THEN send the gas float. Never before (limit 4), and never omit it (limit 6).
 5. Log in the public grants register with the decision reference from §4.
 
-### D2. Node onboarding
+### D2. Node onboarding — toll-free, and implemented
 
-nodeops bucket grants the operator a token self-bond (see NODE ONBOARDING AT MINIMUM COST), operator runs `MsgCreateValidator`,
-foundation delegates a tranche, commission is operator compensation. `min_commission_rate` is 5%, so
-a node is self-funding from month one.
+A node joining the network needs **no QDN and no treasury of its own**. Built and wired:
+
+```sh
+# on the joiner (or via the fleet driver)
+add_full_node.sh --pioneer <name> --foundation-sponsored [<granter-addr>] ...
+
+# on a box holding the foundation key, between the two runs
+foundation_sponsor_node.sh --node <pioneer-address> [--granter <key>]
+
+# whole fleet, one flag
+fleet_bringup_with_tests.sh --foundation-sponsored ...
+nth_node_bringup.sh        --foundation-sponsored ...   (phases 3 and 4)
+```
+
+Instead of waiting for a balance, `add_full_node.sh` waits for a **fee grant** and passes
+`--fee-granter` to `sync-enclave`. `nth_node_bringup` phase 3 issues that grant in place of its
+bank send, so the fleet path is automated end to end with no manual foundation step.
+
+**The grant covers the node's whole life, not just the join.** `sync-enclave` broadcasts three
+messages, but `UpdateHeight` runs per block and drives SS rotation and re-share, which broadcast two
+more:
+
+```
+MsgPioneerAddPublicKey                join + SS rotation
+MsgPioneerUpdateIntervalPublicKeyID   join + SS rotation + InitEnclave
+MsgPioneerUpdatePioneerJar            join + InitEnclave
+MsgPioneerUpdatePublicKey             SS RE-SHARE
+MsgPioneerUpdateJarRegulator          InitEnclave
+```
+
+A join-only or expiring grant is a **trap**: the node joins, runs, and then fails its first SS
+rotation — unable to pay for a message its grant does not list — while still looking healthy. SS
+participation is consensus-relevant here. So the default is a recurring `PeriodicAllowance` over all
+five, with no expiry, bounded by a per-period budget and the message allow-list.
+
+**Why the join is still two runs.** `add_full_node.sh` mints the pioneer key with a plain
+`keys add` — random, no mnemonic — so the address does not exist until the first run has happened
+and nobody can grant to it beforehand. That predates sponsorship; it is why `--stop-for-funding`
+exists. Supplying the operator's key instead of minting one would collapse it to a single run, at
+the cost of moving key custody earlier.
+
+**What is still the operator's own money: the self-bond.** `--stake` is unaffected.
+
+There is **no chain floor** — x/staking checks only that the bond is positive, that the operator's
+declared `MinSelfDelegation` is positive, and that the bond is not below that declaration; x/qadena
+adds no gate. The chain would accept 1 aqdn.
+
+**The floor that applies is policy: 10,000 QDN**, set as `validators.first().app.min-self-delegation`
+in `config/config.yml` and read by `convert_to_validator.sh` for the genesis validator and every
+joiner. Under `--foundation-sponsored` that script does not sponsor the bond — it *reduces* it to
+exactly this floor (110,000 -> 10,000 QDN), because voting power comes from the foundation's
+delegation and bonding eleven times the minimum buys nothing.
+
+Leaving it unset is not neutral: `convert_to_validator.sh` falls back to **1 aqdn**, says so, and
+proceeds. The decision is now recorded in `config/launch-config.yml` alongside the staking params.
+
+It is a **promise, not an entry fee** — fall below it and the validator is permanently unbonded.
 
 #### Undelegation and slashing — the timing rule that matters
 
@@ -516,6 +654,18 @@ Three levers, in order of preference:
 **Do not** try to solve this with a feegrant. It will appear to work — the transaction succeeds —
 while the fee comes from the creator regardless.
 
+#### 3a. What is already BUILT for VERITAS
+
+`setup_veritas.sh --fund-mode feegrant` (now the default) stands the deployment up with **no SEC
+treasury at all**: two foundation accounts (`foundation-appsvr`, `foundation-users`),
+`foundation_authorise_sec.sh` to authorise SEC's admin for `MsgGrantAllowance`, `step_4.sh` for the
+app-server's sponsor pool, and `grant_as_foundation` doing the authz-wrapped grants. The old
+`--fund-mode banksend` path is kept for a deployment mid-migration.
+
+Note what that removed: the AML whitelist exemption `sec-treasury` needed. A treasury making direct
+transfers looks exactly like the pattern the AML scanner exists to catch; fee grants are not bank
+sends, so the hole is no longer needed and is no longer opened.
+
 #### 4. Direct funding — replace with sponsorship
 
 `step_3.sh` funds providers and users by `tx bank send` from `sec-treasury`, which is why that
@@ -551,8 +701,8 @@ not), the bounded-allowance fix in §1, bulk credential issuance, and a sponsore
 
 # NODE ONBOARDING AT MINIMUM COST
 
-D2 as written grants **1,100 QDN** per node (1,000 self-bond + 100 gas). Both halves are reducible,
-and one of them almost to zero.
+D2 grants **10,100 QDN** per node (10,000 self-bond + 100 gas). The gas half goes to zero under
+sponsorship; the self-bond half is policy, and deliberately does not.
 
 **There is no chain-wide minimum self-delegation.** The only checks are that the operator's declared
 `MinSelfDelegation` is positive (`x/staking/types/msg.go:76`) and that the initial self-bond is not
@@ -573,7 +723,8 @@ from a nodeops-funded native sponsor. The operator then needs **no gas float at 
 D2 works. The self-bond's only real function is slashing exposure.
 
 So a minimal onboarding is: **a token self-bond + a feegrant**, and the foundation delegates the
-stake that actually matters. That reduces the 1,100 QDN grant to near zero.
+stake that actually matters. Sponsorship therefore removes the 100 QDN gas entirely and leaves the
+10,000 QDN self-bond, which is the number the policy floor exists to set.
 
 **The trade-off is a governance decision, not a technical one.** Self-bond is the operator's skin in
 the game. At 1,000 QDN they have something to lose; at 1 QDN they have nothing, and D2 already notes
@@ -828,5 +979,16 @@ fixes founder custody terms.
 8. **Pattern C** (community pool) entirely.
 9. **A3's rewards leg via a contract**, and the cw-vesting contracts, were never instantiated —
    irrelevant if native is adopted, but the original brief's Phase C depends on them.
-10. Single chain, single run, single validator, no SGX. `unbonding_time` was reduced to 120s by
+10. **Sponsored node join and operation, end to end.** `--foundation-sponsored` is wired through
+    `fleet_bringup_with_tests.sh` -> `nth_node_bringup.sh` -> `add_full_node.sh` and passes syntax
+    and help checks, but has never run against a live chain: the fleet is wiped and
+    `foundation_sponsor_node.sh` is not yet in the installed package. **The first sponsored bringup
+    should also MEASURE GAS BURN** — the 1000qdn/30-day default is judgement, not evidence, and §7
+    says these buckets must be budgeted by burn rate.
+11. **A sponsored `x/dsvs` message.** Adding the three dsvs types to the appsvr's feegrant allow-list
+    is the change that makes VERITAS signing toll-free; A6 proves the mechanism for a different
+    message type, not for these.
+12. **Revoke-then-regrant of a live node grant**, and whether the gap costs a rotation interval in
+    practice.
+13. Single chain, single run, single validator, no SGX. `unbonding_time` was reduced to 120s by
     governance for N3; mainnet's 21 days is untested at that duration.

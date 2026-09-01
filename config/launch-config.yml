@@ -76,11 +76,92 @@ version: 1
 chain_id: "qadena_482-1"
 
 # ---------------------------------------------------------------------------------------------
+# NODE RUNTIME
+# ---------------------------------------------------------------------------------------------
+#
+# These four stanzas are what ignite needs to BUILD a chain, and they were absent until
+# 2026-09-01.  They are here, with MAINNET values, rather than borrowed from
+# config/config.yml -- because that file is the TEST chain and its values are wrong here in
+# ways that do not announce themselves:
+#
+#     validators[0].bonded  100000qdn  -> 10x the 10,000 the allocation actually funds
+#     timeout_commit        1.5s       -> half the 3s that blocks_per_year below ASSUMES
+#
+# That last pair is the dangerous one: importing a 1.5s timeout_commit while mint is
+# configured for 3s blocks would run the chain at roughly twice the assumed rate and
+# over-mint for its entire life, silently.  The node runtime for mainnet IS a mainnet
+# parameter, so it belongs in the mainnet parameter file.
+#
+# NOTE ON `validators:` AND KEY CUSTODY.  Its presence does not commit you to
+# `ignite chain init`.  The documented mainnet flow is still publish-genesis -> gentx ->
+# collect-gentxs, which keeps each validator's key on its own machine; these values then
+# describe the node runtime that flow produces.  A test fleet may use chain init directly.
+validation: sovereign
+
+build:
+  main: cmd/qadenad
+
+client:
+  openapi:
+    path: docs/static/openapi.yml
+
+validators:
+  # ONE IDENTITY, NOT TWO.  This is both the genesis validator and the genesis pioneer, which
+  # the chain requires rather than merely permits: a pioneer's external address is published
+  # ONLY by updateIsValidator(), behind `if in.IsProposer { if !PioneerIsValidator {...} }`
+  # (cmd/qadenad_enclave/enclave_external_address.go).  It fires on the node's first PROPOSED
+  # block.  A pioneer that never bonds never proposes, so it never publishes an address,
+  # getAddressPublishedPioneers() never counts it, and it never carries a secret share --
+  # registered in genesis and inert.  config/config.yml has always merged these for the same
+  # reason.  Splitting them was considered and rejected on 2026-09-01.
+  - name: qfi-pioneer1
+    # 10,000 QDN, matching the min-self-delegation floor documented in the staking section.
+    # The qfi-pioneer1 row in allocations.csv funds 110,100 = this 10,000 self-bond + a 100,100
+    # working balance for the re-share traffic a running pioneer never stops broadcasting.
+    bonded: "10000qdn"
+    app:
+      # Taken from config/config.yml (the devnet's working value) by decision, 2026-09-01.
+      # Deliberate, not inherited: it is high enough to price out spam and low enough that
+      # the sponsored flows in Phase D stay affordable -- a sponsor pays this on every
+      # wallet creation and every dsvs signature.
+      minimum-gas-prices: "500000000aqdn"
+      # A PROMISE, not an entry fee: fall below it and the validator is permanently
+      # unbonded.  10,000 QDN in aqdn.  Note the unit trap (cosmos-sdk#9386): a bare
+      # "10000" would mean 10000 aqdn, a floor of 0.00000000000001 QDN.
+      min-self-delegation: "10000000000000000000000"
+      pruning: "default"
+      pruning-keep-recent: "0"
+      pruning-interval: "0"
+    config:
+      # THE MONIKER IS THE PIONEER ID.  Not cosmetic, and not free-form: the node looks its
+      # own signing key up BY MONIKER when it initialises the enclave --
+      # cmd/qadenad/cmd/enclave_selfstart.go does
+      #     GetAddressByName(clientCtx, moniker, ...)
+      # and fails with "no key named %q (the moniker) in the keyring".
+      # scripts/convert_to_validator.sh reads it back the same way
+      # (`status | jq .node_info.moniker`) to learn which pioneer it is operating on.
+      #
+      # So this MUST equal the account name above.  Omitting it is not neutral: ignite
+      # defaults the moniker to "mynode", the chain builds, the genesis is correct -- and
+      # then InitEnclave cannot find a key named "mynode", so the node comes up and never
+      # registers its enclave.  Observed on the 2026-09-01 bring-up.
+      moniker: "qfi-pioneer1"
+      consensus:
+        # TARGETING 3s BLOCKS, which is what blocks_per_year: 10512000 below assumes.
+        # timeout_commit is a FLOOR, not the resulting rate: a real validator set is
+        # dominated by propagation latency and will run slower.  MEASURE the result on a
+        # multi-validator testnet (tokenomics/measure_block_time.sh) and recompute
+        # blocks_per_year from the measurement before launch -- do not ship this pairing
+        # on the assumption that the target is achieved.
+        timeout_commit: "2s"
+
+# ---------------------------------------------------------------------------------------------
 # ACCOUNTS AND TOKEN ALLOCATION
 # ---------------------------------------------------------------------------------------------
 #
 # NO MNEMONICS.  Production keys must never live in a repo file; supply addresses generated in
-# whatever custody you are using (hardware, multisig, MPC).  Everything here is TODO_ADDR_.
+# whatever custody you are using (hardware, multisig, MPC).  Every address below is a
+# placeholder until you supply one.
 #
 # The allocation below is NOT a starting structure to be edited here.  It is transcribed from
 # tokenomics/allocations.csv, which is human-owned; qadena-master-brief.md is authoritative for
@@ -111,9 +192,9 @@ accounts:
   #
   # qadena-master-brief.md says "Zero external addresses at genesis except genesis validator
   # operators", and specifies exactly 11 genesis accounts: 10 buckets + 1 validator.  Taken
-  # literally that deletes pioneer1 and treasury.  THEY CANNOT BE DELETED: the x/qadena genesis
+  # literally that deletes qfi-pioneer1 and treasury.  THEY CANNOT BE DELETED: the x/qadena genesis
   # stanza further down this file is NAME-BOUND to both --
-  #     publicKeyList          needs pioneer1PubKID / pioneer1PubK_pubk (transaction AND credential)
+  #     publicKeyList          needs qfi-pioneer1PubKID / qfi-pioneer1PubK_pubk (transaction AND credential)
   #     intervalPublicKeyIDList needs both a `pioneer` and a `treasury` nodeType entry
   #     bankSendWhitelistList   grants the AML scan exemption to treasuryPubKID
   # and buildscripts/setPubKAndPubKID.sh resolves "<name>PubKID" from the keyring for a NAMED
@@ -125,12 +206,27 @@ accounts:
   #
   # Until then both are left in place, and their amounts are NOT drawn from any bucket -- which
   # is itself part of the conflict, since the bucket percentages already sum to 100.
-  - name: pioneer1
-    address: "TODO_ADDR_PIONEER1"
-    coins: ["1000000qdn"]
-  - name: treasury
-    address: "TODO_ADDR_TREASURY"
-    coins: ["TODO_AMOUNT_TREASURYqdn"]
+  # 110,100 QDN = 10,000 gentx self-bond (the min-self-delegation floor, so the genesis node and
+  # every later joiner share one number) + 100,100 working balance.  NOT foundation-sponsored:
+  # this node bootstraps the chain, so both halves are real.  The working balance is what pays
+  # for what a RUNNING pioneer broadcasts forever -- MsgPioneerAddPublicKey,
+  # MsgPioneerUpdateIntervalPublicKeyID and the MsgPioneerUpdatePublicKey SS re-share, emitted
+  # from updateSSIntervalKey off UpdateHeight (scripts/foundation_sponsor_node.sh documents the
+  # full message set).  A join-only balance is a trap: the node runs, then stops re-sharing while
+  # continuing to look healthy.
+  # Operator-supplied address; part of the Node Operations bucket, not additional to it.
+  - name: qfi-pioneer1
+    address: "TODO_ADDR_QFI_PIONEER1"
+    coins: ["110100qdn"]
+  # NO `treasury` ACCOUNT.  It is gone as of 2026-09-01, and nothing references it:
+  #   * the chain role it served is now `wallet-incentive-pool`, funded from bucket 01;
+  #   * its only other use was bankSendWhitelistList, a field x/qadena no longer HAS.
+  # Removing it also makes this file's accounts sum to exactly 4,000,000,000 -- while it
+  # existed, its unset amount was supply that allocations.csv did not account for.
+  #
+  # The DEVNET (config/config.yml) still has one and still needs it: setup_prerequisites.sh
+  # funds every test user from it. That is a test-chain concern and does not belong here.
+
   # --- THE TEN ALLOCATION BUCKETS ---
   #
   # Transcribed from tokenomics/allocations.csv, which is HUMAN-OWNED and authoritative.
@@ -147,7 +243,24 @@ accounts:
   # Merchant incentives, DID onboarding, loyalty, gas subsidies. Capped annual tranches.
   - name: adoption
     address: "TODO_ADDR_ADOPTION"
-    coins: ["960000000qdn"]
+    coins: ["999000000qdn"]
+
+  # THE WALLET INCENTIVE POOL -- part of bucket 01, not a bucket of its own.
+  #
+  # x/qadena debits this account DIRECTLY for create_wallet incentives (500 + 500 per
+  # wallet, 50 per ephemeral wallet).  It is found by HARDCODED constants
+  # (types.IncentivePoolNodeID / NodeType, both "wallet-incentive-pool") and the chain
+  # PANICS on its first wallet creation if the intervalPublicKeyIDList entry is missing.
+  #
+  # It sits inside Adoption Programs because onboarding is exactly what that bucket is
+  # for -- so the 24% is unchanged and no eleventh allocation is invented.  1M QDN is a
+  # working float, not the whole onboarding budget; top it up from adoption as it drains.
+  #
+  # It replaces the old `treasury` role.  "treasury" collided three ways: this account,
+  # the Foundation Treasury bucket, and a deployment's sec-treasury.
+  - name: wallet-incentive-pool
+    address: "TODO_ADDR_WALLET_INCENTIVE_POOL"
+    coins: ["1000000qdn"]
 
   # Long-Term Reserve -- 15%, 600,000,000 QDN.  custody: cw-vesting + cw3-flex 4of5
   # 10yr linear unlock ENFORCED by cw-vesting; cw3 controls each unlocked tranche. Governance-
@@ -201,22 +314,19 @@ accounts:
     address: "TODO_ADDR_PUBSEC"
     coins: ["320000000qdn"]
 
-  # Node Operations -- 2%, 80,000,000 QDN.  custody: cw3-flex 3of5
-  # Post-launch onboarding: 1000 self-bond + 100 gas per node, then foundation delegates.
+  # Node Operations -- 1%, 40,000,000 QDN.  custody: native msig 3of5
+  # Post-launch onboarding: 10,000 self-bond + gas per node, then foundation delegates.
   # Commission is operator compensation.
-  # SPLIT ROW: this bucket is the reserve below PLUS the genesis validator account,
-  # which together sum to the full 80,000,000 QDN.
+  # SPLIT ROW: this reserve PLUS the qfi-pioneer1 account below sum to the full 40,000,000 QDN
+  # (39,889,900 + 110,100).  There is no separate genesis-validator account: qfi-pioneer1 is it.
   - name: nodeops
     address: "TODO_ADDR_NODEOPS"
-    coins: ["79998900qdn"]
+    coins: ["39889900qdn"]
 
-  # --- GENESIS VALIDATOR OPERATOR ---
-  # The ONLY externally-held address at genesis.  1,100 QDN = 1,000 gentx self-bond + 100 gas.
-  # Operator-supplied address; part of the Node Operations bucket, not additional to it.
-  # The validator set grows one node at a time POST-launch via Phase D2 -- one gentx here.
-  - name: genval1
-    address: "TODO_ADDR_GENVAL_1"
-    coins: ["1100qdn"]
+  # NO SEPARATE `genval1` ACCOUNT.  Merged into qfi-pioneer1 above on 2026-09-01: the genesis
+  # validator and the genesis pioneer are one identity, because a non-validator pioneer never
+  # publishes an address and never carries a share.  The validator set still grows one node at
+  # a time POST-launch via Phase D2 -- one gentx here.
 
 genesis:
   # Must match the top-level chain_id above.  See the registry note there.
@@ -228,6 +338,34 @@ genesis:
     # STAKING
     # -----------------------------------------------------------------------------------------
     staking:
+      # ---------------------------------------------------------------------------------------
+      # MIN-SELF-DELEGATION IS NOT A GENESIS PARAM -- and it is decided here anyway.
+      #
+      # There is NO chain-wide minimum self-delegation.  x/staking validates only three things
+      # (x/staking/types/msg.go): the self-bond is positive, the operator's DECLARED
+      # MinSelfDelegation is positive, and the bond is not below that declaration.  x/qadena adds
+      # no gate of its own.  So the chain's floor is 1 aqdn, and the floor that actually applies is
+      # whatever policy sets.
+      #
+      # That policy lives in NODE config, not in genesis state:
+      #     validators.first().app.min-self-delegation      (config/config.yml)
+      # which scripts/convert_to_validator.sh reads for both the genesis validator and every joiner.
+      # It is recorded HERE because it is a mainnet PARAMETER DECISION, and because leaving it unset
+      # is not neutral: convert_to_validator.sh falls back to **1 aqdn**, announces it, and proceeds.
+      # A mainnet validator could then be created with a self-bond of one atto-QDN.
+      #
+      # MAINNET VALUE: 10,000 QDN = "10000000000000000000000" aqdn, matching config/config.yml.
+      # Note the unit trap (cosmos-sdk#9386): a bare "10000" means 10000 aqdn, a floor of
+      # 0.00000000000001 QDN.
+      #
+      # WHY IT MATTERS MORE HERE THAN ON MOST CHAINS.  Voting power comes from the FOUNDATION's
+      # delegation, not the operator's bond, and slashing is keyed to the infraction height -- so
+      # the foundation absorbs the penalty whether or not it reacts.  The self-bond is therefore the
+      # operator's ENTIRE exposure.  At 1 aqdn they risk nothing; at 10,000 QDN they risk something.
+      # It is a PROMISE, not an entry fee: fall below it and the validator is permanently unbonded.
+      #
+      # Fees for becoming a validator ARE foundation-sponsorable (convert_to_validator.sh
+      # --foundation-sponsored); the self-bond deliberately is not.
       params:
         bond_denom: "aqdn"
         # 21 days is the Cosmos default and the usual choice.  It is the window during which a
@@ -313,7 +451,10 @@ genesis:
     # -----------------------------------------------------------------------------------------
     gov:
       params:
-        # TODO_MIN_DEPOSIT: set this by TARGET FIAT VALUE, not token count.  The real chains anchor
+        # 10,000 QDN, taken from config/config.yml by decision, 2026-09-01.
+        #
+        # STILL REVISIT BY GOVERNANCE ONCE A PRICE EXISTS.  The right way to set this is by
+        # TARGET FIAT VALUE, not token count.  The real chains anchor
         # around USD 1-2k of deposit: Cosmos Hub 250 ATOM, Osmosis 6000 OSMO.  qdn has no market
         # price yet, so pick the token amount that lands in that band at your expected launch price
         # and revisit by governance once a price exists.  10,000 qdn below is a placeholder shape.
@@ -471,6 +612,55 @@ genesis:
     # -----------------------------------------------------------------------------------------
     # QADENA
     # -----------------------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------------------
+    # WASM  --  present so the permissions are a DECISION, not a default.
+    #
+    # The token design uses no contracts at genesis (custody is native multisig throughout), but
+    # x/wasm is compiled in, so its params exist either way.  Spelling them out here keeps
+    # "who may upload code, and who may instantiate it" reviewable in this file rather than
+    # inherited from whatever wasmd currently defaults to.
+    wasm:
+      codes: []
+      contracts: []
+      params:
+        code_upload_access:
+          addresses: []
+          permission: "Everybody"
+        instantiate_default_permission: "Everybody"
+      sequences: []
+    # -----------------------------------------------------------------------------------------
+    # EVM  --  THE evm_denom IS LOAD-BEARING AND HAS NO SAFE DEFAULT.
+    #
+    # Omitting this whole section does not omit the module: Cosmos EVM falls back to its own
+    # default denom, "aatom", and the node PANICS at startup with
+    #     error initializing evm coin info: denom metadata aatom could not be found
+    # because bank.denom_metadata declares aqdn and nothing else.  The chain builds, the genesis
+    # verifies, and the node dies on first start.  Observed 2026-09-01.
+    #
+    # extended_denom must match evm_denom -- both are aqdn, the 18-decimal base unit.  Note the
+    # EVM chain id is NOT set here: it is PARSED from chain_id (<name>_<eip155>-<epoch>), and a
+    # malformed one fails silently.  See the chain_id note at the top of this file.
+    #
+    # Precompiles are left empty deliberately, matching the devnet.  Enabling one is a
+    # governance decision with a security review, not a launch default.
+    evm:
+      accounts: []
+      params:
+        access_control:
+          call:
+            access_control_list: []
+            access_type: "ACCESS_TYPE_PERMISSIONLESS"
+          create:
+            access_control_list: []
+            access_type: "ACCESS_TYPE_PERMISSIONLESS"
+        active_static_precompiles: []
+        evm_channels: []
+        evm_denom: "aqdn"
+        extended_denom_options:
+          extended_denom: "aqdn"
+        extra_eips: []
+        history_serve_window: "8192"
+      preinstalls: []
     qadena:
       params:
         # ONBOARDING INCENTIVES, paid by create-wallet-sponsor -- an operating cost, not an
@@ -502,7 +692,14 @@ genesis:
 
         # CREDENTIAL UPDATE POLICY
         update_credential_fee: "30php"
+        # DEVNET RUNS 2.  Left at 1 here deliberately pending review -- the devnet was bumped
+        # and this file was not, so confirm which version mainnet should launch on before
+        # genesis.  Raised by governance afterwards, but the launch value is fixed here.
         update_credential_policy_version: 1
+
+        # PRESENT SO IT IS NOT A DEFAULT.  config/config.yml sets 1; omitting it here would
+        # take whatever x/qadena defaults to, which is not the same decision.
+        update_credential_max_changed_identity_fields: 1
         update_credential_max_identity_aliases: 4
         update_credential_max_life_events: 2
         update_name_max_edit_distance: 2
@@ -523,11 +720,14 @@ genesis:
         # Every currency named below needs a cn:qdn:<denom> market with a live price, or transfers
         # fail closed: the keeper refuses to scan a transfer it cannot measure. Adding a
         # jurisdiction here means adding its market and an oracle posting to it.
-        suspicious_transaction_threshold: "TODO_SUSPICIOUS_THRESHOLD"   # e.g. "10000usd"
+        # From config/config.yml by decision, 2026-09-01.  Note these are FIAT-denominated
+        # and converted through the pricefeed, so they are only as good as the posted price
+        # below -- a stale cn:qdn:php makes every threshold wrong in the same direction.
+        suspicious_transaction_threshold: "10000usd"
         suspicious_transaction_threshold_overrides:
           # e.g. PH files at PHP 500,000 rather than a converted USD figure
-          - country: "TODO_JURISDICTION_ALPHA2"
-            threshold: "TODO_JURISDICTION_THRESHOLD"
+          - country: "PH"
+            threshold: "500000php"
         # 30 days.  Shortening this narrows what counts as structuring; lengthening it grows the
         # stored history per wallet.
         suspicious_transaction_window_seconds: 2592000
@@ -546,48 +746,113 @@ genesis:
         # are exempt in every mode.  Raised by governance, not by a deploy.
         sign_recover_key_guardian_assertion_mode: 0
 
-      # Accounts allowed to move coins with a direct bank send WITHOUT being AML-scanned.  Every
-      # other account-to-account transfer, by any module, goes through the same enclave scan as
-      # transfer-funds: eKYC gate, per-jurisdiction threshold, rolling window.
+      # ---------------------------------------------------------------------------------
+      # THE AML SCAN WHITELIST -- WITHOUT THIS THE CHAIN IS FUNDED AND FROZEN.
       #
-      # EVERY ENTRY HERE IS AN AML EXEMPTION.  Keep the list to accounts that genuinely cannot be
-      # scanned -- ones that are not user wallets and hold no credential to draw a jurisdiction
-      # from.  In practice that means the bootstrap treasury and nothing else at genesis.
+      # app.go:630 registers qadenaBankSendRestriction on the bank keeper, so it sits UNDER
+      # SendCoins and per-output under InputOutputCoins -- MsgSend, MsgMultiSend, authz-wrapped
+      # sends and EVM value transfers alike, not just the message a user typed.  It exempts
+      # exactly one thing: a MODULE account on either side (fees, staking, gov deposits, the
+      # x/qadena escrow).  EVERYTHING ELSE IS SCANNED, and refused if it cannot be scanned.
       #
-      # Per-deployment treasuries are deliberately NOT listed: they are created at runtime and add
-      # themselves by governance when that deployment is onboarded, so a deployment that never
-      # launches never gets an exemption.  The `reason` is stored on chain and is what a later
-      # reviewer has to judge the entry by, so write it for them.
-      # treasuryPubKID is substituted with the treasury's derived address by
-      # buildscripts/setPubKAndPubKID.sh during init, so it needs no TODO -- but review whether this
-      # account should be exempt at all before launch, and delete the entry if it should not.
-      bankSendWhitelistList:
-        - address: treasuryPubKID
-          reason: "TODO: state why this account cannot be AML-scanned"
+      # None of these accounts holds an eKYC credential -- they are plain addresses and native
+      # multisigs.  So without an entry here, a bucket can pay gas, bond, and vote, but cannot
+      # send a single token to a person or to another bucket: code 1159, ErrBankSendNotScannable.
+      # Adoption could not even refill the wallet incentive pool.
+      #
+      # Listed is NOT exempt.  A listed party may transact without holding a credential, but its
+      # sends are still scanned, measured and reported -- which is why this replaced the old
+      # bankSendWhitelistList (see the note below) rather than restoring it.
+      #
+      # codeID 0 because every one of these is a PLAIN ACCOUNT, not a wasm contract.  A contract
+      # MUST be pinned to its code ID: its admin can migrate it, and an unpinned entry would
+      # carry the approval over to code governance never reviewed.  The chain rejects a mismatch.
+      #
+      # Per-deployment treasuries (ekycph-treasury, enf-treasury, sec-treasury) are NOT here.
+      # They are created at runtime and add themselves by governance during onboarding.
+      #
+      # tokenomics/build_config.py adds any bucket missing from this list when it renders the
+      # ignite config.  Listing them here anyway is the point: the whitelist is a security
+      # decision and belongs somewhere a human reviews, not only in a generator's fallback.
+      scannedContractWhitelistList:
+        - address: TODO_ADDR_ADOPTION
+          codeID: 0
+          reason: "Adoption Programs genesis custody"
+        - address: TODO_ADDR_WALLET_INCENTIVE_POOL
+          codeID: 0
+          reason: "Wallet Incentive Pool genesis custody"
+        - address: TODO_ADDR_LTR
+          codeID: 0
+          reason: "Long-Term Reserve genesis custody"
+        - address: TODO_ADDR_FOUNDATION
+          codeID: 0
+          reason: "Foundation Treasury genesis custody"
+        - address: TODO_ADDR_GRANTS
+          codeID: 0
+          reason: "Builder & Partner Grants genesis custody"
+        - address: TODO_ADDR_PERSONNEL
+          codeID: 0
+          reason: "Personnel genesis custody"
+        - address: TODO_ADDR_BACKERS
+          codeID: 0
+          reason: "Early Backers Escrow genesis custody"
+        - address: TODO_ADDR_FOUNDERS
+          codeID: 0
+          reason: "Founders Escrow genesis custody"
+        - address: TODO_ADDR_CONTINGENCY
+          codeID: 0
+          reason: "Contingency Reserve genesis custody"
+        - address: TODO_ADDR_PUBSEC
+          codeID: 0
+          reason: "Public Sector Programs genesis custody"
+        - address: TODO_ADDR_NODEOPS
+          codeID: 0
+          reason: "Node Operations genesis custody"
+        - address: TODO_ADDR_QFI_PIONEER1
+          codeID: 0
+          reason: "genesis validator and pioneer: bootstrap identity, Node Operations bucket"
+
+      # bankSendWhitelistList IS GONE -- the field no longer exists in x/qadena GenesisState
+      # (see types/genesis.pb.go: Params, CredentialList, PublicKeyList, WalletList,
+      # IntervalPublicKeyIDList, PioneerJarList, JarRegulatorList, SuspiciousTransactionList,
+      # SuspiciousTransactionCount, ProtectKeyList, RecoverKeyList, EnclaveIdentityList,
+      # ScannedContractWhitelistList).  It used to grant an UNSCANNED exemption; what replaced it
+      # is the scannedContractWhitelistList above, which is narrower: a listed party may transact
+      # without holding a credential, but its sends are still scanned, measured and reported.
+      #
+      # The stale stanza was carried here until 2026-09-01 naming `treasuryPubKID`, and removing it
+      # removes the LAST reason launch-config needed a `treasury` account at all -- the chain role
+      # that account served is now `wallet-incentive-pool`, which is funded from bucket 01.
 
       # THE MOST SECURITY-CRITICAL ENTRY IN THIS FILE.
       # These are the SGX measurements the chain will trust.  The test chain ships
       # test-unique-id/test-signer-id/test-product-id, which WORK -- so this is the item most likely
       # to be shipped unchanged by accident.  Placeholders here are deliberately invalid.
+      # !! TEST-FLEET VALUES !!  These are the placeholders config/config.yml uses;
+      # buildscripts/build_enclave.sh rewrites uniqueID and signerID in the GENERATED
+      # genesis.json with the ids the debug build produced.  They are correct for a
+      # debug fleet (M1-M4 have no SGX) and MUST NOT reach mainnet: a real launch
+      # needs the MRENCLAVE of the exact SGX build, read with
+      #     qadenad query qadena enclave-measurement
       enclaveIdentityList:
-        - uniqueID: "TODO_ENCLAVE_UNIQUE_ID"
-          signerID: "TODO_ENCLAVE_SIGNER_ID"
-          productID: "TODO_ENCLAVE_PRODUCT_ID"
+        - uniqueID: "test-unique-id"
+          signerID: "test-signer-id"
+          productID: "test-product-id"
           status: active
 
-      # pioneer1 and treasury only.  Every service provider is onboarded at runtime by a
+      # qfi-pioneer1 and treasury only.  Every service provider is onboarded at runtime by a
       # MsgAddServiceProvider governance proposal -- see testscripts/setup_prerequisites.sh.
       publicKeyList:
-        - pubKID: pioneer1PubKID
-          pubK: pioneer1PubK_pubk
+        - pubKID: qfi-pioneer1PubKID
+          pubK: qfi-pioneer1PubK_pubk
           pubKType: transaction
-        - pubKID: pioneer1PubKID
-          pubK: pioneer1PubK_pubk
+        - pubKID: qfi-pioneer1PubKID
+          pubK: qfi-pioneer1PubK_pubk
           pubKType: credential
       intervalPublicKeyIDList:
-        - pubKID: pioneer1PubKID
+        - pubKID: qfi-pioneer1PubKID
           nodeType: pioneer
-          nodeID: pioneer1
+          nodeID: qfi-pioneer1
         # THE INCENTIVE POOL -- the account the chain debits for create_wallet incentives
         # (500 + 500 per wallet, 50 per ephemeral wallet; ~100M QDN per 100k users).
         #
@@ -604,9 +869,9 @@ genesis:
         # nodeID/nodeType are STATE KEY bytes and the lookup constants are hardcoded
         # (types.IncentivePoolNodeID / NodeType).  They must match exactly or every wallet
         # creation PANICS.
-        - pubKID: TODO_ADDR_ADOPTION
-          nodeType: incentive-pool
-          nodeID: incentive-pool
+        - pubKID: TODO_ADDR_WALLET_INCENTIVE_POOL
+          nodeType: wallet-incentive-pool
+          nodeID: wallet-incentive-pool
 
     # -----------------------------------------------------------------------------------------
     # PRICEFEED
@@ -640,7 +905,22 @@ genesis:
       #
       # Give them days, not years -- long enough to bootstrap, short enough that real prices take
       # over cleanly.  And do not launch fiat-denominated fees without something actually posting.
+      # From config/config.yml by decision, 2026-09-01.  cn:qdn:php is DERIVED, not
+      # independent: qdn:php = qdn:usd / php:usd = 0.01 / 0.016297 = 0.613610.  Keep the
+      # three in step -- cn:qdn:php is the one that matters in practice, because it is what
+      # the credential fee ("30php") is converted through.
+      #
+      # THE 0.01 QDN:USD IS A PLACEHOLDER PRICE, not an observation: qdn is not traded yet.
+      # Every fiat-denominated fee and AML threshold on this chain is priced through it, so
+      # replace it the moment a real source exists -- and note the expiry below is 2030, far
+      # longer than the "days, not years" this section otherwise recommends.
       postedPriceList:
-        - expiry: "TODO_EXPIRY_DAYS_AFTER_LAUNCH"
+        - expiry: "2030-01-01T00:00:00Z"
+          marketId: "cn:qdn:usd"
+          price: "0.01"
+        - expiry: "2030-01-01T00:00:00Z"
           marketId: "cn:qdn:php"
-          price: "TODO_LAUNCH_PRICE_QDN_PHP"
+          price: "0.613610"
+        - expiry: "2030-01-01T00:00:00Z"
+          marketId: "fn:php:usd"
+          price: "0.016297"

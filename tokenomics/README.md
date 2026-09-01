@@ -3,6 +3,83 @@
 Everything the QDN token launch is built from. `qadena-master-brief.md` is authoritative; this
 README says what is here, what has been verified, and what is still open.
 
+---
+
+## Quickstart
+
+**Check the allocations add up** (no chain, no genesis, takes a second):
+
+```sh
+./verify_genesis.py --csv-only --allow-placeholders
+```
+
+**Build a dev genesis and verify it:**
+
+```sh
+./measure_block_time.sh                       # against a running chain -> block time
+
+qadenad init dev --chain-id qadena_4828-1 --home /tmp/g
+
+./build_genesis.py --base /tmp/g/config/genesis.json \
+                   --chain-id qadena_4828-1 --block-time 1.467 \
+                   --out /tmp/g/config/genesis.json \
+                   --allow-placeholders --verify
+```
+
+### Where `blocks_per_year` comes from — measure it, do not copy it
+
+`blocks_per_year = 31,536,000 / seconds-per-block`, and the brief requires the block time to be
+**measured**. Do not read it off `timeout_commit`: that is a *floor*, not a rate.
+
+x/mint pays `annual_provisions / blocks_per_year` on **every block**. Set it below the true rate and
+each block pays too much *and* there are more blocks than assumed — the error compounds twice,
+silently, for the life of the chain.
+
+| source | s/block | blocks_per_year |
+|---|---|---|
+| devnet `timeout_commit` (a target) | 1.5 | 21,024,000 |
+| **measured**, Phase A | 1.467 | 21,496,932 |
+| **measured**, later run | 1.564 | 20,159,824 |
+| mainnet target, unmeasured | 3.0 | 10,512,000 |
+
+The devnet's *configured* 21,024,000 against a measured 1.467s is ~2% of over-mint — a "1%"
+inflation really paying 1.02%. And the two measurements differ by 7%, so **sample over minutes**;
+`build_genesis.py` warns if the value you pass implies exactly 1.5s or 3.0s, because those are
+targets rather than observations.
+
+**Regenerate the unlock schedule:**
+
+```sh
+./export_unlock_schedule.py --summary
+```
+
+**Check a genesis you have already built:**
+
+```sh
+./verify_genesis.py --genesis /tmp/g/config/genesis.json --allow-placeholders --pre-gentx
+```
+
+> Do **not** point this at a running devnet's `~/qadena/config/genesis.json` and expect a pass.
+> That genesis comes from `config/config.yml` and holds `pioneer1` + `treasury` = 2.001B QDN, not
+> the ten buckets — so it fails assertion 4 with `balances sum to 2001000000000000000000000000,
+> expected 4000000000000000000000000000`. That is the verifier being right, not broken. This tool
+> checks **token-launch** genesis files.
+
+Every script takes `--help`. `verify_genesis.py` exits **non-zero on the first failure**, naming
+the bucket, so it drops straight into CI or a pre-flight check.
+
+Three things that will bite you if you skip them:
+
+| | |
+|---|---|
+| `--allow-placeholders` | Needed until the ten real `<NN_MSIG_ADDR>` values exist. A mainnet build must **not** pass it. |
+| `--pre-gentx` | Needed before `collect-gentxs`. `build_genesis.py` passes it automatically when verifying its own output. |
+| `qadenad genesis validate` | **Not** `qadenad validate-genesis` — the older form exits "unknown command" on this SDK. |
+
+Detail for all of it is under [Building a genesis](#building-a-genesis).
+
+---
+
 ## Contents
 
 | file | status |
@@ -10,9 +87,14 @@ README says what is here, what has been verified, and what is still open.
 | `qadena-master-brief.md` | **The brief — one document, read this.** All-native custody on core SDK only. Economics, Phase A results, Phases B–D, runbooks, hard rules, open questions. |
 | `allocations.csv` | **Human-owned.** Never edited by tooling. A missing value stops work and asks. |
 | `gating-findings.md` | Phase A results, with pasted output. |
+| `verify_genesis.py` | 16 assertions. Exits non-zero on the FIRST failure, naming the bucket. |
+| `build_genesis.py` | CSV -> genesis.json. Deterministic; patches a real `qadenad init` skeleton. |
+| `export_unlock_schedule.py` | Monthly unlock / circulating / minted-supply table, TGE to month 120. |
+| `measure_block_time.sh` | Samples a running chain for `--block-time`. |
+| `unlock_schedule.csv` | Generated. Do not edit. |
 
-Phase B deliverables (`build_genesis.py`, `verify_genesis.py`, `export_unlock_schedule.py`) are
-**not here yet** — Phase A gates them, and one open question below blocks Phase B specifically.
+Phase B's three tools are built and tested. What is **not** done: the ten real bucket addresses,
+which is why every command above carries `--allow-placeholders`, and the open questions below.
 
 ## allocations.csv
 
@@ -85,6 +167,83 @@ Conflicts found by testing rather than reading. All are recorded in full in
 4. **`cw-vesting` is not in cw-plus**, and ships in two builds. Foundation (504M, delegated while
    locked) needs `-staking`; Long-Term Reserve needs `-no_staking`. The brief says only
    "cw-vesting", which is not specific enough to deploy from.
+
+## Building a genesis
+
+```sh
+# 1. render the ignite config from launch-config.yml + allocations.csv
+#    NOTE: it must land at config/config.yml -- see the warning below
+./build_config.py --out ../config/config.yml
+
+# 2. ignite builds genesis.json from it
+buildscripts/init.sh
+
+# 3. check the artifact (pre-gentx: no validator collected yet)
+./verify_genesis.py --genesis $QADENAHOME/config/genesis.json --pre-gentx
+
+# 4. gentx, collect, then verify IN FULL -- assertion 12 runs this time
+qadenad genesis gentx ... && qadenad genesis collect-gentxs --home $QADENAHOME
+./verify_genesis.py --genesis $QADENAHOME/config/genesis.json --expect-evm-id 482
+
+# 5. the chain's own check
+qadenad genesis validate --home $QADENAHOME
+```
+
+### `init.sh` overwrites `config.yml` — render to `config/config.yml`, not the repo root
+
+[`buildscripts/init.sh:148`](../buildscripts/init.sh) does
+`cp config/config.yml config.yml` **unconditionally**, so a rendered file left at the repo
+root is silently discarded and you get the devnet chain instead of yours. That copy is
+deliberate: it used to skip when the generated file "looked complete", which meant edits to
+`config/config.yml` had no effect until you remembered to delete the stale copy.
+
+`config/config.yml` is **the devnet's config and is tracked in git**, so rendering over it
+replaces the devnet setup. Commit or stash it first — that is what makes the devnet
+recoverable. `build_config.py` warns whenever `--out` is anywhere else.
+
+**`qadenad genesis validate`, not `qadenad validate-genesis`.** The brief's older wording
+exits "unknown command" on this SDK.
+
+`build_genesis.py` **patches a skeleton rather than fabricating one.** A genesis carries
+consensus params and 35 module sections whose shape moves with the SDK; hand-generating
+them would be a second, silently-drifting definition of the chain. The script sets only
+accounts, balances, supply, denom metadata, mint params, the AML whitelist and the
+incentive-pool entry, and passes everything else through.
+
+**Output is deterministic** -- sorted keys, fixed separators -- so the same inputs give a
+byte-identical file and the same SHA256. That is what lets a second person reproduce the
+hash, which the Definition of Done requires.
+
+### Two flags that exist for real reasons
+
+- `--allow-placeholders` -- permits `<NN_MSIG_ADDR>`. **Dev builds only**; assertion 13
+  fails a mainnet build on them. Note that `qadenad genesis validate` rejects a
+  placeholder genesis anyway: the addresses are not parseable bech32, so the SDK decodes
+  them all to the same value and reports "duplicate account".
+- `--pre-gentx` -- skips assertion 12. `qadenad init` produces no gentx, so the artifact
+  this script writes is by definition pre-gentx; the validator check belongs after
+  `collect-gentxs`.
+
+## The unlock schedule has a known limitation
+
+`export_unlock_schedule.py` implements the brief exactly, and the result is that
+**`circulating_qdn` is FLAT at 56,010,100 QDN for all 120 months.**
+
+That is not a bug in the script. 85% of supply sits in buckets marked `circulating=no`,
+and nothing in the CSV ever moves a token out of that state. The column describes a
+bucket's status *at genesis*, not the destiny of grants issued from it -- a founder grant
+that vests and is sold is plainly circulating, while its bucket stays `no`.
+
+So the column answers *"how much is liquid in accounts that are themselves float"* and
+**not** *"how much could reach a market"*. The second question needs a payout assumption
+per bucket that `allocations.csv` does not carry. **Reported, not invented** (HARD RULE 1)
+-- it needs a human decision.
+
+The **unlock** columns are unaffected and meaningful: LTR rises linearly to 600M over 120
+months, Foundation reaches 560M at month 72, and the total lands exactly on 4,000,000,000.
+
+TGE circulating computes to 56,010,100 QDN (1.40%), matching the brief's ~56.0M +
+validator floats prediction.
 
 ## Reproducing the tests
 

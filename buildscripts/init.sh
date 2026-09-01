@@ -28,6 +28,10 @@ nodeparamsfile="$qadenaconfig/node_params.json"
 #enclave_path="$(pwd)/cmd/qadenad_enclave"
 
 ADVERTISE_IP_ADDRESS=""
+mainnet_source=""
+mainnet_vault=""
+pioneer_mnemonic=""
+vault_passphrase=""
 build_sgx_flag=""
 no_sgx_flag=""
 skip_build=0
@@ -40,6 +44,95 @@ while [[ $# -gt 0 ]]; do
         shift 2
       else
         echo "Error: --advertise-ip-address requires an IP argument"
+        exit 1
+      fi
+      ;;
+    # BUILD A MAINNET-SHAPED CHAIN FROM THIS IGNITE CONFIG, instead of the devnet's
+    # config/config.yml.  Two things change, and they are the same decision:
+    #
+    #   1. the config is read from HERE.  A token-launch genesis rendered by
+    #      tokenomics/build_config.py would otherwise have to overwrite config/config.yml to be
+    #      built at all, since the copy below reads only that one path -- and that file is the
+    #      devnet's own tracked config.
+    #
+    #   2. the setPubKAndPubKID substitutions below are SKIPPED.  That script resolves
+    #      "<name>PubKID" from the local keyring, and it also splices in "<name>PrivKHex" --
+    #      a private key, exported unarmored.  That is a devnet convenience for minting
+    #      throwaway identities in one command.  A real launch collects the pioneer's ADDRESS
+    #      and PUBKEY from whoever holds the key, in their own custody, and carries them as
+    #      literals; the build host never sees the secret and has no such keyring entry to
+    #      resolve.  So the correct mainnet behaviour is not "substitute" -- it is "there is
+    #      nothing left to substitute", which is then asserted rather than assumed.
+    --mainnet-source)
+      if [[ -n "$2" && "$2" != --* ]]; then
+        mainnet_source="$2"
+        # VALIDATE HERE, NOT WHERE IT IS USED.  The copy happens at line ~170, which is AFTER
+        # `rm -rf $QADENAHOME` -- so a typo'd path would wipe the node's home and its keyring
+        # and only then report the mistake.  Fail before anything is destroyed.
+        if [[ ! -f "$mainnet_source" ]]; then
+          echo "Error: --mainnet-source $mainnet_source does not exist"
+          exit 1
+        fi
+        shift 2
+      else
+        echo "Error: --mainnet-source requires a path"
+        exit 1
+      fi
+      ;;
+    # THE ONE KEY A BUILD HOST NEEDS.  Under --mainnet-source the accounts carry literal
+    # ADDRESSES, not mnemonics, so `ignite chain init` creates funded accounts with no signing
+    # key -- and the genesis validator still has to sign a gentx.  The key is restored from a
+    # vault AFTER the wipe below (which takes $QADENAHOME/keyring-test with it) and BEFORE the
+    # init, which is the only window where it survives to be used.
+    #
+    # Restored with --strip-prefix dev-, because ignite looks the key up by the ACCOUNT name in
+    # config.yml (qfi-pioneer1) while the vault stores it prefixed to keep throwaway keys
+    # obviously throwaway.  Only the pioneer vault belongs here: the bucket multisigs are
+    # genesis addresses and no key of theirs is ever needed to build a chain.
+    # THE GENESIS VALIDATOR'S KEY, for --mainnet-source only.
+    #
+    # `ignite chain init` wipes the chain home and THEN needs a key to sign the gentx, so the
+    # only way one can be there is for ignite to create it during "add accounts" -- and it only
+    # does that from a `mnemonic:`.  An account given neither address nor mnemonic gets a freshly
+    # MINTED key whose mnemonic ignite prints once and nothing captures: the chain comes up with
+    # a validator nobody can ever sign for again.  So the operator supplies it.
+    #
+    # It is injected into the WORKING config.yml, never into the source given to
+    # --mainnet-source.  That file stays free of key material.
+    #
+    # The devnet path is untouched: config/config.yml carries its own mnemonics already.
+    --pioneer-mnemonic)
+      if [[ -n "$2" && "$2" != --* ]]; then
+        pioneer_mnemonic="$2"
+        shift 2
+      else
+        echo "Error: --pioneer-mnemonic requires the mnemonic in quotes"
+        exit 1
+      fi
+      ;;
+    --mainnet-vault)
+      if [[ -n "$2" && "$2" != --* ]]; then
+        mainnet_vault="$2"
+        if [[ ! -f "$mainnet_vault" ]]; then
+          echo "Error: --mainnet-vault $mainnet_vault does not exist"
+          exit 1
+        fi
+        shift 2
+      else
+        echo "Error: --mainnet-vault requires a path"
+        exit 1
+      fi
+      ;;
+    --vault-passphrase)
+      if [[ -n "$2" && "$2" != --* ]]; then
+        vault_passphrase="$2"
+        if [[ ! -f "$vault_passphrase" ]]; then
+          echo "Error: --vault-passphrase $vault_passphrase does not exist"
+          exit 1
+        fi
+        shift 2
+      else
+        echo "Error: --vault-passphrase requires a path"
         exit 1
       fi
       ;;
@@ -62,6 +155,19 @@ while [[ $# -gt 0 ]]; do
       ;;
     --help)
       echo "Usage: init.sh [--advertise-ip-address <ip>] [--build-sgx | --no-sgx] [--skip-build]"
+      echo "               [--mainnet-source <path-to-yml>]"
+      echo "  --mainnet-source  build a MAINNET-shaped chain from THIS ignite config instead"
+      echo "            of the devnet's config/config.yml -- e.g. a genesis rendered by"
+      echo "            tokenomics/build_config.py.  Also SKIPS the setPubKAndPubKID key"
+      echo "            splicing, which is devnet-only (it exports a private key), and instead"
+      echo "            asserts the genesis carries no unresolved placeholder."
+      echo "  --pioneer-mnemonic <words>"
+      echo "            the genesis validator's mnemonic, for --mainnet-source.  Prompted for if"
+      echo "            omitted.  Injected into the working config.yml only, never the source."
+      echo "  --mainnet-vault / --vault-passphrase"
+      echo "            restore the pioneer signing key from a key vault after the home is"
+      echo "            wiped and before the chain init, so the genesis validator can sign its"
+      echo "            gentx.  Only meaningful with --mainnet-source."
       echo "  --no-sgx  force a DEBUG enclave even where ego is installed.  Without it, build.sh"
       echo "            builds SGX artifacts on any machine that has ego."
       exit 0
@@ -105,7 +211,50 @@ echo "-------------------------------------------"
 echo "INIT CHAIN FROM SCRATCH AND ERASE ALL DATA"
 echo "-------------------------------------------"
 
+# THE PIONEER ID IS A CONFIG FACT, NOT A CONSTANT.  The devnet's genesis identity is
+# `pioneer1`; a mainnet-shaped chain names its own (qfi-pioneer1).  It has to match the
+# account/validator name in the config being built, because setPioneerID.sh writes it into
+# node_params.json and the enclave later hands it to InitEnclave -- a mismatch produces a node
+# whose sealed identity is not the one genesis registered.
 PIONEER1=pioneer1
+if [[ -n "$mainnet_source" ]]; then
+    mv_name=$(awk '/^validators:/{v=1;next} v&&/^[a-z]/{exit} v&&/^[[:space:]]*- name:/{print $3;exit}' "$mainnet_source")
+    if [[ -z "$mv_name" ]]; then
+        echo "   INIT FAILED: could not read validators[0].name from $mainnet_source"
+        exit 1
+    fi
+    PIONEER1="$mv_name"
+    echo "Pioneer ID from $mainnet_source: $PIONEER1"
+fi
+
+# ASKED BEFORE ANYTHING IS DESTROYED, for the same reason the IP is: a prompt discovered after
+# `rm -rf $QADENAHOME` leaves the operator with a wiped node and a question.
+if [[ -n "$mainnet_source" ]]; then
+    # Only when the config actually needs one: an account carrying a literal address (the real
+    # mainnet shape, where the holder keeps their key) needs no mnemonic here at all.
+    if ! awk -v n="$PIONEER1" '
+            $0 ~ "- name: " n "$" {f=1; next}
+            f && /^[[:space:]]*(address|mnemonic):/ {print "has"; exit}
+            f && /^[[:space:]]*- name:/ {exit}
+        ' "$mainnet_source" | grep -q has ; then
+        if [[ -z "$pioneer_mnemonic" ]]; then
+            echo ""
+            echo "The genesis validator '$PIONEER1' has no address and no mnemonic in"
+            echo "$mainnet_source, so ignite would MINT a key and print its mnemonic once."
+            echo "Nothing captures that, and the validator would be unrecoverable."
+            echo "You can avoid this prompt by calling init.sh --pioneer-mnemonic \"<words>\""
+            echo ""
+            read -s "pioneer_mnemonic?*** Paste the mnemonic for $PIONEER1 (hidden): "
+            echo ""
+        fi
+        wc=$(echo "$pioneer_mnemonic" | wc -w | tr -d ' ')
+        if [[ $wc -lt 12 ]]; then
+            echo "   INIT FAILED: that is $wc word(s); a BIP39 mnemonic is 12 or 24."
+            exit 1
+        fi
+        echo "Got a $wc-word mnemonic for $PIONEER1"
+    fi
+fi
 
 # CHECKED BEFORE ANYTHING IS DESTROYED.  `ignite chain init` below REGENERATES THE PROTOS as a side
 # effect, using the machine's local plugins; a mismatched one rewrites nine .pb.go files and the
@@ -137,6 +286,22 @@ fi
 
 cd $qadenabuild
 
+# RESTORE THE PIONEER KEY -- the wipe above just deleted $QADENAHOME/keyring-test, and
+# `ignite chain init` below needs a signing key for the genesis validator.
+if [[ -n "$mainnet_vault" ]]; then
+    if [[ -z "$vault_passphrase" ]]; then
+        echo "   INIT FAILED: --mainnet-vault needs --vault-passphrase"
+        exit 1
+    fi
+    echo "Restoring the pioneer key from $mainnet_vault"
+    if ! python3 "$qadenabuild/tokenomics/dev_key_vault.py" import \
+            --in "$mainnet_vault" --passphrase-file "$vault_passphrase" --strip-prefix dev- ; then
+        echo "   INIT FAILED: could not restore the key vault -- the gentx would fail with the"
+        echo "   key sitting in a file right next to it."
+        exit 1
+    fi
+fi
+
 # config.yml is now just a verbatim copy of config/config.yml.  Nothing is substituted into it any
 # more -- pioneer1 and treasury are both fixed up in genesis.json after the init -- so there is no
 # reason to detect or preserve an existing copy.
@@ -144,8 +309,48 @@ cd $qadenabuild
 # Copying unconditionally also removes a real trap.  The old code kept a previously generated
 # config.yml if it looked complete, so an edit to config/config.yml silently had no effect until you
 # remembered to delete the generated one first.
-echo "Copying config/config.yml -> config.yml"
-cp $qadenabuild/config/config.yml $qadenabuild/config.yml
+# STILL AN UNCONDITIONAL COPY.  Only the SOURCE is selectable now -- the old trap it warns
+# about above (keeping a stale generated config.yml because it "looked complete") stays
+# closed either way.
+config_src="${mainnet_source:-$qadenabuild/config/config.yml}"
+if [[ ! -f "$config_src" ]]; then
+    # --mainnet-source is validated at parse time; this only catches a missing default.
+    echo "init.sh: $config_src does not exist"
+    exit 1
+fi
+if [[ -n "$mainnet_source" ]]; then
+    echo "Copying $config_src -> config.yml  (MAINNET source, NOT config/config.yml)"
+else
+    echo "Copying config/config.yml -> config.yml"
+fi
+cp "$config_src" $qadenabuild/config.yml
+
+# INTO THE COPY, NEVER THE SOURCE.  $config_src keeps no key material; the working config.yml
+# is regenerated by every init and is gitignored.
+if [[ -n "$pioneer_mnemonic" ]]; then
+    echo "Injecting the $PIONEER1 mnemonic into the working config.yml"
+    PIONEER1="$PIONEER1" MNEMONIC="$pioneer_mnemonic" python3 - "$qadenabuild/config.yml" <<'PYINJECT'
+import io, os, sys
+p = sys.argv[1]; name = os.environ["PIONEER1"]; mn = os.environ["MNEMONIC"].strip()
+lines = io.open(p, encoding="utf-8").read().splitlines()
+out, done = [], False
+for i, l in enumerate(lines):
+    out.append(l)
+    if not done and l.strip() == f"- name: {name}":
+        # accounts entry only: the validators entry is followed by `bonded:`, not `coins:`
+        nxt = next((x for x in lines[i+1:] if x.strip() and not x.strip().startswith("#")), "")
+        if "coins:" in nxt:
+            indent = " " * (len(l) - len(l.lstrip()) + 2)
+            out.append(f'{indent}mnemonic: "{mn}"')
+            done = True
+io.open(p, "w", encoding="utf-8").write("\n".join(out) + "\n")
+sys.exit(0 if done else 1)
+PYINJECT
+    if [[ $? != 0 ]]; then
+        echo "   INIT FAILED: could not find the $PIONEER1 accounts entry to inject into"
+        exit 1
+    fi
+fi
 
 echo "Initializing chain"
 if ignite chain init --home $QADENAHOME ; then
@@ -189,7 +394,21 @@ fi
 # treasuryPubKID has always survived the init as a literal string and been rewritten in genesis.json
 # afterwards.  pioneer1 can take the same route, so the keys can be minted by a single init and the
 # substitution can happen against the resulting genesis.
-if $qadenabuildscripts/setPubKAndPubKID.sh $PIONEER1 $genesisfile ; then
+# SUBSTITUTE ONLY IF THERE IS A PLACEHOLDER.  Keyed on the FILE, not on --mainnet-source.
+# Both shapes are legitimate and the genesis says which one it is:
+#
+#   "<name>PubKID" survived the init as a literal   -> the key was minted locally (ignite
+#       generates one for an account given neither address nor mnemonic), so resolve it from
+#       the keyring.  This is how the devnet has always worked.
+#   a real bech32 address is already there          -> the holder supplied their address and
+#       pubkey as literals and no key of theirs exists here.  Nothing to do; substituting
+#       would need a private key this host must never have.
+#
+# Tying the skip to the flag was wrong: it disabled the mechanism for a mainnet-SHAPED test
+# chain whose key is minted locally, and the gentx then failed on a keyring that had no key.
+if ! grep -q "${PIONEER1}PubKID" $genesisfile 2>/dev/null; then
+    echo "no ${PIONEER1}PubKID placeholder in the genesis -- address already literal, nothing to substitute"
+elif $qadenabuildscripts/setPubKAndPubKID.sh $PIONEER1 $genesisfile ; then
 else
     echo "failed to modify $genesisfile"
     exit 1
@@ -214,7 +433,9 @@ echo "Fixing up genesis file -- pubk and pubkid..."
 #    exit 1
 #fi
 
-if $qadenabuildscripts/setPubKAndPubKID.sh treasury $genesisfile ; then
+if ! grep -q "treasuryPubKID" $genesisfile 2>/dev/null; then
+    echo "no treasuryPubKID placeholder in the genesis -- nothing to substitute"
+elif $qadenabuildscripts/setPubKAndPubKID.sh treasury $genesisfile ; then
 else
     echo "failed to modify config.yml"
     exit 1
@@ -235,12 +456,40 @@ fi
 # either -- same reason: they are srv-prv providers, so they belong in a MsgAddServiceProvider
 # proposal, not genesis.  pioneer1 and treasury are the only substitutions left.
     
+# --mainnet-source: ASSERT THE SUBSTITUTIONS WERE NOT NEEDED.
+#
+# Skipping setPubKAndPubKID above is only correct if the config already carries real values.  If
+# it does not, the genesis ships a literal string like "pioneer1PubKID" in an address field --
+# a chain whose pioneer identity is unresolvable, built without a single error.  So the skip is
+# paired with a check: after a mainnet build, NO devnet placeholder may survive.
+#
+# The pattern is deliberately case-sensitive.  The real genesis field is "pubKID" (lowercase p);
+# only the placeholder VALUES carry a capital "...PubKID", so the field names never match.
+# ALWAYS, not just under --mainnet-source: an unresolved placeholder ships a literal string
+# like "qfi-pioneer1PubKID" in an address field, and the chain comes up with an identity
+# nobody can act as.  Cheap to check, and it fails the build rather than the network.
+if true; then
+    echo "Checking the genesis carries no unresolved key placeholder..."
+    leftover=$(grep -oE '[A-Za-z0-9_]*(PubKID|PubK_pubk|PrivKHex)' $genesisfile \
+               | grep -v '^setPubKAndPubKID$' | sort -u)
+    if [[ -n "$leftover" ]]; then
+        echo "   INIT FAILED: these key placeholders are unresolved in $genesisfile:"
+        echo "$leftover" | sed 's/^/     /'
+        echo ""
+        echo "   A mainnet config must carry the real address and pubkey as literals -- they are"
+        echo "   public values, collected from whoever holds the key.  They are NOT resolved from"
+        echo "   this host's keyring, which is why the substitution was skipped."
+        exit 1
+    fi
+    echo "   OK: no placeholders remain."
+fi
+
 echo "Copying node_params.json"
 cp config/node_params.json $qadenaconfig
 #echo "Copying enclave_params.json"
 #cp config/enclave_params.json $qadenaconfig
 echo "Fixing up node_params.json..."
-$qadenascripts/setPioneerID.sh pioneer1 $nodeparamsfile
+$qadenascripts/setPioneerID.sh $PIONEER1 $nodeparamsfile
 #echo "Fixing up enclave_params.json..."
 
 

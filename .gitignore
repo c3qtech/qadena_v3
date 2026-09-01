@@ -62,3 +62,5 @@ testscripts/token_contracts/*.wasm
 testscripts/tools/msgencode/msgencode
 testscripts/.a[0-9]periods.json
 testscripts/.native_periods.json
+tokenomics/__pycache__/
+tokenomics/genesis.json
