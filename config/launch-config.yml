@@ -692,10 +692,21 @@ genesis:
 
         # CREDENTIAL UPDATE POLICY
         update_credential_fee: "30php"
-        # DEVNET RUNS 2.  Left at 1 here deliberately pending review -- the devnet was bumped
-        # and this file was not, so confirm which version mainnet should launch on before
-        # genesis.  Raised by governance afterwards, but the launch value is fixed here.
-        update_credential_policy_version: 1
+        # 2, MATCHING THE POLICY THE CODE ACTUALLY IMPLEMENTS.  Resolved 2026-09-01: this file
+        # said 1 while the devnet had moved to 2 in f233c6b6, the commit that rewrote
+        # x/qadena/common/credential_policy.go (155 lines).  1 was stale, not a decision.
+        #
+        # WHAT IT IS.  A version marker for the credential-update policy, which runs INSIDE THE
+        # ENCLAVE on every validator -- so two nodes disagreeing is a consensus failure, not a
+        # bad UX.  The policy avoids golang.org/x/text because its Unicode tables are
+        # module-versioned; the stdlib's move only with the toolchain, and this field exists to
+        # make that movement VISIBLE.  See the header of credential_policy.go.
+        #
+        # NOTHING READS IT.  It is a real params field (params.proto #12) with a getter, but no
+        # keeper, enclave or Validate() path consumes it -- checked 2026-09-01.  So a wrong
+        # value changes no behaviour; it just makes the chain misdescribe itself from block 1,
+        # which is the one thing a version marker must not do.
+        update_credential_policy_version: 2
 
         # PRESENT SO IT IS NOT A DEFAULT.  config/config.yml sets 1; omitting it here would
         # take whatever x/qadena defaults to, which is not the same decision.
@@ -842,6 +853,15 @@ genesis:
 
       # qfi-pioneer1 and treasury only.  Every service provider is onboarded at runtime by a
       # MsgAddServiceProvider governance proposal -- see testscripts/setup_prerequisites.sh.
+      # ONE KEY FOR BOTH ROLES -- DECIDED 2026-09-01, NOT AN OVERSIGHT.
+      #
+      # The chain distinguishes the transaction key from the credential key, and they COULD be
+      # separate keys under separate custody, so that compromising the one that signs
+      # transactions does not also yield the one that bears credentials.  That was considered
+      # and declined: it doubles the public values to collect from the operator and the
+      # ceremony to check them, for a split neither the devnet nor any test exercises.
+      #
+      # It is genesis-fixed.  Revisiting it means a new genesis, not a governance proposal.
       publicKeyList:
         - pubKID: qfi-pioneer1PubKID
           pubK: qfi-pioneer1PubK_pubk
@@ -878,6 +898,15 @@ genesis:
     # -----------------------------------------------------------------------------------------
     pricefeed:
       params:
+        # THREE MARKETS, DELIBERATELY -- decided 2026-09-01.  config/config.yml carries six:
+        # these three plus fn:aud:usd, cn:btc:usd and cn:eth:usd.  All three extras are excluded
+        # here.  They are reference prices the token design does not use: nothing on this chain
+        # prices in AUD, BTC or ETH, and a seeded price with no oracle behind it is a number the
+        # chain will assert until someone replaces it.
+        #
+        # Adding one later is a governance proposal -- but read the REMINDER below first, because
+        # that proposal must carry ALL markets, not just the new one.
+        #
         # No oracles at genesis; registration is a MsgUpdateParams governance proposal.
         # REMINDER: MsgUpdateParams replaces the whole params object and Params.Validate() is a
         # no-op, so any proposal must carry ALL markets or it silently deletes the missing ones.
