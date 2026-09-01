@@ -242,10 +242,43 @@ gov_wait_proposal() {
 # Both used to go to stdout, so any caller that captured the hash also swallowed the progress line
 # -- and a caller that wanted the progress had to discard the hash.  gov_vote.sh did the latter and
 # printed nothing at all per vote.
+# gov_discover_fee_granter <grantee-addr> -- prints the granter that will pay this account's vote,
+# or nothing.  Lets the normal vote path work on a toll-free fleet without anyone passing a flag.
+#
+# ONLY AN ALLOWANCE THAT COVERS MsgVote IS OFFERED.  An AllowedMsgAllowance that omits it fails
+# exactly the same way as having no granter at all, just one step later, so naming such a granter
+# would trade a clear "no funds" for a confusing "the granter did not pay".  A Basic or Periodic
+# allowance carries no allowed_messages and therefore covers everything.
+gov_discover_fee_granter() {
+    local grantee="$1"
+    [ -n "$grantee" ] || return 0
+    qq q feegrant grants-by-grantee "$grantee" --output json 2>/dev/null | python3 -c '
+import sys, json
+VOTE = "/cosmos.gov.v1.MsgVote"
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for g in d.get("allowances", []) or []:
+    v = (g.get("allowance") or {}).get("value") or {}
+    msgs = v.get("allowed_messages")
+    if msgs is None or VOTE in msgs:
+        print(g.get("granter", ""))
+        break
+' 2>/dev/null
+}
+
 gov_tx() {
     local desc="$1"; shift
     local out hash code
-    out=$(qq "$@" -y --output json --gas-prices "$minimum_gas_prices" --gas auto --gas-adjustment "$gas_adjustment" 2>&1)
+    # A SPONSORED VALIDATOR HAS NO LIQUID QDN, so without a granter its fee check fails at
+    # CheckTx -- and the failure is nearly unreadable: `qadenad tx` still returns a txhash because
+    # the tx was accepted for BROADCAST, it never reaches a block, `q tx` below finds nothing, and
+    # the code comes back EMPTY.  That is the literal "FAILED with code " (nothing after it) that
+    # took proposal 134 down on 2026-09-01.  Ambient, like minimum_gas_prices and gas_adjustment.
+    local granter_flag=()
+    [ -n "${fee_granter:-}" ] && granter_flag=(--fee-granter "$fee_granter")
+    out=$(qq "$@" "${granter_flag[@]}" -y --output json --gas-prices "$minimum_gas_prices" --gas auto --gas-adjustment "$gas_adjustment" 2>&1)
     # EXTRACT THE HASH, DO NOT PARSE THE WHOLE STREAM AS JSON.  `qadenad tx` prints a human line
     # ("gas estimate: 88012") before the JSON object, so `jq -r .txhash` over the combined output
     # fails with "Invalid numeric literal" -- and the transaction has ALREADY BEEN BROADCAST by

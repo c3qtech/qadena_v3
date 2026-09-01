@@ -146,7 +146,17 @@ esac
 # It sits in JOIN_MSGS rather than only in LIFE_MSGS because bonding happens during the join, and
 # --join-only is the shape used for a node that is funded normally afterwards.
 JOIN_MSGS="/qadena.qadena.MsgPioneerAddPublicKey,/qadena.qadena.MsgPioneerUpdateIntervalPublicKeyID,/qadena.qadena.MsgPioneerUpdatePioneerJar,/cosmos.staking.v1beta1.MsgCreateValidator"
-LIFE_MSGS="$JOIN_MSGS,/qadena.qadena.MsgPioneerUpdatePublicKey,/qadena.qadena.MsgPioneerUpdateJarRegulator"
+#
+# MsgVote IS A LIFETIME MESSAGE, AND WITHOUT IT A SPONSORED FLEET CANNOT BE GOVERNED.  A node
+# sponsored toll-free holds NO liquid QDN by design, so it cannot pay its own fee to vote -- and a
+# validator that cannot vote cannot be counted toward quorum.  On 2026-09-01 that stopped an
+# upgrade outright: pioneer2/3/4 were all sponsored and all failed to vote, leaving pioneer1's
+# 31.95% against a 33.4% quorum, so proposal 134 was REJECTED on turnout and the fleet could not
+# upgrade itself.  A chain whose validators are sponsored must sponsor the governance too.
+#
+# It is NOT in JOIN_MSGS: a --join-only node is "funded normally afterwards" (see above), so it
+# pays for its own votes like any other operator.  This is for the toll-free case.
+LIFE_MSGS="$JOIN_MSGS,/qadena.qadena.MsgPioneerUpdatePublicKey,/qadena.qadena.MsgPioneerUpdateJarRegulator,/cosmos.gov.v1.MsgVote"
 
 if [ "$join_only" = "true" ]; then
     MSGS="$JOIN_MSGS"

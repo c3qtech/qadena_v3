@@ -40,7 +40,7 @@ SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh" > /dev/null 2>&1
 source "$SCRIPT_DIR/gov_lib.sh"
 
-use_ledger=0; generate_only=0; do_import=0; do_forget=0; explicit_addr=""
+use_ledger=0; generate_only=0; do_import=0; do_forget=0; explicit_addr=""; explicit_granter=""
 args=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -49,6 +49,7 @@ while [ $# -gt 0 ]; do
         --import)        do_import=1; shift ;;
         --forget)        do_forget=1; shift ;;
         --address)       explicit_addr="$2"; shift 2 ;;
+        --fee-granter)   explicit_granter="$2"; shift 2 ;;
         -h|--help)       sed -n '3,32p' "$0"; exit 0 ;;
         *)               args+=("$1"); shift ;;
     esac
@@ -183,7 +184,15 @@ fi
 
 ledger_flag=()
 [ $use_ledger -eq 1 ] && ledger_flag=(--ledger)
+# PER VOTER, because each has its own address and its own grant.  Explicit --fee-granter wins;
+# otherwise look one up, which is what makes a toll-free fleet votable without extra flags.  A
+# voter holding its own QDN finds no grant, sets nothing, and pays for itself exactly as before.
 for name in "${voters[@]}"; do
+    fee_granter="$explicit_granter"
+    if [ -z "$fee_granter" ]; then
+        fee_granter=$(gov_discover_fee_granter "$(addr_of "$name")")
+        [ -n "$fee_granter" ] && echo "  $name: no liquid balance needed -- fee paid by granter $fee_granter"
+    fi
     gov_tx "vote from $name" tx gov vote "$id" "$opt" --from "$name" "${ledger_flag[@]}" > /dev/null || failed=1
 done
 
