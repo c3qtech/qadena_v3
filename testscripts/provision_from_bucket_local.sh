@@ -23,8 +23,13 @@
 # so NO ARGUMENT HERE MAY CONTAIN A SPACE -- the reason --reason is not an option.
 #
 set -u
-SCRIPT_DIR="${0:A:h}"
-source "$SCRIPT_DIR/../scripts/setup_env.sh" > /dev/null 2>&1 || true
+# HERE, NOT SCRIPT_DIR.  scripts/setup_env.sh sets SCRIPT_DIR="${0:A:h}" itself, and when it is
+# SOURCED that expands to ITS OWN directory -- so SCRIPT_DIR silently becomes scripts/ the moment
+# the line below runs.  References of the form $HERE/../scripts/x survive that by accident
+# (scripts/../scripts is still scripts), which is why this went unnoticed; a reference to a SIBLING
+# in testscripts/ does not, and fails with "no such file or directory: .../scripts/<sibling>".
+HERE="${0:A:h}"
+source "$HERE/../scripts/setup_env.sh" > /dev/null 2>&1 || true
 QBIN="${qadenabin:-$HOME/qadena/bin}/qadenad"
 HOME_DIR="${QADENAHOME:-$HOME/qadena}"
 
@@ -131,19 +136,19 @@ else
     for attempt in 1 2; do
         wd=$(mktemp -d)
         ok=1
-        "$SCRIPT_DIR/../scripts/multisig_sign.sh" build-send --via-ssh "$HOST" --from "$BUCKET" --to "$addr" \
+        "$HERE/../scripts/multisig_sign.sh" build-send --via-ssh "$HOST" --from "$BUCKET" --to "$addr" \
             --amount "${AMOUNT}qdn" --out "$wd/fund.json" > /dev/null || ok=0
         shares=()
         if (( ok )); then
             for i in $(seq 1 "$thr"); do
-                "$SCRIPT_DIR/../scripts/multisig_sign.sh" sign --via-ssh "$HOST" --tx "$wd/fund.json" --multisig "$BUCKET" \
+                "$HERE/../scripts/multisig_sign.sh" sign --via-ssh "$HOST" --tx "$wd/fund.json" --multisig "$BUCKET" \
                     --from "${BUCKET}-m${i}" --out "$wd/s${i}.json" > /dev/null || { ok=0; break }
                 shares+=("$wd/s${i}.json")
             done
         fi
-        (( ok )) && { "$SCRIPT_DIR/../scripts/multisig_sign.sh" combine --via-ssh "$HOST" --tx "$wd/fund.json" \
+        (( ok )) && { "$HERE/../scripts/multisig_sign.sh" combine --via-ssh "$HOST" --tx "$wd/fund.json" \
             --multisig "$BUCKET" --out "$wd/signed.json" "${shares[@]}" > /dev/null || ok=0 }
-        (( ok )) && { "$SCRIPT_DIR/../scripts/multisig_sign.sh" broadcast --via-ssh "$HOST" --tx "$wd/signed.json" || ok=0 }
+        (( ok )) && { "$HERE/../scripts/multisig_sign.sh" broadcast --via-ssh "$HOST" --tx "$wd/signed.json" || ok=0 }
         rm -rf "$wd"
         (( ok )) && { ceremony_ok=1; break }
         (( attempt == 1 )) && { print "  ceremony attempt 1 failed -- retrying in 20s"; sleep 20 }

@@ -28,19 +28,28 @@
 # normally runs on the primary (testscripts/foundation_sponsor_node.sh).
 #
 set -u
-SCRIPT_DIR="${0:A:h}"
-source "$SCRIPT_DIR/../scripts/setup_env.sh" > /dev/null 2>&1 || true
+# HERE, NOT SCRIPT_DIR.  scripts/setup_env.sh sets SCRIPT_DIR="${0:A:h}" itself, and when it is
+# SOURCED that expands to ITS OWN directory -- so SCRIPT_DIR silently becomes scripts/ the moment
+# the line below runs.  References of the form $HERE/../scripts/x survive that by accident
+# (scripts/../scripts is still scripts), which is why this went unnoticed; a reference to a SIBLING
+# in testscripts/ does not, and fails with "no such file or directory: .../scripts/<sibling>".
+HERE="${0:A:h}"
+source "$HERE/../scripts/setup_env.sh" > /dev/null 2>&1 || true
 QBIN="${qadenabin:-$HOME/qadena/bin}/qadenad"
 HOME_DIR="${QADENAHOME:-$HOME/qadena}"
 
-PRIMARY="" JOINER="" PIONEER="" GRANTER="" CONVERT=0 SYNC="--block-sync" EXTRA=()
+# BLOCK-SYNC IS THE ABSENCE OF A FLAG, not a flag.  nth_node_bringup takes --state-sync and
+# nothing else; passing a literal --block-sync makes it exit with "unknown option".  Held as an
+# ARRAY so the empty case forwards nothing at all.
+PRIMARY="" JOINER="" PIONEER="" GRANTER="" CONVERT=0 EXTRA=() SYNC_ARG=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --primary) PRIMARY="$2"; shift 2 ;;
         --joiner)  JOINER="$2"; shift 2 ;;
         --pioneer) PIONEER="$2"; shift 2 ;;
         --granter) GRANTER="$2"; shift 2 ;;
-        --block-sync|--state-sync) SYNC="$1"; shift ;;
+        --block-sync) SYNC_ARG=(); shift ;;
+        --state-sync) SYNC_ARG=(--state-sync); shift ;;
         --convert-to-validator) CONVERT=1; shift ;;
         --seed2) EXTRA+=(--seed2 "$2"); shift 2 ;;
         -h|--help) sed -n '3,32p' "$0"; exit 0 ;;
@@ -69,13 +78,13 @@ print "sponsored join: $PIONEER on ${JOINER##*@}, sponsored by $GRANTER ($GADDR)
 print "  chain $CHAIN via $PRIMARY"
 
 nthargs=(--primary "$PRIMARY" --joiner "$JOINER" --pioneer "$PIONEER"
-         --foundation-sponsored "$GADDR" "$SYNC" "${EXTRA[@]}")
+         --foundation-sponsored "$GADDR" "${SYNC_ARG[@]}" "${EXTRA[@]}")
 (( CONVERT )) && nthargs+=(--convert-to-validator)
 
 # ---------------------------------------------------------------- 1. mint the key, then stop
 print ""
 print "=== phases 1-3: mint $PIONEER and stop for the ceremony ==="
-"$SCRIPT_DIR/nth_node_bringup.sh" "${nthargs[@]}" --from 1 --until 3 || exit 1
+"$HERE/nth_node_bringup.sh" "${nthargs[@]}" --from 1 --until 3 || exit 1
 
 JADDR=$(ssh -o ConnectTimeout=15 "$JOINER" "bash -lc '\$HOME/qadena/bin/qadenad --home \$HOME/qadena --keyring-backend test keys show $PIONEER -a'" 2>/dev/null | tr -d '\r')
 [[ "$JADDR" == qadena1* ]] || { print -u2 "could not read $PIONEER's address from $JOINER"; exit 1 }
@@ -100,13 +109,13 @@ if (( CONVERT )); then
     bond_arg=(--self-bond "${FLOOR}aqdn")
 fi
 
-QADENA_CHAIN_ID="$CHAIN" "$SCRIPT_DIR/foundation_multisig_sponsor_node.sh" \
+QADENA_CHAIN_ID="$CHAIN" "$HERE/foundation_multisig_sponsor_node.sh" \
     --node "$JADDR" --granter "$GRANTER" --via "$PRIMARY" "${bond_arg[@]}" || exit 1
 
 # ---------------------------------------------------------------- 3. finish the join
 print ""
 print "=== phases 5-8: join, bond, agree ==="
-"$SCRIPT_DIR/nth_node_bringup.sh" "${nthargs[@]}" --from 5 --until 8 || exit 1
+"$HERE/nth_node_bringup.sh" "${nthargs[@]}" --from 5 --until 8 || exit 1
 
 print ""
 print "DONE.  $PIONEER = $JADDR  (sponsored by $GRANTER, zero liquid balance by design)"

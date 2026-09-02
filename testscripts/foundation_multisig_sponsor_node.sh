@@ -25,8 +25,13 @@
 # members are asked once, which is why the bond's shares carry --sequence-offset 1.
 #
 set -u
-SCRIPT_DIR="${0:A:h}"
-source "$SCRIPT_DIR/../scripts/setup_env.sh" > /dev/null 2>&1 || true
+# HERE, NOT SCRIPT_DIR.  scripts/setup_env.sh sets SCRIPT_DIR="${0:A:h}" itself, and when it is
+# SOURCED that expands to ITS OWN directory -- so SCRIPT_DIR silently becomes scripts/ the moment
+# the line below runs.  References of the form $HERE/../scripts/x survive that by accident
+# (scripts/../scripts is still scripts), which is why this went unnoticed; a reference to a SIBLING
+# in testscripts/ does not, and fails with "no such file or directory: .../scripts/<sibling>".
+HERE="${0:A:h}"
+source "$HERE/../scripts/setup_env.sh" > /dev/null 2>&1 || true
 QBIN="${qadenabin:-$HOME/qadena/bin}/qadenad"
 HOME_DIR="${QADENAHOME:-$HOME/qadena}"
 
@@ -53,7 +58,7 @@ done
 [[ "$NODE_ADDR" == qadena1* ]] || { print -u2 "--node must be a bech32 address"; exit 1 }
 
 lk() { "$QBIN" --home "$HOME_DIR" --keyring-backend test "$@" 2>/dev/null }
-M="$SCRIPT_DIR/../scripts/multisig_sign.sh"
+M="$HERE/../scripts/multisig_sign.sh"
 
 THR=$(lk keys show "$GRANTER" --output json | jq -r '.pubkey | fromjson? // . | .threshold // empty')
 [[ -n "$THR" ]] || { print -u2 "'$GRANTER' is not a multisig key in this keyring"; exit 1 }
