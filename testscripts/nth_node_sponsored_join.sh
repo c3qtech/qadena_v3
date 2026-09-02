@@ -1,9 +1,14 @@
 #!/bin/zsh
 #
-# Join ONE node SPONSORED by a bucket multisig, ceremony included -- test fleets only.
+# nth_node_bringup, for a joiner sponsored by a bucket MULTISIG -- test fleets only.
 #
-#   sponsored_join_local.sh --primary <p> --joiner <j> --pioneer <name> --granter nodeops \
-#       [--block-sync] [--convert-to-validator]
+#   nth_node_sponsored_join.sh --primary <p> --joiner <j> --pioneer <name> --granter nodeops \
+#       [--block-sync|--state-sync] [--convert-to-validator]
+#
+# NAMED FOR WHAT IT WRAPS.  It takes nth_node_bringup's arguments and drives its phases; the only
+# thing it adds is a ceremony in the middle.  The signing itself is not here -- that is
+# foundation_multisig_sponsor_node.sh, the multisig counterpart of the foundation_sponsor_node.sh
+# that phase 4 runs for a single-key granter.
 #
 # WHY THIS EXISTS.  fleet_bringup_with_tests.sh refuses --mainnet-source with
 # --foundation-sponsored, and its reasoning is right: the sponsoring bucket is a multisig, that

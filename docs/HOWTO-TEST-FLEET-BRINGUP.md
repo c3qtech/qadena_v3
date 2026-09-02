@@ -64,12 +64,14 @@ above applies to these two -- do not read it as covering the whole table.
 
 **3 and 4 were one phase until 2026-09-01.**  Minting a key and PAYING for it are different
 jobs with different owners: the mint is mechanical, while the funding depends entirely on who
-holds the money.  Both funding branches resolve the granter with `keys show` **on the
-primary**, so a bucket held as a 3-of-5 multisig whose members live on a workstation cannot be
-used at all -- the phase fails before the join it was gating.
+holds the money.  Phase 4 resolves the granter with `keys show` **on the primary**, which holds no
+bucket keys and never should -- so it cannot fund from a multisig itself.
 
 Split, the escape hatch is `--until 3`, fund by whatever ceremony that custody requires, then
-`--from 5`.
+`--from 5`.  **That escape hatch is now automated** for a bucket multisig:
+`testscripts/nth_node_sponsored_join.sh` drives exactly that sequence, and the fleet driver uses
+it whenever `--mainnet-source` and `--foundation-sponsored` are given together -- see
+[The same run, SPONSORED](#the-same-run-sponsored).
 
 ### `--convert-to-validator`: declare the intent, get one funding point
 
@@ -356,6 +358,60 @@ Then the run itself:
   --test-local "./testscripts/provision_from_bucket_local.sh --name treasury --from-bucket adoption --amount 50000000 --stake 10000000 --whitelist --host alvillarica@192.168.86.162" \
   --test "QADENA_PIONEER=qfi-pioneer1 QADENA_GENESIS_NODES=qfi-pioneer1,wallet-incentive-pool QADENA_PF_TARGET=fn:php:usd QADENA_PF_CONTROL=cn:qdn:usd ./testscripts/regression.sh"
 ```
+
+### The same run, SPONSORED
+
+Swap the funding flags and every joiner is toll-free instead -- no coins sent, a recurring fee
+grant from the `nodeops` bucket instead:
+
+```sh
+  ...same as above, but replace
+      --funder qfi-pioneer1 --fund-qdn 10100 --stake 10000
+  with
+      --foundation-sponsored nodeops
+```
+
+Nothing else on the command line changes.  **Validated end to end 2026-09-02, ALL 22 SUITES**, from
+a clean purge and a committed tree.
+
+This is the harder path and exercises what the unsponsored one cannot:
+
+- **`MsgGrantAllowance` through a 3-of-5** -- a different message from `MsgSend`
+- **the seven-message lifetime allowance**, `MsgVote` included and no expiry.  A join-only or
+  expiring grant stops SS re-sharing silently, later, while the node still looks healthy
+- **two transactions from one bucket in one sitting** -- the grant plus the self-bond, since bonds
+  are never sponsored.  The bond's shares are signed at `--sequence-offset 1`
+- **three ceremonies in sequence**, so joins 2 and 3 start from a non-zero bucket sequence
+
+The driver used to REFUSE `--mainnet-source` with `--foundation-sponsored`, because the primary
+cannot sign for a bucket.  It now hands each join to `testscripts/nth_node_sponsored_join.sh`,
+which drives `nth_node --until 3` -> `testscripts/foundation_multisig_sponsor_node.sh` -> `--from 5
+--until 8`.  The ceremony has to sit BETWEEN phases: the joiner's address does not exist until
+phase 3, and phase 5 blocks waiting for the grant, so a `--test-local` entry is too late.
+
+#### Checking a joiner is REALLY sponsored
+
+A grant that exists is not a grant that is being used.  Check both, plus the granter's side:
+
+```sh
+Q="$HOME/qadena/bin/qadenad --home $HOME/qadena"     # on the primary
+$Q q bank balances <joiner-addr>                     # must be ZERO
+$Q q feegrant grants-by-grantee <joiner-addr> -o json \
+  | jq '.allowances[0].allowance.value | {msgs: (.allowed_messages|length),
+        limit: .allowance.value.period_spend_limit[0].amount,
+        left:  .allowance.value.period_can_spend[0].amount}'
+```
+
+`msgs` must be 7, and `left < limit` proves the grant has actually **paid** for something.  Those
+two together are conclusive: a node holding zero coins that has nonetheless minted keys, created a
+validator and proposed blocks cannot have paid a fee itself.  Measured on the 2026-09-02 run --
+each joiner: liquid 0, bond exactly `min-self-delegation`, ~0.00015 QDN drawn from its grant; and
+`nodeops` down 30,000.0014 QDN, being three bonds plus fees.
+
+> **The allowance is in the LEGACY AMINO SHAPE.**  It is
+> `.allowances[0].allowance.value.allowed_messages`, **not** `.allowance.allowed_messages`.  The
+> short path returns empty, which reads as "no restriction" and nearly produced a false failure
+> report.  Same trap as the two false FAILs in `tokenomics/gating-findings.md`.
 
 ### Why this is test tooling and must stay that way
 

@@ -318,10 +318,16 @@ while [[ $# -gt 0 ]]; do
             print "                      SKIPS THE REGRESSION and says so; stepping over that guard"
             print "                      should be a deliberate act, never a quiet one."
             print "  --mainnet-source <file> / --pioneer-mnemonic-file <file>"
-            print "                      build a LAUNCH chain instead of the devnet.  The joins"
-            print "                      then need --funder naming a key the PRIMARY holds (a"
-            print "                      launch chain has no 'treasury'), and a SPONSORED join"
-            print "                      from a bucket multisig cannot run unattended at all --"
+            print "                      build a LAUNCH chain instead of the devnet.  Two funding"
+            print "                      modes work here:"
+            print "                        --funder <key>            a SINGLE key the PRIMARY holds"
+            print "                                                  (a launch chain has no 'treasury';"
+            print "                                                  qfi-pioneer1 is the usual choice)."
+            print "                                                  NOT a multisig -- phase 4 signs on"
+            print "                                                  the primary, which holds no bucket keys."
+            print "                        --foundation-sponsored <bucket>   a bucket MULTISIG.  Each join"
+            print "                                                  goes through nth_node_sponsored_join.sh,"
+            print "                                                  whose ceremony runs HERE."
             print "                      see docs/HOWTO-TEST-FLEET-BRINGUP.md."
             print "  --fund-qdn <qdn> / --stake <qdn>"
             print "                      passed to nth_node_bringup.  Its defaults (200000 fund,"
@@ -865,11 +871,11 @@ fi
     # place it fits: the joiner's address does not exist until phase 3 and phase 5 blocks waiting
     # for the grant.  A --test-local entry cannot do it; those fire only after a joiner is done.
     #
-    # testscripts/sponsored_join_local.sh drives --until 3 / ceremony / --from 5 and is explicit
+    # testscripts/nth_node_sponsored_join.sh drives --until 3 / ceremony / --from 5 and is explicit
     # about being test-only.  Production is scripts/sponsor_join_node.sh.
     if [[ -n "$MAINNET_SRC" ]] && (( SPONSORED )); then
-        if [[ ! -x "$SCRIPT_DIR/sponsored_join_local.sh" ]]; then
-            fail "--mainnet-source with --foundation-sponsored needs testscripts/sponsored_join_local.sh
+        if [[ ! -x "$SCRIPT_DIR/nth_node_sponsored_join.sh" ]]; then
+            fail "--mainnet-source with --foundation-sponsored needs testscripts/nth_node_sponsored_join.sh
        (the sponsoring bucket is a multisig and the primary cannot sign for it)."
         fi
         info "joining $j as $pioneer by $SYNC_KIND, SPONSORED by $SPONSOR_GRANTER (ceremony runs here)"
@@ -877,7 +883,7 @@ fi
         sjargs=(--primary "$PRIMARY" --joiner "$j" --pioneer "$pioneer"
                 --granter "$SPONSOR_GRANTER" "${sync_arg[@]}" "${seed2_arg[@]}"
                 --convert-to-validator)
-        "$SCRIPT_DIR/sponsored_join_local.sh" "${sjargs[@]}" \
+        "$SCRIPT_DIR/nth_node_sponsored_join.sh" "${sjargs[@]}" \
             2>&1 | tee "$RUN_DIR/stage-G-join-${j##*@}.log"
         [[ ${pipestatus[1]} -eq 0 ]] || fail "sponsored join failed for $j -- see $RUN_DIR/stage-G-join-${j##*@}.log
        nth_node_bringup is phase-resumable, so re-running picks up where it stopped."
