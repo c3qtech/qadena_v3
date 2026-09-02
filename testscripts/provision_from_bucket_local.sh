@@ -56,14 +56,23 @@ fi
 export QADENA_NODE="$NODE" QADENA_CHAIN_ID="$CHAIN"
 
 kq() { ssh -o ConnectTimeout=10 "$HOST" "bash -lc '\$HOME/qadena/bin/qadenad --home \$HOME/qadena --keyring-backend test $*'" 2>/dev/null | tr -d '\r' }
-q()  { "$QBIN" --home "$HOME_DIR" "$@" }
+# CHAIN READS RUN ON THE NODE, for the same reason multisig_sign.sh has --via-ssh: this
+# workstation may be unable to reach the RPC at all, and a read that quietly returns nothing is
+# indistinguishable from a real answer of zero.  That exact confusion cost a run on 2026-09-02 --
+# the ceremony had broadcast successfully and the money had arrived, but the balance poll here
+# could not see it and reported "the coins never arrived".  --host is required, so there is
+# always somewhere to run these.
+q() {
+    ssh -o ConnectTimeout=10 "$HOST" "bash -lc $(printf '%q' \
+        "\$HOME/qadena/bin/qadenad --home \$HOME/qadena $* --node tcp://localhost:26657")" 2>/dev/null | tr -d '\r'
+}
 # Same measure provision_account.sh uses: liquid + delegated.  --stake spends the balance down,
 # so comparing liquid alone against --amount re-runs the ceremony on an account already funded.
 funded_total() {
     local liq del
-    liq=$(q q bank balances "$1" --node "$NODE" --output json 2>/dev/null \
+    liq=$(q q bank balances "$1" --output json 2>/dev/null \
           | jq -r '[.balances[]?|select(.denom=="aqdn").amount]|first // "0"')
-    del=$(q q staking delegations "$1" --node "$NODE" --output json 2>/dev/null \
+    del=$(q q staking delegations "$1" --output json 2>/dev/null \
           | jq -r '[.delegation_responses[]?.balance.amount]|join("+")' 2>/dev/null)
     [[ -z "$del" || "$del" == "null" ]] && del="0"
     print "${liq:-0} + $del" | bc
@@ -122,19 +131,19 @@ else
     for attempt in 1 2; do
         wd=$(mktemp -d)
         ok=1
-        "$SCRIPT_DIR/../scripts/multisig_sign.sh" --via-ssh "$HOST" build-send --from "$BUCKET" --to "$addr" \
+        "$SCRIPT_DIR/../scripts/multisig_sign.sh" build-send --via-ssh "$HOST" --from "$BUCKET" --to "$addr" \
             --amount "${AMOUNT}qdn" --out "$wd/fund.json" > /dev/null || ok=0
         shares=()
         if (( ok )); then
             for i in $(seq 1 "$thr"); do
-                "$SCRIPT_DIR/../scripts/multisig_sign.sh" --via-ssh "$HOST" sign --tx "$wd/fund.json" --multisig "$BUCKET" \
+                "$SCRIPT_DIR/../scripts/multisig_sign.sh" sign --via-ssh "$HOST" --tx "$wd/fund.json" --multisig "$BUCKET" \
                     --from "${BUCKET}-m${i}" --out "$wd/s${i}.json" > /dev/null || { ok=0; break }
                 shares+=("$wd/s${i}.json")
             done
         fi
-        (( ok )) && { "$SCRIPT_DIR/../scripts/multisig_sign.sh" --via-ssh "$HOST" combine --tx "$wd/fund.json" \
+        (( ok )) && { "$SCRIPT_DIR/../scripts/multisig_sign.sh" combine --via-ssh "$HOST" --tx "$wd/fund.json" \
             --multisig "$BUCKET" --out "$wd/signed.json" "${shares[@]}" > /dev/null || ok=0 }
-        (( ok )) && { "$SCRIPT_DIR/../scripts/multisig_sign.sh" --via-ssh "$HOST" broadcast --tx "$wd/signed.json" || ok=0 }
+        (( ok )) && { "$SCRIPT_DIR/../scripts/multisig_sign.sh" broadcast --via-ssh "$HOST" --tx "$wd/signed.json" || ok=0 }
         rm -rf "$wd"
         (( ok )) && { ceremony_ok=1; break }
         (( attempt == 1 )) && { print "  ceremony attempt 1 failed -- retrying in 20s"; sleep 20 }

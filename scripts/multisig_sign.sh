@@ -90,11 +90,20 @@ usage() {
     print "  --chain-id   REQUIRED for sign; a signature is bound to one chain"
     print "  --sequence-offset <n>   SIGN at sequence+n.  Use 1 for every share of the SECOND tx"
     print "                          of a pair, or it is invalid as soon as the first one lands."
-    exit 0
+    # EXIT NON-ZERO BY DEFAULT.  This used to `exit 0`, so every misuse looked like SUCCESS to a
+    # caller: a mistyped subcommand printed usage, returned 0, and the script that invoked it
+    # carried on believing the transaction had been built.  Observed 2026-09-02 -- a whole
+    # ceremony "succeeded" without signing or broadcasting anything, and the only symptom was a
+    # four-minute wait for coins that were never sent.  --help passes 0 explicitly.
+    exit ${1:-1}
 }
 
 [[ $# -eq 0 ]] && usage
 CMD="$1"; shift
+# HELP IS HANDLED HERE, not in the option loop below: $1 is taken as the SUBCOMMAND, so
+# `multisig_sign.sh --help` never reaches that loop and would otherwise die on the --chain-id
+# check with a message about signatures.
+[[ "$CMD" == "--help" || "$CMD" == "-h" ]] && usage 0
 granter="" grantee="" msgs="" period="2592000" period_limit="1000qdn" out=""
 from="" to="" amount="" tx="" msig="" seqoff=0
 sigs=()
@@ -117,7 +126,7 @@ while [[ $# -gt 0 ]]; do
         --sequence-offset) seqoff="$2"; shift 2 ;;
         --gas) GAS="$2"; shift 2 ;;
         --gas-prices) GAS_PRICES="$2"; shift 2 ;;
-        --help|-h) usage ;;
+        --help|-h) usage 0 ;;
         -*) print -u2 "unknown option: $1"; exit 1 ;;
         *) sigs+=("$1"); shift ;;
     esac
