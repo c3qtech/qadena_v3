@@ -41,6 +41,7 @@ NODE="${QADENA_NODE:-tcp://localhost:26657}"
 CHAIN="${QADENA_CHAIN_ID:-}"
 GAS="${QADENA_GAS:-300000}"
 GAS_PRICES="${QADENA_GAS_PRICES:-500000000aqdn}"
+VIA_SSH="${QADENA_VIA_SSH:-}"
 
 # --keyring-backend IS NOT A GLOBAL FLAG.  `query` rejects it outright ("unknown flag"), so a
 # wrapper that adds it unconditionally breaks every read this script makes -- and breaks them
@@ -54,6 +55,25 @@ q() {
     esac
 }
 
+# THE CHAIN-TOUCHING CALLS, AND ONLY THOSE.  With --via-ssh they run qadenad ON THE NODE instead
+# of here, which matters when this workstation cannot reach the RPC at all -- a restrictive
+# corporate network, a filtered VPN, or (observed 2026-09-02) an outbound policy that permits
+# dynamically-linked binaries while denying Go ones, so `curl` reaches the node and `qadenad`
+# does not.  Without this the script simply cannot run from such a machine.
+#
+# SIGNING NEVER COMES THROUGH HERE.  Only two things cross the wire: the account number and
+# sequence, and the FULLY SIGNED transaction -- which is public by definition, since the next
+# thing that happens to it is broadcast to every validator.  No key, no share, no mnemonic ever
+# leaves this machine, which is the property the multisig exists to create.
+qnode() {
+    if [[ -n "$VIA_SSH" ]]; then
+        ssh -o ConnectTimeout=10 "$VIA_SSH" "bash -lc $(printf '%q' \
+            "\$HOME/qadena/bin/qadenad --home \$HOME/qadena $* --node tcp://localhost:26657")"
+    else
+        q "$@" --node "$NODE"
+    fi
+}
+
 usage() {
     print "Usage:"
     print "  multisig_sign.sh build-feegrant --granter <msig> --grantee <addr> --msgs <csv>"
@@ -64,6 +84,9 @@ usage() {
     print "  multisig_sign.sh broadcast      --tx <signed>"
     print ""
     print "  --node       RPC to read account number/sequence from (default \$QADENA_NODE)"
+    print "  --via-ssh <user@host>   run the CHAIN-touching calls on that node over ssh, for a"
+    print "               machine that cannot reach the RPC itself.  Signing stays local: only the"
+    print "               account number/sequence and the already-public signed tx cross the wire."
     print "  --chain-id   REQUIRED for sign; a signature is bound to one chain"
     print "  --sequence-offset <n>   SIGN at sequence+n.  Use 1 for every share of the SECOND tx"
     print "                          of a pair, or it is invalid as soon as the first one lands."
@@ -89,6 +112,7 @@ while [[ $# -gt 0 ]]; do
         --tx) tx="$2"; shift 2 ;;
         --multisig) msig="$2"; shift 2 ;;
         --node) NODE="$2"; shift 2 ;;
+        --via-ssh) VIA_SSH="$2"; shift 2 ;;
         --chain-id) CHAIN="$2"; shift 2 ;;
         --sequence-offset) seqoff="$2"; shift 2 ;;
         --gas) GAS="$2"; shift 2 ;;
@@ -118,7 +142,15 @@ addr_of() {
 # offline and generate-only flags are set").  The number is written when a share is signed.
 seq_flags() {
     local a="$1" acct num sq
-    acct=$(q query auth account "$a" --node "$NODE" --output json 2>/dev/null) || return 0
+    acct=$(qnode query auth account "$a" --output json 2>/dev/null) || acct=""
+    # WITH --via-ssh THIS MUST SUCCEED.  Returning empty makes `sign` fall back to an ONLINE
+    # signature, which is the one thing the relay exists to avoid -- and it fails with a dial
+    # error that names neither this lookup nor the relay.
+    if [[ -z "$acct" && -n "$VIA_SSH" ]]; then
+        print -u2 "could not read $a's account through $VIA_SSH -- is the node reachable there?"
+        exit 1
+    fi
+    [[ -n "$acct" ]] || return 0
     num=$(print "$acct" | jq -r '..|.account_number? // empty' | head -1)
     sq=$(print "$acct"  | jq -r '..|.sequence? // empty'       | head -1)
     # AN ABSENT sequence MEANS ZERO, NOT UNKNOWN.  A brand-new account -- one that has received
@@ -163,14 +195,29 @@ sign)
     ;;
 combine)
     [[ -n "$tx" && -n "$msig" && -n "$out" && ${#sigs} -gt 0 ]] || usage
-    q tx multisign "$tx" "$msig" "${sigs[@]}" \
-        --chain-id "$CHAIN" --node "$NODE" > "$out" || exit 1
+    # multisign reads the multisig's PUBKEY from this keyring, so it cannot be relayed -- it runs
+    # here either way.  What it can do is run OFFLINE, given the same pinned account number and
+    # sequence the shares were signed at, which is what makes the relay work end to end.
+    if [[ -n "$VIA_SSH" ]]; then
+        q tx multisign "$tx" "$msig" "${sigs[@]}" \
+            --chain-id "$CHAIN" ${=$(seq_flags "$(addr_of "$msig")")} > "$out" || exit 1
+    else
+        q tx multisign "$tx" "$msig" "${sigs[@]}" \
+            --chain-id "$CHAIN" --node "$NODE" > "$out" || exit 1
+    fi
     n=$(jq -r '.auth_info.signer_infos[0].mode_info.multi.mode_infos | length' "$out" 2>/dev/null)
     print "combined ${#sigs} share(s) -> $out  (tx carries $n signature(s))"
     ;;
 broadcast)
     [[ -n "$tx" ]] || usage
-    outj=$(q tx broadcast "$tx" --node "$NODE" --output json 2>&1) || { print -u2 "$outj"; exit 1 }
+    # THE SIGNED TX GOES TO THE NODE, not the keys.  With --via-ssh it is copied there and
+    # broadcast from there; it is public the instant it is sent, so this discloses nothing.
+    btx="$tx"
+    if [[ -n "$VIA_SSH" ]]; then
+        btx="/tmp/.msig_bcast_$$.json"
+        scp -q "$tx" "$VIA_SSH:$btx" || { print -u2 "could not copy $tx to $VIA_SSH"; exit 1 }
+    fi
+    outj=$(qnode tx broadcast "$btx" --output json 2>&1) || { print -u2 "$outj"; exit 1 }
     h=$(print "$outj" | grep '^{' | tail -1 | jq -r '.txhash // ""')
     [[ -n "$h" ]] || { print -u2 "no txhash; broadcast said:"; print -u2 "$outj"; exit 1 }
     print "broadcast $h"
@@ -178,18 +225,19 @@ broadcast)
     # so a missing subcommand cannot fail the run), and a single `query tx` straight after can
     # race inclusion: the tx is accepted, not yet in a block, the query returns nothing, and an
     # empty code reads as failure.  Observed 2026-09-01 on a grant that had in fact landed.
-    q query wait-tx "$h" --node "$NODE" --timeout 60s > /dev/null 2>&1 || true
+    qnode query wait-tx "$h" --timeout 60s > /dev/null 2>&1 || true
     code=""
     for _i in {1..30}; do
-        code=$(q query tx "$h" --node "$NODE" --output json 2>/dev/null | jq -r '.code // ""')
+        code=$(qnode query tx "$h" --output json 2>/dev/null | jq -r '.code // ""')
         [[ -n "$code" ]] && break
         sleep 2
     done
+    [[ -n "$VIA_SSH" ]] && ssh -o ConnectTimeout=10 "$VIA_SSH" "rm -f $btx" 2>/dev/null
     if [[ "$code" == "0" ]]; then
         print "  landed, code 0"
     else
         print -u2 "  FAILED on chain, code ${code:-<not included within 60s>}:"
-        q query tx "$h" --node "$NODE" --output json 2>/dev/null | jq -r '.raw_log' | head -c 300
+        qnode query tx "$h" --output json 2>/dev/null | jq -r '.raw_log' | head -c 300
         exit 1
     fi
     ;;

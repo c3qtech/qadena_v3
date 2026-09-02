@@ -104,9 +104,12 @@ else
     # scheduled inside a 20-minute unattended fleet run -- observed exactly once, as
     # "dial tcp ...:26657: connect: no route to host" from a chain that was healthy either side of
     # it.
-    print -n "  waiting for the RPC"
+    # Probed OVER SSH, because that is the path the ceremony actually uses now (--via-ssh).
+    # Probing from here with curl would pass on a workstation whose own RPC access is blocked
+    # and tell us nothing about the relay.
+    print -n "  waiting for the RPC (via $HOST)"
     for i in {1..30}; do
-        curl -s --max-time 5 "http://${HOST##*@}:26657/status" > /dev/null 2>&1 && { print " -- up"; break }
+        ssh -o ConnectTimeout=8 "$HOST" "bash -lc 'curl -s --max-time 5 http://localhost:26657/status > /dev/null'" 2>/dev/null && { print " -- up"; break }
         print -n "."; sleep 4
         (( i == 30 )) && { print ""; print -u2 "  ${HOST##*@}:26657 never answered"; exit 1 }
     done
@@ -119,19 +122,19 @@ else
     for attempt in 1 2; do
         wd=$(mktemp -d)
         ok=1
-        "$SCRIPT_DIR/../scripts/multisig_sign.sh" build-send --from "$BUCKET" --to "$addr" \
+        "$SCRIPT_DIR/../scripts/multisig_sign.sh" --via-ssh "$HOST" build-send --from "$BUCKET" --to "$addr" \
             --amount "${AMOUNT}qdn" --out "$wd/fund.json" > /dev/null || ok=0
         shares=()
         if (( ok )); then
             for i in $(seq 1 "$thr"); do
-                "$SCRIPT_DIR/../scripts/multisig_sign.sh" sign --tx "$wd/fund.json" --multisig "$BUCKET" \
+                "$SCRIPT_DIR/../scripts/multisig_sign.sh" --via-ssh "$HOST" sign --tx "$wd/fund.json" --multisig "$BUCKET" \
                     --from "${BUCKET}-m${i}" --out "$wd/s${i}.json" > /dev/null || { ok=0; break }
                 shares+=("$wd/s${i}.json")
             done
         fi
-        (( ok )) && { "$SCRIPT_DIR/../scripts/multisig_sign.sh" combine --tx "$wd/fund.json" \
+        (( ok )) && { "$SCRIPT_DIR/../scripts/multisig_sign.sh" --via-ssh "$HOST" combine --tx "$wd/fund.json" \
             --multisig "$BUCKET" --out "$wd/signed.json" "${shares[@]}" > /dev/null || ok=0 }
-        (( ok )) && { "$SCRIPT_DIR/../scripts/multisig_sign.sh" broadcast --tx "$wd/signed.json" || ok=0 }
+        (( ok )) && { "$SCRIPT_DIR/../scripts/multisig_sign.sh" --via-ssh "$HOST" broadcast --tx "$wd/signed.json" || ok=0 }
         rm -rf "$wd"
         (( ok )) && { ceremony_ok=1; break }
         (( attempt == 1 )) && { print "  ceremony attempt 1 failed -- retrying in 20s"; sleep 20 }
@@ -151,9 +154,14 @@ fi
 # ---------------------------------------------------------------- 3. hand back to the operator script
 # It sees an existing, funded key, so it skips straight to staking and the whitelist -- the parts
 # that are identical on a test fleet and in production, and therefore must not be duplicated here.
-args=(--name "$NAME" --from-bucket "$BUCKET" --mode banksend --amount "$AMOUNT" --host "$HOST")
+# RUN IT ON THE NODE, not here.  provision_account.sh queries the chain from wherever it runs
+# (balances, delegations, the whitelist), and with --host the key and the chain are BOTH on that
+# machine anyway -- so running it there needs no relay at all, and the `--host` flag becomes
+# unnecessary because everything is already local to it.
+args=(--name "$NAME" --from-bucket "$BUCKET" --mode banksend --amount "$AMOUNT")
 [[ -n "$STAKE" ]] && args+=(--stake "$STAKE")
 (( WHITELIST )) && args+=(--whitelist)
 print ""
-print "  handing off to scripts/provision_account.sh for stake + whitelist"
-QADENA_NODE="$NODE" QADENA_CHAIN_ID="$CHAIN" "$SCRIPT_DIR/../scripts/provision_account.sh" "${args[@]}"
+print "  handing off to scripts/provision_account.sh on $HOST for stake + whitelist"
+ssh -o ConnectTimeout=15 "$HOST" "bash -lc $(printf '%q' \
+    "cd \$HOME/qv3 && QADENA_NODE=tcp://localhost:26657 QADENA_CHAIN_ID=$CHAIN ./scripts/provision_account.sh ${args[*]}")"
