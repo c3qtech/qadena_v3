@@ -98,23 +98,45 @@ else
     [[ -n "$thr" ]] || { print -u2 "$BUCKET is not a multisig key in this keyring"; exit 1 }
     print "  ceremony: $BUCKET is ${thr}-of-N, signing locally (TEST FLEET ONLY)"
 
-    wd=$(mktemp -d)
-    "$SCRIPT_DIR/../scripts/multisig_sign.sh" build-send --from "$BUCKET" --to "$addr" \
-        --amount "${AMOUNT}qdn" --out "$wd/fund.json" > /dev/null \
-        || { print -u2 "  build-send failed"; rm -rf "$wd"; exit 1 }
-    shares=()
-    for i in $(seq 1 "$thr"); do
-        "$SCRIPT_DIR/../scripts/multisig_sign.sh" sign --tx "$wd/fund.json" --multisig "$BUCKET" \
-            --from "${BUCKET}-m${i}" --out "$wd/s${i}.json" > /dev/null \
-            || { print -u2 "  ${BUCKET}-m${i} could not sign"; rm -rf "$wd"; exit 1 }
-        shares+=("$wd/s${i}.json")
+    # WAIT FOR THE RPC FIRST.  Every step below needs the node: `build-send` reads the account
+    # number and `sign` binds the sequence, so a momentary network fault fails ONE share and takes
+    # the whole ceremony with it.  That is tolerable when a human is watching and not when this is
+    # scheduled inside a 20-minute unattended fleet run -- observed exactly once, as
+    # "dial tcp ...:26657: connect: no route to host" from a chain that was healthy either side of
+    # it.
+    print -n "  waiting for the RPC"
+    for i in {1..30}; do
+        curl -s --max-time 5 "http://${HOST##*@}:26657/status" > /dev/null 2>&1 && { print " -- up"; break }
+        print -n "."; sleep 4
+        (( i == 30 )) && { print ""; print -u2 "  ${HOST##*@}:26657 never answered"; exit 1 }
     done
-    "$SCRIPT_DIR/../scripts/multisig_sign.sh" combine --tx "$wd/fund.json" --multisig "$BUCKET" \
-        --out "$wd/signed.json" "${shares[@]}" > /dev/null \
-        || { print -u2 "  combine failed"; rm -rf "$wd"; exit 1 }
-    "$SCRIPT_DIR/../scripts/multisig_sign.sh" broadcast --tx "$wd/signed.json" \
-        || { print -u2 "  broadcast failed"; rm -rf "$wd"; exit 1 }
-    rm -rf "$wd"
+
+    wd=$(mktemp -d)
+    # ONE RETRY, from a CLEAN temp dir.  Shares bind the sequence at sign time, so a half-signed
+    # set from a failed attempt cannot be topped up -- the ceremony is redone from build-send or
+    # not at all.  Nothing is spent by a failed attempt: no broadcast happened.
+    ceremony_ok=0
+    for attempt in 1 2; do
+        wd=$(mktemp -d)
+        ok=1
+        "$SCRIPT_DIR/../scripts/multisig_sign.sh" build-send --from "$BUCKET" --to "$addr" \
+            --amount "${AMOUNT}qdn" --out "$wd/fund.json" > /dev/null || ok=0
+        shares=()
+        if (( ok )); then
+            for i in $(seq 1 "$thr"); do
+                "$SCRIPT_DIR/../scripts/multisig_sign.sh" sign --tx "$wd/fund.json" --multisig "$BUCKET" \
+                    --from "${BUCKET}-m${i}" --out "$wd/s${i}.json" > /dev/null || { ok=0; break }
+                shares+=("$wd/s${i}.json")
+            done
+        fi
+        (( ok )) && { "$SCRIPT_DIR/../scripts/multisig_sign.sh" combine --tx "$wd/fund.json" \
+            --multisig "$BUCKET" --out "$wd/signed.json" "${shares[@]}" > /dev/null || ok=0 }
+        (( ok )) && { "$SCRIPT_DIR/../scripts/multisig_sign.sh" broadcast --tx "$wd/signed.json" || ok=0 }
+        rm -rf "$wd"
+        (( ok )) && { ceremony_ok=1; break }
+        (( attempt == 1 )) && { print "  ceremony attempt 1 failed -- retrying in 20s"; sleep 20 }
+    done
+    (( ceremony_ok )) || { print -u2 "  the ceremony failed twice; nothing was broadcast"; exit 1 }
 
     print -n "  waiting for the coins"
     for i in {1..40}; do
