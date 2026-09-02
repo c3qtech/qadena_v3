@@ -73,7 +73,11 @@
 #   Set QADENA_NODE_ADMIN to use that path; unset, this signs directly and needs the granter's key.
 
 SCRIPT_DIR="${0:A:h}"
-source "$SCRIPT_DIR/setup_env.sh"
+# ../scripts/, NOT $SCRIPT_DIR/.  This file lived in scripts/ until 2026-09-02 and sourced its
+# neighbour; from testscripts/ that path resolves to testscripts/setup_env.sh, which does not
+# exist -- and the failure surfaces as "sponsorship failed: no such file or directory" from
+# nth_node phase 4, naming setup_env rather than the move that caused it.
+source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
