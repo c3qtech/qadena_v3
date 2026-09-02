@@ -857,11 +857,39 @@ fi
     # prevent.  Use --funder with a key the primary DOES hold (the genesis validator's own,
     # typically), or drive the joins by hand: nth_node_bringup --until 3, run the ceremony it
     # prints, then --from 5.
+    # SPONSORED + LAUNCH CHAIN GOES THROUGH THE LOCAL CEREMONY WRAPPER.
+    #
+    # This used to be a hard refusal, and the reasoning above still stands for the PRIMARY: it does
+    # not hold bucket keys and never should.  But THIS workstation does -- that is the test fleet's
+    # standing shortcut -- so the ceremony can run here, between nth_node's phases, which is the one
+    # place it fits: the joiner's address does not exist until phase 3 and phase 5 blocks waiting
+    # for the grant.  A --test-local entry cannot do it; those fire only after a joiner is done.
+    #
+    # testscripts/sponsored_join_local.sh drives --until 3 / ceremony / --from 5 and is explicit
+    # about being test-only.  Production is scripts/sponsor_join_node.sh.
     if [[ -n "$MAINNET_SRC" ]] && (( SPONSORED )); then
-        fail "--mainnet-source with --foundation-sponsored cannot run unattended: the sponsoring
-       bucket is a multisig and this script signs on the primary.  Either pass --funder <key the
-       primary holds> for an unsponsored join, or bring each joiner up by hand with
-       nth_node_bringup.sh --until 3 / ceremony / --from 5."
+        if [[ ! -x "$SCRIPT_DIR/sponsored_join_local.sh" ]]; then
+            fail "--mainnet-source with --foundation-sponsored needs testscripts/sponsored_join_local.sh
+       (the sponsoring bucket is a multisig and the primary cannot sign for it)."
+        fi
+        info "joining $j as $pioneer by $SYNC_KIND, SPONSORED by $SPONSOR_GRANTER (ceremony runs here)"
+        print "$j joined by: $SYNC_KIND (as $pioneer, sponsored by $SPONSOR_GRANTER)" >> "$RUN_DIR/fleet.txt"
+        sjargs=(--primary "$PRIMARY" --joiner "$j" --pioneer "$pioneer"
+                --granter "$SPONSOR_GRANTER" "${sync_arg[@]}" "${seed2_arg[@]}"
+                --convert-to-validator)
+        "$SCRIPT_DIR/sponsored_join_local.sh" "${sjargs[@]}" \
+            2>&1 | tee "$RUN_DIR/stage-G-join-${j##*@}.log"
+        [[ ${pipestatus[1]} -eq 0 ]] || fail "sponsored join failed for $j -- see $RUN_DIR/stage-G-join-${j##*@}.log
+       nth_node_bringup is phase-resumable, so re-running picks up where it stopped."
+        # SAME BOOKKEEPING AS THE UNSPONSORED PATH.  JOINED feeds the run summary and the
+        # addressable-count gate that --test entries wait on; a joiner missing from it is invisible
+        # to everything scheduled after it.
+        JOINED+=("$j")
+        assert_advancing "$j" "after join"
+        assert_advancing "$PRIMARY" "primary after $j joined"
+        info "$j joined as $pioneer (sponsored)"
+        note "joined $j as $pioneer (sponsored by $SPONSOR_GRANTER)"
+        continue
     fi
     amount_args=()
     [[ -n "$FUND_QDN_ARG" ]] && amount_args+=(--fund-qdn "$FUND_QDN_ARG")

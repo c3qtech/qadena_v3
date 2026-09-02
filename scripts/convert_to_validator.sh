@@ -121,7 +121,8 @@ fi
 
 # A SPONSORED NODE BONDS EXACTLY THE FLOOR, and no more.
 #
-# Its stake is sent by the foundation (foundation_sponsor_node.sh --self-bond), so bonding the
+# Its stake is sent by the sponsor (testscripts/foundation_sponsor_node.sh --self-bond for a single-key
+# granter; the same --self-bond through a members' ceremony on a launch chain), so bonding the
 # unsponsored default would mean moving eleven times as much QDN for no gain: what decides voting
 # power on this fleet is the treasury delegation setup_prerequisites splits across all bonded
 # validators right after, which is millions of QDN and dwarfs either figure.  Bond the minimum the

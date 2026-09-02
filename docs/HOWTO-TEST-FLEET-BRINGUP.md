@@ -298,7 +298,50 @@ launch genesis holds buckets and validators only.  Funding one is a bucket cerem
 to be three commands with a manual signing session wedged between them.
 
 `--test-local` closes that, because the ceremony's keys are on **this workstation** and
-`--test-local` is the one scheduling slot that runs here rather than on the primary:
+`--test-local` is the one scheduling slot that runs here rather than on the primary.
+
+**Validated end to end 2026-09-02**: purged fleet -> 4 validators -> treasury by a real 3-of-5
+ceremony -> stake -> self-passing whitelist -> ALL 22 SUITES, unattended, about 40 minutes.
+
+### What chain this actually builds
+
+`--mainnet-source` takes a rendered instance of `config/launch-config.yml` -- the **real** token
+design: the ten buckets and their amounts from `tokenomics/allocations.csv`, the mint params, the
+AML whitelist, `qadena_482-1`.  Not the devnet's `config.yml`.
+
+**One thing is deliberately different, and only one: the governance clock.**  The instance is
+rendered with `tokenomics/fill_launch_config.py --test-gov-timings`, which shortens the periods so
+a proposal resolves inside a test run rather than over three days:
+
+| param | launch | this instance |
+|---|---|---|
+| `voting_period` | 72h | **300s** |
+| `expedited_voting_period` | 6h | **30s** |
+| `max_deposit_period` | 24h | **300s** |
+| `quorum` / `threshold` / `expedited_threshold` | 0.40 / 0.5 / 0.667 | **unchanged** |
+
+Quorum, thresholds and deposits are untouched, so a proposal that passes here would pass on
+mainnet -- it simply takes 72 hours there.  Note that the *comments* in the file still describe the
+72h/6h values: they document the design, while the rendered instance carries the short ones.  Read
+the values, not the prose.
+
+**The buckets are genuine N-of-M multisigs**, not stubs -- 11 of them in this workstation's keyring
+(`adoption`, `nodeops`, `foundation`, `grants`, ...), each derived from five member pubkeys.  The
+treasury ceremony below is a real 3-of-5: three separate member signatures, combined, and rejected
+by the chain if any is missing.  That is what makes this run worth doing rather than a rehearsal
+against a single key that happens to be called `adoption`.
+
+First the purge.  It stays a SEPARATE command on purpose -- wiping four chains and four keyrings
+should be a deliberate act, never a side effect of a flag on a long line:
+
+```sh
+./testscripts/stop_fleet.sh \
+  --node alvillarica@192.168.86.162 --node alvillarica@192.168.86.154 \
+  --node alvillarica@192.168.86.52  --node alvillarica@192.168.86.136 \
+  --purge --reap-archives --immediate
+```
+
+Then the run itself:
 
 ```sh
 ./testscripts/fleet_bringup_with_tests.sh \
@@ -324,7 +367,29 @@ around.  The wrapper does the ceremony and then hands straight back to `provisio
 staking and the whitelist, so the production logic is borrowed rather than reimplemented.  The
 manual procedure is [HOWTO-LAUNCH-CHAIN-BRINGUP.md](HOWTO-LAUNCH-CHAIN-BRINGUP.md) Phase 4.
 
-### Two rules the command line has to obey
+### The ceremony talks to the chain THROUGH the primary
+
+The wrapper passes `--via-ssh <primary>` to every `multisig_sign.sh` call, and relays its own
+balance and delegation reads the same way.  That is not decoration: on this workstation
+`qadenad` cannot open a TCP connection to the fleet at all while `curl` and `ssh` can, so a
+ceremony run directly from here fails at the first chain read
+([[qadena-mac-cannot-reach-rpc]] in the project notes has the ruled-out causes -- do not
+re-diagnose it).
+
+Signing stays local and offline; only the account number/sequence and the fully signed
+transaction cross the wire, and the latter is public the moment it is broadcast.  **The bucket
+keys never leave this machine even though this machine holds all of them** -- the shortcut here is
+that they are all in one keyring, not that they travel.
+
+### Four rules the command line has to obey
+
+**QUOTE every `--test` and `--test-local`.**  Their argument is ONE string.  Unquoted, the
+driver reads the inner flags as its own and refuses -- `--test ./testscripts/test_ss_key_rotation.sh
+--key-added-only` dies with `unknown option --key-added-only` before anything starts.
+
+> **The run log will mislead you here.**  `status.txt` records the command line *flattened*, with
+> the quotes stripped -- so copying a command out of a previous run's log reproduces exactly this
+> failure.  Re-add the quotes.
 
 **`--test-local` goes after the LAST `--joiner`.**  The provisioning stakes the treasury across
 every *bonded* validator, and voting power decides whether the whitelist proposal passes.  Run it
@@ -334,6 +399,17 @@ earlier and it delegates to a partial set, then submits a proposal short of quor
 **No argument may contain a space.**  The dispatcher word-splits scheduled commands with
 `${=...}`, so a quoted `--reason "provisioned from adoption"` arrives as three words and the next
 one is read as the address.  That is why the wrapper takes no `--reason`.
+
+**The primary's checkout must be CLEAN and current.**  A0 preflights every host before anything is
+stopped or moved, and refuses a dirty tree -- the build runs `git clean -fd` and would destroy the
+work.  It refuses *before* touching any host, so a failure here costs nothing:
+
+```sh
+ssh <primary> 'cd ~/qv3 && git fetch -q origin && git reset --hard origin/main'
+```
+
+Only the PRIMARY needs a checkout.  Joiners are installed from the package it builds, and normally
+have no `~/qv3` at all.
 
 ### The environment the suites need on a launch chain
 
@@ -652,7 +728,7 @@ refills and **no expiry**.  Both parts are deliberate:
   the node runs, so the sponsorship has to as well.
 
 Bounded three ways regardless: per-period budget, message allow-list, and an optional
-total cap.  `scripts/foundation_sponsor_node.sh --join-only` gives the narrow expiring
+total cap.  `testscripts/foundation_sponsor_node.sh --join-only` gives the narrow expiring
 grant if you actually want it, and warns about exactly this.
 
 ### What is NOT sponsored
@@ -664,8 +740,8 @@ nothing -- and undelegating after the fact does not escape it.
 
 ### Requirements
 
-- `scripts/foundation_sponsor_node.sh` must be on the **primary** (it ships in the
-  release package; stage G fails with "install the release package first" if not).
+- `testscripts/foundation_sponsor_node.sh` runs on the **primary**, from its CHECKOUT -- it is
+  test tooling and is deliberately NOT in the release package, so the primary needs `~/qv3`
 - The granter key must be in the primary's keyring.
 
 Stage G's banner and the run-directory note both record which mode was used, so a run

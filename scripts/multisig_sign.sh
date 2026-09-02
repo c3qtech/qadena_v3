@@ -208,8 +208,23 @@ combine)
     # here either way.  What it can do is run OFFLINE, given the same pinned account number and
     # sequence the shares were signed at, which is what makes the relay work end to end.
     if [[ -n "$VIA_SSH" ]]; then
-        q tx multisign "$tx" "$msig" "${sigs[@]}" \
-            --chain-id "$CHAIN" ${=$(seq_flags "$(addr_of "$msig")")} > "$out" || exit 1
+        # THE SEQUENCE COMES FROM THE SHARES, NOT THE CHAIN.  multisign verifies each share against
+        # the sequence it is told, and a share was signed at whatever the sequence was THEN plus
+        # any --sequence-offset.  Reading the chain here instead makes the right answer depend on
+        # whether the earlier transaction of a pair has landed yet: before it lands the shares are
+        # one ahead of the chain, after it lands they match.  Getting it wrong fails with
+        # "unable to verify single signer signature", which names neither the sequence nor the
+        # cause.  The share records what it committed to -- use that and the question disappears.
+        _ssq=$(jq -r '.signatures[0].sequence // empty' "${sigs[1]}" 2>/dev/null)
+        _san=$(qnode query auth account "$(addr_of "$msig")" --output json 2>/dev/null \
+               | jq -r '..|.account_number? // empty' | head -1)
+        if [[ -n "$_ssq" && -n "$_san" ]]; then
+            q tx multisign "$tx" "$msig" "${sigs[@]}" --chain-id "$CHAIN" \
+                --offline --account-number "$_san" --sequence "$_ssq" > "$out" || exit 1
+        else
+            q tx multisign "$tx" "$msig" "${sigs[@]}" \
+                --chain-id "$CHAIN" ${=$(seq_flags "$(addr_of "$msig")")} > "$out" || exit 1
+        fi
     else
         q tx multisign "$tx" "$msig" "${sigs[@]}" \
             --chain-id "$CHAIN" --node "$NODE" > "$out" || exit 1

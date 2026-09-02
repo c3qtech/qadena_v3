@@ -402,7 +402,12 @@ ensure_self_bond() {
     info "sponsored: sending the ${floor}aqdn self-bond to $jaddr (fees stay on the grant)"
     # --bond-only: the fee grant is phase 4's (or the ceremony's); re-granting collides with it.
     # tail -12, not -4: the sponsor script prints its header first, and a short tail hid results.
-    ssh "$PRIMARY" "${SUDO_P}~/qadena/scripts/foundation_sponsor_node.sh --node $jaddr --granter $SPONSOR_GRANTER --bond-only --self-bond ${floor}aqdn" \
+    # FROM THE PRIMARY'S CHECKOUT, not the installed package.  foundation_sponsor_node.sh signs
+    # with a SINGLE key, which no launch-chain bucket is, so it is test tooling and lives in
+    # testscripts/ -- which package_release.sh deliberately does not ship to nodes.  The primary
+    # always has a checkout (it is where the build happens) and repo_on finds it.
+    _fsn_repo=$(repo_on "$PRIMARY") || fail "cannot locate the checkout on $PRIMARY (needed for foundation_sponsor_node.sh)"
+    ssh "$PRIMARY" "${SUDO_P}$_fsn_repo/testscripts/foundation_sponsor_node.sh --node $jaddr --granter $SPONSOR_GRANTER --bond-only --self-bond ${floor}aqdn" \
         2>&1 | tail -12 | sed 's/^/    /'
     if (( ${pipestatus[1]} != 0 )); then
         print_funding_instructions "$jaddr"
@@ -812,7 +817,7 @@ phase "4. fund the joiner"
         # SPONSORED: no coins move.  Issue a fee grant from the granter to the joiner's pioneer key.
         # The grant is bounded (per-period budget + message allow-list) and recurring, because SS
         # rotation recurs for as long as the node runs -- a one-off grant would let the node join and
-        # then quietly stop re-sharing SS keys.  See scripts/foundation_sponsor_node.sh.
+        # then quietly stop re-sharing SS keys.  See testscripts/foundation_sponsor_node.sh.
         # AN ADDRESS IS A VALID GRANTER.  `keys show` can only answer for a key the PRIMARY
         # holds, which excludes every custody model where the money is not the primary's --
         # a multisig, an HSM, a foundation elsewhere.  Those grants are issued off-box and this
@@ -827,10 +832,11 @@ phase "4. fund the joiner"
         if [[ -n "$existing" ]]; then
             info "already sponsored by $existing -- nothing to do"
         else
-            ssh "$PRIMARY" "test -x ~/qadena/scripts/foundation_sponsor_node.sh" \
-                || fail "~/qadena/scripts/foundation_sponsor_node.sh is missing on the primary -- install the release package first"
+            _fsn_repo=$(repo_on "$PRIMARY") || fail "cannot locate the checkout on $PRIMARY"
+            ssh "$PRIMARY" "test -x $_fsn_repo/testscripts/foundation_sponsor_node.sh" \
+                || fail "$_fsn_repo/testscripts/foundation_sponsor_node.sh is missing on the primary"
             info "sponsoring $addr from $SPONSOR_GRANTER ($gaddr) -- no coins are sent"
-            sp_out=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/scripts/foundation_sponsor_node.sh --node $addr --granter $SPONSOR_GRANTER" 2>&1) \
+            sp_out=$(ssh "$PRIMARY" "${SUDO_P}$_fsn_repo/testscripts/foundation_sponsor_node.sh --node $addr --granter $SPONSOR_GRANTER" 2>&1) \
                 || fail "sponsorship failed: $(print -r -- "$sp_out" | tail -3)"
             print -r -- "$sp_out" | grep -E "ok:|FAILED" | while read -r l; do info "  $l"; done
             got=""
@@ -1376,7 +1382,7 @@ phase "7. convert to validator and split the stake"
 # It is a TRANSFER, not a grant, and that is what keeps the risk in the right place: once sent the
 # tokens are the node's own, they are what gets bonded, and slashing burns them.  A fee grant could
 # not do this job anyway -- it separates who signs from who pays FEES, and staked principal is
-# neither.  foundation_sponsor_node.sh --self-bond owns this so the rule lives with the grant logic
+# neither.  testscripts/foundation_sponsor_node.sh --self-bond owns this, so the rule lives with
 # rather than being re-implemented here.
 if (( SPONSORED )); then
     # Safety net for resumed runs (--from 7): phase 4 delivers the bond when the run declared a

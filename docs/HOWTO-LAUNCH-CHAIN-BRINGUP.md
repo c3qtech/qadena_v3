@@ -392,6 +392,39 @@ Shares travel as files; **no machine ever holds enough keys to move the bucket a
 did, the ceremony would be theatre.  `provision_account.sh` is polling the chain and continues by
 itself once the coins land.
 
+#### When the signing machine cannot reach the chain
+
+A member's workstation being unable to reach the RPC is a normal condition, not an exotic one:
+corporate networks filter outbound traffic, a VPN captures the route, an endpoint agent applies
+per-application policy.  Observed on this project 2026-09-02, where `curl` reached the node and
+`qadenad` did not, from the same shell, in the same second.
+
+The keys must not move to solve that.  `--via-ssh` relays only the calls that need the chain:
+
+```sh
+scripts/multisig_sign.sh sign --via-ssh <user@node> \
+    --tx fund.json --multisig adoption --from adoption-mN --out sN.json
+```
+
+Pass it to whichever subcommands you run -- **after the subcommand**, since the first argument is
+the subcommand itself.  What it changes:
+
+| step | where it runs | why |
+|---|---|---|
+| `build-send` / `build-feegrant` | locally | already offline; no chain needed |
+| read account number + sequence | **on the node** | the only read the signature depends on |
+| `sign` | **locally, offline** | the keys are here and stay here |
+| `combine` | **locally, offline** | `tx multisign` needs the multisig pubkey from THIS keyring |
+| `broadcast` | **on the node** | the signed tx is copied over and sent from there |
+
+**Two things cross the wire, and neither is secret:** the account number and sequence, and the
+fully signed transaction -- which is public the instant it is broadcast to every validator.  No
+key, no share and no mnemonic leaves the signing machine, so the property the multisig exists to
+create is untouched.
+
+Requires ssh to a node that has `qadenad` and can reach its own RPC; it runs there against
+`tcp://localhost:26657`.  Without `--via-ssh` nothing changes -- the default is exactly as before.
+
 ### 3. Stake BEFORE whitelisting -- the order is not cosmetic
 
 Voting power follows **bonded** stake, and the whitelist is a governance proposal.  An account
@@ -408,6 +441,25 @@ The stake is **split across every bonded validator**, never concentrated.  Handi
 more than two-thirds of consensus power lets it finalise blocks alone: a peer that disagrees
 prevotes nil and is simply outvoted.  Splitting costs nothing in governance, because a delegator's
 voting power is the SUM of its delegations.
+
+**Confirm each delegation before sending the next.**  They all come from one account, so every
+transaction needs the following sequence number -- fired back to back they land in the same block,
+the sequence has not advanced, and CheckTx rejects the later ones.  `qadenad` still **exits 0**,
+because the transaction *was* accepted for broadcast rather than for inclusion, so a loop that
+checks only the exit status reports four delegations while the chain records two.  Measured
+2026-09-02: 2 of 4, then 1 of 2.  Read the code back:
+
+```sh
+h=$(qadenad tx staking delegate <valoper> <amt>qdn --from <acct> -y --output json ... \
+      | sed -n 's/.*"txhash":"\([0-9A-Fa-f]*\)".*/\1/p')
+qadenad query tx "$h" --output json | jq -r .code      # must be 0 before the next delegation
+```
+
+`sed`, not `jq`, on the first line: `qadenad tx` prints a human `gas estimate:` line before the
+JSON, so parsing the whole stream as JSON fails on a transaction that was in fact broadcast.
+
+Under-delegating matters more than it looks: the whitelist proposal that follows is sized against
+the stake you think you have, and a proposal short of quorum **expires** rather than failing.
 
 ### 4. The whitelist proposal, and who has to vote
 

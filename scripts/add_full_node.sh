@@ -229,7 +229,8 @@ while [[ $# -gt 0 ]]; do
 	  echo "                       TOLL-FREE JOIN.  This node holds NO QDN and needs no treasury of"
 	  echo "                       its own: the foundation pays for sync-enclave by FEE GRANT, and"
 	  echo "                       this script waits for that grant instead of for a balance."
-	  echo "                       The foundation runs scripts/foundation_sponsor_node.sh (the exact"
+	  echo "                       The foundation runs testscripts/foundation_sponsor_node.sh for a"
+	  echo "                       SINGLE-KEY granter, or a multisig ceremony on a launch chain (the exact"
 	  echo "                       command is printed below); the grant is bounded to the three"
 	  echo "                       messages sync-enclave actually sends, so it cannot fund anything"
 	  echo "                       else.  Pass the granter address to pin it, or omit it to accept"
@@ -795,7 +796,8 @@ if [[ -n "$FOUNDATION_GRANTER" ]] ; then
 	echo ""
 	echo "Ask the foundation to run this (on a box holding the foundation key):"
 	echo ""
-	echo "    ~/qadena/scripts/foundation_sponsor_node.sh --node $PIONEERADDRESS"
+	echo "    testscripts/foundation_sponsor_node.sh --node $PIONEERADDRESS   (single-key granter)"
+	echo "    ...or a members' ceremony on a launch chain -- docs/HOWTO-ADD-LAUNCH-CHAIN-NODE.md step 2"
 	echo ""
 	if [[ "$FOUNDATION_GRANTER" == "any" ]] ; then
 		echo "Waiting for a fee grant to $PIONEERADDRESS from any granter."
@@ -917,7 +919,13 @@ while [[ $REPLY != "y" && $REPLY != "n" ]]; do
 
 		if [ $IS_UP -eq 0 ] ; then
 			echo "Couldn't find a fee grant for $PIONEERADDRESS"
-			echo "The foundation must run:  ~/qadena/scripts/foundation_sponsor_node.sh --node $PIONEERADDRESS"
+			# TWO PATHS, and naming only the single-key one sends a launch-chain operator to a
+			# script that cannot sign for their granter: every launch-chain bucket is a multisig.
+			echo "The sponsor must issue the fee grant for $PIONEERADDRESS:"
+			echo "  single-key granter (devnet):  testscripts/foundation_sponsor_node.sh --node $PIONEERADDRESS"
+			echo "  bucket multisig (LAUNCH CHAIN):  a ceremony among the members --"
+			echo "     scripts/multisig_sign.sh build-feegrant --granter <bucket> --grantee $PIONEERADDRESS ..."
+			echo "     see docs/HOWTO-ADD-LAUNCH-CHAIN-NODE.md step 2 for the full sequence."
 			echo "Stopping the enclave"
 			$qadenascripts/stop_qadena.sh --enclave > /dev/null
 			exit 1

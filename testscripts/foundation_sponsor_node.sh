@@ -6,6 +6,25 @@
 #   add_full_node.sh --foundation-sponsored
 # which mints the pioneer key and prints its address.
 #
+# SINGLE-KEY GRANTERS ONLY -- WHICH A LAUNCH CHAIN DOES NOT HAVE.
+#
+# This signs with ONE key from the local keyring.  On mainnet, and on any chain built from
+# config/launch-config.yml, EVERY account holding money is an N-of-M bucket multisig -- adoption,
+# nodeops, foundation, grants and the rest.  The only single key at genesis is the genesis
+# validator's own operator key, which is a working balance and not a sponsor.  So there is no
+# launch-chain granter this script can sign for, and it is not the mainnet path.
+#
+# Where each path lives:
+#   single key (devnet, test fleets)  this script -- nth_node_bringup phase 4 runs it on the primary
+#   multisig, unattended (test fleet) testscripts/foundation_multisig_sponsor_node.sh
+#   multisig, real custody (MAINNET)  a ceremony among separate keyholders --
+#                                     docs/HOWTO-ADD-LAUNCH-CHAIN-NODE.md step 2, scripts/multisig_sign.sh
+#
+# It lives in testscripts/ because that is what it is.  It used to sit in scripts/ so that nodes
+# would have it installed, but the only thing that runs it is nth_node_bringup's phase 4, on the
+# PRIMARY -- which always has a checkout, since that is where the build happens.  So it is invoked
+# from there (repo_on) and never needs to ship in the release package.
+#
 # WHAT A NODE ACTUALLY SPENDS -- FOR ITS WHOLE LIFE, NOT JUST THE JOIN
 #
 #   Joining (`qadenad enclave sync-enclave`) broadcasts three messages:
