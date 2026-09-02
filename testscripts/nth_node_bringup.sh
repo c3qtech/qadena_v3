@@ -71,12 +71,20 @@ ONLY=""
 QUIESCE=0; QUIESCE_NOW=0
 VALIDATOR_STAKE="110000"
 FUND_QDN="200000"
-# TOLL-FREE JOIN.  With --foundation-sponsored the joiner is never sent coins: phase 3 issues a
-# bounded, recurring FEE GRANT instead, and phase 4 tells add_full_node.sh to wait for that grant
+# TOLL-FREE JOIN.  With --foundation-sponsored the joiner is never sent coins: phase 4 issues a
+# bounded, recurring FEE GRANT instead, and phase 5 tells add_full_node.sh to wait for that grant
 # rather than for a balance.  The granter defaults to `treasury` because that is the key the primary
 # already holds and already funds with -- in a real deployment it is a foundation key.
 SPONSORED=0
 SPONSOR_GRANTER="treasury"
+# A FULL NODE IS THE DEFAULT PRODUCT.  add_full_node.sh "covers JOINING only", and validating is
+# a separate, optional act with its own script -- so this run bonds nothing and converts nothing
+# unless told to.  --convert-to-validator declares the intent up front, and everything follows
+# from the declaration: the self-bond moves at the FUNDING phase (4) together with the grant, the
+# phase-3 ceremony instructions include it, and phase 7 performs the conversion.  Without the
+# flag none of that happens, and no coins are parked on a node that may never bond -- which
+# matters here because coins sent to an unidentified address CANNOT be sent back (AML code 1159).
+CONVERT=0
 PIONEER_NAME="pioneer2"
 STATE_SYNC=0
 SEED2=""
@@ -97,6 +105,7 @@ while [[ $# -gt 0 ]]; do
         --stake)   VALIDATOR_STAKE="$2"; shift 2 ;;
         --pioneer) PIONEER_NAME="$2"; shift 2 ;;
         --state-sync) STATE_SYNC=1; shift ;;
+        --convert-to-validator) CONVERT=1; shift ;;
         --foundation-sponsored)
             SPONSORED=1
             if [[ -n "$2" && "$2" != --* ]]; then SPONSOR_GRANTER="$2"; shift 2; else shift; fi ;;
@@ -115,16 +124,26 @@ while [[ $# -gt 0 ]]; do
             print "                only looks and warns.  Worth passing when the primary is running"
             print "                the loop, because enclave-rollback/crash/upgrade restart the"
             print "                chain and a joiner cannot survive its primary's RPC vanishing."
-            print "  --from/--until  run a RANGE of phases, inclusive: --from 1 --until 5 brings a node"
+            print "  --from/--until  run a RANGE of phases, inclusive: --from 1 --until 6 brings a node"
             print "                up and stops short of converting it to a validator.  --only runs one."
+            print "                PHASES: 1 preflight, 2 check primary, 3 mint the joiner key,"
+            print "                        4 fund it, 5 join, 6 start+catch up, 7 validator, 8 peer agreement."
+            print "                --until 3 then --from 5 SKIPS THE FUNDING, for custody this script"
+            print "                cannot drive: a multisig, an HSM, or a foundation on another continent."
             print "  --pioneer     the joiner's pioneer name (default pioneer2).  MUST BE UNUSED ON"
             print "                THE CHAIN: add_full_node.sh refuses a name already registered, so"
             print "                a re-join after a wipe needs a fresh one -- the key is gone"
             print "                locally but the chain still remembers it."
-            print "  --foundation-sponsored [<granter-key>]"
+            print "  --convert-to-validator"
+            print "                bond and convert.  WITHOUT this the run produces a FULL NODE:"
+            print "                no self-bond is sent anywhere, phase 3's ceremony instructions"
+            print "                omit it, and phase 7 is skipped.  With it, the bond moves at the"
+            print "                funding phase (4) alongside the grant -- ONE intervention for an"
+            print "                external custodian -- and phase 7 only converts."
+            print "  --foundation-sponsored [<granter-key-or-ADDRESS>]"
             print "                TOLL-FREE.  The joiner gets NO coins and needs no treasury of its"
             print "                own.  Phase 3 issues a bounded recurring fee grant from <granter-key>"
-            print "                (default: treasury, the key the primary already holds) and phase 4"
+            print "                (default: treasury, the key the primary already holds) and phase 5"
             print "                waits for that grant instead of a balance.  The grant covers the"
             print "                five messages a node broadcasts for life -- join, SS rotation and"
             print "                SS re-share -- so the node keeps working, not just joining."
@@ -262,7 +281,7 @@ sgx_state() { ssh -o ConnectTimeout=10 "$1" "$SGX_PROBE" >/dev/null 2>&1; print 
 # 1st_node_bringup.sh has stripped this for its own advertise address for some time; this script
 # did not, and it contaminates THREE fields -- external_address, persistent_peers and the state-sync
 # rpc_servers -- which fail ONE AT A TIME, each with a different error at a different startup stage.
-# The failure lands in phase 5, minutes after phase 4 has already minted the key, funded it, fetched
+# The failure lands in phase 6, minutes after phases 3-4 have already minted the key, funded it, fetched
 # genesis and run sync-enclave, so it reads as a start problem rather than a bad argument.
 # See TESTING-BACKLOG.md item 86.
 #
@@ -288,11 +307,11 @@ TRUST_OFFSET_ARG=" --trust-height-offset ${TRUST_HEIGHT_OFFSET:-10}"
 # second seed makes the trust block run at all.
 
 # Passed to convert_to_validator.sh so the create-validator tx is fee-granted.  Unconditional for
-# the same reason as TRUST_OFFSET_ARG: `set -u` is on and phase 6 interpolates it either way.
+# the same reason as TRUST_OFFSET_ARG: `set -u` is on and phase 7 interpolates it either way.
 if (( SPONSORED )); then SPONSOR_CV_ARG=" --foundation-sponsored"; else SPONSOR_CV_ARG=""; fi
 
 # SECOND_IP_ARG -- the extra seed that turns statesync on.  Computed here rather than inside phase
-# 4, because phase 3 now drives add_full_node.sh too and the two must agree: a key minted for a
+# 5, because phase 3 now drives add_full_node.sh too and the two must agree: a key minted for a
 # block-sync join and then resumed as a state-sync one would rewrite config.toml mid-flight.
 if (( STATE_SYNC )); then
     SECOND_IP_ARG=" --genesis-pioneer-second-ip-address ${${SEED2:-$PRIMARY}##*@}"
@@ -326,6 +345,118 @@ sgx_desc() {
 }
 info "primary $PRIMARY: $(sgx_desc "$PRIMARY")"
 info "joiner  $JOINER: $(sgx_desc "$JOINER")"
+
+# ensure_self_bond: deliver the validator self-bond to the joiner's pioneer key, once.
+#
+# CALLED FROM TWO PHASES, IDEMPOTENTLY.  Phase 4 (funding) calls it under --convert-to-validator
+# so all money moves at one point and an external custodian intervenes once; phase 7 calls it as
+# a safety net for resumed runs (--from 7) that skipped 4.  Whichever runs second sees the
+# balance and does nothing.  The amount is read from the JOINER's config.yml because that is the
+# file convert_to_validator.sh bonds from: sponsored, it bonds exactly min-self-delegation, so
+# sending anything else either strands QDN on the node or leaves its balance poll waiting.
+ensure_self_bond() {
+    local jaddr floor _bal
+    jaddr=$(ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+    [[ -n "$jaddr" ]] || fail "cannot resolve $PIONEER_NAME's address on $JOINER to fund its self-bond"
+    floor=$(ssh "$JOINER" "dasel -f \$HOME/qadena/config/config.yml 'validators.first().app.min-self-delegation' 2>/dev/null" | tr -d '\r"')
+    [[ "$floor" == <-> ]] \
+        || fail "validators.first().app.min-self-delegation on $JOINER is \"$floor\", not a bare aqdn integer -- cannot size the self-bond"
+    _bal=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena q bank balances $jaddr --output json 2>/dev/null" \
+           | tr -d '\r' | jq -r '[.balances[]? | select(.denom=="aqdn") | .amount] | first // "0"' 2>/dev/null)
+    _bal=${_bal:-0}
+    if [[ "$_bal" != "0" ]] && (( $(print "$_bal >= $floor" | bc 2>/dev/null || print 0) )); then
+        info "self-bond already present ($_bal aqdn >= ${floor}aqdn) -- not sending it again"
+        return 0
+    fi
+    # THE --from 7 RESUME IS THE CASE THAT BITES.  A full-node run (no --convert-to-validator)
+    # never sent a bond and never printed bond instructions -- phase 3 omits them by design.  So
+    # when the operator later resumes with the flag, THIS is the first moment the money is
+    # needed, and "go look at what phase 3 printed" points at output that does not exist.  An
+    # external-custody granter cannot be signed for on the primary either, so print the complete
+    # ceremony here and stop, rather than attempting a send that must fail.
+    if [[ "$SPONSOR_GRANTER" == qadena1* ]]; then
+        info "granter $SPONSOR_GRANTER is external custody -- the primary cannot sign the self-bond."
+        print_funding_instructions "$jaddr"
+        fail "deliver the ${floor}aqdn self-bond by the ceremony above, then re-run this phase --
+       the delivered bond will be seen and not re-sent."
+    fi
+    info "sponsored: sending the ${floor}aqdn self-bond to $jaddr (fees stay on the grant)"
+    # --bond-only: the fee grant is phase 4's (or the ceremony's); re-granting collides with it.
+    # tail -12, not -4: the sponsor script prints its header first, and a short tail hid results.
+    ssh "$PRIMARY" "${SUDO_P}~/qadena/scripts/foundation_sponsor_node.sh --node $jaddr --granter $SPONSOR_GRANTER --bond-only --self-bond ${floor}aqdn" \
+        2>&1 | tail -12 | sed 's/^/    /'
+    if (( ${pipestatus[1]} != 0 )); then
+        print_funding_instructions "$jaddr"
+        fail "could not send the self-bond to $jaddr from the primary.  Deliver it by the
+       ceremony above (scripts/multisig_sign.sh) and re-run -- the delivered bond will be seen."
+    fi
+}
+
+print_funding_instructions() {  # $1 = the joiner pioneer address
+    local addr="$1"
+    _chainid=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena status 2>/dev/null" \
+               | tr -d '\r' | jq -r '.node_info.network // empty' 2>/dev/null)
+    print ""
+    print "  ---- IF PHASE 4 CANNOT SIGN FOR YOUR CUSTODY, SKIP IT ----"
+    print "  Stop here (--until 3), fund $PIONEER_NAME by your own ceremony, then resume with --from 5."
+    print ""
+    if (( SPONSORED )); then
+    print "  MODE: SPONSORED (--foundation-sponsored given).  Instructions below are for a fee grant."
+    else
+    print "  MODE: NOT SPONSORED.  Instructions below are for a plain transfer."
+    print "        PASS --foundation-sponsored ON THIS RUN IF YOU MEANT TO SPONSOR.  It selects which"
+    print "        instructions you get, so it is needed on the --until 3 run even though the phase it"
+    print "        otherwise drives (4) is the one you are skipping.  Sign the wrong thing and you"
+    print "        find out at phase 5, after the ceremony."
+    fi
+    print ""
+    print "  joiner:   $addr"
+    print "  chain-id: ${_chainid:-<primary is not answering>}"
+    if (( SPONSORED )); then
+    print "  needed:   a recurring FEE GRANT from $SPONSOR_GRANTER to the joiner."
+    print "            No coins move.  It must NOT expire and must NOT be join-only: SS re-sharing"
+    print "            recurs for the life of the node, and a lapsed grant stops it silently."
+    if (( CONVERT )); then
+    print "  ALSO:     a validator needs a REAL SELF-BOND -- a transfer, which no fee grant covers."
+    # THE EXACT AMOUNT, SO BOTH TXS CAN BE SIGNED IN ONE SITTING.  config.yml ships with the release
+    # package, so the floor is readable here -- long before phase 7, which is merely where the
+    # unsponsored path happens to send it.  Printing it is what makes ONE ceremony possible: both
+    # phase 4 (grant) and phase 7 (bond) skip work already on chain, so an operator who signs both
+    # now is never asked again.  Saying "send the floor" without saying what it is forces two.
+    _floor=$(ssh "$JOINER" "dasel -f \$HOME/qadena/config/config.yml 'validators.first().app.min-self-delegation' 2>/dev/null" | tr -d '\r"')
+    if [[ "$_floor" == <-> ]]; then
+    print "            SEND EXACTLY: ${_floor}aqdn   (min-self-delegation, from the joiner's config.yml)"
+    print "            NOT ${VALIDATOR_STAKE}qdn -- that default is a DEVNET figure.  A sponsored node"
+    print "            handed a large liquid balance can pay its own gas, which is not sponsorship."
+    else
+    print "            Send the MIN-SELF-DELEGATION FLOOR (could not read it from the joiner:"
+    print "            validators.first().app.min-self-delegation was \"$_floor\")."
+    fi
+    print ""
+    print "  DO BOTH NOW, IN ONE CEREMONY.  Phase 4 skips a grant already on chain and the bond"
+    print "  delivery skips one already present, so signing both here means the multisig is never"
+    print "  asked twice."
+    else
+    print "  NO SELF-BOND: --convert-to-validator was not given, so this run makes a FULL NODE and"
+    print "  no stake should be sent.  (Coins sent to an unidentified address cannot come back.)"
+    print "  If this node will validate, re-run --only 3 WITH --convert-to-validator to get the"
+    print "  full ceremony, bond amount included."
+    fi
+    else
+    print "  needed:   a transfer of ${FUND_QDN}qdn to the joiner."
+    fi
+    print ""
+    print "  On the machine holding a member key (scripts/multisig_sign.sh):"
+    print "    build-feegrant --granter <msig> --grantee $addr --msgs <LIFE_MSGS> --out grant.json"
+    print "    build-send     --from <msig> --to $addr --amount <stake> --out bond.json"
+    print "    sign  --tx grant.json --multisig <msig> --from <member> --out sigN.json   # once per member"
+    print "    combine --tx grant.json --multisig <msig> --out signed.json sig1.json sig2.json ..."
+    print "    broadcast --tx signed.json"
+    print "  --sequence-offset 1 goes on SIGN, on every share of the SECOND tx -- the sequence is"
+    print "  written when a share is signed, not when the tx is built.  Omit it and the second tx is"
+    print "  invalid the instant the first lands.  Drop it if the first has ALREADY landed."
+}
+
 
 # ---------------------------------------------------------------------------- 1. preflight
 if run_phase 1; then
@@ -454,7 +585,7 @@ fi
 
 # THE PIONEER NAME MUST BE UNUSED ON THE CHAIN.  add_full_node.sh refuses a name already in the
 # IntervalPublicKeyID list ("The Pioneer <name> already exists, please choose a different Pioneer
-# name") -- and it refuses it in phase 4, after the wipe, after the funding, several minutes in.
+# name") -- and it refuses it in phase 5, after the wipe, after the funding, several minutes in.
 #
 # The trap is that the name outlives the machine: wiping a joiner removes its key but the CHAIN
 # still remembers the registration, so the default pioneer2 is burned by any previous join attempt
@@ -623,9 +754,9 @@ done
 sleep 30
 FEED
 
-# ---------------------------------------------------------------------------- 3. fund
+# ---------------------------------------------------------------------------- 3. mint
 if run_phase 3; then
-phase "3. mint the joiner's pioneer key and fund it"
+phase "3. mint the joiner's pioneer key"
 
 # THIS PHASE MINTS THE KEY IT FUNDS, and that is the point.  Funding used to be ordered before the
 # join, which cannot work on a first run: the key does not exist until add_full_node.sh creates it,
@@ -667,15 +798,48 @@ PREP
     # discover that on its own is how orphans outlive the run that made them.
     ssh "$JOINER" "pgrep -f '[t]nb_feed.sh' | while read fp; do ${SUDO_J}kill \$fp 2>/dev/null; done; true" > /dev/null 2>&1
     info "minted $PIONEER_NAME = $addr"
+
+# WHAT TO SIGN, IF THE FUNDING IS NOT OURS TO DO.
+#
+# Phase 4 funds the joiner by signing ON THE PRIMARY.  That is right when the money is a single
+# key the primary holds, and impossible when it is a multisig, an HSM, or a foundation
+# elsewhere.  Rather than fail there, phase 3 ends by printing exactly what has to be signed, so
+# an operator can skip phase 4 entirely and do it by their own ceremony.
+#
+# Printed unconditionally: a run that IS going on to phase 4 loses nothing by seeing what phase 4
+# is about to do on its behalf.
+print_funding_instructions "$addr"
+print ""
 fi
-if true; then
+fi
+
+# ---------------------------------------------------------------------------- 4. fund
+# SPLIT OUT OF PHASE 3 on 2026-09-01.  Minting a key and PAYING for it are different jobs with
+# different owners: the mint is mechanical and always identical, while the funding depends
+# entirely on who holds the money.  Welded together, a custody model this script did not
+# anticipate blocks the whole phase -- which is exactly what happened with a bucket held as a
+# 3-of-5 multisig whose members are on a workstation, not on the primary: both branches below
+# resolve the granter with `keys show` ON THE PRIMARY, so neither can sign for it.
+#
+# Split, `--until 3` mints and stops, the operator funds by whatever ceremony their custody
+# requires, and `--from 5` carries on.  Nothing here changed except where the boundary sits.
+if run_phase 4; then
+phase "4. fund the joiner"
     info "joiner $PIONEER_NAME = $addr"
     if (( SPONSORED )); then
         # SPONSORED: no coins move.  Issue a fee grant from the granter to the joiner's pioneer key.
         # The grant is bounded (per-period budget + message allow-list) and recurring, because SS
         # rotation recurs for as long as the node runs -- a one-off grant would let the node join and
         # then quietly stop re-sharing SS keys.  See scripts/foundation_sponsor_node.sh.
-        gaddr=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena keys show $SPONSOR_GRANTER -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+        # AN ADDRESS IS A VALID GRANTER.  `keys show` can only answer for a key the PRIMARY
+        # holds, which excludes every custody model where the money is not the primary's --
+        # a multisig, an HSM, a foundation elsewhere.  Those grants are issued off-box and this
+        # only needs the address to look the grant up, so accept one directly.
+        if [[ "$SPONSOR_GRANTER" == qadena1* ]]; then
+            gaddr="$SPONSOR_GRANTER"
+        else
+            gaddr=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena keys show $SPONSOR_GRANTER -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+        fi
         [[ -n "$gaddr" ]] || fail "granter '$SPONSOR_GRANTER' is not in the primary's keyring"
         existing=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query feegrant grants-by-grantee $addr --output json 2>/dev/null | jq -r '.allowances[0].granter // \"\"'" | tr -d '\r')
         if [[ -n "$existing" ]]; then
@@ -695,6 +859,11 @@ if true; then
             done
             [[ -n "$got" ]] || fail "the fee grant did not land for $addr -- $(print -r -- "$sp_out" | tail -3)"
             info "fee grant confirmed on chain, granter $got"
+        fi
+        # THE BOND MOVES HERE TOO, when a validator was declared.  One funding point, one
+        # ceremony, one intervention for whoever holds the money.  Phase 7 then only converts.
+        if (( CONVERT )); then
+            ensure_self_bond
         fi
     elif true; then
     bal=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
@@ -773,12 +942,11 @@ print(format(max(bf * 2, Decimal('0.025')), 'f'))
     fi
 fi
 fi
-fi
 
-# ---------------------------------------------------------------------------- 4. join
-if run_phase 4; then
+# ---------------------------------------------------------------------------- 5. join
+if run_phase 5; then
 if (( STATE_SYNC )); then
-    phase "4. join (STATE-SYNC)"
+    phase "5. join (STATE-SYNC)"
     # add_full_node.sh enables statesync only when BOTH genesis-pioneer IPs are given: it reads the
     # trust height and hash from the first, re-reads that exact height from the second, and refuses
     # unless they match.
@@ -791,7 +959,7 @@ if (( STATE_SYNC )); then
     [[ -n "$SEED2" ]] || info "no --seed2 given: using the primary for both trust sources (self-corroborating)"
     :
 else
-    phase "4. join (block-sync)"
+    phase "5. join (block-sync)"
 fi
 
 # WHICH SYNC IS CHOSEN BY THE NUMBER OF SEED ADDRESSES, not by a flag on add_full_node.sh: it turns
@@ -820,7 +988,15 @@ if (( SPONSORED )); then
     # its own, and an unset gaddr would silently degrade to "any" -- accepting whatever grant
     # happened to exist rather than the one we issued.
     if [[ -z "${gaddr:-}" ]]; then
-        gaddr=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena keys show $SPONSOR_GRANTER -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+        # AN ADDRESS IS A VALID GRANTER.  `keys show` can only answer for a key the PRIMARY
+        # holds, which excludes every custody model where the money is not the primary's --
+        # a multisig, an HSM, a foundation elsewhere.  Those grants are issued off-box and this
+        # only needs the address to look the grant up, so accept one directly.
+        if [[ "$SPONSOR_GRANTER" == qadena1* ]]; then
+            gaddr="$SPONSOR_GRANTER"
+        else
+            gaddr=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena keys show $SPONSOR_GRANTER -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+        fi
     fi
     [[ -n "${gaddr:-}" ]] || fail "--foundation-sponsored: cannot resolve granter '$SPONSOR_GRANTER' on the primary"
     SPONSOR_ARG=" --foundation-sponsored $gaddr"
@@ -876,9 +1052,9 @@ for p in $(ssh "$JOINER" 'pgrep -f "[t]nb_feed|[t]nb_join|[a]dd_full_node" 2>/de
 done
 fi
 
-# ---------------------------------------------------------------------------- 5. start
-if run_phase 5; then
-phase "5. start the joiner and catch up"
+# ---------------------------------------------------------------------------- 6. start
+if run_phase 6; then
+phase "6. start the joiner and catch up"
 
 # Standalone, NOT from inside add_full_node.sh (trap 3).
 # REDIRECT ON THE REMOTE SIDE, INSIDE THE QUOTES.  This used to end with `> /dev/null 2>&1` outside
@@ -1198,9 +1374,15 @@ fi
 ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena enclave height" 2>/dev/null | sed 's/^/  /'
 fi
 
-# ---------------------------------------------------------------------------- 6. validator
-if run_phase 6; then
-phase "6. convert to validator and split the stake"
+# ---------------------------------------------------------------------------- 7. validator
+if run_phase 7; then
+if (( ! CONVERT )); then
+    info "phase 7 skipped: no --convert-to-validator.  This run produced a FULL NODE, which is"
+    info "add_full_node.sh's whole product; validating is a separate act.  Re-run with"
+    info "  --convert-to-validator --from 7"
+    info "when this node should bond (the self-bond is sent then, not before)."
+else
+phase "7. convert to validator and split the stake"
 
 # THE SELF-BOND IS SENT BY THE FOUNDATION, because on this chain there is nowhere else it can come
 # from -- QDN originates only from the foundation, so an operator's stake necessarily did too.
@@ -1211,28 +1393,9 @@ phase "6. convert to validator and split the stake"
 # neither.  foundation_sponsor_node.sh --self-bond owns this so the rule lives with the grant logic
 # rather than being re-implemented here.
 if (( SPONSORED )); then
-    jaddr=$(ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
-    [[ -n "$jaddr" ]] || fail "phase 6: cannot resolve $PIONEER_NAME's address on $JOINER to fund its self-bond"
-    # THE AMOUNT COMES FROM config.yml, not from --stake, and it must match what
-    # convert_to_validator.sh will bond: sponsored, it bonds exactly min-self-delegation, so sending
-    # anything else either strands QDN on the node or leaves its balance poll waiting forever.
-    # ONE SOURCE OF TRUTH -- read from the joiner's own config.yml, the same file the script reads.
-    # STORED IN aqdn AS A BARE INTEGER (ignite reads the same key and x/staking demands that), so
-    # the denom is appended here rather than assumed.  Sending anything other than what
-    # convert_to_validator.sh will bond either strands QDN on the node or leaves its poll waiting.
-    floor=$(ssh "$JOINER" "dasel -f \$HOME/qadena/config/config.yml 'validators.first().app.min-self-delegation' 2>/dev/null" | tr -d '\r"')
-    [[ "$floor" == <-> ]] \
-        || fail "phase 6: validators.first().app.min-self-delegation on $JOINER is \"$floor\", not a bare aqdn integer -- cannot size the self-bond"
-    info "sponsored: sending the ${floor}aqdn self-bond to $jaddr (fees stay on the grant)"
-    # --bond-only: phase 3 already granted this node.  Re-granting here is two extra treasury
-    # transactions at the worst moment -- setup_prerequisites has just re-split the delegation, so
-    # the treasury is mid-signing and the grant collides with it.
-    #
-    # tail -12, not -4: the sponsor script prints its header first, so a short tail showed only the
-    # banner and hid the actual result.  A failure that scrolls past is a failure nobody can debug.
-    ssh "$PRIMARY" "${SUDO_P}~/qadena/scripts/foundation_sponsor_node.sh --node $jaddr --granter $SPONSOR_GRANTER --bond-only --self-bond ${floor}aqdn" \
-        2>&1 | tail -12 | sed 's/^/    /'
-    (( ${pipestatus[1]} == 0 )) || fail "phase 6: could not send the self-bond to $jaddr -- convert_to_validator.sh would wait six minutes for a transfer that never happened."
+    # Safety net for resumed runs (--from 7): phase 4 delivers the bond when the run declared a
+    # validator, so this normally sees it and does nothing.  See ensure_self_bond.
+    ensure_self_bond
     # convert_to_validator.sh polls for the balance to land, so nothing sleeps here.
 fi
 
@@ -1267,10 +1430,11 @@ else
     info "no validator holds >= 2/3 ($mx of $tot) -- disagreement is observable"
 fi
 fi
+fi
 
-# ---------------------------------------------------------------------------- 7. agreement
-if run_phase 7; then
-phase "7. peer agreement"
+# ---------------------------------------------------------------------------- 8. agreement
+if run_phase 8; then
+phase "8. peer agreement"
 
 # The first run of this that can compare anything: on a single node it prints NOTHING COMPARED and
 # says to treat that as 'not tested'.

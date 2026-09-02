@@ -16,13 +16,26 @@
 #
 # BLOCK TIME: TARGET 3s
 #
-#   The single-validator test chain runs at exactly timeout_commit (1.5s) because there is no
-#   consensus round-trip -- that number is the floor, not a prediction.  A real validator set is
-#   dominated by propagation latency: Cosmos Hub sets timeout_commit 5s and observes ~6.5s blocks.
+#   The single-validator test chain runs at exactly timeout_commit because there is no consensus
+#   round-trip -- that number is the floor, not a prediction.  A real validator set adds the
+#   propose -> prevote -> precommit cycle on top: Cosmos Hub sets timeout_commit 5s and observes
+#   ~6.5s blocks.
 #
-#   3s is the stated target here, which is achievable but on the fast side for a globally
-#   distributed set.  It suits timeout_commit ~2s.  VERIFY ON A MULTI-VALIDATOR TESTNET before
-#   freezing these, then recompute:
+#   MEASURED HERE on the 4-validator M1-M4 fleet, 2026-09-02:
+#       timeout_commit 2s -> 2.32s blocks      timeout_commit 3s -> 3.32s blocks
+#   so the cycle costs ~0.32s on a LAN.  SETTLED: timeout_commit 3s, and blocks_per_year computed
+#   as 9,500,000 (implying 3.32s, the measured rate) -- the BEST CASE.  A slower real network then UNDER-mints slightly,
+#   which is the safe direction; padding the assumption upward would OVER-mint and break the
+#   stated 1% figure.  blocks_per_year is governance-updatable, so correct it by proposal once
+#   the real topology has been measured.
+#
+#   THE LATENCY KNOB TO WATCH IS timeout_propose, NOT timeout_commit.  timeout_commit only paces;
+#   timeout_propose (3s) is how long a validator waits for the proposal before prevoting NIL.  If
+#   propagation routinely exceeds it the round FAILS and the chain advances by round-skipping,
+#   which collapses throughput.  The _delta knobs (500ms each) grow the timeouts per failed round
+#   so a laggy network degrades instead of deadlocking.
+#
+#   VERIFY ON THE REAL TOPOLOGY before freezing these, then recompute:
 #       blocks_per_year = 31,536,000 / observed_block_time
 #   Getting it wrong does not break anything, it makes real inflation drift from target: if blocks
 #   are faster than blocks_per_year assumes, you mint more than intended.
@@ -85,7 +98,7 @@ chain_id: "qadena_482-1"
 # ways that do not announce themselves:
 #
 #     validators[0].bonded  100000qdn  -> 10x the 10,000 the allocation actually funds
-#     timeout_commit        1.5s       -> half the 3s that blocks_per_year below ASSUMES
+#     timeout_commit        1.5s       -> the mainnet value is 3s (see the block time note)
 #
 # That last pair is the dangerous one: importing a 1.5s timeout_commit while mint is
 # configured for 3s blocks would run the chain at roughly twice the assumed rate and
@@ -132,6 +145,60 @@ validators:
       pruning: "default"
       pruning-keep-recent: "0"
       pruning-interval: "0"
+      # --- CARRIED FROM config/config.yml, 2026-09-01 -----------------------------------
+      # These were absent and therefore taking Cosmos defaults.  state-sync is the one with
+      # teeth: with no snapshot-interval a node produces NO snapshots, so nothing can ever
+      # state-sync from it and every joiner must block-sync the whole chain.
+      wasm:
+        query_gas_limit: "300000"
+        memory_cache_size: "300"
+      evm:
+        tracer: ""
+        max-tx-gas-wanted: "0"
+        cache-preimage: false
+        min-tip: "0"
+        geth-metrics-address: "0.0.0.0:8100"
+        mempool:
+          price-limit: "1"
+          price-bump: "10"
+          account-slots: "16"
+          global-slots: "5120"
+          account-queue: "64"
+          global-queue: "1024"
+          lifetime: "3h0m0s"
+      json-rpc:
+        enable: true
+        address: "0.0.0.0:8545"
+        ws-address: "0.0.0.0:8546"
+        ws-origins:
+          - "127.0.0.1"
+          - "localhost"
+        api: "eth,net,web3"
+        gas-cap: "25000000"
+        allow-insecure-unlock: true
+        evm-timeout: "5s"
+        txfee-cap: "1"
+        filter-cap: "200"
+        feehistory-cap: "100"
+        logs-cap: "10000"
+        block-range-cap: "10000"
+        http-timeout: "30s"
+        http-idle-timeout: "2m0s"
+        allow-unprotected-txs: false
+        max-open-connections: "0"
+        enable-indexer: true
+        metrics-address: "0.0.0.0:6065"
+        batch-request-limit: "1000"
+        batch-response-max-size: "25000000"
+        enable-profiling: false
+      state-sync:
+        snapshot-interval: "2000"
+        snapshot-keep-recent: "3"
+    # The node's own client.toml.  Must match chain_id above: a client pointed at the wrong
+    # chain-id sends every CLI query and tx to a chain that will reject them -- or, on a chain
+    # that happens to share the id, accept them.
+    client:
+      chain-id: "qadena_482-1"
     config:
       # THE MONIKER IS THE PIONEER ID.  Not cosmetic, and not free-form: the node looks its
       # own signing key up BY MONIKER when it initialises the enclave --
@@ -146,14 +213,63 @@ validators:
       # then InitEnclave cannot find a key named "mynode", so the node comes up and never
       # registers its enclave.  Observed on the 2026-09-01 bring-up.
       moniker: "qfi-pioneer1"
+
+      # THE REMOTE SIGNER LISTENER.  WITHOUT THIS THE NODE CRASH-LOOPS.
+      #
+      # This chain signs blocks in an ENCLAVE: signer_enclave dials the node and serves as a
+      # CometBFT remote signer.  Leave priv_validator_laddr unset and qadenad never opens the
+      # listener, so signer_enclave dials 127.0.0.1:26659, retries 60 times at 1s intervals,
+      # and exits 1.  The node then halts in EndBlock ("enclave wallet sync failed"), systemd
+      # restarts it, and it does the whole thing again ~29 blocks later.
+      #
+      # Measured on M1, 2026-09-01: 345 consecutive halts at exact multiples of 29 blocks
+      # (29, 58, 87, ...), NRestarts=109, from the very first run.  The node still produces
+      # blocks between halts and reports catching_up=false, so it LOOKS healthy in any
+      # snapshot short enough to miss a crash -- which is how it passed a first inspection.
+      priv_validator_laddr: "tcp://0.0.0.0:26659"
+
+      # addr_book_strict=false accepts PRIVATE addresses in the address book.  Required for a
+      # fleet on 192.168.x.x; a public mainnet should drop it and take the strict default.
+      log_level: "p2p:info,consensus:info,mempool:info,server:info,*:debug"
+      p2p:
+        addr_book_strict: false
+        max_num_inbound_peers: "80"
+        max_num_outbound_peers: "60"
+      mempool:
+        size: "10000"
       consensus:
-        # TARGETING 3s BLOCKS, which is what blocks_per_year: 10512000 below assumes.
-        # timeout_commit is a FLOOR, not the resulting rate: a real validator set is
-        # dominated by propagation latency and will run slower.  MEASURE the result on a
-        # multi-validator testnet (tokenomics/measure_block_time.sh) and recompute
-        # blocks_per_year from the measurement before launch -- do not ship this pairing
-        # on the assumption that the target is achieved.
-        timeout_commit: "2s"
+        # ~3s BLOCKS, which is what blocks_per_year: 10512000 below assumes.
+        #
+        # timeout_commit is a FLOOR, not the rate.  On top of it every block pays for the
+        # propose -> prevote -> precommit -> finalize cycle: two rounds of vote gossip, block
+        # propagation, and this chain's ABCI work (EnclaveEndBlock does a gRPC round trip to
+        # the enclave before the block can commit).  MEASURED on the real 4-validator M1-M4
+        # fleet, 2026-09-02: "2s" produced 2.32s blocks, so that cycle costs ~0.32s on a LAN.
+        #
+        # 3s therefore yields ~3.3s, which is the intent -- near 3s, deliberately not exact.
+        #
+        # NOTE IF create_empty_blocks IS EVER TURNED OFF: the delays STACK.  finalizeCommit
+        # sets the next round to CommitTime + timeout_commit (config.Commit(),
+        # consensus/state.go), and enterNewRound THEN waits create_empty_blocks_interval again
+        # before proposing.  Tuning timeout_commit alone is not enough in that mode.
+        #
+        # A geographically spread mainnet set carries MORE propagation latency, so RE-MEASURE
+        # there and recompute blocks_per_year from what you observe.
+        timeout_commit: "3s"
+        timeout_propose: "3s"
+        # EMPTY BLOCKS STAY ON, and that is a decision, not a default.  This chain needs a
+        # steady heartbeat regardless of traffic:
+        #   * the enclave's UpdateHeight runs PER BLOCK and drives SS interval-key rotation --
+        #     no blocks, no re-sharing, and the SS set is consensus-relevant;
+        #   * mint pays provisions per block against blocks_per_year, so a chain that idles
+        #     produces fewer blocks than the inflation model assumes and under-pays stakers.
+        # Measured 2026-09-02: 17 transactions in ~13,000 blocks, so on a quiet fleet ~99.9%
+        # of blocks are empty -- turning them off would make the IDLE path the normal path.
+        #
+        # With create_empty_blocks true, the interval is unused (enterNewRound proposes
+        # immediately); it only takes effect if empty blocks are turned off.
+        create_empty_blocks: true
+        create_empty_blocks_interval: "0s"
 
 # ---------------------------------------------------------------------------------------------
 # ACCOUNTS AND TOKEN ALLOCATION
@@ -412,14 +528,35 @@ genesis:
     mint:
       params:
         mint_denom: "aqdn"
-        # 31,536,000 / 3s.  RECOMPUTE -- see the block time note at the top.
+        # 9,500,000 -- a ROUND NUMBER, and it lands almost exactly on the measurement.
         #
-        # This is the MAINNET target (3s blocks), and is NOT the same number as the one the brief
-        # asks for.  qadena-master-brief.md Phase B says to compute blocks_per_year from the
-        # MEASURED devnet block time -- that is an input to the devnet genesis build, where the
-        # single-validator chain runs at timeout_commit with no consensus round-trip.  Keep the two
-        # separate: a devnet measurement must never be pasted in here.
-        blocks_per_year: "10512000"
+        # 31,536,000 / 9,500,000 = 3.3196s implied, against 3.32s MEASURED on the real
+        # 4-validator M1-M4 fleet on 2026-09-02 (timeout_commit "3s", 23 blocks / 76.4s).  That
+        # is a 0.01% difference -- the round number costs nothing here, and a figure people can
+        # hold in their heads is worth more than four digits of false precision on a rate that
+        # will change the moment the validator set is geographically spread.
+        #
+        # It is the BEST CASE deliberately: the fastest this chain has been observed to run.
+        #
+        # WHICH WAY THE ERROR RUNS, because it is not symmetric.  Mint pays
+        # annual_provisions / blocks_per_year PER BLOCK, so realised inflation is
+        #     target x (t_assumed / t_actual)
+        # Blocks FASTER than assumed mint MORE than 1%; SLOWER mint less.  Assuming the best
+        # case therefore biases toward UNDER-minting, which pays stakers slightly less than
+        # modelled.  The opposite bias -- padding the assumption to 4s "for headroom" -- would
+        # over-mint by ~20% at the measured rate and break a publicly stated 1% figure, which
+        # is the worse failure.  Deliberate choice, 2026-09-02.
+        #
+        # AND IT IS CORRECTABLE.  blocks_per_year is x/mint params, updatable by governance
+        # (MsgUpdateParams, gov authority) -- unlike the genesis-frozen items in this file.  So
+        # the plan is: launch on this, MEASURE on the real topology, and correct by proposal.
+        # Write that proposal into the launch runbook as a scheduled action, not a surprise.
+        #     blocks_per_year = 31,536,000 / observed_block_time
+        #
+        # NOT the number qadena-master-brief.md Phase B asks for.  That one is measured on the
+        # single-validator DEVNET, which runs at timeout_commit with no consensus round-trip.
+        # Keep the two separate: a devnet measurement must never be pasted in here.
+        blocks_per_year: "9500000"
         # 1.00% FIXED.  inflation_min == inflation_max, so there is no band and no steering -- the
         # rate is a constant.  This supersedes the earlier 10%/3% band; see tokenomics/
         # qadena-master-brief.md, which is authoritative for every token decision.

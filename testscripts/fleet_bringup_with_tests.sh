@@ -818,10 +818,11 @@ fi
     # the guard that matters here: it verifies neither node reaches 2/3, which is exactly the check
     # a hand-written loop skipped when it halted this fleet (TESTING-BACKLOG item 108).  Phase 7 is
     # test_peer_agreement.sh -- the first thing in the sequence that compares two nodes at all.
-    info "joining $j as $pioneer by $SYNC_KIND (through phase 7: join, bond, agree)"
+    info "joining $j as $pioneer by $SYNC_KIND (through phase 8: join, bond, agree)"
     print "$j joined by: $SYNC_KIND (as $pioneer)" >> "$RUN_DIR/fleet.txt"
     "$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" \
-        --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" "${sponsor_arg[@]}" --from 1 --until 7 \
+        --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" "${sponsor_arg[@]}" \
+        --convert-to-validator --from 1 --until 8 \
         2>&1 | tee "$RUN_DIR/stage-G-join-${j##*@}.log"
     [[ ${pipestatus[1]} -eq 0 ]] || fail "join failed for $j; nth_node_bringup is phase-resumable (--from N). See $RUN_DIR/stage-G-join-${j##*@}.log"
     JOINED+=("$j")
@@ -855,7 +856,7 @@ print ""
 # WHAT THIS SCRIPT DID AND DID NOT DO -- and it must describe THIS script.  This block was once a
 # copy of the old bringup's, which stopped at phase 5 and said so; here the joiners are bonded by
 # phase 7, so the text told the operator to go and re-run a conversion that had already happened.
-print "Joiners WERE converted to validators: nth_node_bringup ran --from 1 --until 7, so each one is"
+print "Joiners WERE converted to validators: nth_node_bringup ran --convert-to-validator --until 8, so each one is"
 print "bonded, has proposed a block, and is therefore addressable, an SS key owner and visible to the"
 print "re-share audit.  Stopping at phase 5 instead would leave them unbonded, and every audit would"
 print "sit at target=1 healing nothing.  See the stage G comment."

@@ -54,7 +54,39 @@ check_plugin() {  # <binary> <go.mod module>
         print -u2 "    go install ${mod}/...@$want   (or re-run ubuntu/setup_qadena_build.sh)"
         return 1
     fi
+    # AN EMPTY VERSION IS NOT A WRONG VERSION.  `go version -m` is what reads the module a Go
+    # binary was built from, so with no `go` on PATH it prints nothing, $have is empty, and the
+    # comparison below would report the plugin as WRONG -- sending you to reinstall a binary that
+    # was correct all along.
+    #
+    # This is not hypothetical.  A non-login ssh does not source the profile that puts
+    # /usr/local/go/bin on PATH, so `ssh host ./buildscripts/init.sh` hits it while
+    # `ssh host bash -lc ...` does not -- which is why testscripts/fleet_lib.sh runs everything
+    # through a login shell.  Diagnosed on M1, 2026-09-01, after two wasted reinstalls.
+    if ! command -v go >/dev/null 2>&1; then
+        print -u2 ""
+        print -u2 "cannot check $bin: 'go' is not on PATH, so its version cannot be read."
+        print -u2 "    found:  $bin_path"
+        print -u2 ""
+        print -u2 "    THE PLUGIN IS PROBABLY FINE.  This is a PATH problem, not a version problem."
+        print -u2 "    A non-login shell does not get /usr/local/go/bin.  Re-run through a login"
+        print -u2 "    shell -- ssh <host> bash -lc '<command>' -- or add go to PATH."
+        print -u2 ""
+        return 1
+    fi
     have=$(go version -m "$bin_path" 2>/dev/null | awk -v m="$mod" '$1 == "mod" && $2 == m { print $3; exit }')
+    if [[ -z $have ]]; then
+        print -u2 ""
+        print -u2 "cannot determine the version of $bin."
+        print -u2 "    found:     $bin_path"
+        print -u2 "    expected:  $mod $want"
+        print -u2 ""
+        print -u2 "    'go version -m' reported no module for it: the file is not a Go binary, was"
+        print -u2 "    built without module info, or is a wrapper.  Reinstall it with"
+        print -u2 "    ubuntu/setup_qadena_build.sh (as root -- it needs sudo to publish)."
+        print -u2 ""
+        return 1
+    fi
     if [[ $have != $want ]]; then
         print -u2 ""
         print -u2 "$bin is the WRONG VERSION for this project."

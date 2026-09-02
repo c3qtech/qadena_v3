@@ -80,6 +80,12 @@ GENESIS_PIONEER_SECOND_IP_ADDRESS=""
 
 FOUNDATION_GRANTER=""
 
+# Pre-answers for the interactive prompts; empty/0 means "ask a human".
+assume_yes=0
+on_existing=""
+already_funded=0
+start_node=-1
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --advertise-ip-address)
@@ -144,6 +150,42 @@ while [[ $# -gt 0 ]]; do
         shift
       fi
       ;;
+    # NON-INTERACTIVE ANSWERS.  Every prompt below can be pre-answered, so this script can be
+    # driven by another script instead of by a person at a PTY.  Before these existed the only
+    # way to automate it was to feed a pseudo-terminal and watch the transcript for question
+    # text (testscripts/nth_node_bringup.sh still carries that machinery) -- which breaks the
+    # moment a prompt is reworded, and answers by POSITION rather than by meaning.
+    #
+    # --yes covers only the SAFE confirmations.  The destructive fork keeps its own flag on
+    # purpose: [s]tart-from-scratch erases the keyring, and a node whose key is erased after
+    # being funded has its coins stranded (they cannot be sent back -- AML 1159).  That must
+    # never ride in on a blanket --yes.
+    --yes|-y)
+      assume_yes=1
+      shift
+      ;;
+    --on-existing)
+      if [[ "$2" == "c" || "$2" == "s" || "$2" == "q" ]]; then
+        on_existing="$2"
+        shift 2
+      else
+        echo "Error: --on-existing needs c (continue, keeps the funded key), s (start from"
+        echo "       scratch, ERASES the keyring) or q (quit)"
+        exit 1
+      fi
+      ;;
+    --funded)
+      already_funded=1
+      shift
+      ;;
+    --start-node)
+      start_node=1
+      shift
+      ;;
+    --no-start-node)
+      start_node=0
+      shift
+      ;;
     --stop-for-funding)
       STOP_FOR_FUNDING="true"
       shift
@@ -161,6 +203,16 @@ while [[ $# -gt 0 ]]; do
       echo "                             of 1500 or less falls back to block-sync (see below)."
 	  echo "Example 1 (adding the second node):  add_full_node.sh --pioneer pioneer2 --advertise-ip-address 192.168.86.133 --genesis-pioneer-first-ip-address 192.168.86.109"
 	  echo "Example 2 (adding the 3rd node):  add_full_node.sh --pioneer pioneer3 --advertise-ip-address 192.168.86.140 --genesis-pioneer-first-ip-address 192.168.86.109 --genesis-pioneer-second-ip-address 192.168.86.133"
+	  echo ""
+	  echo "  NON-INTERACTIVE (so another script can drive this):"
+	  echo "  --yes, -y            pre-answer the SAFE confirmations (proceed / final confirm)."
+	  echo "  --on-existing c|s|q  answer the fork when a node already exists.  DELIBERATELY NOT"
+	  echo "                       covered by --yes: 's' erases the keyring, and a funded node"
+	  echo "                       whose key is erased has its coins stranded for good."
+	  echo "                       'c' keeps the existing (possibly funded) key."
+	  echo "  --funded             the grant/transfer has already landed; do not wait and ask."
+	  echo "  --start-node         start the node at the end.  --no-start-node leaves it stopped"
+	  echo "                       (prefer that when a supervisor will start it)."
 	  echo ""
 	  echo "  --stop-for-funding   Mint the pioneer key, print its address, and EXIT instead of"
 	  echo "                       waiting for the balance.  Re-run without the flag once the funds"
@@ -235,6 +287,7 @@ if [ -d "$QADENAHOME/enclave_config" ] && [ -f "$QADENAHOME/config/genesis.json"
 		echo "*************************************"
 		echo ""
 		REPLY=""
+		if (( assume_yes )); then REPLY=y; echo "--yes: proceeding to make this a full node as '$PIONEER'"; fi
 		while [[ $REPLY != "y" && $REPLY != "n" ]]; do
 			echo "You are about to make this node into a full node, with a new Pioneer name '$PIONEER'."
 			read REPLY\?"This will erase all existing configuration data.  Proceed? (y/n) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
@@ -252,6 +305,8 @@ if [ -d "$QADENAHOME/enclave_config" ] && [ -f "$QADENAHOME/config/genesis.json"
 			REPLY=""
 			echo "This node is already initialized as $MONIKER."
 			while [[ $REPLY != "c" && $REPLY != "s" && $REPLY != "q" ]]; do
+				if [[ -n "$on_existing" ]]; then REPLY="$on_existing"; echo "--on-existing: answering '$REPLY'"; fi
+				[[ -n "$REPLY" ]] ||
 				read REPLY\?"Would you like to [c]ontinue after receiving funding, or [s]tart from scratch (erase all existing configuration data), or [q]uit? (c/s/q) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
 				if [[ $REPLY == "q" ]] ; then
 					exit 0
@@ -267,6 +322,8 @@ if [ -d "$QADENAHOME/enclave_config" ] && [ -f "$QADENAHOME/config/genesis.json"
   		 	echo "This node is already initialized as $MONIKER."
 			REPLY=""
 			while [[ $REPLY != "s" && $REPLY != "q" ]]; do
+				if [[ "$on_existing" == "s" || "$on_existing" == "q" ]]; then REPLY="$on_existing"; echo "--on-existing: answering '$REPLY'"; fi
+				[[ -n "$REPLY" ]] ||
 				read REPLY\?"Would you like to [s]tart from scratch (erase all existing configuration data), or [q]uit? (s/q) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
 				if [[ $REPLY == "q" ]] ; then
 					exit 0
@@ -289,6 +346,8 @@ if [[ $CONTINUE_AFTER_FUNDING -eq 1 ]]; then
 else
 	REPLY=""
 	while [[ $REPLY != "y" && $REPLY != "n" ]]; do
+		if (( assume_yes )); then REPLY=y; echo "--yes: confirmed"; fi
+		[[ -n "$REPLY" ]] ||
 		read REPLY\?"Final confirmation.  Are you really sure? (y/n) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
 		if [[ $REPLY == "y" ]] ; then
 			echo "Ok, will start from scratch."
@@ -822,8 +881,12 @@ fi
 REPLY=""
 while [[ $REPLY != "y" && $REPLY != "n" ]]; do
 	if [[ -n "$FOUNDATION_GRANTER" ]] ; then
+		if (( already_funded )); then REPLY=y; echo "--funded: taking the fee grant as issued"; fi
+		[[ -n "$REPLY" ]] ||
 		read REPLY\?"Has the foundation issued the fee grant to $PIONEERADDRESS ? (y/n) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
 	else
+		if (( already_funded )); then REPLY=y; echo "--funded: taking the funds as sent"; fi
+		[[ -n "$REPLY" ]] ||
 		read REPLY\?"Are you done sending funds to $PIONEERADDRESS ? (y/n) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
 	fi
 	if [[ $REPLY == "y" ]] ; then
@@ -925,6 +988,9 @@ echo ""
 
 REPLY=""
 while [[ $REPLY != "y" && $REPLY != "n" ]]; do
+	if (( start_node == 1 )); then REPLY=y; echo "--start-node: starting"; fi
+	if (( start_node == 0 )); then REPLY=n; echo "--no-start-node: leaving it stopped"; fi
+	[[ -n "$REPLY" ]] ||
 	read REPLY\?"Do you want to start the new qadena 'full-node' now? (y/n) " || { echo ""; echo "add_full_node.sh: stdin closed while waiting for an answer -- refusing to loop."; exit 1; }
 	if [[ $REPLY == "y" ]] ; then
 		$qadenascripts/start_qadena.sh

@@ -13,9 +13,9 @@ they are why it went:
   treasury, so they collide on the account sequence.  That failed a real run mid-join
   (`expected 143, got 142`) after surviving the two joins before it.  Here the soak may
   only be scheduled last.
-- **it joined `--until 5`, leaving joiners unbonded** -- so they never proposed, never
-  became addressable, never became SS key owners, and phase 7's peer agreement never ran
-  at all.  Here every joiner goes through phase 7.
+- **it joined `--until 6`, leaving joiners unbonded** -- so they never proposed, never
+  became addressable, never became SS key owners, and phase 8's peer agreement never ran
+  at all.  Here every joiner goes through phase 8.
 
 `testscripts/fleet_lib.sh` holds the helpers and the traps.  Read it before changing
 the bringup.
@@ -43,6 +43,53 @@ All aarch64 debug-enclave boxes: no SGX, no ego, ~3 minute builds.
 above applies to these two -- do not read it as covering the whole table.
 
 ---
+
+## The phases
+
+| # | phase | notes |
+|---|---|---|
+| 1 | preflight | ssh, arch, enclave measurement |
+| 2 | check the primary | `--quiesce` stops its continuous regression first |
+| 3 | mint the joiner's pioneer key | `add_full_node.sh --stop-for-funding` |
+| 4 | **fund the joiner** | bank send, or a fee grant under `--foundation-sponsored` |
+| 5 | join | state-sync or block-sync |
+| 6 | start the joiner and catch up | |
+| 7 | convert to validator and split the stake | **runs only with `--convert-to-validator`**; a joiner that never bonds never becomes an SS owner |
+| 8 | peer agreement | |
+
+**3 and 4 were one phase until 2026-09-01.**  Minting a key and PAYING for it are different
+jobs with different owners: the mint is mechanical, while the funding depends entirely on who
+holds the money.  Both funding branches resolve the granter with `keys show` **on the
+primary**, so a bucket held as a 3-of-5 multisig whose members live on a workstation cannot be
+used at all -- the phase fails before the join it was gating.
+
+Split, the escape hatch is `--until 3`, fund by whatever ceremony that custody requires, then
+`--from 5`.
+
+### `--convert-to-validator`: declare the intent, get one funding point
+
+`add_full_node.sh` makes a FULL NODE, and a full node may stay one forever: "this covers
+JOINING only."  Validating is a separate act (`convert_to_validator.sh`), and the self-bond
+is money only that act needs -- sent early to a node that never bonds, it is stranded, because
+coins sent to an unidentified address CANNOT BE SENT BACK (HOWTO-MAINNET-BRINGUP.md).
+
+So the bond follows a DECLARATION, not a phase:
+
+- **without `--convert-to-validator`**: a full node.  No self-bond anywhere, phase 3's
+  ceremony instructions omit it, phase 7 is skipped.
+- **with it**: the bond moves at the FUNDING phase (4), alongside the fee grant -- one
+  intervention for whoever holds the money -- and phase 7 only converts.  Passing the flag is
+  the statement that this node WILL bond, which is what makes the early send safe.
+
+Both deliveries are idempotent (an existing grant and a present bond are skipped), so an
+external custodian signs everything at `--until 3` and is never asked again.  Phase 3 prints
+the exact `aqdn` bond amount so both transactions can be prepared in one sitting.
+
+**Pass `--foundation-sponsored` on the `--until 3` run too**, if that is what you mean to do.
+Phase 3 prints what has to be signed, and *what* has to be signed depends entirely on it -- a
+recurring fee grant, or a plain transfer.  The flag is normally read by phase 4, which is the
+phase you are skipping, so it is easy to leave off and be told to sign the wrong thing.  Phase 3
+now names the mode it assumed, so check that line before starting a ceremony.
 
 ## The growth test (TESTING-BACKLOG item 107)
 
@@ -479,7 +526,7 @@ schedule names must be pushed or the fleet runs the old one.
 ## Choosing a funding mode
 
 By default every joiner is **sent 200,000 QDN** by bank send from the primary's
-treasury (stage G, `nth_node_bringup` phase 3), and `add_full_node.sh` waits for that
+treasury (stage G, `nth_node_bringup` phase 4), and `add_full_node.sh` waits for that
 balance before it will run `sync-enclave`.
 
 `--foundation-sponsored [<granter-key>]` replaces that with a **fee grant**.  No coins
@@ -565,9 +612,9 @@ C  --test commands scheduled before the first --joiner
 D  package what is actually running
 E  install that package on each joiner
 F  wait for the snapshot   (skipped by --block-sync)
-G  join each joiner: nth_node_bringup --from 1 --until 7, then wait until
+G  join each joiner: nth_node_bringup --from 1 --until 8, then wait until
    addressable, then its --test commands
-   (phase 3 funds the joiner -- by bank send, or by fee grant under
+   (phase 4 funds the joiner -- by bank send, or by fee grant under
     --foundation-sponsored, in which case no coins move at all)
 ```
 
@@ -583,13 +630,13 @@ G  join each joiner: nth_node_bringup --from 1 --until 7, then wait until
 
 ## Traps this has already hit
 
-**Joiners must be bonded, phase 6.**  It is tempting to join `--from 1 --until 5` and
+**Joiners must be bonded -- pass `--convert-to-validator`, phase 7.**  It is tempting to join `--from 1 --until 6` and
 stop there, because converting re-splits stake -- the old bringup did exactly that.  For
 a growth test it is wrong: a node that is not a validator never proposes a block,
 `updateIsValidator`
 publishes an external address **only under `IsProposer`**, so an unbonded joiner never
 becomes addressable, never becomes an SS key owner, and every audit stays quiescent --
-the suite goes green having healed nothing.  This script uses `--until 7`.
+the suite goes green having healed nothing.  This script uses `--until 8`.
 
 **Full paths on remote commands.**  `rsh_user` runs `zsh -lc`, and the node's bin is
 not on a zsh login PATH -- `which qadenad` answers NOT-ON-PATH.  A bare `qadenad`

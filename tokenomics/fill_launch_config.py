@@ -92,7 +92,13 @@ def cmd_dev_keys(path, understood):
                  "Re-run with --i-understand if that is what you want.")
     rows = []
     for name, thr, what, _, _ in ACCOUNTS:
-        key = f"dev-{name}"
+        # REAL NAMES, NOT dev- PREFIXES.  The brief's LATE ARRIVAL section is explicit that at
+        # genesis "almost nobody's address is known": the buckets exist, the members arrive
+        # later, and until they do the FOUNDER holds every member key.  These are not stand-ins
+        # for someone else's custody -- they ARE the day-one custody -- so they carry the names
+        # operations will use.  The --i-understand guard still marks them as generated-by-script:
+        # what makes a key unfit for mainnet is how it was minted, not what it is called.
+        key = name
         if thr == "single":
             qadenad("keys", "add", key, "--keyring-backend", "test")
         else:

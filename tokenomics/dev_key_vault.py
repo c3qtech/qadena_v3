@@ -167,10 +167,23 @@ def local_name(vault_name, strip):
     return vault_name
 
 
-def cmd_import(src, passphrase_file, strip=None):
+def cmd_import(src, passphrase_file, strip=None, include=None):
     pw = read_passphrase(passphrase_file)
     vault = json.loads(Path(src).read_text())
     entries = vault["keys"]
+
+    # RESTORE ONLY WHAT THIS MACHINE NEEDS.  A vault holding every bucket's signing authority
+    # should not be unpacked wholesale onto a workstation just because one bucket has to sign.
+    # A multisig comes with its members -- it cannot be rebuilt without them -- and nothing else
+    # comes along.
+    if include:
+        want = set(include)
+        for e in entries:
+            if e["name"] in want and e["kind"] == "multisig":
+                want |= set(e["members"])
+        entries = [e for e in entries if e["name"] in want]
+        if not entries:
+            sys.exit(f"--include matched nothing in {src}")
     restored, skipped, bad = 0, 0, []
 
     # members/singles FIRST -- a multisig cannot be rebuilt until its members are present.
@@ -246,6 +259,8 @@ def main():
     i = sub.add_parser("import", help="restore a vault into the keyring (after init.sh)")
     i.add_argument("--in", dest="src", required=True, metavar="FILE")
     i.add_argument("--passphrase-file", required=True, metavar="FILE")
+    i.add_argument("--include", help="comma-separated key names to restore (members implied); "
+                                     "omit to restore the whole vault")
     i.add_argument("--strip-prefix", metavar="PREFIX",
                    help="restore dev-X as X, so ignite finds the key under the account name")
     v = sub.add_parser("verify", help="check the keyring matches a vault, without importing")
@@ -254,7 +269,8 @@ def main():
     if a.cmd == "export": return cmd_export(a.out, a.passphrase_file, a.prefix,
                                             (a.include or "").split(",") if a.include else None,
                                             (a.exclude or "").split(",") if a.exclude else None)
-    if a.cmd == "import": return cmd_import(a.src, a.passphrase_file, a.strip_prefix)
+    if a.cmd == "import": return cmd_import(a.src, a.passphrase_file, a.strip_prefix,
+                                            (a.include or "").split(",") if a.include else None)
     if a.cmd == "verify": return cmd_verify(a.src)
 
 
