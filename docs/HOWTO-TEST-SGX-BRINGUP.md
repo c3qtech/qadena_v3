@@ -1,4 +1,10 @@
-# Bringing up SGX machines
+# Bringing up the SGX TEST machines (SGX1 + SGX2)
+
+**This is the test fleet.**  SGX1 and SGX2 are real SGX hardware used for TESTING, and this drives
+`testscripts/`.  A LAUNCH chain -- mainnet, or a testnet built on mainnet parameters -- also runs only on SGX, and
+may well run on these same two machines.  Its procedure is manual and lives in
+[HOWTO-LAUNCH-CHAIN-BRINGUP.md](HOWTO-LAUNCH-CHAIN-BRINGUP.md), which now carries the SGX prerequisites, the
+build-once-distribute rule and the `store-hash` note.  Do not follow this page for a launch node.
 
 The short version of the two-node procedure, for REAL SGX rather than debug enclaves. Everything
 here is the same as `HOWTO-TWO-NODE-STATE-SYNC.md` except where noted; the differences are what
@@ -34,9 +40,18 @@ measurements match BY CONSTRUCTION. Building the two nodes independently is wher
 
 ## Register the measurement, if it is new to the chain
 
-    testscripts/test_update_enclave_identity.sh <uniqueID> <signerID> unvalidated
+    scripts/gov_register_enclave_identity.sh <uniqueID> <signerID>
 
-`package_release.sh` prints the exact command with the right ids. `EnclaveIdentity` is keyed by
+NOT `testscripts/test_update_enclave_identity.sh`, which this used to say.  That fixture votes only
+from `pioneer1` and asserts nothing about the outcome, so on a balanced fleet where `pioneer1`
+carries 25% against a 33.4% quorum it reports success while the proposal quietly EXPIRES.  This step
+gates the build: `build.sh` installs the new binary and stops the node to do it, and if the
+measurement is not ACTIVE by then the old enclave refuses to hand over its sealed keys and the node
+stays down.  The operator script checks quorum reachability BEFORE submitting and polls to a
+terminal state after; see the header of `scripts/gov_lib.sh`, which records this costing an hour
+twice on 2026-08-21.
+
+`package_release.sh` prints the exact ids. `EnclaveIdentity` is keyed by
 measurement, so a joiner whose enclave differs by one byte is refused by `verifyRemoteReport` — and
 the error names the measurement, not the cause.
 

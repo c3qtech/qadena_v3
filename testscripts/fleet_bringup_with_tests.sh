@@ -322,7 +322,7 @@ while [[ $# -gt 0 ]]; do
             print "                      then need --funder naming a key the PRIMARY holds (a"
             print "                      launch chain has no 'treasury'), and a SPONSORED join"
             print "                      from a bucket multisig cannot run unattended at all --"
-            print "                      see docs/HOWTO-FLEET-BRINGUP.md."
+            print "                      see docs/HOWTO-TEST-FLEET-BRINGUP.md."
             print "  --fund-qdn <qdn> / --stake <qdn>"
             print "                      passed to nth_node_bringup.  Its defaults (200000 fund,"
             print "                      110000 stake) are DEVNET figures and exceed what a launch"

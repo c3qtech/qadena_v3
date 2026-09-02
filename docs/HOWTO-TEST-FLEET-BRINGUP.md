@@ -1,4 +1,9 @@
-# Bringing up a fleet (M1-M4, or SGX1-SGX2), and the re-share growth test
+# Bringing up a TEST fleet (M1-M4, or SGX1-SGX2), and the re-share growth test
+
+**This is test tooling.**  It drives `testscripts/`, and it takes shortcuts a deployment must not:
+above all, one workstation holds every bucket multisig member's key, so the funding ceremony can be
+performed without a second person.  A real bring-up is manual and lives in
+[HOWTO-LAUNCH-CHAIN-BRINGUP.md](HOWTO-LAUNCH-CHAIN-BRINGUP.md).
 
 One script brings up a fleet: `testscripts/fleet_bringup_with_tests.sh`.  It tests
 **nothing** unless you schedule it, and the schedule is the command line.
@@ -71,7 +76,7 @@ Split, the escape hatch is `--until 3`, fund by whatever ceremony that custody r
 `add_full_node.sh` makes a FULL NODE, and a full node may stay one forever: "this covers
 JOINING only."  Validating is a separate act (`convert_to_validator.sh`), and the self-bond
 is money only that act needs -- sent early to a node that never bonds, it is stranded, because
-coins sent to an unidentified address CANNOT BE SENT BACK (HOWTO-MAINNET-BRINGUP.md).
+coins sent to an unidentified address CANNOT BE SENT BACK (HOWTO-LAUNCH-CHAIN-BRINGUP.md).
 
 So the bond follows a DECLARATION, not a phase:
 
@@ -284,6 +289,86 @@ tree that matches no commit, and an SGX build's `git clean -fd` would discard an
 uncommitted bump and rebuild the identical measurement while looking like it worked.
 
 ---
+
+## A launch-chain run, end to end in one command
+
+A devnet needs nothing but the fleet.  A **launch chain** (`--mainnet-source`) also needs the
+accounts the suites expect -- above all a `treasury`, which genesis does not contain because a
+launch genesis holds buckets and validators only.  Funding one is a bucket ceremony, so this used
+to be three commands with a manual signing session wedged between them.
+
+`--test-local` closes that, because the ceremony's keys are on **this workstation** and
+`--test-local` is the one scheduling slot that runs here rather than on the primary:
+
+```sh
+./testscripts/fleet_bringup_with_tests.sh \
+  --primary alvillarica@192.168.86.162 \
+  --joiner alvillarica@192.168.86.154 \
+  --joiner alvillarica@192.168.86.52 \
+  --joiner alvillarica@192.168.86.136 \
+  --block-sync \
+  --mainnet-source ~/qadena-dev-vault/fleet-launch-config.yml \
+  --pioneer-mnemonic-file ~/qadena-dev-vault/pioneer-mnemonic.txt \
+  --funder qfi-pioneer1 --fund-qdn 10100 --stake 10000 \
+  --test-local "./testscripts/provision_from_bucket_local.sh --name treasury --from-bucket adoption --amount 50000000 --stake 10000000 --whitelist --host alvillarica@192.168.86.162" \
+  --test "QADENA_PIONEER=qfi-pioneer1 QADENA_GENESIS_NODES=qfi-pioneer1,wallet-incentive-pool QADENA_PF_TARGET=fn:php:usd QADENA_PF_CONTROL=cn:qdn:usd ./testscripts/regression.sh"
+```
+
+### Why this is test tooling and must stay that way
+
+`provision_from_bucket_local.sh` **signs for the bucket** -- three of five member keys, one after
+another, unattended.  It can only do that because this workstation holds all five, which is
+precisely the arrangement a real bucket exists to prevent.  `scripts/provision_account.sh` refuses
+to sign and waits for a human instead; that is correct there and is not a limitation to route
+around.  The wrapper does the ceremony and then hands straight back to `provision_account.sh` for
+staking and the whitelist, so the production logic is borrowed rather than reimplemented.  The
+manual procedure is [HOWTO-LAUNCH-CHAIN-BRINGUP.md](HOWTO-LAUNCH-CHAIN-BRINGUP.md) Phase 4.
+
+### Two rules the command line has to obey
+
+**`--test-local` goes after the LAST `--joiner`.**  The provisioning stakes the treasury across
+every *bonded* validator, and voting power decides whether the whitelist proposal passes.  Run it
+earlier and it delegates to a partial set, then submits a proposal short of quorum -- which
+**expires** rather than failing, with every transaction reporting success.
+
+**No argument may contain a space.**  The dispatcher word-splits scheduled commands with
+`${=...}`, so a quoted `--reason "provisioned from adoption"` arrives as three words and the next
+one is read as the address.  That is why the wrapper takes no `--reason`.
+
+### The environment the suites need on a launch chain
+
+The devnet's names are not the launch chain's, so regression is pointed at the right ones by
+environment rather than by editing scripts:
+
+| variable | launch chain | why |
+|---|---|---|
+| `QADENA_PIONEER` | `qfi-pioneer1` | the devnet's validator is `pioneer1` |
+| `QADENA_GENESIS_NODES` | `qfi-pioneer1,wallet-incentive-pool` | genesis registration set |
+| `QADENA_PF_TARGET` | `fn:php:usd` | the devnet's `cn:eth:usd` does not exist here |
+| `QADENA_PF_CONTROL` | `cn:qdn:usd` | any market credential fees do NOT convert through |
+
+---
+
+## Adding ONE node to an existing test fleet
+
+The manual, operator-side procedure is [HOWTO-ADD-LAUNCH-CHAIN-NODE.md](HOWTO-ADD-LAUNCH-CHAIN-NODE.md).  This is the same
+sequence driven from a workstation, which ssh-es into both machines and watches them from outside:
+
+```sh
+testscripts/nth_node_bringup.sh --primary <ip> --joiner <ip> --pioneer <name> \
+    --until 3 [--foundation-sponsored <granter-addr>] [--convert-to-validator]
+# ...run the funding ceremony (phase 3 prints it, amounts included)...
+testscripts/nth_node_bringup.sh --primary <ip> --joiner <ip> --pioneer <name> \
+    --from 5 --until 8 <same flags>
+```
+
+Pass the SAME flags on both runs — they select what phase 3 tells you to sign and what phase 5
+waits for.  Phases 4 and 7 skip money already delivered, so the ceremony is never repeated.
+See the phase table above for what each one does.  The ceremony itself — what the sponsor signs,
+and why a joiner holds no liquid balance — is [HOWTO-ADD-LAUNCH-CHAIN-NODE.md](HOWTO-ADD-LAUNCH-CHAIN-NODE.md) step 2.
+
+And above all: never re-run phase 3 with a DIFFERENT pioneer name against a joined node.  It
+wipes.
 
 ## SGX1 + SGX2
 

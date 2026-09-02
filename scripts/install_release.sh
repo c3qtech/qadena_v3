@@ -453,7 +453,11 @@ elif [[ "$mode" == "upgrade" && -n "$new_unique" && "$cur_unique" != "$new_uniqu
         if [[ -z "$st" || "$st" == "null" ]]; then
             echo "  not registered, or the chain is not reachable from here."
             echo "  Register it by governance first:"
-            echo "    testscripts/test_update_enclave_identity.sh $new_unique $new_signer unvalidated"
+            # The OPERATOR script, not testscripts/test_update_enclave_identity.sh.  That fixture
+            # votes only from pioneer1 and asserts nothing about the outcome, so on a balanced
+            # fleet it reports success while the proposal expires below quorum -- the exact
+            # failure scripts/gov_lib.sh was written for.
+            echo "    scripts/gov_register_enclave_identity.sh $new_unique $new_signer"
             can_activate=0
         elif [[ "$st" != "active" && $wait_active -eq 1 ]]; then
             # POLL, DO NOT SLEEP-THEN-ASSUME.  Promotion happens on the proposer's enclave at its

@@ -1067,7 +1067,7 @@ chain -- block-sync (caught up 936, validator, peer agreement PASSED) and state-
     were never reconciled with any of it.  Fixed in `install_release.sh` (header + a note, no
     automatic `chown`: recursively re-owning a live home would hand `priv_validator_key.json`,
     `data/` and `keyring-*` to the login account on the very machines where the node is meant to run
-    as root), `package_release.sh` (x2), `1st_node_bringup.sh` phase 7, and `HOWTO-SGX-BRINGUP.md`.
+    as root), `package_release.sh` (x2), `1st_node_bringup.sh` phase 7, and `HOWTO-TEST-SGX-BRINGUP.md`.
     Remaining: nothing enforces it -- a future doc can reintroduce `sudo ./install.sh` and no test
     would notice.
 

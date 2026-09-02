@@ -1,10 +1,16 @@
-# Adding a node to a running chain — sponsored or self-funded, scripted or by hand
+# Adding a node to a running LAUNCH chain — sponsored or self-funded
 
-The operator's document.  [HOWTO-FLEET-BRINGUP.md](HOWTO-FLEET-BRINGUP.md) drives the same
-steps through `testscripts/nth_node_bringup.sh`, which exists **for testing a fleet from a
-workstation** — it ssh-es into both machines and watches them from outside.  A real operator
-runs the steps below on their own node, and someone holding the sponsor bucket's keys runs the
-funding ceremony wherever those keys live.  Both paths were exercised end-to-end on
+For mainnet, and for a mainnet-parameter testnet — the procedure is the same, and so are the
+requirements: every launch-chain node runs a real SGX enclave
+([HOWTO-LAUNCH-CHAIN-BRINGUP.md](HOWTO-LAUNCH-CHAIN-BRINGUP.md) §Every node runs SGX), and the
+package this node installs must be the one built on the primary, so the measurements match by
+construction.
+
+**The operator's document, and it is manual throughout.**  A real operator runs the steps below on
+their own node, and someone holding the sponsor bucket's keys runs the funding ceremony wherever
+those keys live — which is a different person on a different machine, by design.  The test fleet
+drives the same steps from a workstation through `testscripts/nth_node_bringup.sh`; that is test
+tooling and lives in [HOWTO-TEST-FLEET-BRINGUP.md](HOWTO-TEST-FLEET-BRINGUP.md).  Both paths were exercised end-to-end on
 2026-09-01/02: M2 joined sponsored, M3 joined self-funded, peer agreement passed on both.
 
 ## First, decide two things
@@ -141,19 +147,9 @@ delegation or add the next validator promptly.
 
 ---
 
-## The scripted path (test fleets)
+## Doing this on a test fleet instead
 
-The same steps, driven from a workstation:
-
-```sh
-testscripts/nth_node_bringup.sh --primary <ip> --joiner <ip> --pioneer <name> \
-    --until 3 [--foundation-sponsored <granter-addr>] [--convert-to-validator]
-# ...run the step-2 ceremony above (phase 3 prints it, amounts included)...
-testscripts/nth_node_bringup.sh --primary <ip> --joiner <ip> --pioneer <name> \
-    --from 5 --until 8 <same flags>
-```
-
-Pass the SAME flags on both runs — they select what phase 3 tells you to sign and what phase 5
-waits for.  Phases 4 and 7 skip money already delivered, so the ceremony is never repeated.
-See [HOWTO-FLEET-BRINGUP.md](HOWTO-FLEET-BRINGUP.md) for the phase list and its traps —
-above all: never re-run phase 3 with a DIFFERENT pioneer name against a joined node; it wipes.
+`testscripts/nth_node_bringup.sh` drives these same steps from a workstation, ssh-ing into both
+machines.  It is test tooling and it is documented with the rest of it, in
+[HOWTO-TEST-FLEET-BRINGUP.md](HOWTO-TEST-FLEET-BRINGUP.md#adding-one-node-to-an-existing-test-fleet).
+Nothing on this page depends on it.
