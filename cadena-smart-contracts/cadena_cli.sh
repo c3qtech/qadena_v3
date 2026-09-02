@@ -220,7 +220,7 @@ setup_dbm() {
         citizenship="PH"
         residency="PH"
         dsvsserviceprovider=""
-        pioneer="pioneer1"
+        pioneer="${QADENA_PIONEER:-pioneer1}"
         identityprovider="testidentitysrvprv"
         acceptcredentialtypes=""
         acceptpassword=""

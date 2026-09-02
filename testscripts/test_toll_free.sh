@@ -38,6 +38,9 @@
 SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# Env-defaulted: the devnet's validator is pioneer1, a launch chain names its own.
+pioneer="${QADENA_PIONEER:-pioneer1}"
+
 set -e
 
 function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
@@ -254,7 +257,7 @@ c=$(tx_result "B-fg-secadmin" tx feegrant grant "$FU" "$SA" \
 # 3. create the wallet.  Creation itself is paid by the existing create-wallet-sponsor: the address
 #    is derived from mnemonic+index by the CLI, so it cannot be granted to before it exists.  From
 #    here on, everything is on foundation-users.
-c=$(tx_result "B-create-wallet" tx qadena create-wallet "$NEW_EPH" pioneer1 create-wallet-sponsor \
+c=$(tx_result "B-create-wallet" tx qadena create-wallet "$NEW_EPH" "$pioneer" create-wallet-sponsor \
     --link-to-real-wallet "$USER" --account-mnemonic="$mnemonic" --eph-account-index "$NEW_IDX")
 [ "$c" = "0" ] || fail "create-wallet failed (code $c): $(tx_rawlog B-create-wallet)"
 sleep 4

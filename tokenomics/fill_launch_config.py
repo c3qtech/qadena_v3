@@ -124,7 +124,7 @@ def cmd_dev_keys(path, understood):
     print(f"\nwrote {path}   (DEV keys, in the `test` keyring -- never use for mainnet)")
 
 
-def render(supplied, pubkeys=None, generate=None):
+def render(supplied, pubkeys=None, generate=None, test_gov=False):
     """Return launch-config.yml with every supplied address substituted.
 
     WRITES NOTHING.  This used to write config/launch-config.yml and tokenomics/allocations.csv
@@ -184,10 +184,31 @@ def render(supplied, pubkeys=None, generate=None):
             changed += 1
         else:
             unknown.append(f"{name} ({todo} not in the template)")
+    # TEST-ONLY GOVERNANCE TIMINGS -- INSTANCE ONLY, AND THE ONE DEVIATION THAT IS DEFENSIBLE.
+    #
+    # The launch window's periods are 72h voting / 6h expedited.  Correct for mainnet, and they
+    # make a test loop impossible: anything gated on a proposal (whitelisting a treasury so it can
+    # fund the suites, registering an enclave measurement, a param change) blocks for hours.
+    #
+    # WHY THIS DEVIATION AND NOT THE OTHERS.  Every other difference between a test genesis and
+    # the real one has bitten us: a missing evm section, a missing priv_validator_laddr, a
+    # devnet-sized funding default.  Those were all things the chain DEPENDS ON to behave
+    # correctly, so testing without them tested the wrong chain.  Voting periods are not that:
+    # they are governance-updatable at any time, they change no consensus or custody property,
+    # and every rule a proposal must satisfy -- quorum, threshold, veto, deposit -- is untouched.
+    # What shortens is only the wait.
+    #
+    # It is still a deviation.  Never render an instance for a real launch with this flag.
+    if test_gov:
+        lc = re.sub(r'^(\s*)voting_period: ".*?"',            r'\1voting_period: "300s"',            lc, count=1, flags=re.M)
+        lc = re.sub(r'^(\s*)expedited_voting_period: ".*?"',  r'\1expedited_voting_period: "30s"',   lc, count=1, flags=re.M)
+        lc = re.sub(r'^(\s*)max_deposit_period: ".*?"',       r'\1max_deposit_period: "300s"',       lc, count=1, flags=re.M)
+        changed += 1
+
     return lc, changed, unknown
 
 
-def cmd_apply(path, out, generate=None):
+def cmd_apply(path, out, generate=None, test_gov=False):
     if not out:
         sys.exit("--apply needs --out FILE.\n"
                  "The filled config is a build INSTANCE, not an edit to the template:\n"
@@ -209,7 +230,7 @@ def cmd_apply(path, out, generate=None):
     if not supplied:
         sys.exit(f"{path} has no addresses filled in")
 
-    lc, changed, unknown = render(supplied, pubkeys, generate)
+    lc, changed, unknown = render(supplied, pubkeys, generate, test_gov)
     missing = [n for n, *_ in ACCOUNTS if n not in supplied]
 
     outp = pathlib.Path(out)
@@ -222,6 +243,7 @@ def cmd_apply(path, out, generate=None):
     if missing:
         print(f"  still unset ({len(missing)}): {', '.join(missing)}")
     # report BOTH placeholder classes -- a surviving PubKID fails init.sh --mainnet-source
+
     left = re.findall(r"TODO_ADDR_[A-Z0-9_]+", lc)
     # STRIP COMMENTS FIRST.  YAML comments never reach genesis.json, so a placeholder named
     # only in prose is not a defect -- flagging it trains the reader to ignore this warning.
@@ -305,6 +327,9 @@ def main():
     ap.add_argument("--generate", metavar="NAME", action="append",
                     help="leave this account for ignite to mint (no address, no mnemonic); "
                          "its references become <name>PubKID for post-init substitution")
+    ap.add_argument("--test-gov-timings", action="store_true",
+                    help="INSTANCE ONLY: shorten gov voting to 300s/30s so proposal-gated tests "
+                         "can finish.  Changes no rule, only the wait.  NEVER for a real launch.")
     ap.add_argument("--out", metavar="FILE",
                     help="where to write the filled INSTANCE (required with --apply)")
     ap.add_argument("--enclave", action="store_true")
@@ -314,7 +339,7 @@ def main():
     a = ap.parse_args()
     if a.template:  cmd_template(a.template); return 0
     if a.dev_keys:  cmd_dev_keys(a.dev_keys, a.i_understand); return 0
-    if a.apply:     cmd_apply(a.apply, a.out, a.generate); return 0
+    if a.apply:     cmd_apply(a.apply, a.out, a.generate, a.test_gov_timings); return 0
     if a.enclave:   return cmd_enclave_test_fleet() if a.test_fleet else cmd_enclave()
     ap.print_help(); return 1
 

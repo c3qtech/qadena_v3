@@ -54,8 +54,13 @@ foundationappsvrmnemonic="angle unknown bean lunch base vague awful together dis
 # feegrant (no SEC treasury) or banksend (the original).  See the funding block below.
 fund_mode="feegrant"
 
-pioneer="pioneer1"
+# The DEVNET\'s genesis validator is `pioneer1`; a launch chain names its own
 
+# (qfi-pioneer1).  Env default so a whole suite run can be pointed at either without
+
+# editing eight scripts; --pioneer still wins where this script takes one.
+
+pioneer="${QADENA_PIONEER:-pioneer1}"
 # accept 1 parameter, the pioneer name
 # accept named parameters to override all these mnemonics
 # Process command line arguments

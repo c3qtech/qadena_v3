@@ -24,6 +24,10 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# The devnet's validator is `pioneer1`; a launch chain names its own.  Env-defaulted so a
+# suite run can target either without editing every create-wallet call.
+pioneer="${QADENA_PIONEER:-pioneer1}"
+
 # set -e after the source: setup_env.sh queries the chain and falls back on failure
 set -e
 
@@ -292,7 +296,7 @@ for w in "$eph_src:7" "$eph_dst:8"; do
     name="${w%%:*}"
     idx="${w##*:}"
     if ! addr_of "$name" > /dev/null 2>&1; then
-        qadenad_alias tx qadena create-wallet "$name" pioneer1 create-wallet-sponsor \
+        qadenad_alias tx qadena create-wallet "$name" "$pioneer" create-wallet-sponsor \
             --link-to-real-wallet al --eph-account-index "$idx" --yes > /dev/null \
             || fail "could not create $name"
         echo "created $name"
@@ -358,7 +362,7 @@ echo "========================="
 eph_drain="al-ephdrain"
 
 if ! addr_of "$eph_drain" > /dev/null 2>&1; then
-    qadenad_alias tx qadena create-wallet "$eph_drain" pioneer1 create-wallet-sponsor \
+    qadenad_alias tx qadena create-wallet "$eph_drain" "$pioneer" create-wallet-sponsor \
         --link-to-real-wallet al --eph-account-index 9 --yes > /dev/null \
         || fail "could not create $eph_drain"
     echo "created $eph_drain"

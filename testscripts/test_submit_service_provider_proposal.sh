@@ -9,6 +9,9 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# The devnet's validator is `pioneer1`; a launch chain names its own.
+pioneer="${QADENA_PIONEER:-pioneer1}"
+
 if [ -z $nodeid ] || [ -z $json_proposal ] ; then
     echo "Usage: ./test_submit_service_provider_proposal.sh <nodeid> <json_proposal> (e.g. add_service_provider_proposal, deactivate_service_provider_proposal) <service_provider_type> (optional:  e.g. identity, finance)"
     exit 1
@@ -24,8 +27,12 @@ if [ -z $address ] ; then
 fi
 
 # modify json_proposal
-jq --arg nodeid "$nodeid" \
-   '.messages[0].nodeID = $nodeid' \
+# homePioneerID is substituted for the same reason nodeID is -- see the long note in
+# provider_scripts/submit_service_provider_proposal.sh.  The template's literal `pioneer1` is
+# right only on the devnet, nothing rejects a wrong one at proposal time, and the registration
+# it produces is UNRECOVERABLE: the nodeID is burned with the bad pioneer baked in.
+jq --arg nodeid "$nodeid" --arg pioneer "$pioneer" \
+   '.messages[0].nodeID = $nodeid | .messages[0].homePioneerID = $pioneer' \
    "test_data/$json_proposal.json" > "test_data/$json_proposal.gen.json"
 
 
@@ -58,7 +65,7 @@ echo "-------------------------"
 
 
 # submit json_proposal
-result=$(qadenad_alias tx gov submit-proposal "test_data/$json_proposal.gen.json" --from pioneer1 -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+result=$(qadenad_alias tx gov submit-proposal "test_data/$json_proposal.gen.json" --from "$pioneer" -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"
 submit_hash=$(echo $result | jq -r .txhash)
 # check if code is 0
@@ -80,7 +87,7 @@ echo "Deposit into proposal"
 echo "-------------------------"
 
 # deposit into the proposal
-result=$(qadenad_alias tx gov deposit $proposal_id 1000qdn --from pioneer1 -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+result=$(qadenad_alias tx gov deposit $proposal_id 1000qdn --from "$pioneer" -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"
 deposit_hash=$(echo $result | jq -r .txhash)
 # check if code is 0
@@ -104,7 +111,7 @@ $qadenaproviderscripts/query_service_provider_proposal.sh $proposal_id --wait --
 
 # vote yes on the proposal
 gas_adjustment="2.0"
-result=$(qadenad_alias tx gov vote $proposal_id yes --from pioneer1 -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+result=$(qadenad_alias tx gov vote $proposal_id yes --from "$pioneer" -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
 echo "Result: $result"
 # check if code is 0
 if [ $(echo $result | jq -r .code) -ne 0 ]; then

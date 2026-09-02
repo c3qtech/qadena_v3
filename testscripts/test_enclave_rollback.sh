@@ -123,11 +123,14 @@ if [ "$peer_count" -gt 0 ] && [ "$total_power" -gt 0 ]; then
     fi
 fi
 
-pioneer_addr=$(qadenad_alias keys show pioneer1 -a --keyring-backend test) || fail "cannot resolve pioneer1"
+# Env-defaulted like the setup scripts: the devnet's validator is pioneer1, a launch chain's is
+# its own (qfi-pioneer1).  Hardcoding it made this suite devnet-only.
+pioneer="${QADENA_PIONEER:-pioneer1}"
+pioneer_addr=$(qadenad_alias keys show "$pioneer" -a --keyring-backend test) || fail "cannot resolve $pioneer"
 
 # ---- 1. a real transaction ----
 bal_before=$(pioneer_balance)
-[ "$bal_before" != "0" ] || fail "pioneer1 has no balance to measure against"
+[ "$bal_before" != "0" ] || fail "$pioneer has no balance to measure against"
 
 # THE ENCLAVE'S OWN STATE, fingerprinted.  Everything else here measures the CHAIN; this is the
 # only thing that proves the ENCLAVE rolled back rather than merely moving its watermark.
@@ -141,7 +144,7 @@ hash_before=$(as_enclave_owner "$qadenad_binary" --home "$QADENAHOME" enclave st
 test_wallet="rbtest$(date +%s)"
 test_mnemonic=$(qadenad_alias keys mnemonic --keyring-backend test) || fail "cannot generate a mnemonic"
 
-result=$(qadenad_alias tx qadena create-wallet "$test_wallet" pioneer1 \
+result=$(qadenad_alias tx qadena create-wallet "$test_wallet" "$pioneer" \
     --account-mnemonic="$test_mnemonic" create-wallet-sponsor --yes --keyring-backend test \
     --gas-prices "$minimum_gas_prices" --gas auto --gas-adjustment "$gas_adjustment" --output json 2>&1) \
     || fail "create-wallet broadcast failed"

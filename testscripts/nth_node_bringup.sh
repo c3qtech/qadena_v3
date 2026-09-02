@@ -69,8 +69,18 @@ ONLY=""
 # regression loop and waiting out the in-flight run, which is authority over a machine the operator
 # did not necessarily ask us to change.
 QUIESCE=0; QUIESCE_NOW=0
+# DEVNET FIGURES.  Both assume the funder is the devnet `treasury`, which holds millions.  On a
+# launch chain the funder is an ordinary account -- the genesis validator has 110,100 QDN total,
+# ~100,100 liquid after its own bond -- so these defaults exceed the whole balance and the FIRST
+# joiner fails with insufficient funds.  Override with --stake / --fund-qdn there.
 VALIDATOR_STAKE="110000"
 FUND_QDN="200000"
+# WHO PAYS, on the unsponsored path.  Defaults to `treasury` because that is the key the DEVNET
+# primary holds and funds with -- but a launch-config chain has no such account (the devnet's
+# do-everything key was deliberately removed), so on those the default cannot sign and phase 4
+# fails AFTER the primary and all its tests have run.  Name the funder instead: any key in the
+# PRIMARY's keyring that holds coins and is on the AML whitelist, e.g. the genesis validator.
+FUNDER="treasury"
 # TOLL-FREE JOIN.  With --foundation-sponsored the joiner is never sent coins: phase 4 issues a
 # bounded, recurring FEE GRANT instead, and phase 5 tells add_full_node.sh to wait for that grant
 # rather than for a balance.  The granter defaults to `treasury` because that is the key the primary
@@ -103,9 +113,11 @@ while [[ $# -gt 0 ]]; do
         --until)   UNTIL="$2";   shift 2 ;;
         --only)    ONLY="$2";    shift 2 ;;
         --stake)   VALIDATOR_STAKE="$2"; shift 2 ;;
+        --fund-qdn) FUND_QDN="$2"; shift 2 ;;
         --pioneer) PIONEER_NAME="$2"; shift 2 ;;
         --state-sync) STATE_SYNC=1; shift ;;
         --convert-to-validator) CONVERT=1; shift ;;
+        --funder)     FUNDER="$2"; shift 2 ;;
         --foundation-sponsored)
             SPONSORED=1
             if [[ -n "$2" && "$2" != --* ]]; then SPONSOR_GRANTER="$2"; shift 2; else shift; fi ;;
@@ -140,6 +152,13 @@ while [[ $# -gt 0 ]]; do
             print "                omit it, and phase 7 is skipped.  With it, the bond moves at the"
             print "                funding phase (4) alongside the grant -- ONE intervention for an"
             print "                external custodian -- and phase 7 only converts."
+            print "  --fund-qdn <qdn>  how much the funder sends an unsponsored joiner (default"
+            print "                  200000, a DEVNET figure).  It must cover the self-bond plus a"
+            print "                  working balance, and must not exceed what --funder holds."
+            print "  --funder <key>  UNSPONSORED path only: the key on the PRIMARY that sends the"
+            print "                  joiner its coins (default: treasury).  A launch-config chain"
+            print "                  has no 'treasury' account, so name one that exists -- the"
+            print "                  genesis validator's own key is usually the one that can sign."
             print "  --foundation-sponsored [<granter-key-or-ADDRESS>]"
             print "                TOLL-FREE.  The joiner gets NO coins and needs no treasury of its"
             print "                own.  Phase 3 issues a bounded recurring fee grant from <granter-key>"
@@ -699,60 +718,16 @@ else
 fi
 fi
 
-# THE PROMPT FEEDER, defined once and used by BOTH phase 3 (which mints the key with
-# --stop-for-funding) and phase 4 (which resumes the join).  It lived inside phase 4 until
-# phase 3 grew a need for it, at which point phase 3 was scp-ing a file that did not exist yet.
-
-cat > /tmp/tnb_feed.sh <<'FEED'
-#!/bin/zsh
-# PROMPT-DRIVEN, not timed.  This used to print c/y/y/y/n on three-second intervals and hope each
-# landed on the right question.  It does not: the funding prompt polls for the balance for up to six
-# minutes, so every answer had been written and echoed long before the LAST prompt appeared, and the
-# final 'n' -- the one trap 3 exists to deliver -- was consumed by something else.  The node then
-# started itself, several process layers under a PTY that exits moments later, which is precisely
-# the failure trap 3 documents.
+# NO PROMPT FEEDER ANY MORE.  A ~50-line zsh script used to be piped into a pseudo-terminal on
+# the joiner, watching add_full_node.sh's transcript for question TEXT and printing an answer
+# when it matched.  It answered by WORDING rather than by meaning, so rewording a prompt broke
+# it silently; it had to be killed by hand afterwards because it kept looping for questions that
+# would never come; and the pipeline meant a closed stdin could spin add_full_node.sh at 100% of
+# a core (the EOF guards in that script exist because of exactly that).
 #
-# So: watch the transcript, answer each prompt ONCE, when it actually appears.
-LOG=/tmp/tnb_join.log
-proceed=0 fork=0 final=0 funds=0 start=0
-
-for i in {1..2400}; do
-    [[ -f $LOG ]] || { sleep 1; continue }
-    if (( ! proceed )) && grep -aq "Proceed? (y/n)" $LOG; then
-        print y; proceed=1; sleep 2; continue
-    fi
-    # 'c' resumes a part-initialised node and KEEPS its already-funded key; 's' would erase and mint
-    # a new one, stranding the funds.  Only one of the two spellings appears, depending on how far a
-    # previous attempt got.
-    if (( ! fork )) && grep -aqE "\[c\]ontinue" $LOG; then
-        print c; fork=1; sleep 2; continue
-    fi
-    if (( ! fork )) && grep -aqE "\[s\]tart from scratch" $LOG; then
-        print s; fork=1; sleep 2; continue
-    fi
-    if (( ! final )) && grep -aq "Are you really sure" $LOG; then
-        print y; final=1; sleep 2; continue
-    fi
-    if (( ! funds )) && grep -aq "Are you done sending funds" $LOG; then
-        print y; funds=1; sleep 2; continue
-    fi
-    # THE SPONSORED TWIN OF THE PROMPT ABOVE.  --foundation-sponsored replaces "send coins and tell
-    # me when you are done" with "has the foundation issued the fee grant", and a feeder that only
-    # knows the funding wording answers NEITHER: add_full_node.sh blocks on the PTY forever, the
-    # run sits with no output, and nothing says why.  Observed 2026-08-31 on M2 -- the grant had
-    # been issued and confirmed on chain minutes earlier, so 'y' was true the whole time it hung.
-    # Shares the `funds` latch: exactly one of the two wordings can appear in a given run.
-    if (( ! funds )) && grep -aq "issued the fee grant" $LOG; then
-        print y; funds=1; sleep 2; continue
-    fi
-    # THE ONE THAT MATTERS: decline the in-script start, so phase 5 starts it standalone.
-    if (( ! start )) && grep -aq "start the new qadena" $LOG; then
-        print n; start=1; sleep 5; break
-    fi
-    sleep 1
-done
-sleep 30
-FEED
+# add_full_node.sh takes --yes / --on-existing / --funded / --no-start-node since 2026-09-02, so
+# both call sites below pass ARGUMENTS instead.  Same answers, chosen by meaning, and nothing to
+# clean up afterwards.
 
 # ---------------------------------------------------------------------------- 3. mint
 if run_phase 3; then
@@ -771,18 +746,20 @@ phase "3. mint the joiner's pioneer key"
 addr=$(ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
 if [[ ! "$addr" =~ ^qadena1 ]]; then
     info "no $PIONEER_NAME key yet -- minting it with --stop-for-funding"
-    cat > /tmp/tnb_prep.sh <<PREP
-#!/bin/zsh
-exec script -qec "$JOINER_HOME/qadena/scripts/add_full_node.sh \
+    # ANSWERED BY FLAG, NOT BY A FEEDER.  add_full_node.sh takes --yes/--on-existing/--funded
+    # since 2026-09-02, so the prompts are pre-answered as ARGUMENTS.  What this replaces was a
+    # zsh script piped into a pseudo-terminal, watching the transcript for question TEXT and
+    # printing an answer when it matched -- which answers by wording rather than by meaning,
+    # breaks silently the moment a prompt is reworded, and leaves an orphan feeder looping for
+    # questions that will never come (the kill below existed for exactly that).
+    #
+    # --on-existing s is correct HERE and only here: phase 3 mints, so any prior node state on
+    # this machine is being deliberately replaced.  Phase 5 uses 'c' to KEEP the funded key.
+    ssh "$JOINER" "rm -f /tmp/tnb_join.log; ${SUDO_J}nohup setsid zsh -c '~/qadena/scripts/add_full_node.sh \
   --pioneer $PIONEER_NAME \
   --advertise-ip-address $ADVERTISE_J \
   --genesis-pioneer-first-ip-address $ADVERTISE_P$SECOND_IP_ARG$TRUST_OFFSET_ARG \
-  --stop-for-funding" /dev/null
-PREP
-    scp -q /tmp/tnb_feed.sh /tmp/tnb_prep.sh "$JOINER":/tmp/ 2>/dev/null \
-        || fail "cannot copy the prepare drivers to $JOINER"
-    ssh "$JOINER" 'chmod +x /tmp/tnb_feed.sh /tmp/tnb_prep.sh'
-    ssh "$JOINER" "rm -f /tmp/tnb_join.log; ${SUDO_J}nohup setsid zsh -c '/tmp/tnb_feed.sh | /tmp/tnb_prep.sh' > /tmp/tnb_join.log 2>&1 & echo started" > /dev/null
+  --yes --on-existing s --stop-for-funding' > /tmp/tnb_join.log 2>&1 & echo started" > /dev/null
     for i in {1..60}; do
         ssh "$JOINER" 'grep -aq "stopping for funding, as requested" /tmp/tnb_join.log' 2>/dev/null && break
         sleep 5
@@ -793,10 +770,6 @@ PREP
         ssh "$JOINER" 'tail -20 /tmp/tnb_join.log' 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^/      /'
         fail "could not mint $PIONEER_NAME on $JOINER"
     fi
-    # The prepare run exits at the funding stop, so its feeder is still looping for prompts that
-    # will never come.  It would die of SIGPIPE on its next write anyway, but leaving a process to
-    # discover that on its own is how orphans outlive the run that made them.
-    ssh "$JOINER" "pgrep -f '[t]nb_feed.sh' | while read fp; do ${SUDO_J}kill \$fp 2>/dev/null; done; true" > /dev/null 2>&1
     info "minted $PIONEER_NAME = $addr"
 
 # WHAT TO SIGN, IF THE FUNDING IS NOT OURS TO DO.
@@ -825,6 +798,15 @@ fi
 # requires, and `--from 5` carries on.  Nothing here changed except where the boundary sits.
 if run_phase 4; then
 phase "4. fund the joiner"
+    # RESOLVE IT HERE TOO, because this phase must stand alone.  $addr is assigned in phase 3,
+    # so `--from 4` (or 5, or 7) previously died on `addr: parameter not set` under `set -u` --
+    # which defeats the phase-resumability this script exists to offer, and bites exactly when
+    # something failed mid-run and you want to pick up where it stopped.
+    if [[ -z "${addr:-}" ]]; then
+        addr=$(ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+        [[ "$addr" == qadena1* ]] \
+            || fail "phase 4: $PIONEER_NAME has no key on $JOINER.  Run phase 3 first (it mints one)."
+    fi
     info "joiner $PIONEER_NAME = $addr"
     if (( SPONSORED )); then
         # SPONSORED: no coins move.  Issue a fee grant from the granter to the joiner's pioneer key.
@@ -867,12 +849,13 @@ phase "4. fund the joiner"
         fi
     elif true; then
     bal=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
-    if [[ "${bal:-0}" -gt 0 ]] 2>/dev/null; then
+    # String test: aqdn balances overflow int64 (see the note on the wait loop below).
+    if [[ -n "$bal" && "$bal" != "0" ]]; then
         info "already funded ($bal aqdn) -- nothing to do"
     else
         chainid=$(ssh "$PRIMARY" 'curl -s localhost:26657/status | jq -r ".result.node_info.network"' | tr -d '\r')
         amt="${FUND_QDN}000000000000000000"
-        info "sending ${FUND_QDN}qdn from treasury on chain $chainid"
+        info "sending ${FUND_QDN}qdn from $FUNDER on chain $chainid"
         # KEEP THE BROADCAST REPLY AND READ ITS CODE.  This used to redirect the reply to /dev/null
         # and trust the exit status, but the CLI EXITS 0 EVEN WHEN THE JSON CARRIES A NON-ZERO
         # code -- a "gas prices too low" rejection (code 13) exits 0 just like a success does.  So a
@@ -904,7 +887,7 @@ print(format(max(bf * 2, Decimal('0.025')), 'f'))
 " 2>/dev/null)
         [[ -n "$gas_price" ]] || fail "could not read the chain's base fee to price the funding transfer"
         info "base fee ${base_fee:-?}aqdn -- funding at ${gas_price}aqdn"
-        fund_out=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena tx bank send treasury $addr ${amt}aqdn --keyring-backend test --chain-id $chainid --gas auto --gas-adjustment 1.5 --gas-prices ${gas_price}aqdn --yes --output json" 2>&1) \
+        fund_out=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena tx bank send $FUNDER $addr ${amt}aqdn --keyring-backend test --chain-id $chainid --gas auto --gas-adjustment 1.5 --gas-prices ${gas_price}aqdn --yes --output json" 2>&1) \
             || fail "funding transfer failed to broadcast: $(print -r -- "$fund_out" | tail -3)"
         fund_code=$(print -r -- "$fund_out" | sed -n 's/.*"code":\([0-9]*\).*/\1/p' | head -1)
         if [[ -n "$fund_code" && "$fund_code" != "0" ]]; then
@@ -926,9 +909,14 @@ print(format(max(bf * 2, Decimal('0.025')), 'f'))
         for _ in {1..20}; do
             sleep 6
             bal=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query bank balances $addr --output json 2>/dev/null | jq -r '.balances[0].amount // \"0\"'" | tr -d '\r')
-            [[ "${bal:-0}" -gt 0 ]] 2>/dev/null && break
+            # STRING TEST, NOT ARITHMETIC.  aqdn balances routinely exceed int64: 10,100 QDN is
+            # 1.01e22 and zsh's -gt tops out near 9.2e18, so a real balance compares as ZERO and
+            # the loop times out on money that arrived.  Measured 2026-09-02 -- the funding tx
+            # was code 0 at height 36 and this still reported "did not land".  The devnet never
+            # hit it because its test amounts are smaller.
+            [[ -n "$bal" && "$bal" != "0" ]] && break
         done
-        if [[ "${bal:-0}" -le 0 ]] 2>/dev/null; then
+        if [[ -z "$bal" || "$bal" == "0" ]]; then
             # ASK THE CHAIN WHAT BECAME OF IT rather than leaving the reader to.  CheckTx passed, so
             # the interesting answer is in DeliverTx -- and if the hash is simply unknown, the tx
             # never made it into a block at all, which is a different problem from one that ran and
@@ -1003,18 +991,16 @@ if (( SPONSORED )); then
     info "joiner will wait for a fee grant from $SPONSOR_GRANTER ($gaddr), not for a balance"
 fi
 
-cat > /tmp/tnb_join.sh <<FEED
-#!/bin/zsh
-exec script -qec "$JOINER_HOME/qadena/scripts/add_full_node.sh \
+# --on-existing c KEEPS the key phase 3 minted and the sponsor funded.  's' would erase it, and
+# a funded pioneer address cannot send its coins back (AML 1159), so they would be stranded.
+# --funded: the money is already on chain -- phases 4 and the ceremony saw to that -- so do not
+# stop and ask.  --no-start-node because this script starts it in phase 6 and watches it.
+info "driving add_full_node.sh (flags, no PTY); fetches genesis and runs sync-enclave"
+ssh "$JOINER" "rm -f /tmp/tnb_join.log; ${SUDO_J}nohup setsid zsh -c '~/qadena/scripts/add_full_node.sh \
   --pioneer $PIONEER_NAME \
   --advertise-ip-address $ADVERTISE_J \
-  --genesis-pioneer-first-ip-address $ADVERTISE_P$SECOND_IP_ARG$TRUST_OFFSET_ARG$SPONSOR_ARG" /dev/null
-FEED
-scp -q /tmp/tnb_feed.sh /tmp/tnb_join.sh "$JOINER":/tmp/ || fail "cannot copy join drivers"
-ssh "$JOINER" 'chmod +x /tmp/tnb_feed.sh /tmp/tnb_join.sh'
-
-info "driving add_full_node.sh (PTY); this mints the key, fetches genesis and runs sync-enclave"
-ssh "$JOINER" "rm -f /tmp/tnb_join.log; ${SUDO_J}nohup setsid zsh -c '/tmp/tnb_feed.sh | /tmp/tnb_join.sh' > /tmp/tnb_join.log 2>&1 & echo started" > /dev/null
+  --genesis-pioneer-first-ip-address $ADVERTISE_P$SECOND_IP_ARG$TRUST_OFFSET_ARG$SPONSOR_ARG \
+  --yes --on-existing c --funded --no-start-node' > /tmp/tnb_join.log 2>&1 & echo started" > /dev/null
 
 # SURFACE THE ADDRESS AND THE STAGE HERE, rather than leaving them in a log on the other machine.
 # add_full_node.sh prints the pioneer address once and then polls silently for the balance; anyone

@@ -187,7 +187,7 @@ if [ $count -gt 0 ]; then
     done
 fi
 
-$qadenaproviderscripts/submit_service_provider_proposal.sh $treasury $providername add_service_provider_proposal $serviceProviderType
+$qadenaproviderscripts/submit_service_provider_proposal.sh $treasury $providername add_service_provider_proposal $serviceProviderType $pioneer
 
 
 

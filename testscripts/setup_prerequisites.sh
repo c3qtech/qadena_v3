@@ -70,7 +70,13 @@ oraclemnemonics=(
 )
 oracleamount="100000qdn"
 
-pioneer="pioneer1"
+# The DEVNET\'s genesis validator is `pioneer1`; a launch chain names its own
+
+# (qfi-pioneer1).  Env default so a whole suite run can be pointed at either without
+
+# editing eight scripts; --pioneer still wins where this script takes one.
+
+pioneer="${QADENA_PIONEER:-pioneer1}"
 treasury="treasury"
 
 # what each provider used to get from genesis coins:
@@ -346,9 +352,19 @@ else
         '.params | .markets |= map(.oracles = $addrs)') \
         || fail "could not build the updated params"
 
+    # COMPARE AGAINST THE CHAIN, NOT A CONSTANT.  The danger this guards is real --
+    # MsgUpdateParams REPLACES the whole params object and pricefeed's Validate() is a no-op, so a
+    # proposal carrying fewer markets silently deletes the rest.  But "6" was the DEVNET's market
+    # count; a launch chain ships 3 (no aud/btc/eth), and the guard then refused a proposal that
+    # was perfectly correct.
+    #
+    # newparams is derived from liveparams by mapping over .markets, so the only thing worth
+    # asserting is that the map preserved them all.  That holds on any chain.
+    livecount=$(echo "$liveparams" | jq -r '.params.markets | length')
     marketcount=$(echo "$newparams" | jq -r '.markets | length')
     echo "registering ${#oracleaddrs[@]} oracles across $marketcount markets"
-    [ "$marketcount" = "6" ] || fail "expected 6 markets, got $marketcount -- refusing to submit a proposal that would drop markets"
+    [ "$marketcount" = "$livecount" ] \
+        || fail "built $marketcount markets from $livecount on chain -- refusing to submit a proposal that would drop markets"
 
     proposalfile="$qadenaproviderscripts/proposals/pricefeed-oracles.gen.json"
     mkdir -p "$qadenaproviderscripts/proposals"
@@ -428,7 +444,7 @@ onboard() {
         # which is the part that did not finish.
         echo "$providername has keys but no registration -- resuming at the proposal"
         $qadenaproviderscripts/submit_service_provider_proposal.sh \
-            "$treasury" "$providername" add_service_provider_proposal "$providertype" \
+            "$treasury" "$providername" add_service_provider_proposal "$providertype" "$pioneer" \
             || fail "could not submit proposal for $providername"
     else
         $qadenaproviderscripts/setup_provider_base.sh "$providername" "$providertype" \

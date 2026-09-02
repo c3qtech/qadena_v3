@@ -25,8 +25,12 @@ function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 # the oracle that posts, and the market it posts to.  cn:eth:usd is deliberately NOT the market the
 # credential fees convert through (cn:qdn:php), so this test cannot perturb fee amounts.
 oracle="band-protocol-oracle"
-target_market="cn:eth:usd"
-control_market="cn:btc:usd"
+# ENV-DEFAULTED.  The requirement is a market that credential fees do NOT convert through
+# (cn:qdn:php) -- not these specific two.  The devnet ships six markets and eth/btc are the
+# obvious spare pair; a launch chain ships three, so it must name its own or the suite fails
+# with "no oracles registered on cn:eth:usd" against a perfectly healthy chain.
+target_market="${QADENA_PF_TARGET:-cn:eth:usd}"
+control_market="${QADENA_PF_CONTROL:-cn:btc:usd}"
 
 # genesis seeds cn:eth:usd at 1916.18 and cn:btc:usd at 64363.66
 #
@@ -38,14 +42,27 @@ control_market="cn:btc:usd"
 # (market, oracle), so re-posting the SAME value from the same oracle replaces it with an identical
 # value and the current price never moves -- which would look like a failure.  Pick whichever
 # candidate is not already in effect, so every run produces a real change.
-seeded_eth="1916180000000000000000"     # 1916.18, from the genesis postedPriceList
+# The seeded price a market MUST report, read from THIS chain's genesis rather than hardcoded.
+# The devnet seeds cn:eth:usd at 1916.18 and cn:btc:usd at 64363.66; a launch chain seeds other
+# markets at other prices, and a stale constant here fails a perfectly healthy chain while
+# claiming "prices are being blended across markets" -- pointing the reader at the iterator bug
+# this suite exists to detect, which is not what went wrong.
+genesis_price_of() {
+    local p
+    p=$(jq -r --arg m "$1" \
+        '.app_state.pricefeed.postedPriceList[]? | select(.marketId==$m) | .price' \
+        "$QADENAHOME/config/genesis.json" 2>/dev/null | head -1)
+    [ -n "$p" ] || return 1
+    python3 -c "from decimal import Decimal; print(int(Decimal('$p') * 10**18))"
+}
+
 price_a="2000000000000000000000"        # 2000.00 -> median with the seed = 1958.09
 price_b="2100000000000000000000"        # 2100.00 -> median with the seed = 2008.09
 expiry="2035-01-01T00:00:00Z"
 
 # the current price is the median of the seeded price and whatever the oracle last posted
 median_with_seed() {
-    python3 -c "print((int('$seeded_eth') + int('$1')) // 2)"
+    python3 -c "print((int('$seeded_target') + int('$1')) // 2)"
 }
 
 # 10^18-scaled integer -> human decimal, for legible output
@@ -65,6 +82,11 @@ price_of() {
         | jq -r '.price.price // empty' 2>/dev/null) || p=""
     echo "$p"
 }
+
+seeded_target=$(genesis_price_of "$target_market") \
+    || fail "$target_market is not in the genesis postedPriceList -- set QADENA_PF_TARGET to a market this chain actually seeds"
+seeded_control=$(genesis_price_of "$control_market") \
+    || fail "$control_market is not in the genesis postedPriceList -- set QADENA_PF_CONTROL to a market this chain actually seeds"
 
 echo "========================="
 echo "preflight"
@@ -96,9 +118,9 @@ echo "$control_market = $(human "$control_before")"
 [ "$target_before" != "$control_before" ] \
     || fail "every market reports the same price ($(human "$target_before")) -- IterateRawPricesByMarket is still unfiltered"
 
-# 64363.66 scaled by 10^18.  Pre-fix this market reported the cross-market median (~0.654805).
-[ "$control_before" = "64363660000000000000000" ] \
-    || fail "$control_market = $(human "$control_before"), expected 64363.66 -- prices are being blended across markets"
+# Pre-fix this market reported the cross-market median instead of its own seeded price.
+[ "$control_before" = "$seeded_control" ] \
+    || fail "$control_market = $(human "$control_before"), expected its seeded $(human "$seeded_control") -- prices are being blended across markets"
 echo "$control_market reads its own seeded price, not a cross-market median"
 
 # and exactly one raw price per market is the direct signature of the fixed iterator

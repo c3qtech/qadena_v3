@@ -85,6 +85,19 @@ fail() { print -u2 "FAIL(1st_node_bringup): $*"; exit 1 }
 info() { print "  $*" }
 phase() { print ""; print "======================================================================"; print ">>> $*"; print "======================================================================" }
 
+# WHICH CHAIN THIS BUILDS.  Empty means config/config.yml -- the DEVNET, which is what this
+# script has always produced and what the SS/regression suites are written against.
+#
+# --mainnet-source builds a LAUNCH-SHAPED chain instead, from a rendered instance of
+# config/launch-config.yml (tokenomics/fill_launch_config.py --out).  Both paths are legitimate;
+# they are different chains with different accounts, and confusing them wastes a whole run --
+# the devnet has `treasury` and `pioneer1`, a launch chain has buckets and `qfi-pioneer1`.
+#
+# The instance and the mnemonic are LOCAL paths here; both are copied to the primary, because
+# neither belongs in the repo (the instance is gitignored, the mnemonic is key material).
+MAINNET_SRC=""
+MNEMONIC_FILE=""
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --primary)   PRIMARY="$2"; shift 2 ;;
@@ -100,6 +113,8 @@ while [[ $# -gt 0 ]]; do
         # way to ask for a debug one.  See TESTING-BACKLOG.md item 90.
         --no-sgx)    NO_SGX=1; shift ;;
         --advertise-ip-address) ADVERTISE="$2"; shift 2 ;;
+        --mainnet-source)       MAINNET_SRC="$2"; shift 2 ;;
+        --pioneer-mnemonic-file) MNEMONIC_FILE="$2"; shift 2 ;;
         --package-out) PKG_OUT="$2"; shift 2 ;;
         --force)     FORCE=1; shift ;;
         --from)      FROM="$2"; shift 2 ;;
@@ -153,6 +168,14 @@ while [[ $# -gt 0 ]]; do
             print "  1 preflight   reachable; checkout present; toolchain present; SGX if asked for"
             print "  2 stop        stop node + enclaves, and PROVE nothing survived"
             print "  3 update      fetch/reset the checkout to --ref; report the commit built"
+            print "  --mainnet-source <file>  build a LAUNCH chain from this rendered instance"
+            print "                instead of the devnet's config/config.yml.  LOCAL path; it is"
+            print "                copied to the primary.  Needs --pioneer-mnemonic-file too."
+            print "  --pioneer-mnemonic-file <file>  the genesis validator's mnemonic, LOCAL path."
+            print "                Required with --mainnet-source: ignite mints the validator key"
+            print "                from it, and without one it mints a key whose mnemonic is"
+            print "                printed once and captured by nothing."
+            print ""
             print "  4 build+init  init.sh -- builds, WIPES \$QADENAHOME, re-inits genesis, installs"
             print "  5 verify      built measurement == the one genesis recorded"
             print "  6 start       start the node (sudo only where SGX) and wait for blocks"
@@ -539,9 +562,32 @@ if run_phase 4; then
     # trap 4: init.sh refuses to run as root.  trap 1: a fresh, user-owned log.
     # The redirect matters for a second reason -- without it the ssh channel stays open for as long
     # as the build runs, which looks like a hang.
+    # THE CONFIG SOURCE, AND THE KEY THAT SIGNS THE GENTX.
+    #
+    # Copied to the primary rather than referenced from the repo: the instance is gitignored (a
+    # --build-reproducible run's `git clean -fd` would delete it) and the mnemonic is key
+    # material that must never live in a checkout.  Both land in the login user's home.
+    mainnet_flag=""
+    if [[ -n "$MAINNET_SRC" ]]; then
+        [[ -f "$MAINNET_SRC" ]] || fail "--mainnet-source $MAINNET_SRC does not exist"
+        [[ -n "$MNEMONIC_FILE" ]] || fail "--mainnet-source needs --pioneer-mnemonic-file: ignite
+       mints the genesis validator's key from it.  Without one it mints a key whose mnemonic is
+       printed once and captured by nothing, leaving a funded validator nobody can sign for."
+        [[ -f "$MNEMONIC_FILE" ]] || fail "--pioneer-mnemonic-file $MNEMONIC_FILE does not exist"
+        rem_src="\$HOME/$(basename "$MAINNET_SRC")"
+        rem_mn="\$HOME/$(basename "$MNEMONIC_FILE")"
+        scp -q "$MAINNET_SRC"  "$PRIMARY:$(basename "$MAINNET_SRC")"  || fail "cannot copy the instance to $PRIMARY"
+        scp -q "$MNEMONIC_FILE" "$PRIMARY:$(basename "$MNEMONIC_FILE")" || fail "cannot copy the mnemonic to $PRIMARY"
+        ssh "$PRIMARY" "chmod 600 $(basename "$MNEMONIC_FILE")" 2>/dev/null
+        mainnet_flag=" --mainnet-source $rem_src --pioneer-mnemonic \"\$(cat $rem_mn)\""
+        info "building a LAUNCH chain from $(basename "$MAINNET_SRC") (not the devnet config)"
+    else
+        info "building the DEVNET chain from config/config.yml (no --mainnet-source given)"
+    fi
+
     rsh_user "$PRIMARY" "rm -f $RUNLOG"
     ssh -o ConnectTimeout=10 "$PRIMARY" \
-        "cd $REPO && nohup zsh -lc '$BUILD_PATH ./buildscripts/init.sh --advertise-ip-address $ADVERTISE$sgx_flag' > $RUNLOG 2>&1 &" \
+        "cd $REPO && nohup zsh -lc '$BUILD_PATH ./buildscripts/init.sh --advertise-ip-address $ADVERTISE$sgx_flag$mainnet_flag' > $RUNLOG 2>&1 &" \
         || fail "could not launch init.sh on $PRIMARY"
 
     info "waiting for init.sh to finish (log: $PRIMARY:$RUNLOG)"

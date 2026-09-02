@@ -15,6 +15,10 @@
 
 SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
+
+# The devnet's validator is `pioneer1`; a launch chain names its own.  Env-defaulted so a
+# suite run can target either without editing every create-wallet call.
+pioneer="${QADENA_PIONEER:-pioneer1}"
 set -e
 function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 cd $qadenabuild
@@ -336,7 +340,7 @@ echo ""; echo "=== N6: can a multisig become an eKYC wallet? ==="
 # a multisig is not obviously refused by the message server. Building one means reproducing the
 # pubK/pubKID material and the sponsor feegrant that the CLI assembles, which was not attempted.
 # Reported as NOT-EXERCISED rather than guessed at in either direction.
-qadenad_alias tx qadena create-wallet "msig-ekyc-$run_id" pioneer1 create-wallet-sponsor \
+qadenad_alias tx qadena create-wallet "msig-ekyc-$run_id" "$pioneer" create-wallet-sponsor \
     --from "$MS" --generate-only --gas 900000 --gas-prices "$minimum_gas_prices" \
     --output json > "$ev/n6.json" 2>"$ev/n6.err" || true
 if [ -s "$ev/n6.json" ] && jq -e '.body.messages[0]."@type"' "$ev/n6.json" >/dev/null 2>&1; then

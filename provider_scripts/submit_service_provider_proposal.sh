@@ -4,6 +4,7 @@ treasury=$1
 providername=$2
 json_proposal=$3
 service_provider_type=$4
+pioneer=${5:-${QADENA_PIONEER:-pioneer1}}
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
@@ -11,7 +12,7 @@ SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 if [ -z $providername ] || [ -z $json_proposal ] ; then
-    echo "Usage: submit_service_provider_proposal.sh <treasury> <providername> <proposal_type> (e.g. add_service_provider_proposal, deactivate_service_provider_proposal) <service_provider_type> (optional:  e.g. identity, finance)"
+    echo "Usage: submit_service_provider_proposal.sh <treasury> <providername> <proposal_type> (e.g. add_service_provider_proposal, deactivate_service_provider_proposal) <service_provider_type> (optional:  e.g. identity, finance) <pioneer> (optional: defaults to \$QADENA_PIONEER or pioneer1)"
     exit 1
 fi
 
@@ -29,8 +30,17 @@ fi
 
 
 # modify json_proposal
-jq --arg nodeid "$providername" \
-   '.messages[0].nodeID = $nodeid' \
+# homePioneerID is substituted for the SAME reason nodeID is.  The template carries a literal
+# `pioneer1` -- correct on the devnet, wrong on any chain whose genesis validator is named
+# something else, and the generator used to copy it through untouched.  Nothing rejects it at
+# proposal time: the registration passes governance and looks healthy for the life of the chain.
+# It fails much later and somewhere else entirely -- sign-recover-key resolves the PROVIDER'S
+# home pioneer to sign a recovery share, GetIntervalPublicKey misses, and the operator sees
+# `key not found` naming neither the provider nor the pioneer.  And it is UNRECOVERABLE:
+# AddServiceProvider refuses an existing nodeID (ErrServiceProviderAlreadyExists) and deactivate
+# overwrites rather than deletes, so the name is burned with the wrong pioneer baked in.
+jq --arg nodeid "$providername" --arg pioneer "$pioneer" \
+   '.messages[0].nodeID = $nodeid | .messages[0].homePioneerID = $pioneer' \
    "$qadenaproviderscripts/templates/$json_proposal.json" > "$qadenaproviderscripts/proposals/$providername.gen.json"
 
 

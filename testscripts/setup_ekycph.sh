@@ -32,8 +32,16 @@ signeramount="100000qdn"
 createwalletsponsoramount="100000qdn"
 
 
-pioneer="pioneer1"
+# The DEVNET\'s genesis validator is `pioneer1`; a launch chain names its own
 
+
+# (qfi-pioneer1).  Env default so a whole suite run can be pointed at either without
+
+
+# editing eight scripts; --pioneer still wins where this script takes one.
+
+
+pioneer="${QADENA_PIONEER:-pioneer1}"
 treasuryname="ekycph-treasury"
 identityprovidername="ekycphidentitysrvprv"
 dsvsprovidername="ekycphdsvssrvprv"

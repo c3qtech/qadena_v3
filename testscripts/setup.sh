@@ -13,7 +13,10 @@ no_log="false"
 skip_prerequisites="false"
 
 # Define additional parameters
-pioneer="pioneer1"
+# The DEVNET\'s genesis validator is `pioneer1`; a launch chain names its own
+# (qfi-pioneer1).  Env default so a whole suite run can be pointed at either without
+# editing eight scripts; --pioneer still wins where this script takes one.
+pioneer="${QADENA_PIONEER:-pioneer1}"
 identityprovider="testidentitysrvprv"
 serviceprovider="testdsvssrvprv"
 createwalletsponsor="create-wallet-sponsor"
@@ -319,7 +322,14 @@ else
         # SHARED partners -- testidentitysrvprv, pioneer1, and a user resolved through a nameservice
         # email binding.  Partners only sign; nothing about them has to be per-run, which is what
         # makes a per-run user's recovery cost one protect-key rather than a whole prefixed user set.
-        partners=$(echo "$user" | jq -r '.recovery.partners // [] | join(" ")')
+        # SUBSTITUTE THE PIONEER NAME, do not edit the test data.  test_data/users.json names
+        # `pioneer1` as a recovery partner for four users -- correct on the devnet, and on a launch
+        # chain the validator is called something else, so protect-key resolves it as neither a
+        # pioneer ID nor a service provider and every one of those recoveries fails.  The data
+        # describes a ROLE ("recover through the genesis pioneer"); the name of that pioneer is
+        # environment, so it is translated here rather than duplicated per chain.
+        partners=$(echo "$user" | jq -r --arg p "$pioneer" \
+            '.recovery.partners // [] | map(if . == "pioneer1" then $p else . end) | join(" ")')
 
         # --specific-user FILTERS this loop; it used to skip the whole section with `exit 0`.
         #

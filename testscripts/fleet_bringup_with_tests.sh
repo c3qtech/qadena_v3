@@ -94,6 +94,17 @@ BLOCK_SYNC=0
 # Passed straight through to nth_node_bringup.sh, which does the work in its phases 3 and 4.
 SPONSORED=0
 SPONSOR_GRANTER="treasury"
+# UNSPONSORED funder, passed through to nth_node_bringup.sh.  `treasury` is the devnet's
+# do-everything key and does not exist on a launch-config chain -- name a key the PRIMARY holds.
+FUNDER="treasury"
+# WHICH CHAIN THE FLEET RUNS.  Empty = the DEVNET (config/config.yml), which every SS and
+# regression suite here is written against.  --mainnet-source builds a LAUNCH-shaped chain from a
+# rendered instance instead; see the note above the joiner loop for what that costs.
+MAINNET_SRC=""
+MNEMONIC_FILE=""
+# Passed through to nth_node_bringup.sh.  Empty means "use its defaults", which are DEVNET-sized.
+FUND_QDN_ARG=""
+STAKE_ARG=""
 # --from <stage>.  The sub-scripts have been phase-addressable all along; the fleet script was not,
 # so a failure at stage C meant redoing a ~24-minute SGX build that had already succeeded and whose
 # artifacts were still installed and healthy.  See TESTING-BACKLOG.md item 89.
@@ -243,6 +254,11 @@ while [[ $# -gt 0 ]]; do
             print -u2 "        --joiner m3 --test \"./testscripts/run_regression_continually.sh\""
             exit 1 ;;
         --block-sync)    BLOCK_SYNC=1; shift ;;
+        --funder)        FUNDER="$2"; shift 2 ;;
+        --mainnet-source) MAINNET_SRC="$2"; shift 2 ;;
+        --fund-qdn)      FUND_QDN_ARG="$2"; shift 2 ;;
+        --stake)         STAKE_ARG="$2"; shift 2 ;;
+        --pioneer-mnemonic-file) MNEMONIC_FILE="$2"; shift 2 ;;
         --foundation-sponsored)
             SPONSORED=1
             if [[ -n "$2" && "$2" != --* ]]; then SPONSOR_GRANTER="$2"; shift 2; else shift; fi ;;
@@ -301,6 +317,19 @@ while [[ $# -gt 0 ]]; do
             print "                      a flake at stage C should not cost it.  --from D or later"
             print "                      SKIPS THE REGRESSION and says so; stepping over that guard"
             print "                      should be a deliberate act, never a quiet one."
+            print "  --mainnet-source <file> / --pioneer-mnemonic-file <file>"
+            print "                      build a LAUNCH chain instead of the devnet.  The joins"
+            print "                      then need --funder naming a key the PRIMARY holds (a"
+            print "                      launch chain has no 'treasury'), and a SPONSORED join"
+            print "                      from a bucket multisig cannot run unattended at all --"
+            print "                      see docs/HOWTO-FLEET-BRINGUP.md."
+            print "  --fund-qdn <qdn> / --stake <qdn>"
+            print "                      passed to nth_node_bringup.  Its defaults (200000 fund,"
+            print "                      110000 stake) are DEVNET figures and exceed what a launch"
+            print "                      chain's funder holds -- set both there."
+            print "  --funder <key>      UNSPONSORED joins: the key on the primary that sends"
+            print "                      joiners their coins (default: treasury, which a"
+            print "                      launch-config chain does NOT have)."
             print "  --foundation-sponsored [<granter-key>]"
             print "                      TOLL-FREE JOINS.  No joiner is sent coins and none holds a"
             print "                      treasury of its own: each gets a bounded, recurring FEE GRANT"
@@ -535,7 +564,10 @@ stage "A0. preflight every host BEFORE anything is stopped or moved"
 # at stage B seconds later.  Delegating to 1st_node_bringup's own phase 1 keeps one definition of
 # "can this machine do the job": toolchain presence AND version, checkout cleanliness, disk, SGX.
 # See TESTING-BACKLOG.md item 85.
-"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG --only 1 \
+mainnet_args=()
+[[ -n "$MAINNET_SRC" ]]   && mainnet_args+=(--mainnet-source "$MAINNET_SRC")
+[[ -n "$MNEMONIC_FILE" ]] && mainnet_args+=(--pioneer-mnemonic-file "$MNEMONIC_FILE")
+"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG "${mainnet_args[@]}" --only 1 \
     2>&1 | tee "$RUN_DIR/stage-A0-preflight.log"
 [[ ${pipestatus[1]} -eq 0 ]] || fail "the primary failed preflight; nothing has been changed on any host. See $RUN_DIR/stage-A0-preflight.log"
 
@@ -606,7 +638,7 @@ if run_stage B; then
 stage "B. 1st_node_bringup phases 1-6: build, init and start the primary"
 # Stops at 6 deliberately.  Packaging is stage D, AFTER the regression has upgraded the enclave --
 # see trap 1.  This is the fix for the sequence that failed on 2026-08-18.
-"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG --from 1 --until 6 \
+"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG "${mainnet_args[@]}" --from 1 --until 6 \
     2>&1 | tee "$RUN_DIR/stage-B-bringup.log"
 [[ ${pipestatus[1]} -eq 0 ]] || fail "1st_node_bringup phases 1-6 failed; it is phase-resumable (--from N) once fixed. See $RUN_DIR/stage-B-bringup.log"
 assert_advancing "$PRIMARY" "after bringup"
@@ -733,7 +765,7 @@ fi
 if (( SPONSORED )); then
     FUND_KIND="foundation-sponsored (no coins to joiners)"; sponsor_arg=(--foundation-sponsored "$SPONSOR_GRANTER")
 else
-    FUND_KIND="funded by bank send from treasury"; sponsor_arg=()
+    FUND_KIND="funded by bank send from $FUNDER"; sponsor_arg=(--funder "$FUNDER")
 fi
 stage "G. join each node by $SYNC_KIND, $FUND_KIND, in turn"
 note "join mode: $SYNC_KIND; funding: $FUND_KIND"
@@ -818,10 +850,26 @@ fi
     # the guard that matters here: it verifies neither node reaches 2/3, which is exactly the check
     # a hand-written loop skipped when it halted this fleet (TESTING-BACKLOG item 108).  Phase 7 is
     # test_peer_agreement.sh -- the first thing in the sequence that compares two nodes at all.
+    # A SPONSORED JOIN ON A LAUNCH CHAIN CANNOT RUN UNATTENDED.  The sponsor is a bucket held as
+    # an N-of-M multisig whose members are NOT on the primary, and nth_node_bringup's funding
+    # phase signs on the primary.  There is nothing to fix here: a script that could sign for the
+    # sponsor would have to hold the sponsor's keys, which is the property the multisig exists to
+    # prevent.  Use --funder with a key the primary DOES hold (the genesis validator's own,
+    # typically), or drive the joins by hand: nth_node_bringup --until 3, run the ceremony it
+    # prints, then --from 5.
+    if [[ -n "$MAINNET_SRC" ]] && (( SPONSORED )); then
+        fail "--mainnet-source with --foundation-sponsored cannot run unattended: the sponsoring
+       bucket is a multisig and this script signs on the primary.  Either pass --funder <key the
+       primary holds> for an unsponsored join, or bring each joiner up by hand with
+       nth_node_bringup.sh --until 3 / ceremony / --from 5."
+    fi
+    amount_args=()
+    [[ -n "$FUND_QDN_ARG" ]] && amount_args+=(--fund-qdn "$FUND_QDN_ARG")
+    [[ -n "$STAKE_ARG" ]]    && amount_args+=(--stake "$STAKE_ARG")
     info "joining $j as $pioneer by $SYNC_KIND (through phase 8: join, bond, agree)"
     print "$j joined by: $SYNC_KIND (as $pioneer)" >> "$RUN_DIR/fleet.txt"
     "$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" \
-        --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" "${sponsor_arg[@]}" \
+        --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" "${sponsor_arg[@]}" "${amount_args[@]}" \
         --convert-to-validator --from 1 --until 8 \
         2>&1 | tee "$RUN_DIR/stage-G-join-${j##*@}.log"
     [[ ${pipestatus[1]} -eq 0 ]] || fail "join failed for $j; nth_node_bringup is phase-resumable (--from N). See $RUN_DIR/stage-G-join-${j##*@}.log"

@@ -84,6 +84,10 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# The devnet's validator is `pioneer1`; a launch chain names its own.  Env-defaulted so a
+# suite run can target either without editing every create-wallet call.
+pioneer="${QADENA_PIONEER:-pioneer1}"
+
 source "$qadenatestscripts/setup_mnemonic.sh"
 
 # setup_env.sh provides qadenad_alias as an ALIAS, but expect_ok/expect_reject below invoke their
@@ -361,7 +365,7 @@ if [[ "$guardian_assertion_mode" -ge 2 && -z "$TEST_CREDENTIALS_SKIP_RECOVERY" ]
     fi
 
     # Same setup as case 6, against this run's jill.
-    expect_ok qadenad_alias tx qadena create-wallet $recover_jill_wallet pioneer1 --account-mnemonic="$recoverjillmnemonic" create-wallet-sponsor --yes
+    expect_ok qadenad_alias tx qadena create-wallet $recover_jill_wallet "$pioneer" --account-mnemonic="$recoverjillmnemonic" create-wallet-sponsor --yes
     expect_ok qadenad_alias tx qadena create-credential $jill_recover_a $jill_recover_bf personal-info "Jill$suffix" "Lava$suffix" "Quimba$suffix" "1980-Jan-01" "PH" "PH" "F" --from $identityprovider --yes
     expect_ok qadenad_alias tx qadena claim-credential $jill_recover_a $jill_recover_bf personal-info --from $recover_jill_wallet --recover-key --yes
 
@@ -376,7 +380,7 @@ if [[ "$guardian_assertion_mode" -ge 2 && -z "$TEST_CREDENTIALS_SKIP_RECOVERY" ]
     # pioneer1 resolves through PioneerNodeType, which puts it in the same class.  Asserted
     # separately because it is the classification most likely to be misread: nothing on the command
     # line marks pioneer1 as institutional.
-    expect_reject qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from pioneer1 --yes
+    expect_reject qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from "$pioneer" --yes
 
     echo "-------------------------"
     echo "the INDIVIDUAL guardian is still accepted"
@@ -433,7 +437,7 @@ if [[ -z "$TEST_CREDENTIALS_SKIP_RECOVERY" ]]; then
     #
     # Against the shared jill this passed while testing nothing -- she was never married, so Quimba
     # was simply her only surname and the lookup never went through an alias at all.
-    expect_ok qadenad_alias tx qadena create-wallet $recover_jill_wallet pioneer1 --account-mnemonic="$recoverjillmnemonic" create-wallet-sponsor --yes
+    expect_ok qadenad_alias tx qadena create-wallet $recover_jill_wallet "$pioneer" --account-mnemonic="$recoverjillmnemonic" create-wallet-sponsor --yes
     expect_ok qadenad_alias tx qadena create-credential $jill_recover_a $jill_recover_bf personal-info "Jill$suffix" "Lava$suffix" "Quimba$suffix" "1980-Jan-01" "PH" "PH" "F" --from $identityprovider --yes
     expect_ok qadenad_alias tx qadena claim-credential $jill_recover_a $jill_recover_bf personal-info --from $recover_jill_wallet --recover-key --yes
 
@@ -456,7 +460,7 @@ if [[ -z "$TEST_CREDENTIALS_SKIP_RECOVERY" ]]; then
     #   victor's email      resolved via nameservice to the sub-wallet that bound
     #                       victortorres@c3qtech.com, which is victor-eph1 -> --is-user
     expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from $identityprovider --is-service-provider --yes
-    expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from pioneer1 --yes
+    expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from "$pioneer" --yes
 
     echo "-------------------------"
     echo "2 of 3 signatories: the seed phrase must still be withheld"
@@ -486,7 +490,7 @@ if [[ -z "$TEST_CREDENTIALS_SKIP_RECOVERY" ]]; then
     # 2. Losing a key twice is normal, so recovery must work more than once.  This second claim
     #    replaces jill's RecoverKey and resets its signatory list, which is why all three partners
     #    have to sign again rather than the earlier signatures still counting.
-    expect_ok qadenad_alias tx qadena create-wallet $recover_jill2_wallet pioneer1 --account-mnemonic="$recoverjill2mnemonic" create-wallet-sponsor --yes
+    expect_ok qadenad_alias tx qadena create-wallet $recover_jill2_wallet "$pioneer" --account-mnemonic="$recoverjill2mnemonic" create-wallet-sponsor --yes
     expect_ok qadenad_alias tx qadena create-credential $jill_recover2_a $jill_recover2_bf personal-info "Jill$suffix" "Lava$suffix" "Villarica$suffix" "1980-Jan-01" "PH" "PH" "F" --from $identityprovider --yes
     expect_ok qadenad_alias tx qadena claim-credential $jill_recover2_a $jill_recover2_bf personal-info --from $recover_jill2_wallet --recover-key --yes
 
@@ -496,7 +500,7 @@ if [[ -z "$TEST_CREDENTIALS_SKIP_RECOVERY" ]]; then
     expect_reject qadenad_alias query qadena show-recover-key $recover_jill2_wallet
 
     expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from $identityprovider --is-service-provider --yes
-    expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from pioneer1 --yes
+    expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from "$pioneer" --yes
     expect_ok qadenad_alias tx qadena sign-recover-key $jill_protect_wallet --from victor-eph1 --is-user --yes
 
     echo "-------------------------"
@@ -572,7 +576,7 @@ fi
 echo "========================="
 echo "7. anti-squat: nobody may claim jill's abandoned maiden identity"
 echo "========================="
-expect_ok qadenad_alias tx qadena create-wallet squatter$suffix pioneer1 create-wallet-sponsor --yes
+expect_ok qadenad_alias tx qadena create-wallet squatter$suffix "$pioneer" create-wallet-sponsor --yes
 expect_ok qadenad_alias tx qadena create-credential $squat_a $squat_bf personal-info "Jill$suffix" "Lava$suffix" "Quimba$suffix" "1980-Jan-01" "PH" "PH" "F" --from $identityprovider --yes
 expect_reject qadenad_alias tx qadena claim-credential $squat_a $squat_bf personal-info --from squatter$suffix --yes
 

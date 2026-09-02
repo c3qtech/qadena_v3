@@ -37,8 +37,9 @@ set -e
 function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 oracle="band-protocol-oracle"
-market="cn:eth:usd"
-seeded="1916180000000000000000"          # 1916.18, from the genesis postedPriceList
+# ENV-DEFAULTED, same reason as test_pricefeed.sh: any market that credential fees do not
+# convert through will do, and a launch chain does not ship the devnet's cn:eth:usd.
+market="${QADENA_PF_TARGET:-cn:eth:usd}"
 posted="3000000000000000000000"          # 3000.00 -- far from the seed so the median is unmistakable
 ttl_seconds=30
 
@@ -46,6 +47,20 @@ fail() {
     echo "FAILED: $1"
     exit 1
 }
+
+# The seeded baseline is read from THIS chain's genesis, not hardcoded.  The devnet seeds
+# cn:eth:usd at 1916.18; a launch chain seeds different markets at different prices, and a stale
+# constant fails a healthy chain with an expected-median that was never right for it.
+genesis_price_of() {
+    local p
+    p=$(jq -r --arg m "$1" \
+        '.app_state.pricefeed.postedPriceList[]? | select(.marketId==$m) | .price' \
+        "$QADENAHOME/config/genesis.json" 2>/dev/null | head -1)
+    [ -n "$p" ] || return 1
+    python3 -c "from decimal import Decimal; print(int(Decimal('$p') * 10**18))"
+}
+seeded=$(genesis_price_of "$market") \
+    || fail "$market is not in the genesis postedPriceList -- set QADENA_PF_TARGET to a market this chain actually seeds"
 
 qdn() { python3 -c "print(int('${1:-0}')/10**18)"; }
 

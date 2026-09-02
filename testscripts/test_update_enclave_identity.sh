@@ -5,6 +5,10 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# The devnet's validator is `pioneer1`; a launch chain names its own.  Env-defaulted so a
+# whole suite run can be pointed at either without editing every script.
+pioneer="${QADENA_PIONEER:-pioneer1}"
+
 uniqueid=$1
 signerid=$2
 stat=$3
@@ -34,7 +38,7 @@ jq --arg uniqueid "$uniqueid" \
 
 
 # submit json_proposal
-submit_hash=$(qadenad_alias tx gov submit-proposal "test_data/$json_proposal.gen.json" --from pioneer1 -y --output json --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment | jq -r '.txhash')
+submit_hash=$(qadenad_alias tx gov submit-proposal "test_data/$json_proposal.gen.json" --from "$pioneer" -y --output json --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment | jq -r '.txhash')
 echo $submit_hash
 
 # wait for the proposal to be submitted
@@ -49,14 +53,14 @@ proposal_id=$(qadenad_alias query tx $submit_hash --output json | jq -r '.events
 echo $proposal_id
 
 # deposit into the proposal
-deposit_hash=$(qadenad_alias tx gov deposit $proposal_id 1000qdn --from pioneer1 -y --output json --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment | jq -r '.txhash')
+deposit_hash=$(qadenad_alias tx gov deposit $proposal_id 1000qdn --from "$pioneer" -y --output json --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment | jq -r '.txhash')
 echo $deposit_hash
 
 # wait for the deposit to be submitted
 confirm_tx "$deposit_hash" 30 || { echo "deposit $deposit_hash did not land"; exit 1; }
 
 # vote yes on the proposal
-vote_hash=$(qadenad_alias tx gov vote $proposal_id yes --from pioneer1 -y --output json --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment | jq -r '.txhash')
+vote_hash=$(qadenad_alias tx gov vote $proposal_id yes --from "$pioneer" -y --output json --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment | jq -r '.txhash')
 echo $vote_hash
 
 # wait for the vote to be submitted

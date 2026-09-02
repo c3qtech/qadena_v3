@@ -49,6 +49,10 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# The devnet's validator is `pioneer1`; a launch chain names its own.  Env-defaulted so a
+# suite run can target either without editing every create-wallet call.
+pioneer="${QADENA_PIONEER:-pioneer1}"
+
 set -e
 
 function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
@@ -518,8 +522,8 @@ noekyc_wallet="noekyc-$(date +%s | tail -c 7)"
 expect_ok_tx() {
     "$@" > /dev/null 2>&1 || fail "setup step failed: $*"
 }
-expect_ok_tx qadenad_alias tx qadena create-wallet "$noekyc_wallet" pioneer1 create-wallet-sponsor --yes
-expect_ok_tx qadenad_alias tx qadena create-wallet "$noekyc_wallet-eph1" pioneer1 create-wallet-sponsor \
+expect_ok_tx qadenad_alias tx qadena create-wallet "$noekyc_wallet" "$pioneer" create-wallet-sponsor --yes
+expect_ok_tx qadenad_alias tx qadena create-wallet "$noekyc_wallet-eph1" "$pioneer" create-wallet-sponsor \
     --link-to-real-wallet "$noekyc_wallet" --eph-account-index 1 --yes
 echo "created $noekyc_wallet with an eph wallet and no credential"
 

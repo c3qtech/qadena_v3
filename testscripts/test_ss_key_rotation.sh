@@ -68,7 +68,7 @@ done
 identityprovider="testidentitysrvprv"
 dsvsprovider="testdsvssrvprv"
 sponsor="create-wallet-sponsor"
-pioneer="pioneer1"
+pioneer="${QADENA_PIONEER:-pioneer1}"
 
 run_id=$(date +%s)
 suffix="${run_id: -6}"

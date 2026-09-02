@@ -548,7 +548,7 @@ check_genesis() {
     fi
 
     python3 - "$g" <<'PY'
-import json, sys
+import json, sys, os
 d = json.load(open(sys.argv[1]))['app_state']
 ok = True
 
@@ -557,10 +557,16 @@ if 'crisis' in d:
 else:
     print("no crisis module")
 
+# THE EXPECTED SET IS CHAIN-SHAPED, NOT UNIVERSAL.  The devnet's bootstrap identities are
+# pioneer1 and treasury; a launch chain's are its genesis validator and the wallet incentive
+# pool, under whatever names that genesis chose.  The ASSERTION being made is the same either
+# way -- exactly the bootstrap identities and nothing else, in particular no service providers
+# smuggled into genesis -- so the pair is a parameter, not a constant.
+expected = sorted((os.environ.get('QADENA_GENESIS_NODES') or 'pioneer1,treasury').split(','))
 nodes = sorted(x['nodeID'] for x in d['qadena']['intervalPublicKeyIDList'])
-print("genesis nodes:", nodes)
-if nodes != ['pioneer1', 'treasury']:
-    print("expected exactly pioneer1 and treasury"); ok = False
+print("genesis nodes:", nodes, "expected:", expected)
+if nodes != expected:
+    print(f"expected exactly {expected}"); ok = False
 
 srv = [x for x in d['qadena']['intervalPublicKeyIDList'] if x.get('nodeType') == 'srv-prv']
 if srv:
