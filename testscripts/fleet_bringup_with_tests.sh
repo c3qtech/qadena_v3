@@ -81,6 +81,7 @@ PIONEER_PREFIX="pioneer"
 SNAP_INTERVAL=2000
 SNAP_WAIT_MIN=120
 RUN_DIR=""
+SKIP_UPDATE=0
 # THE SCHEDULE IS THE COMMAND LINE, IN ORDER.  --test attaches to whatever node preceded it, so
 # what you type is what runs:  --primary m1 --test A --joiner m2 --test B  ==  m1, A, m2, B.
 # Entries are tagged strings because zsh has no nested arrays; the tag is everything before the
@@ -243,6 +244,7 @@ while [[ $# -gt 0 ]]; do
         --ref)           REF="$2"; shift 2 ;;
         --build-sgx)     BUILD_SGX="yes"; shift ;;
         --no-build-sgx)  BUILD_SGX="no"; shift ;;
+        --skip-update)     SKIP_UPDATE=1; shift ;;
         --pioneer-prefix) PIONEER_PREFIX="$2"; shift 2 ;;
         --snapshot-interval) SNAP_INTERVAL="$2"; shift 2 ;;
         --addressable-wait) ADDRESSABLE_WAIT_MIN="$2"; shift 2 ;;
@@ -268,6 +270,7 @@ while [[ $# -gt 0 ]]; do
         --help)
             print "Usage: fleet_bringup_with_tests.sh --primary <[user@]host> [--joiner <[user@]host>]..."
             print "                             [--run-dir <dir>] [--ref <git-ref>]"
+            print "                             [--skip-update]"
             print "                             [--build-sgx | --no-build-sgx] [--pioneer-prefix <n>]"
             print "                             [--snapshot-interval N] [--addressable-wait MIN]"
             print "                             [--test <cmd>]... [--test-local <cmd>]... [--test-fleet-upgrade]"
@@ -279,6 +282,7 @@ while [[ $# -gt 0 ]]; do
             print "                      Default ~/qadena-fleet-runs/<timestamp>, plus a 'latest'"
             print "                      symlink.  Remote logs are pulled in as the run proceeds."
             print "  --build-sgx         force a reproducible SGX build (refused without devices)."
+            print "  --skip-update       skip git update on primary."
             print "  --no-build-sgx      force a DEBUG enclave even on SGX hardware -- skips the"
             print "                      ~24-minute docker build when only logic is being tested."
             print "                      NEITHER IS NORMALLY NEEDED: hosts are probed, and the same"
@@ -644,8 +648,13 @@ if run_stage B; then
 stage "B. 1st_node_bringup phases 1-6: build, init and start the primary"
 # Stops at 6 deliberately.  Packaging is stage D, AFTER the regression has upgraded the enclave --
 # see trap 1.  This is the fix for the sequence that failed on 2026-08-18.
-"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG "${mainnet_args[@]}" --from 1 --until 6 \
-    2>&1 | tee "$RUN_DIR/stage-B-bringup.log"
+if (( $SKIP_UPDATE == 1)); then
+    "$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG "${mainnet_args[@]}" --from 1 --except 3 --until 6 \
+        2>&1 | tee "$RUN_DIR/stage-B-bringup.log"
+else
+    "$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG "${mainnet_args[@]}" --from 1 --until 6 \
+        2>&1 | tee "$RUN_DIR/stage-B-bringup.log"
+fi
 [[ ${pipestatus[1]} -eq 0 ]] || fail "1st_node_bringup phases 1-6 failed; it is phase-resumable (--from N) once fixed. See $RUN_DIR/stage-B-bringup.log"
 assert_advancing "$PRIMARY" "after bringup"
 

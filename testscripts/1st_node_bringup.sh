@@ -80,6 +80,7 @@ FORCE=0
 FROM=1
 UNTIL=8
 ONLY=""
+EXCEPT=""
 
 fail() { print -u2 "FAIL(1st_node_bringup): $*"; exit 1 }
 info() { print "  $*" }
@@ -120,11 +121,12 @@ while [[ $# -gt 0 ]]; do
         --from)      FROM="$2"; shift 2 ;;
         --until)     UNTIL="$2"; shift 2 ;;
         --only)      ONLY="$2"; shift 2 ;;
+        --except)      EXCEPT="$2"; shift 2 ;;
         --help)
             print "Usage: 1st_node_bringup.sh --primary <ip> [--joiner <ip>] [--repo <path>] [--ref <git-ref>]"
             print "                          [--build-sgx | --no-sgx] [--advertise-ip-address <ip>]"
             print "                          [--package-out <dir>] [--force]"
-            print "                          [--from N] [--until N] [--only N]"
+            print "                          [--from N] [--until N] [--only N] [--except N]"
             print ""
             print "  --repo        checkout on the TARGET, relative to its home unless absolute."
             print "                Default \$HOME/$REPO_DEFAULT, which is CLONED if absent; an"
@@ -219,6 +221,7 @@ BUILD_PATH='export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH;'
 
 run_phase() {
     [[ -n "$ONLY" ]] && { [[ "$1" == "$ONLY" ]] && return 0 || return 1 }
+    [[ -n "$EXCEPT" ]] && { [[ "$1" == "$EXCEPT" ]] && return 1 || return 0 }
     [[ "$1" -ge "$FROM" ]]  || return 1
     [[ "$1" -le "$UNTIL" ]] || return 1
     return 0
