@@ -42,14 +42,55 @@ if [[ -x "$qadenabin/cosmovisor" ]]; then
     echo "build_cosmovisor.sh: replacing cosmovisor $have with $PIN"
 fi
 
+# THE CACHE LIVES OUTSIDE $QADENAHOME, and that is the whole point of it.
+#
+# $qadenabin is $QADENAHOME/bin, and `stop_fleet.sh --purge` does `rm -rf $HOME/qadena` -- so every
+# purge deletes cosmovisor and the already-$PIN check above can never fire on the next bringup.
+# That is why this appeared to fetch from the network on every single run: not because the pin was
+# moving, but because the artifact kept being thrown away with the chain data.
+#
+# Keyed BY PIN, so bumping cosmovisor_version.txt cannot silently reuse the old binary -- the
+# whole reason for the pin is that a different cosmovisor changes the deploy mechanism.
+CACHE_DIR="${QADENA_COSMOVISOR_CACHE:-$HOME/.cache/qadena}"
+CACHED="$CACHE_DIR/cosmovisor-$PIN-$(uname -s)-$(uname -m)"
+
+# uname in the name because this cache is per-ARCHITECTURE.  The Mac builds darwin/arm64 for
+# itself and the fleet builds linux/aarch64 for the nodes; one path for both would hand a node a
+# Mach-O binary and the failure ("cannot execute binary file") names neither the cache nor this
+# script.
+
+mkdir -p "$qadenabin"
+if [[ -x "$CACHED" ]]; then
+    cached_v=$("$CACHED" version 2>&1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    if [[ "$cached_v" == "$PIN" ]]; then
+        echo "build_cosmovisor.sh: reusing cached $PIN from $CACHED (no build, no network)"
+        cp "$CACHED" "$qadenabin/cosmovisor.new.$$"
+        mv -f "$qadenabin/cosmovisor.new.$$" "$qadenabin/cosmovisor"
+        echo "build_cosmovisor.sh: installed $PIN at $qadenabin/cosmovisor"
+        exit 0
+    fi
+    # A cached file that does not report the pin is not the pin.  Rebuild rather than trust the
+    # filename: the name is a label, the `version` output is evidence.
+    echo "build_cosmovisor.sh: cached binary reports '${cached_v:-nothing}', not $PIN -- rebuilding"
+fi
+
 echo "build_cosmovisor.sh: building cosmovisor $PIN"
 tmp=$(mktemp -d)
 trap "rm -rf $tmp" EXIT
 GOBIN="$tmp" go install "cosmossdk.io/tools/cosmovisor/cmd/cosmovisor@$PIN"
-
-mkdir -p "$qadenabin"
 # cp to a temp name + mv: never rewrite a possibly-running supervisor's inode in place -- the
 # same-inode overwrite lesson from libwasmvm (install.sh) applies to any live binary.
 cp "$tmp/cosmovisor" "$qadenabin/cosmovisor.new.$$"
 mv -f "$qadenabin/cosmovisor.new.$$" "$qadenabin/cosmovisor"
 echo "build_cosmovisor.sh: installed $($qadenabin/cosmovisor version 2>&1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1) at $qadenabin/cosmovisor"
+
+# SEED THE CACHE, best-effort.  A failure here must not fail the build: the binary is already
+# installed and correct, and the cache is only an optimisation for the next purge.
+if mkdir -p "$CACHE_DIR" 2>/dev/null; then
+    if cp "$tmp/cosmovisor" "$CACHED.new.$$" 2>/dev/null && mv -f "$CACHED.new.$$" "$CACHED" 2>/dev/null; then
+        echo "build_cosmovisor.sh: cached at $CACHED -- a --purge will not force a rebuild"
+    else
+        rm -f "$CACHED.new.$$" 2>/dev/null
+        echo "build_cosmovisor.sh: could not write $CACHED (continuing; the binary is installed)"
+    fi
+fi
