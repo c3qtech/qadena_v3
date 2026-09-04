@@ -9,9 +9,32 @@ only worth running if it differs from the real thing in ways you can enumerate. 
 
 | | mainnet | mainnet-parameter testnet |
 |---|---|---|
-| chain-id | `qadena_482-1` | its own (`qadena_4824-1`) -- never the mainnet id |
-| governance timings | 72h / 6h | **may be shortened** -- `fill_launch_config.py --test-gov-timings` |
+| chain-id | `qadena_482-1` | its own (`qadena_4824-1`) -- never the mainnet id. `--chain-id` |
+| governance timings | 72h / 6h | **may be shortened** -- `--test-gov-timings` (300s / 30s / 300s) |
 | everything else | — | **identical**: SGX, allocations, buckets, the ceremony, the AML whitelist |
+
+There is **one template**, `config/launch-config.yml`, and both networks render from it. A
+testnet is not a second tracked file -- that only creates two things to keep in sync, with nothing
+checking that they were. It is the same template plus two flags, so the whole difference between
+your testnet and mainnet is readable on one command line:
+
+```sh
+foundation_scripts/fill_launch_config.py \
+    --apply     ~/launch/addresses.csv \
+    --chain-id  qadena_4824-1 \
+    --test-gov-timings \
+    --out       ~/launch/testnet-launch-config.yml
+```
+
+`--chain-id` rewrites BOTH `chain_id` keys (the top-level one and the nested one that must match)
+and validates the format first, because `cmd/qadenad/cmd/commands.go` derives the EVM chain id by
+parsing that string and **every failure path is a bare `return`** -- a malformed id leaves
+`EVMChainID` unset with no error at init, no error at start, and the mismatch surfacing later as
+transactions that will not verify.
+
+`--test-gov-timings` **without** `--chain-id` is refused outright: a five-minute voting period on
+the mainnet chain-id is a testnet wearing production's identity, and since EIP-155 replay
+protection *is* the chain id, anything signed there would replay against mainnet.
 
 Shortened governance is the one difference that stays a rehearsal.  Change more than that -- debug
 enclaves, a trimmed bucket set, a treasury seeded at genesis instead of provisioned by ceremony --
@@ -88,12 +111,19 @@ notices is assertion 13, which fires about 250 lines and one `rm -rf $QADENAHOME
 Bypasses exist (`QADENA_SKIP_CONFIG_VERIFY=1` covers both pre-wipe gates, `QADENA_SKIP_GENESIS_VERIFY=1`
 the last) and announce that amounts are unverified.
 
-**`QADENA_ALLOW_PLACEHOLDER_ALLOCATIONS=1`** is a different thing and not a bypass: it permits
+**`--allow-placeholder-allocations`** is a different thing and not a bypass: it permits
 placeholder addresses in `allocations.csv` while still running every other assertion. A
 launch-**shaped** test build needs it -- the real bucket multisigs do not exist until the real
 launch, so the tracked CSV holds placeholders and is right to. `testscripts/1st_node_bringup.sh`
-sets it for you on `--mainnet-source`. **A real launch never sets it**, which is the whole point of
-assertion 13.
+passes it for you on `--mainnet-source`. **A real launch never passes it**, which is the whole
+point of assertion 13.
+
+It is a **flag rather than an environment variable** deliberately. An env var is ambient -- set in
+a `.zshrc`, a CI job or a parent shell, it would silently disable assertion 13 on a real launch
+build with nothing in the reviewed command to show for it. A flag can only be set by the caller,
+appears in `ps` and in the run log, and is listed by `init.sh --help`. The `QADENA_SKIP_*`
+variables stay variables because they are "I know I am disabling verification" escape hatches;
+this is a routine mode for an entire class of build, and routine things belong in the interface.
 
 > **NOT YET EXERCISED END TO END.**  Steps 3-5 have not been run as a chain: `--apply` began
 > applying amounts on 2026-09-04 and neither `init.sh` gate has fired on a real build.  Do it once

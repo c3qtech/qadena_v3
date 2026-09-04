@@ -63,6 +63,21 @@ while [[ $# -gt 0 ]]; do
     #      literals; the build host never sees the secret and has no such keyring entry to
     #      resolve.  So the correct mainnet behaviour is not "substitute" -- it is "there is
     #      nothing left to substitute", which is then asserted rather than assumed.
+    # A FLAG, NOT AN ENVIRONMENT VARIABLE, AND THE DISTINCTION MATTERS.
+    #
+    # This relaxes assertion 13, which is the check standing between a permanent genesis and a
+    # placeholder custody record.  An env var is AMBIENT: exported in a .zshrc, a CI job, or a
+    # shell three levels up, it would silently disable that check on a REAL launch build with no
+    # trace in the command anyone typed or reviewed.  A flag can only be set by the caller, shows
+    # up in `ps` and in scrollback, and appears in --help where an env var is invisible.
+    #
+    # The QADENA_SKIP_* variables stay variables on purpose: those are "I know I am disabling
+    # verification" escape hatches.  This is a routine mode for an entire class of build --
+    # every launch-SHAPED test -- and routine things belong in the interface.
+    --allow-placeholder-allocations)
+      allow_placeholder_allocations=1
+      shift
+      ;;
     --mainnet-source)
       if [[ -n "$2" && "$2" != --* ]]; then
         mainnet_source="$2"
@@ -161,6 +176,12 @@ while [[ $# -gt 0 ]]; do
       echo "            foundation_scripts/fill_launch_config.py --apply.  Also SKIPS the setPubKAndPubKID key"
       echo "            splicing, which is devnet-only (it exports a private key), and instead"
       echo "            asserts the genesis carries no unresolved placeholder."
+      echo "  --allow-placeholder-allocations"
+      echo "            let tokenomics/allocations.csv keep its <NN_MSIG_ADDR> placeholders."
+      echo "            For a launch-SHAPED TEST: the real bucket multisigs are generated once,"
+      echo "            in custody, at the real launch, so the tracked CSV holds placeholders"
+      echo "            until then and is right to.  Every other assertion still runs."
+      echo "            A REAL LAUNCH NEVER PASSES THIS -- it is what assertion 13 is for."
       echo "  --pioneer-mnemonic <words>"
       echo "            the genesis validator's mnemonic, for --mainnet-source.  Prompted for if"
       echo "            omitted.  Injected into the working config.yml only, never the source."
@@ -280,7 +301,7 @@ fi
 # Default strict, therefore, and let the test paths opt out by name.  The variable says exactly
 # what it permits, so it cannot be set by someone who thinks it means something else.
 _ph_flag=()
-if [[ -n "${QADENA_ALLOW_PLACEHOLDER_ALLOCATIONS:-}" ]]; then
+if (( ${allow_placeholder_allocations:-0} )); then
     _ph_flag=(--allow-placeholders)
 fi
 
@@ -312,7 +333,7 @@ if [[ -n "$mainnet_source" ]]; then
             echo ""
             echo "   INIT FAILED: allocations.csv does not add up, or still holds placeholders."
             echo "   Nothing has been destroyed yet.  Fix the CSV and re-run."
-            echo "   A launch-SHAPED TEST build wants QADENA_ALLOW_PLACEHOLDER_ALLOCATIONS=1."
+            echo "   A launch-SHAPED TEST build wants --allow-placeholder-allocations."
             exit 1
         fi
         echo "   OK: allocations.csv is internally consistent."

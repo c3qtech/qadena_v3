@@ -327,8 +327,8 @@ mainnet -- it simply takes 72 hours there.  Note that the *comments* in the file
 72h/6h values: they document the design, while the rendered instance carries the short ones.  Read
 the values, not the prose.
 
-**One check is relaxed, and it changes nothing about the chain.**  `1st_node_bringup.sh` sets
-`QADENA_ALLOW_PLACEHOLDER_ALLOCATIONS=1` on `--mainnet-source`, which lets `init.sh`'s CSV gates
+**One check is relaxed, and it changes nothing about the chain.**  `1st_node_bringup.sh` passes
+`--allow-placeholder-allocations` on `--mainnet-source`, which lets `init.sh`'s CSV gates
 proceed while `tokenomics/allocations.csv` still holds `<NN_MSIG_ADDR>` in its `genesis_address`
 column.  That column records the REAL bucket multisigs, which do not exist until the real launch;
 this run's genesis is built from dev addresses and is complete.  So the relaxation is about the

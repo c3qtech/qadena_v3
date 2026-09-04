@@ -238,6 +238,36 @@ def cross_check(supplied, path=ALLOC):
               f"allocations.csv: all agree")
 
 
+MAINNET_CHAIN_ID = "qadena_482-1"
+
+
+def set_chain_id(lc, chain_id):
+    """Rewrite every chain_id in the instance, having first checked the node can parse it.
+
+    THE FORMAT IS LOad-BEARING AND FAILS SILENTLY.  cmd/qadenad/cmd/commands.go derives the EVM
+    chain ID by splitting the cosmos chain-id on "_" then "-", and EVERY failure path is a bare
+    `return`: a malformed id leaves EVMChainID unset, with no error at init, no error at start,
+    and the mismatch surfacing later as transactions that will not verify.  So refuse here,
+    where there is something to read.
+
+    Two places carry it -- the top-level key and the nested one that must match it -- and a
+    genesis where they disagree is a chain whose client talks to the wrong network.
+    """
+    m = re.fullmatch(r"([A-Za-z][A-Za-z0-9]*)_(\d+)-(\d+)", chain_id)
+    if not m:
+        sys.exit(f"--chain-id {chain_id!r} is not <name>_<eip155>-<epoch> (e.g. qadena_4824-1).\n"
+                 f"qadenad PARSES the EVM chain id out of this string and returns silently when\n"
+                 f"it cannot, leaving EVMChainID unset.  Nothing would tell you at build time.")
+    if int(m.group(2)) == 0:
+        sys.exit(f"--chain-id {chain_id!r}: the EIP-155 number may not be 0 -- qadenad treats a\n"
+                 f"parsed 0 as a parse failure and leaves EVMChainID unset.")
+    lc, n = re.subn(r'^(\s*)chain_id: ".*?"', lambda mm: f'{mm.group(1)}chain_id: "{chain_id}"',
+                    lc, flags=re.M)
+    if n < 2:
+        print(f"  WARNING: rewrote only {n} chain_id line(s); the template normally has 2")
+    return lc, n
+
+
 def apply_amounts(lc, amounts):
     """Set each account's `coins:` from the CSV.  Line-based, so the file's comments survive.
 
@@ -283,7 +313,8 @@ def validator_name(lc):
                 return m.group(1)
     return None
 
-def render(supplied, pubkeys=None, generate=None, test_gov=False, amounts=None):
+def render(supplied, pubkeys=None, generate=None, test_gov=False, amounts=None,
+           chain_id=None):
     """Return launch-config.yml with every supplied address substituted.
 
     WRITES NOTHING.  This used to write config/launch-config.yml and tokenomics/allocations.csv
@@ -391,6 +422,20 @@ def render(supplied, pubkeys=None, generate=None, test_gov=False, amounts=None):
     # What shortens is only the wait.
     #
     # It is still a deviation.  Never render an instance for a real launch with this flag.
+    # A SHORT CLOCK AND THE MAINNET ID ARE NEVER BOTH RIGHT.  --test-gov-timings produces a
+    # chain where anything passes in five minutes; the mainnet chain-id is what makes a
+    # transaction signed on it replayable against mainnet.  Together they are a testnet wearing
+    # the production network's identity, which is the one combination worth refusing outright.
+    if test_gov and (chain_id or MAINNET_CHAIN_ID) == MAINNET_CHAIN_ID:
+        sys.exit(f"--test-gov-timings with chain-id {MAINNET_CHAIN_ID} (the MAINNET id) is refused.\n"
+                 f"Pass --chain-id for the network you are actually building, e.g.\n"
+                 f"    --chain-id qadena_4824-1     (testnet)\n"
+                 f"Addresses derive identically on every EVM chain and EIP-155 replay protection\n"
+                 f"IS the chain id, so a short-clock chain sharing mainnet's id makes anything\n"
+                 f"signed there replayable against mainnet.")
+    if chain_id:
+        lc, _ = set_chain_id(lc, chain_id)
+        changed += 1
     if test_gov:
         lc = re.sub(r'^(\s*)voting_period: ".*?"',            r'\1voting_period: "300s"',            lc, count=1, flags=re.M)
         lc = re.sub(r'^(\s*)expedited_voting_period: ".*?"',  r'\1expedited_voting_period: "30s"',   lc, count=1, flags=re.M)
@@ -400,7 +445,7 @@ def render(supplied, pubkeys=None, generate=None, test_gov=False, amounts=None):
     return lc, changed, unknown
 
 
-def cmd_apply(path, out, generate=None, test_gov=False):
+def cmd_apply(path, out, generate=None, test_gov=False, chain_id=None):
     if not out:
         sys.exit("--apply needs --out FILE.\n"
                  "The filled config is a build INSTANCE, not an edit to the template:\n"
@@ -425,13 +470,13 @@ def cmd_apply(path, out, generate=None, test_gov=False):
     # BEFORE ANYTHING IS WRITTEN.  A mismatch here means the wrong key would hold a bucket.
     cross_check(supplied)
 
-    lc, changed, unknown = render(supplied, pubkeys, generate, test_gov)
+    lc, changed, unknown = render(supplied, pubkeys, generate, test_gov, chain_id=chain_id)
     missing = [n for n, *_ in ACCOUNTS if n not in supplied]
 
     outp = pathlib.Path(out)
     outp.parent.mkdir(parents=True, exist_ok=True)
     outp.write_text(lc)
-    print(f"wrote {outp}  ({changed} address(es) substituted)")
+    print(f"wrote {outp}  ({changed} substitution(s))")
     print(f"  template config/launch-config.yml is UNCHANGED, still holding placeholders")
     for u in unknown:
         print(f"  WARNING: {u}")
@@ -523,6 +568,10 @@ def main():
     # itself, and passing the wrong name silently produced an instance whose validator had an
     # address -- so no prompt, no mnemonic, and a gentx that cannot be signed.  One fewer thing
     # to get right.
+    ap.add_argument("--chain-id", metavar="ID",
+                    help="rewrite chain_id in the instance, e.g. qadena_4824-1 for a testnet. "
+                         "Must be <name>_<eip155>-<epoch>: qadenad parses the EVM chain id out "
+                         "of it and fails SILENTLY if it cannot. Required with --test-gov-timings.")
     ap.add_argument("--no-generate", action="store_true",
                     help="do not strip any account's address, not even the validator's. "
                          "Only for a genesis whose validator signs its gentx elsewhere")
@@ -539,7 +588,7 @@ def main():
     if a.template:  cmd_template(a.template); return 0
     if a.dev_keys:  cmd_dev_keys(a.dev_keys, a.i_understand); return 0
     if a.apply:     cmd_apply(a.apply, a.out, [] if a.no_generate else None,
-                              a.test_gov_timings); return 0
+                              a.test_gov_timings, a.chain_id); return 0
     if a.enclave:   return cmd_enclave_test_fleet() if a.test_fleet else cmd_enclave()
     ap.print_help(); return 1
 

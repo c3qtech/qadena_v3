@@ -571,7 +571,6 @@ if run_phase 4; then
     # --build-reproducible run's `git clean -fd` would delete it) and the mnemonic is key
     # material that must never live in a checkout.  Both land in the login user's home.
     mainnet_flag=""
-    mainnet_env=""
     if [[ -n "$MAINNET_SRC" ]]; then
         [[ -f "$MAINNET_SRC" ]] || fail "--mainnet-source $MAINNET_SRC does not exist"
         [[ -n "$MNEMONIC_FILE" ]] || fail "--mainnet-source needs --pioneer-mnemonic-file: ignite
@@ -589,8 +588,12 @@ if run_phase 4; then
         # which happens once, at the real launch.  The instance we just copied over was rendered
         # from DEV addresses, so its genesis is real and complete -- but init.sh's CSV gates
         # (assertion 13) are strict by default and would refuse the build on the placeholders
-        # alone.  Opt this path out by name; a real launch never sets this.
-        mainnet_env="QADENA_ALLOW_PLACEHOLDER_ALLOCATIONS=1 "
+        # alone.  Opt this path out by name; a real launch never passes this.
+        #
+        # Appended to the ARGUMENTS rather than exported: a flag is visible in the log line
+        # below, in `ps` on the primary, and in the run log -- so what relaxed the check is
+        # readable afterwards by anyone reading the transcript.
+        mainnet_flag+=" --allow-placeholder-allocations"
         info "building a LAUNCH chain from $(basename "$MAINNET_SRC") (not the devnet config)"
     else
         info "building the DEVNET chain from config/config.yml (no --mainnet-source given)"
@@ -598,7 +601,7 @@ if run_phase 4; then
 
     rsh_user "$PRIMARY" "rm -f $RUNLOG"
     ssh -o ConnectTimeout=10 "$PRIMARY" \
-        "cd $REPO && nohup zsh -lc '$BUILD_PATH $mainnet_env./buildscripts/init.sh --advertise-ip-address $ADVERTISE$sgx_flag$mainnet_flag' > $RUNLOG 2>&1 &" \
+        "cd $REPO && nohup zsh -lc '$BUILD_PATH ./buildscripts/init.sh --advertise-ip-address $ADVERTISE$sgx_flag$mainnet_flag' > $RUNLOG 2>&1 &" \
         || fail "could not launch init.sh on $PRIMARY"
 
     info "waiting for init.sh to finish (log: $PRIMARY:$RUNLOG)"
