@@ -125,6 +125,31 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ;;
+    # THE SEALED MNEMONIC, OPENED HERE RATHER THAN PIPED IN.
+    #
+    # The documented flow used to be
+    #     mnemonic.sh show <dir> <name> | init.sh --mainnet-source ...
+    # and a pipeline runs BOTH SIDES CONCURRENTLY.  mnemonic.sh printed "  passphrase: " and
+    # waited on the terminal while init.sh, already running, overwrote the line with its own
+    # banner -- so the operator saw "passphrase: SGX not detected", then init.sh's unrelated
+    # --pioneer-mnemonic advice, and no indication of which process wanted input or what for.
+    # Two programs sharing one terminal cannot be sequenced; the fix is to have one program.
+    #
+    # Also strictly better than --pioneer-mnemonic "<words>": nothing reaches the process table,
+    # and no plaintext mnemonic is ever written to disk.
+    --pioneer-mnemonic-enc)
+      if [[ -n "$2" && "$2" != --* ]]; then
+        pioneer_mnemonic_enc="$2"
+        if [[ ! -r "$pioneer_mnemonic_enc" ]]; then
+          echo "Error: --pioneer-mnemonic-enc $pioneer_mnemonic_enc is not readable"
+          exit 1
+        fi
+        shift 2
+      else
+        echo "Error: --pioneer-mnemonic-enc requires a path to a .mnemonic.enc file"
+        exit 1
+      fi
+      ;;
     --mainnet-vault)
       if [[ -n "$2" && "$2" != --* ]]; then
         mainnet_vault="$2"
@@ -176,6 +201,11 @@ while [[ $# -gt 0 ]]; do
       echo "            foundation_scripts/fill_launch_config.py --apply.  Also SKIPS the setPubKAndPubKID key"
       echo "            splicing, which is devnet-only (it exports a private key), and instead"
       echo "            asserts the genesis carries no unresolved placeholder."
+      echo "  --pioneer-mnemonic-enc <file>"
+      echo "            open a SEALED mnemonic (mnemonic.sh seal / derive_launch_keys.sh) and"
+      echo "            prompt for its passphrase here.  Preferred over --pioneer-mnemonic: the"
+      echo "            mnemonic never reaches the process table or the disk.  Replaces the old"
+      echo "            'mnemonic.sh show ... | init.sh ...' pipe, whose two prompts collided."
       echo "  --allow-placeholder-allocations"
       echo "            let tokenomics/allocations.csv keep its <NN_MSIG_ADDR> placeholders."
       echo "            For a launch-SHAPED TEST: the real bucket multisigs are generated once,"
@@ -270,6 +300,28 @@ if [[ -n "$mainnet_source" ]]; then
             f && /^[[:space:]]*(address|mnemonic):/ {print "has"; exit}
             f && /^[[:space:]]*- name:/ {exit}        # next account, ours had neither
         ' "$mainnet_source" | grep -q has ; then
+        # OPEN THE SEALED FILE FIRST.  One process, one prompt, in order, with a label that
+        # nothing else can trample -- which is the whole reason this flag exists.
+        if [[ -z "$pioneer_mnemonic" && -n "$pioneer_mnemonic_enc" ]]; then
+            echo ""
+            echo "Opening the sealed mnemonic for $PIONEER1:"
+            echo "  $pioneer_mnemonic_enc"
+            print -u2 -n "*** Keyring passphrase (hidden, will not echo): "
+            read -s _ppass
+            [[ -t 0 ]] && stty echo 2>/dev/null
+            echo ""
+            # BUFFERED, NOT STREAMED, for the reason mnemonic.sh documents: openssl emits partial
+            # plaintext as it decrypts and only reports failure at the end, so a wrong passphrase
+            # produces BINARY GARBAGE followed by an error.  Capture, check, then use.
+            pioneer_mnemonic=$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+                  -in "$pioneer_mnemonic_enc" -pass fd:3 3< <(print -r -- "$_ppass") 2>/dev/null) || {
+                unset _ppass
+                echo "   INIT FAILED: could not decrypt $pioneer_mnemonic_enc"
+                echo "   Wrong passphrase, or the file is damaged.  Nothing has been destroyed."
+                exit 1 }
+            unset _ppass
+            echo "   OK: decrypted."
+        fi
         if [[ -z "$pioneer_mnemonic" ]]; then
             echo ""
             echo "The genesis validator '$PIONEER1' has no address and no mnemonic in"
@@ -282,8 +334,14 @@ if [[ -n "$mainnet_source" ]]; then
             # redirection -- a pipe, a run log, an ssh command -- the prompt vanishes and the read
             # silently consumes the first line of whatever is on stdin.  The operator sees the
             # explanation above, then nothing, and has no idea what is being asked for.
+            #
+            # Prefer --pioneer-mnemonic-enc over reaching this prompt at all: it opens the sealed
+            # file in THIS process, so there is no second program competing for the terminal.
             print -u2 -n "*** Paste the mnemonic for $PIONEER1 (hidden, will not echo): "
             read -s "pioneer_mnemonic?"
+            # Belt and braces: `read -s` is documented to restore the tty, but this has not been
+            # verified interactively here, and leaving echo off would strand the operator's shell.
+            [[ -t 0 ]] && stty echo 2>/dev/null
             echo ""
         fi
         wc=$(echo "$pioneer_mnemonic" | wc -w | tr -d ' ')

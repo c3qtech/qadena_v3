@@ -48,7 +48,82 @@ is the mechanics, not the design.
 
 ---
 
-## Quick start -- the whole sequence, to a running genesis
+## Quick start -- TESTNET
+
+Start here if you are rehearsing.  It is the mainnet sequence with **three flags** and **one step
+skipped**; everything else is identical on purpose, because a rehearsal is only worth running if it
+differs from the real thing in ways you can enumerate.
+
+```sh
+# 1. MINT THROWAWAY KEYS.  Same script as mainnet -- rehearsing custody is the point.
+#    Keep them somewhere clearly separate from the real ones.
+foundation_scripts/derive_launch_keys.sh \
+    --home          ~/testnet/coord \
+    --mnemonics-dir ~/testnet/mnemonics \
+    --out           ~/testnet/addresses.csv
+
+# 2. BACK UP + RESTORE-TEST.  Rehearse this too; a backup nobody has restored is
+#    a hypothesis, and finding that out on the testnet is the entire point.
+foundation_scripts/backup_mnemonics.sh --dir ~/testnet/mnemonics \
+    --out-dir ~/testnet/backup --parts 5 --threshold 3
+foundation_scripts/restore_mnemonics.sh --shares ~/testnet/backup --out-dir /tmp/verify
+#    RESTORING IS NOT VERIFYING.  Compare, or all you have proven is that the
+#    shares reassemble into something tar accepted.
+diff -r ~/testnet/mnemonics /tmp/verify && echo "BACKUP VERIFIED" || echo "BACKUP IS BAD"
+rm -rf /tmp/verify
+
+# 3. SKIPPED -- DO NOT EDIT tokenomics/allocations.csv.
+#    It is TRACKED.  Filling it with throwaway addresses and committing them puts
+#    dev keys in the permanent custody record, and nothing downstream would catch it:
+#    addresses.csv and allocations.csv would agree, so every assertion passes.
+#    --allow-placeholder-allocations in step 5 covers the gap instead.
+
+# 4. RENDER.  --chain-id and --test-gov-timings are the whole difference from mainnet.
+foundation_scripts/fill_launch_config.py \
+    --apply     ~/testnet/addresses.csv \
+    --chain-id  qadena_4824-1 \
+    --test-gov-timings \
+    --out       ~/testnet/testnet-launch-config.yml
+
+# 5. BUILD.
+buildscripts/init.sh \
+    --mainnet-source        ~/testnet/testnet-launch-config.yml \
+    --advertise-ip-address  <this node's ip> \
+    --allow-placeholder-allocations \
+    --pioneer-mnemonic-enc  ~/testnet/mnemonics/qfi-pioneer1.mnemonic.enc
+
+# 6. START IT.
+./scripts/start_qadena.sh
+```
+
+### The three flags, and why each is refused without the others
+
+| flag | what happens without it |
+|---|---|
+| `--chain-id qadena_4824-1` | step 4 **refuses**: `--test-gov-timings` on the mainnet id is a testnet wearing production's identity, and EIP-155 replay protection *is* the chain id |
+| `--test-gov-timings` | governance runs at 72h/6h, so anything gated on a proposal blocks for three days and the fleet suites cannot run unattended |
+| `--allow-placeholder-allocations` | step 5 **refuses** at assertion 13, because you skipped step 3 |
+
+There is no separate testnet template.  `config/launch-config.yml` is the single tracked source and
+both networks render from it -- a second file would only be two things to keep in sync, with
+nothing checking that they were.  (One existed briefly, `config/testnet-launch-config.yml`; it
+carried the *mainnet* chain-id, had half-applied timings, and nothing read it.  It was deleted.)
+
+### What this rehearsal does NOT exercise
+
+`--allow-placeholder-allocations` relaxes exactly one thing: it stops requiring real addresses in
+`allocations.csv`.  Everything else still runs -- amounts, supply totals, per-bucket sums, mint
+params, module accounts, denom metadata, the AML whitelist, the incentive-pool identity.
+
+What it costs you is the **address** comparison: assertions 5, 14 and 15 skip placeholder rows, and
+`fill_launch_config --apply`'s cross-check has nothing to compare against.  So a mis-derived bucket
+address would not be caught on this path.  That gap closes only on a run where step 3 is done for
+real, which is worth doing **once, on the real bucket multisigs, before mainnet** -- it is the only
+configuration that tests the custody chain end to end.
+
+---
+
+## Quick start -- MAINNET
 
 The phases below explain WHY each step is shaped the way it is.  This is the order to type them in.
 Nothing here is a shortcut past a phase: every command is one a phase documents.
@@ -66,7 +141,11 @@ foundation_scripts/derive_launch_keys.sh \
 foundation_scripts/backup_mnemonics.sh --dir ~/launch/mnemonics \
     --out-dir ~/launch/backup --parts 5 --threshold 3
 foundation_scripts/restore_mnemonics.sh --shares ~/launch/backup --out-dir /tmp/verify
+#    RESTORING IS NOT VERIFYING.  Compare byte for byte, or all you have proven is
+#    that the shares reassemble into something tar was willing to unpack.
+diff -r ~/launch/mnemonics /tmp/verify && echo "BACKUP VERIFIED" || echo "BACKUP IS BAD"
 #    then move the 5 shares to 5 SEPARATE places and delete /tmp/verify
+rm -rf /tmp/verify
 
 # 3. FILL tokenomics/allocations.csv BY HAND -- the genesis_address column.
 #    Human-owned (HARD RULE 1); no tool writes it.  Mapping in Phase 1 below.
@@ -81,12 +160,14 @@ python3 foundation_scripts/verify_genesis.py --csv-only        # must pass with 
 foundation_scripts/fill_launch_config.py --apply ~/launch/addresses.csv \
     --out ~/launch/launch-config.yml
 
-# 5. BUILD.  The pipe feeds init.sh's hidden mnemonic prompt over stdin, so the mnemonic
-#    reaches neither a file nor `ps`.  --advertise-ip-address stops the IP prompt from
-#    eating the piped line.
-foundation_scripts/mnemonic.sh show ~/launch/mnemonics qfi-pioneer1 \
-  | buildscripts/init.sh --mainnet-source ~/launch/launch-config.yml \
-        --advertise-ip-address <this node's public ip>
+# 5. BUILD.  init.sh opens the sealed mnemonic itself and prompts for the passphrase,
+#    so the mnemonic reaches neither a file nor `ps`.  Do NOT pipe `mnemonic.sh show`
+#    into it: both sides of a pipeline run at once, and its passphrase prompt collides
+#    with init.sh's own output.
+buildscripts/init.sh \
+    --mainnet-source        ~/launch/launch-config.yml \
+    --advertise-ip-address  <this node's public ip> \
+    --pioneer-mnemonic-enc  ~/launch/mnemonics/qfi-pioneer1.mnemonic.enc
 
 # 6. START IT.
 ./scripts/start_qadena.sh

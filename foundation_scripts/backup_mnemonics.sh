@@ -106,4 +106,9 @@ print "  * The shares protect the ARCHIVE.  The SEALING passphrase protects the 
 print "    A recovery needs BOTH: $THRESHOLD shares to rebuild the tar, then that passphrase to"
 print "    read any mnemonic in it.  It is the only secret here -- make sure it survives."
 print "  * Verify now, not later:"
-print "      foundation_scripts/restore_mnemonics.sh --shares <k-of-them> --out-dir /tmp/verify"
+print "      foundation_scripts/restore_mnemonics.sh --shares <k-of-them> --out-dir /tmp/verify
+      diff -r $DIR /tmp/verify && print \"BACKUP VERIFIED\" || print \"BACKUP IS BAD\"
+      rm -rf /tmp/verify
+    A restore that ran is not a restore that is correct.  diff -r exits non-zero and
+    names the file on a flipped byte or a missing one; without it you have only shown
+    that the shares reassembled into something tar was willing to unpack."
