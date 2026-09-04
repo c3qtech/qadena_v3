@@ -25,6 +25,82 @@ is the mechanics, not the design.
 
 ---
 
+## Quick start -- the whole sequence, to a running genesis
+
+The phases below explain WHY each step is shaped the way it is.  This is the order to type them in.
+Nothing here is a shortcut past a phase: every command is one a phase documents.
+
+```sh
+# 1. MINT THE KEYS.  Encrypted keyring; each mnemonic sealed as it is created, never
+#    written in the clear.  Asks for the passphrase once, reuses it for all ~130 keys.
+foundation_scripts/derive_launch_keys.sh \
+    --home          ~/launch/coord \
+    --mnemonics-dir ~/launch/mnemonics \
+    --out           ~/launch/addresses.csv
+
+# 2. BACK IT UP BEFORE GOING FURTHER, and test the restore the same day.
+#    A backup nobody has restored is a hypothesis.
+foundation_scripts/backup_mnemonics.sh --dir ~/launch/mnemonics \
+    --out-dir ~/launch/backup --parts 5 --threshold 3
+foundation_scripts/restore_mnemonics.sh --shares ~/launch/backup --out-dir /tmp/verify
+#    then move the 5 shares to 5 SEPARATE places and delete /tmp/verify
+
+# 3. FILL tokenomics/allocations.csv BY HAND -- the genesis_address column.
+#    Human-owned (HARD RULE 1); no tool writes it.  Mapping in Phase 1 below.
+#    init.sh runs this same check before it destroys anything, so this is an early
+#    look, not a load-bearing step.  It costs a second; take the early look.
+python3 foundation_scripts/verify_genesis.py --csv-only        # must pass with NO placeholders
+
+# 4. RENDER THE INSTANCE.  Addresses substituted, amounts taken from allocations.csv,
+#    the validator left for the node's own keyring to mint.  Cross-checks the two CSVs
+#    against each other and REFUSES on any disagreement -- see below.
+#    Add --test-gov-timings for a testnet.  Keep --out OUTSIDE the repo.
+foundation_scripts/fill_launch_config.py --apply ~/launch/addresses.csv \
+    --out ~/launch/launch-config.yml
+
+# 5. BUILD.  The pipe feeds init.sh's hidden mnemonic prompt over stdin, so the mnemonic
+#    reaches neither a file nor `ps`.  --advertise-ip-address stops the IP prompt from
+#    eating the piped line.
+foundation_scripts/mnemonic.sh show ~/launch/mnemonics qfi-pioneer1 \
+  | buildscripts/init.sh --mainnet-source ~/launch/launch-config.yml \
+        --advertise-ip-address <this node's public ip>
+
+# 6. START IT.
+./scripts/start_qadena.sh
+```
+
+### What stops you between those steps
+
+`init.sh --mainnet-source` gates three times, and all three refuse rather than warn:
+
+| gate | when | catches |
+|---|---|---|
+| `verify_genesis.py --csv-only` | **before** `rm -rf $QADENAHOME` | `allocations.csv` not adding up, or still holding `<NN_MSIG_ADDR>` placeholders -- the human-owned file, checked before anything reads it as authority |
+| `verify_launch_config.py --strict` | **before** `rm -rf $QADENAHOME` | an amount disagreeing with `allocations.csv`, anything unset -- while nothing is destroyed yet |
+| `verify_genesis.py --pre-gentx` | **after** `ignite chain init` | a genesis that does not say what the CSV says; `ignite` sits between the two, so verifying the input is not verifying the output |
+
+The first gate exists because the second cannot cover for it. `verify_launch_config` compares the
+*instance* against the CSV, and the instance gets its addresses from `addresses.csv` -- so a stale
+`genesis_address` column is invisible to it. Verified: a rendered instance with all 12 placeholders
+still in the CSV reports `LAUNCH-READY, 0 wrong, 0 unset`. Without the CSV gate the only thing that
+notices is assertion 13, which fires about 250 lines and one `rm -rf $QADENAHOME` later.
+
+Bypasses exist (`QADENA_SKIP_CONFIG_VERIFY=1` covers both pre-wipe gates, `QADENA_SKIP_GENESIS_VERIFY=1`
+the last) and announce that amounts are unverified.
+
+**`QADENA_ALLOW_PLACEHOLDER_ALLOCATIONS=1`** is a different thing and not a bypass: it permits
+placeholder addresses in `allocations.csv` while still running every other assertion. A
+launch-**shaped** test build needs it -- the real bucket multisigs do not exist until the real
+launch, so the tracked CSV holds placeholders and is right to. `testscripts/1st_node_bringup.sh`
+sets it for you on `--mainnet-source`. **A real launch never sets it**, which is the whole point of
+assertion 13.
+
+> **NOT YET EXERCISED END TO END.**  Steps 3-5 have not been run as a chain: `--apply` began
+> applying amounts on 2026-09-04 and neither `init.sh` gate has fired on a real build.  Do it once
+> on a throwaway chain before doing it on one whose genesis is permanent.
+
+---
+
 ## The principle
 
 **A private key belongs on the machine that must use it, and nowhere else.**
@@ -245,6 +321,53 @@ Addresses go into `tokenomics/allocations.csv` **by hand**.  That file is human-
 
 ---
 
+### When the foundation holds every key (day one)
+
+The section above is the **distributed** shape: real members, on their own devices, sending only
+pubkeys.  That is where a bucket ends up, not where it starts.  The brief's LATE ARRIVAL section is
+explicit that at genesis *"almost nobody's address is known"* -- the buckets exist, the members
+arrive later, and until they do the **founder holds every member key**.
+
+That is a legitimate day-one custody model, not a shortcut.  What separates it from a test fleet is
+not the topology -- both have one holder -- but **how the keys are minted**: an encrypted keyring,
+and every mnemonic captured as it is created.
+
+```sh
+foundation_scripts/derive_launch_keys.sh \
+    --home          ~/launch/coord \
+    --mnemonics-dir ~/launch/mnemonics \
+    --out           ~/launch/addresses.csv \
+    [--passphrase-file ~/launch/pass.txt]      # else it prompts, dozens of times
+```
+
+It mints every member key, derives each bucket's multisig, and writes the CSV that Phase 2's
+`--apply` consumes.  The account list comes from `fill_launch_config.py --template`, so the two
+cannot drift.  It is idempotent -- existing keys are skipped, so an interrupted run resumes -- and
+if no `qadenad` exists it builds a throwaway one into a temp directory and deletes it on exit.
+
+**Do NOT use `fill_launch_config.py --dev-keys` for this.**  It does the same shape but mints into
+`--keyring-backend test`, an UNENCRYPTED keyring, and stamps every row *"DEV THROWAWAY KEY -- never
+for mainnet"*.  That is right for a fleet you purge and wrong for a genesis that freezes these
+addresses forever.
+
+Three things this produces that you must treat as the deliverable:
+
+| output | why it matters |
+|---|---|
+| `~/launch/mnemonics/*.mnemonic` (0600) | **the only recovery that exists.**  Back it up offline, off that machine, before going further |
+| `~/launch/coord` | the encrypted keyring.  NOT `$QADENAHOME` -- `init.sh` does `rm -rf` there, and the script refuses that path for exactly that reason |
+| `~/launch/addresses.csv` | feeds Phase 2 |
+
+A multisig gets no mnemonic file, correctly: it holds no private material of its own, being a pure
+function of its members' pubkeys, the threshold and their order.  Losing enough *member* mnemonics,
+though, leaves a bucket that genesis says holds billions and nobody can sign for.
+
+**Distributing membership later is a migration, not an edit.**  Real members bring new pubkeys,
+which produce a new multisig address, which means moving the funds -- not changing a config file.
+Worth knowing before genesis freezes the addresses.
+
+---
+
 ## Phase 2 -- render the config
 
 `config/launch-config.yml` is the tracked **template**: every holder value is a
@@ -252,17 +375,59 @@ Addresses go into `tokenomics/allocations.csv` **by hand**.  That file is human-
 **instance**, which is a build input for one chain:
 
 ```sh
-tokenomics/fill_launch_config.py \
+foundation_scripts/fill_launch_config.py \
     --apply    addresses.csv \
-    --generate qfi-pioneer1 \
     --out      ~/launch/mainnet-launch-config.yml
 ```
 
-`--generate <name>` strips that account's `address:` line so the node's own keyring supplies
-the key, and rewrites its other references to `<name>PubKID` for post-init substitution.
+The **validator account is left for the node to mint**: its `address:` line is stripped so the
+node's own keyring supplies the key, and its other references become `<name>PubKID` for
+post-init substitution.  Which account that is comes from `validators[0].name` in the template
+-- there is no flag, because the only thing a flag ever did was let you name the wrong account,
+and naming the wrong one produced a validator WITH an address: no mnemonic prompt, and a gentx
+nothing could sign.  `--no-generate` opts out entirely, for a genesis whose validator signs
+somewhere else.
 
 **Keep `--out` outside the repo.**  A `--build-reproducible` build runs
 `git checkout -f && git clean -fd` and deletes untracked files inside it.
+
+### The cross-check, and why it is fatal
+
+`--apply` reads the two CSVs for different things: **addresses** from `addresses.csv`, **amounts**
+from `allocations.csv`.  Nothing else in the toolchain compares them to each other.  So before it
+writes anything, it checks every account both files name and **exits non-zero on any
+disagreement**:
+
+```
+ADDRESS MISMATCH -- allocations.csv and addresses.csv disagree:
+  adoption
+      allocations.csv : qadena1zzzz...
+      addresses.csv   : qadena1w3n8...
+
+Nothing written.  One of the two files is stale -- reconcile them before rendering.
+```
+
+A mismatch is never a legitimate state: either step 3 was filled from a stale `addresses.csv`, or
+the keys were re-derived afterwards.  It is fatal rather than a warning because the failure is
+otherwise **silent and total** -- the instance would be internally consistent, the genesis would
+build, every later assertion would pass, and the wrong key would control the bucket.  The only
+other thing that could notice is `verify_genesis` assertion 5, which is exactly what
+`--allow-placeholders` relaxes on the test path.
+
+Before step 3 there is nothing to compare, so it says so and continues:
+
+```
+  NOTE: 12 account(s) still hold a PLACEHOLDER address in allocations.csv,
+        so they could not be cross-checked: adoption, backers, ...
+        The instance is still valid -- addresses come from addresses.csv, not from that column.
+        But init.sh --mainnet-source WILL REFUSE until step 3 fills them (assertion 13).
+```
+
+Once step 3 is done it confirms the join instead:
+
+```
+  cross-checked 12 address(es) against allocations.csv: all agree
+```
 
 ---
 
@@ -308,184 +473,28 @@ Then:
 
 ---
 
-## Phase 3B -- build and launch (several genesis validators)
+## Phase 3B -- several genesis validators: NOT CURRENTLY SUPPORTED
 
-Only when more than one operator must contribute a validator.  A coordinator assembles a
-genesis with **no** validators; each operator signs their own gentx at home.
+Only needed when more than one operator must contribute a validator at genesis: a coordinator
+assembles a genesis with **no** validators, each operator signs their own gentx at home, and the
+coordinator collects them.
 
-```sh
-qadenad init <moniker> --chain-id qadena_482-1 --home /tmp/g          # skeleton
-tokenomics/build_genesis.py --base /tmp/g/config/genesis.json \
-    --chain-id qadena_482-1 --blocks-per-year <MEASURED> \
-    --out genesis.json --verify
-tokenomics/verify_genesis.py --genesis genesis.json --pre-gentx
-```
+**There is no tooling for this today, and the tool that used to claim it has been removed.**
+`build_genesis.py` patched a bare `qadenad init` skeleton, which produces a genesis that is
+arithmetically correct and will not run: `qadenad init` writes an EMPTY x/qadena section, so the
+result carries no `enclaveIdentityList`, no `publicKeyList` and no pricefeed markets, and none of
+the governance or staking parameters from `config/launch-config.yml`.  A chain built that way
+fails after genesis, in a way that points at the enclave rather than at the genesis.
 
-Publish `genesis.json`.  Each operator, on their own machine:
+What Phase 3A does instead: the single genesis validator's own machine runs `init.sh
+--mainnet-source`, which lets `ignite chain init` build the genesis from the rendered instance and
+sign that validator's gentx.  Every other node joins afterwards as a normal validator
+([HOWTO-ADD-LAUNCH-CHAIN-NODE.md](HOWTO-ADD-LAUNCH-CHAIN-NODE.md)), which is the path this project
+actually exercises.
 
-```sh
-qadenad genesis gentx <their-key> 10000qdn --chain-id qadena_482-1
-```
-
-They return the signed gentx, which is public.  Collect into `config/gentx/`, then:
-
-```sh
-qadenad genesis collect-gentxs
-tokenomics/verify_genesis.py --genesis genesis.json     # all assertions, no --pre-gentx
-sha256sum genesis.json
-```
-
-A second person reproduces that hash from this repo.  Here the pioneer's address and pubkey
-enter as **literals**, so `init.sh` performs zero substitutions and the assertion proves it.
-
-> **NOT READY.**  `build_genesis.py` does not yet read `config/launch-config.yml`.  It sets
-> accounts, balances, supply, denom metadata, mint, the scanned-contract whitelist and the
-> incentive-pool entry -- but **not** governance timings, staking params, `publicKeyList`,
-> `enclaveIdentityList` or pricefeed markets.  Only `build_config.py` (the Path A renderer)
-> reads those.  Until that gap closes, Path B produces a genesis missing most of the
-> parameter set.
-
----
-
-## Phase 4 -- the accounts a running deployment needs
-
-Genesis holds buckets and genesis validators, nothing else.  Every account a deployment refers to
-by name -- a treasury other things draw on, `foundation-appsvr`, `foundation-users` -- is created
-**after** launch, out of a bucket.  Three steps, and two of them are deliberately not one person's
-to perform.
-
-**This phase is manual, and stays manual.**  The test fleet drives the same operator scripts from
-`testscripts/`, which is fine there because one workstation holds every member key -- exactly what
-a real bucket must never allow.  Nothing in that path belongs here.
-
-### 1. The operator creates the key, where the key will live
-
-```sh
-scripts/provision_account.sh --name treasury --from-bucket adoption \
-    --mode banksend --amount 50000000 --stake 10000000 --whitelist \
-    [--host <user@node>]
-```
-
-It creates the key, prints the exact ceremony, and **waits**.  It never signs for the bucket: a
-script that could would have to hold the bucket's keys, which is the property the multisig exists
-to create.  With `--host` the key is minted on that machine and never crosses the network.
-
-Two modes, and the choice is about what the account is *for*:
-
-| | `--mode banksend` | `--mode feegrant` |
-|---|---|---|
-| what moves | real coins | nothing; the bucket pays its FEES |
-| holds | value -- stake, a float, a treasury | nothing at all |
-| right for | anything that must hold or spend | an agent that only signs (an appsvr) |
-
-### 2. Each bucket member signs, on their own device
-
-```sh
-export QADENA_NODE=tcp://<node>:26657 QADENA_CHAIN_ID=<chain>
-scripts/multisig_sign.sh build-send --from adoption --to <addr> --amount 50000000qdn --out fund.json
-scripts/multisig_sign.sh sign --tx fund.json --multisig adoption --from adoption-mN --out sN.json
-scripts/multisig_sign.sh combine --tx fund.json --multisig adoption --out signed.json s1.json s2.json s3.json
-scripts/multisig_sign.sh broadcast --tx signed.json
-```
-
-Shares travel as files; **no machine ever holds enough keys to move the bucket alone.**  If one
-did, the ceremony would be theatre.  `provision_account.sh` is polling the chain and continues by
-itself once the coins land.
-
-#### When the signing machine cannot reach the chain
-
-A member's workstation being unable to reach the RPC is a normal condition, not an exotic one:
-corporate networks filter outbound traffic, a VPN captures the route, an endpoint agent applies
-per-application policy.  Observed on this project 2026-09-02, where `curl` reached the node and
-`qadenad` did not, from the same shell, in the same second.
-
-The keys must not move to solve that.  `--via-ssh` relays only the calls that need the chain:
-
-```sh
-scripts/multisig_sign.sh sign --via-ssh <user@node> \
-    --tx fund.json --multisig adoption --from adoption-mN --out sN.json
-```
-
-Pass it to whichever subcommands you run -- **after the subcommand**, since the first argument is
-the subcommand itself.  What it changes:
-
-| step | where it runs | why |
-|---|---|---|
-| `build-send` / `build-feegrant` | locally | already offline; no chain needed |
-| read account number + sequence | **on the node** | the only read the signature depends on |
-| `sign` | **locally, offline** | the keys are here and stay here |
-| `combine` | **locally, offline** | `tx multisign` needs the multisig pubkey from THIS keyring |
-| `broadcast` | **on the node** | the signed tx is copied over and sent from there |
-
-**Two things cross the wire, and neither is secret:** the account number and sequence, and the
-fully signed transaction -- which is public the instant it is broadcast to every validator.  No
-key, no share and no mnemonic leaves the signing machine, so the property the multisig exists to
-create is untouched.
-
-Requires ssh to a node that has `qadenad` and can reach its own RPC; it runs there against
-`tcp://localhost:26657`.  Without `--via-ssh` nothing changes -- the default is exactly as before.
-
-### 3. Stake BEFORE whitelisting -- the order is not cosmetic
-
-Voting power follows **bonded** stake, and the whitelist is a governance proposal.  An account
-funded a minute ago holds only liquid coins, so it has no power and cannot vote itself onto the
-whitelist -- the proposal then **expires** rather than failing, with every transaction along the
-way reporting success.  `--stake` delegates first and removes the deadlock.
-
-Delegating does **not** require the whitelist, which is what makes this ordering legal: bank's
-`DelegateCoins` moves balances directly and never calls `SendCoins`, so the AML send restriction is
-not in the path -- and the restriction exempts module accounts on either side anyway, which the
-staking bonded pool is.  Verified on chain.
-
-The stake is **split across every bonded validator**, never concentrated.  Handing one validator
-more than two-thirds of consensus power lets it finalise blocks alone: a peer that disagrees
-prevotes nil and is simply outvoted.  Splitting costs nothing in governance, because a delegator's
-voting power is the SUM of its delegations.
-
-**Confirm each delegation before sending the next.**  They all come from one account, so every
-transaction needs the following sequence number -- fired back to back they land in the same block,
-the sequence has not advanced, and CheckTx rejects the later ones.  `qadenad` still **exits 0**,
-because the transaction *was* accepted for broadcast rather than for inclusion, so a loop that
-checks only the exit status reports four delegations while the chain records two.  Measured
-2026-09-02: 2 of 4, then 1 of 2.  Read the code back:
-
-```sh
-h=$(qadenad tx staking delegate <valoper> <amt>qdn --from <acct> -y --output json ... \
-      | sed -n 's/.*"txhash":"\([0-9A-Fa-f]*\)".*/\1/p')
-qadenad query tx "$h" --output json | jq -r .code      # must be 0 before the next delegation
-```
-
-`sed`, not `jq`, on the first line: `qadenad tx` prints a human `gas estimate:` line before the
-JSON, so parsing the whole stream as JSON fails on a transaction that was in fact broadcast.
-
-Under-delegating matters more than it looks: the whitelist proposal that follows is sized against
-the stake you think you have, and a proposal short of quorum **expires** rather than failing.
-
-### 4. The whitelist proposal, and who has to vote
-
-`--whitelist` runs `scripts/gov_whitelist_bank_send.sh`, which reports three outcomes:
-
-| exit | meaning |
-|---|---|
-| 0 | on the whitelist, verified on chain |
-| **2** | proposal is live and voted, and needs other operators -- **not an error** |
-| 1 | something actually went wrong |
-
-Exit 2 is the normal result whenever the new account's stake is below quorum.  Every other operator
-then runs, **on their own node**:
-
-```sh
-scripts/gov_vote.sh <id> yes          # arg order: id, vote, [account]
-scripts/gov_proposal_status.sh <id>   # watch it
-```
-
-`--stake` only lets an account pass its own whitelist if that stake exceeds the quorum fraction of
-the **resulting** bonded total -- so a first treasury on a fresh chain passes alone, while a later
-account competing with an incumbent staker will not.  `gov_whitelist_bank_send.sh` prints the
-arithmetic before it submits, so this is visible in advance rather than discovered on expiry.
-
-Until the proposal passes, the account can **receive** but cannot **send** to any address holding
-no credential -- see *Funding an unidentified address is ONE-WAY* below.
+**If you need multiple validators AT GENESIS**, the work is to teach the rendered instance to carry
+several `validators:` entries and collect their gentxs -- not to patch a skeleton.  Until then,
+launch with one and add the rest.
 
 ---
 

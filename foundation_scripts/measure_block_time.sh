@@ -1,6 +1,6 @@
 #!/bin/zsh
 #
-# Measure a running chain's seconds-per-block, for build_genesis.py --block-time.
+# Measure a running chain's seconds-per-block, to set blocks_per_year in the launch config.
 #
 #   ./measure_block_time.sh [--node tcp://host:26657] [--samples 40] [--interval 3]
 #
@@ -27,7 +27,7 @@ while [[ $# -gt 0 ]]; do
         --interval) INTERVAL="$2"; shift 2 ;;
         --help)
             echo "Usage: $0 [--node tcp://host:26657] [--samples 40] [--interval 3]"
-            echo "Prints seconds-per-block and the blocks_per_year to pass to build_genesis.py."
+            echo "Prints seconds-per-block and the blocks_per_year for config/launch-config.yml."
             exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -110,5 +110,5 @@ print(f"  {blocks} blocks over {secs:.1f}s")
 print(f"  block time     {bt:.3f}s")
 print(f"  blocks_per_year {bpy:,}")
 print()
-print(f"  ./build_genesis.py --block-time {bt:.3f} ...")
+print(f"  set mint.params.blocks_per_year in config/launch-config.yml (measured {bt:.3f}s/block)")
 PY

@@ -615,32 +615,12 @@ genesis:
         # self-funds every deposit.
         max_deposit_period: "86400s"
         #
-        # 72h, down from 7 days.  Survives a weekend -- a proposal filed Friday evening still ends
-        # Monday evening -- while being 2.3x more responsive than the steady-state value.
-        #
-        # Do NOT compress this towards the expedited period.  A failed expedited proposal is
-        # converted to a regular one rather than rejected (see below), and the SDK sets the new end
-        # time from the ORIGINAL voting start -- x/gov/abci.go:
-        #     endTime := proposal.VotingStartTime.Add(*params.VotingPeriod)
-        # so the fallback window is (voting_period - expedited_voting_period), not a fresh period.
-        # At 72h/6h that leaves 66h of fallback.  Set voting_period to 8h with expedited at 6h and
-        # the fallback track silently collapses to 2h.  Keep the ratio wide.
-        voting_period: "259200s"
+        voting_period: "300s"
         # expedited is for emergencies (a security patch), so it costs 5x
         expedited_min_deposit:
           - denom: "aqdn"
             amount: "50000000000000000000000"
-        # 6h, down from 24h.  Long enough that a non-colluding council member in SOME timezone is
-        # awake and could object; short enough to actually be an emergency lever.
-        #
-        # THIS NUMBER HAS A PRECONDITION: it assumes the council spans timezones (PH/AU/US).  If
-        # the council ends up concentrated in ONE timezone, raise this to 12h ("43200s").  A window
-        # that fits entirely inside one region's night is the wrong design when the thing that can
-        # pass is enclave key custody -- see the charter rule below.
-        #
-        # Hard SDK constraint: must be STRICTLY LESS than voting_period, or ValidateBasic rejects
-        # the params (x/gov/types/v1/params.go).
-        expedited_voting_period: "21600s"
+        expedited_voting_period: "30s"
         # UNCHANGED at 0.667, and it must stay above `threshold` (another hard SDK constraint).
         # With the expedited period cut 4x, this is the only thing left separating the two tiers.
         # Note also that a FAILED expedited proposal does not burn its deposit -- it just converts

@@ -312,7 +312,7 @@ design: the ten buckets and their amounts from `tokenomics/allocations.csv`, the
 AML whitelist, `qadena_482-1`.  Not the devnet's `config.yml`.
 
 **One thing is deliberately different, and only one: the governance clock.**  The instance is
-rendered with `tokenomics/fill_launch_config.py --test-gov-timings`, which shortens the periods so
+rendered with `foundation_scripts/fill_launch_config.py --test-gov-timings`, which shortens the periods so
 a proposal resolves inside a test run rather than over three days:
 
 | param | launch | this instance |
@@ -326,6 +326,14 @@ Quorum, thresholds and deposits are untouched, so a proposal that passes here wo
 mainnet -- it simply takes 72 hours there.  Note that the *comments* in the file still describe the
 72h/6h values: they document the design, while the rendered instance carries the short ones.  Read
 the values, not the prose.
+
+**One check is relaxed, and it changes nothing about the chain.**  `1st_node_bringup.sh` sets
+`QADENA_ALLOW_PLACEHOLDER_ALLOCATIONS=1` on `--mainnet-source`, which lets `init.sh`'s CSV gates
+proceed while `tokenomics/allocations.csv` still holds `<NN_MSIG_ADDR>` in its `genesis_address`
+column.  That column records the REAL bucket multisigs, which do not exist until the real launch;
+this run's genesis is built from dev addresses and is complete.  So the relaxation is about the
+tracked bookkeeping file, not about anything that reaches the chain -- every other assertion still
+runs, and a real launch never sets the variable.
 
 **The buckets are genuine N-of-M multisigs**, not stubs -- 11 of them in this workstation's keyring
 (`adoption`, `nodeops`, `foundation`, `grants`, ...), each derived from five member pubkeys.  The

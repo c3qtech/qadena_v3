@@ -51,7 +51,7 @@ while [[ $# -gt 0 ]]; do
     # config/config.yml.  Two things change, and they are the same decision:
     #
     #   1. the config is read from HERE.  A token-launch genesis rendered by
-    #      tokenomics/build_config.py would otherwise have to overwrite config/config.yml to be
+    #      foundation_scripts/fill_launch_config.py --apply would otherwise have to overwrite config/config.yml to be
     #      built at all, since the copy below reads only that one path -- and that file is the
     #      devnet's own tracked config.
     #
@@ -158,7 +158,7 @@ while [[ $# -gt 0 ]]; do
       echo "               [--mainnet-source <path-to-yml>]"
       echo "  --mainnet-source  build a MAINNET-shaped chain from THIS ignite config instead"
       echo "            of the devnet's config/config.yml -- e.g. a genesis rendered by"
-      echo "            tokenomics/build_config.py.  Also SKIPS the setPubKAndPubKID key"
+      echo "            foundation_scripts/fill_launch_config.py --apply.  Also SKIPS the setPubKAndPubKID key"
       echo "            splicing, which is devnet-only (it exports a private key), and instead"
       echo "            asserts the genesis carries no unresolved placeholder."
       echo "  --pioneer-mnemonic <words>"
@@ -232,10 +232,22 @@ fi
 if [[ -n "$mainnet_source" ]]; then
     # Only when the config actually needs one: an account carrying a literal address (the real
     # mainnet shape, where the holder keeps their key) needs no mnemonic here at all.
+    #
+    # SCOPED TO `accounts:`, AND THAT SCOPE IS THE WHOLE CORRECTNESS OF THIS CHECK.  The pioneer
+    # name appears TWICE in a launch config -- once under `validators:` and once under
+    # `accounts:` -- and the validators entry contains, ~40 lines in:
+    #     address: "0.0.0.0:8545"     # the EVM JSON-RPC LISTEN address
+    # An unscoped scan matches the validators block first, sees that `address:`, concludes the
+    # account already has a key and SKIPS THE PROMPT.  It did exactly that for every launch config
+    # in the tree, which silently disabled the one protection this block exists to provide: ignite
+    # then mints a key, prints its mnemonic once to nothing, and the genesis validator is
+    # unrecoverable.  Only --pioneer-mnemonic(-file) being passed on every fleet run hid it.
     if ! awk -v n="$PIONEER1" '
-            $0 ~ "- name: " n "$" {f=1; next}
+            /^accounts:/ {a=1; next}
+            a && /^[a-z]/ {exit}                      # left accounts:, stop
+            a && $0 ~ "^[[:space:]]*- name: " n "$" {f=1; next}
             f && /^[[:space:]]*(address|mnemonic):/ {print "has"; exit}
-            f && /^[[:space:]]*- name:/ {exit}
+            f && /^[[:space:]]*- name:/ {exit}        # next account, ours had neither
         ' "$mainnet_source" | grep -q has ; then
         if [[ -z "$pioneer_mnemonic" ]]; then
             echo ""
@@ -253,6 +265,75 @@ if [[ -n "$mainnet_source" ]]; then
             exit 1
         fi
         echo "Got a $wc-word mnemonic for $PIONEER1"
+    fi
+fi
+
+# PLACEHOLDER ALLOCATIONS: WHO IS ALLOWED TO HAVE THEM.
+#
+# tokenomics/allocations.csv is tracked, human-owned, and its genesis_address column holds
+# <NN_MSIG_ADDR> until the real bucket multisigs are generated in custody -- which for a mainnet
+# launch happens ONCE, late.  So placeholders there are the normal state of the repo, and a
+# launch-SHAPED test build (fleet bringup, 1st_node_bringup --mainnet-source) renders its instance
+# from dev addresses and is right to proceed with them.  A REAL launch is not: assertion 13 exists
+# to stop a permanent genesis whose custody record is still a placeholder.
+#
+# Default strict, therefore, and let the test paths opt out by name.  The variable says exactly
+# what it permits, so it cannot be set by someone who thinks it means something else.
+_ph_flag=()
+if [[ -n "${QADENA_ALLOW_PLACEHOLDER_ALLOCATIONS:-}" ]]; then
+    _ph_flag=(--allow-placeholders)
+fi
+
+# THE INSTANCE IS CHECKED BEFORE ANYTHING IS DESTROYED, for the same reason the mnemonic is asked
+# for here: an amount that disagrees with allocations.csv is free to fix now and expensive to fix
+# once a genesis exists.  verify_launch_config.py compares every account's `coins:` against the
+# CSV, which is the human-owned authority (HARD RULE 1), and reports anything still unset.
+#
+# --strict, because a launch build has no business proceeding with a placeholder or a mismatch.
+# Set QADENA_SKIP_CONFIG_VERIFY=1 to bypass it -- deliberately awkward, and it says so.
+if [[ -n "$mainnet_source" ]]; then
+    # THE CSV FIRST, BEFORE THE CONFIG THAT IS COMPARED AGAINST IT.  verify_launch_config asks
+    # "does the instance agree with allocations.csv"; that question is meaningless if the CSV
+    # itself does not add up.  Assertions 1-3 and 13 need no chain and no genesis, so they cost
+    # about a second and they run while $QADENAHOME is still intact.
+    #
+    # WITHOUT THIS THE ONLY CSV CHECK IS AT THE POST-INIT GATE BELOW -- 250 lines and one
+    # `rm -rf $QADENAHOME` later.  A hand-edit slip in the human-owned file would take the node
+    # home, the keyring and the enclave state with it before saying so.
+    _vg_pre="$qadenabuild/foundation_scripts/verify_genesis.py"
+    if [[ ! -f "$_vg_pre" ]]; then
+        echo "   INIT FAILED: $_vg_pre is missing -- cannot verify allocations.csv"
+        exit 1
+    elif [[ -n "${QADENA_SKIP_CONFIG_VERIFY:-}" ]]; then
+        : # the same bypass covers both pre-wipe checks; it announces itself below
+    else
+        echo "Verifying tokenomics/allocations.csv..."
+        if ! python3 "$_vg_pre" --csv-only "${_ph_flag[@]}"; then
+            echo ""
+            echo "   INIT FAILED: allocations.csv does not add up, or still holds placeholders."
+            echo "   Nothing has been destroyed yet.  Fix the CSV and re-run."
+            echo "   A launch-SHAPED TEST build wants QADENA_ALLOW_PLACEHOLDER_ALLOCATIONS=1."
+            exit 1
+        fi
+        echo "   OK: allocations.csv is internally consistent."
+    fi
+
+    _vlc="$qadenabuild/foundation_scripts/verify_launch_config.py"
+    if [[ ! -f "$_vlc" ]]; then
+        echo "   INIT FAILED: $_vlc is missing -- cannot verify the instance against allocations.csv"
+        exit 1
+    elif [[ -n "${QADENA_SKIP_CONFIG_VERIFY:-}" ]]; then
+        echo "SKIPPING the instance check (QADENA_SKIP_CONFIG_VERIFY set).  Amounts are UNVERIFIED."
+    else
+        echo "Verifying $mainnet_source against tokenomics/allocations.csv..."
+        if ! python3 "$_vlc" --config "$mainnet_source" --strict; then
+            echo ""
+            echo "   INIT FAILED: the instance disagrees with allocations.csv, or something is unset."
+            echo "   Nothing has been destroyed yet.  Fix the instance (or the CSV) and re-run."
+            echo "   To proceed anyway:  QADENA_SKIP_CONFIG_VERIFY=1 $0 ..."
+            exit 1
+        fi
+        echo "   OK: the instance matches allocations.csv."
     fi
 fi
 
@@ -294,7 +375,7 @@ if [[ -n "$mainnet_vault" ]]; then
         exit 1
     fi
     echo "Restoring the pioneer key from $mainnet_vault"
-    if ! python3 "$qadenabuild/tokenomics/dev_key_vault.py" import \
+    if ! python3 "$qadenabuild/testscripts/dev_key_vault.py" import \
             --in "$mainnet_vault" --passphrase-file "$vault_passphrase" --strip-prefix dev- ; then
         echo "   INIT FAILED: could not restore the key vault -- the gentx would fail with the"
         echo "   key sitting in a file right next to it."
@@ -482,6 +563,33 @@ if true; then
         exit 1
     fi
     echo "   OK: no placeholders remain."
+fi
+
+# AND THE ARTIFACT ITSELF.  The check above proves no placeholder survived; this proves the
+# genesis says what allocations.csv says -- balances, supply, the whitelist, the incentive-pool
+# entry.  ignite is between the instance and the genesis, so verifying the input does not verify
+# the output.
+#
+# --pre-gentx: at this point the gentx has been signed but the validator is not collected yet, so
+# the assertions that need a collected validator are correctly skipped.
+if [[ -n "$mainnet_source" ]]; then
+    _vg="$qadenabuild/foundation_scripts/verify_genesis.py"
+    if [[ ! -f "$_vg" ]]; then
+        echo "   INIT FAILED: $_vg is missing -- cannot verify the genesis against allocations.csv"
+        exit 1
+    elif [[ -n "${QADENA_SKIP_GENESIS_VERIFY:-}" ]]; then
+        echo "SKIPPING the genesis check (QADENA_SKIP_GENESIS_VERIFY set).  Amounts are UNVERIFIED."
+    else
+        echo "Verifying $genesisfile against tokenomics/allocations.csv..."
+        if ! python3 "$_vg" --genesis "$genesisfile" --pre-gentx "${_ph_flag[@]}"; then
+            echo ""
+            echo "   INIT FAILED: the genesis does not match allocations.csv."
+            echo "   The chain has NOT been started.  Re-run init after fixing it."
+            echo "   To proceed anyway:  QADENA_SKIP_GENESIS_VERIFY=1 $0 ..."
+            exit 1
+        fi
+        echo "   OK: the genesis matches allocations.csv."
+    fi
 fi
 
 echo "Copying node_params.json"

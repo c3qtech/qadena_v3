@@ -36,31 +36,34 @@ IGNITE_REQUIRED = ["validation", "client", "validators", "build"]
 SLUG = {"01": "adoption", "02": "ltr", "03": "foundation", "04": "grants",
         "05": "personnel", "06": "backers", "07": "founders", "09": "contingency",
         "10": "pubsec", "12": "nodeops"}
-GENVAL = "genval1"
-# Rows whose account name is not derivable from bucket_id alone.  Keyed on the
-# genesis_address placeholder because it is the one field unique to every row: buckets 01
-# and 12 each hold several rows, and TWO of them are genesis_type `base` (pioneer1 and
-# genval1), so neither bucket_id nor genesis_type identifies a row on its own.
-NAME_OF = {"<01_WIP_ADDR>": "wallet-incentive-pool",
-           "<PIONEER1_ADDR>": "pioneer1",
-           "<GENVAL_1_ADDR>": GENVAL}
+# NO genval1, AND NO SEPARATE pioneer1.  They were merged on 2026-09-01: a pioneer that is not a
+# validator never proposes, so it never publishes an address and never carries a share.  There is
+# now exactly ONE genesis_type=base row, and it funds qfi-pioneer1.
+#
+# This mapping was stale until 2026-09-04 and the effect was not subtle: --strict reported
+# "account 'genval1': missing from launch-config" against a perfectly correct instance, so any
+# build gated on this check would have failed every time.
+# DERIVED FROM THE CONFIG, NOT HARDCODED HERE.  validators[0].name is the one place that says
+# which account signs the gentx; buildscripts/init.sh and fill_launch_config.py both read it.  A
+# constant in this file is a fourth copy of that name, and the drift is not theoretical: this
+# check carried "genval1" for three days after the merge and reported
+# "account 'genval1': missing from launch-config" against a perfectly correct instance.
 
 
 # WHICH ACCOUNT DOES A CSV ROW BELONG TO?
 #
-# Not derivable from bucket_id alone: buckets 01 and 12 hold several rows each, and TWO of
-# them are genesis_type `base` (pioneer1 and genval1).
+# Not derivable from bucket_id alone -- buckets 01 and 12 hold two rows each -- so the
+# discriminators are bucket_name for 01 and genesis_type for 12.
 #
 # An earlier version keyed on the genesis_address PLACEHOLDER, which worked only while the
 # placeholders existed -- the moment real addresses were pasted in, every multi-row bucket
 # silently mis-mapped and the verifier reported the wrong account's amount as wrong.  Key on
 # fields that do not change when an address is filled in.
-def account_of(row, slug, genval="genval1"):
+def account_of(row, slug, validator):
     if row["bucket_name"].strip() == "Wallet Incentive Pool":
         return "wallet-incentive-pool"
     if row["genesis_type"].strip() == "base":
-        # the VALIDATOR is the self-bonding one; pioneer1 is the other bootstrap identity
-        return genval if row["stakes"].strip().lower() == "self-bond" else "pioneer1"
+        return validator
     return slug.get(row["bucket_id"])
 
 
@@ -116,10 +119,16 @@ def check(cfg_path, csv_path, r):
         r.unset(t, why)
 
     # ---- 2. accounts match allocations.csv EXACTLY ----------------------------------
+    vals = cfg.get("validators") or []
+    validator = (vals[0] or {}).get("name") if vals else None
+    if not validator:
+        r.bad("validators[0].name", "missing -- cannot tell which account signs the gentx")
+        validator = ""
+
     accounts = {a["name"]: a for a in cfg.get("accounts", [])}
     for row in rows:
         # bucket 01 and 12 each hold MORE THAN ONE row, so map by NAME, not by bucket_id.
-        name = account_of(row, SLUG, GENVAL)
+        name = account_of(row, SLUG, validator)
         if name is None:
             r.bad(f"bucket {row['bucket_id']}", "no launch-config account name mapped")
             continue
@@ -140,7 +149,7 @@ def check(cfg_path, csv_path, r):
         else:
             r.good(f"{name} = {want:,} qdn")
 
-    named = {GENVAL} | set(SLUG.values()) | set(NAME_OF.values()) | {"pioneer1"}
+    named = {validator} | set(SLUG.values()) | {"wallet-incentive-pool"}
     for extra in sorted(set(accounts) - named):
         r.note(f"account '{extra}'",
                "not one of the ten buckets or the genesis validator -- it is extra "
@@ -190,12 +199,12 @@ def check(cfg_path, csv_path, r):
     missing = [n for n in sorted(named)
                if accounts.get(n, {}).get("address") not in wl]
     if missing:
-        # NOT an error against the TEMPLATE: build_config.py derives one entry per account
+        # NOT an error against the TEMPLATE: --apply fills one entry per account
         # when it renders, so duplicating placeholder addresses here would be noise that
         # then has to be kept in sync.  It IS an error in the rendered config, and
         # verify_genesis.py assertion 14 checks the built artifact.
         r.note("AML whitelist",
-               f"{len(missing)} account(s) not listed here -- build_config.py adds one entry "
+               f"{len(missing)} account(s) not listed here -- --apply fills one entry "
                f"per account when it renders, so this is expected in the TEMPLATE. It only "
                f"matters if you build the genesis by some other route; an account that is "
                f"neither a wallet nor listed is refused with code 1159 and cannot move a token")
@@ -224,7 +233,7 @@ def check(cfg_path, csv_path, r):
         if abs(implied - round(implied)) < 0.001 and implied in (1.0, 1.5, 2.0, 3.0, 5.0):
             r.note("blocks_per_year",
                    f"{bpy} implies exactly {implied:g}s -- that is a timeout_commit TARGET, "
-                   f"not a measurement. Measure it (tokenomics/measure_block_time.sh); a "
+                   f"not a measurement. Measure it (foundation_scripts/measure_block_time.sh); a "
                    f"chain faster than this over-mints for its whole life")
         else:
             r.good(f"blocks_per_year {bpy} (implies {implied:.3f}s)")
@@ -255,9 +264,13 @@ def check(cfg_path, csv_path, r):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    here = Path(__file__).parent
+    # allocations.csv is HUMAN-OWNED and stays in tokenomics/ with the brief it belongs to;
+    # this script lives in foundation_scripts/.  Resolve via the repo root, not via __file__'s
+    # own directory -- that is what broke when the scripts moved out of tokenomics/.
+    here = Path(__file__).resolve().parent
+    tokenomics = here.parent / "tokenomics"
     ap.add_argument("--config", type=Path, default=here.parent / "config" / "launch-config.yml")
-    ap.add_argument("--csv", type=Path, default=here / "allocations.csv")
+    ap.add_argument("--csv", type=Path, default=tokenomics / "allocations.csv")
     ap.add_argument("--strict", action="store_true",
                     help="exit 1 if anything is unset or wrong (mainnet gate)")
     args = ap.parse_args()

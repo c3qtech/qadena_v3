@@ -134,9 +134,13 @@ def build(rows):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    here = Path(__file__).parent
-    ap.add_argument("--csv", type=Path, default=here / "allocations.csv")
-    ap.add_argument("--out", type=Path, default=here / "unlock_schedule.csv")
+    # allocations.csv is HUMAN-OWNED and stays in tokenomics/ with the brief it belongs to;
+    # this script lives in foundation_scripts/.  Resolve via the repo root, not via __file__'s
+    # own directory -- that is what broke when the scripts moved out of tokenomics/.
+    here = Path(__file__).resolve().parent
+    tokenomics = here.parent / "tokenomics"
+    ap.add_argument("--csv", type=Path, default=tokenomics / "allocations.csv")
+    ap.add_argument("--out", type=Path, default=tokenomics / "unlock_schedule.csv")
     ap.add_argument("--summary", action="store_true")
     args = ap.parse_args()
 

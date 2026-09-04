@@ -144,7 +144,7 @@ def cmd_export(out, passphrase_file, prefix, include, exclude):
         "_warning": "DEV THROWAWAY KEYS. Never mainnet. Restores signing authority over every "
                     "genesis bucket on the test chain -- keep out of git.",
         "_source_host": socket.gethostname(),
-        "_restore": "tokenomics/dev_key_vault.py import --in <this file> --passphrase-file <f>",
+        "_restore": "testscripts/dev_key_vault.py import --in <this file> --passphrase-file <f>",
         "prefix": prefix,
         "keys": entries,
     }

@@ -381,7 +381,12 @@ def a13_no_placeholders(rows, allow_placeholders):
     bad = [r for r in rows
            if r["genesis_address"].startswith("<") and r["genesis_address"].endswith(">")]
     if bad and not allow_placeholders:
-        names = ", ".join(f"{r['bucket_id']} ({r['bucket_name']})" for r in bad)
+        # NAME THE PLACEHOLDER, NOT JUST THE BUCKET.  A bucket can occupy more than one row
+        # (12 Node Operations is the msig AND the validator's operator key; 01 is Adoption
+        # Programs AND the Wallet Incentive Pool), so printing bucket_id+name alone repeats
+        # itself and reads like a duplicate row rather than two addresses still to fill.
+        names = ", ".join(f"{r['genesis_address']} = {r['bucket_id']} {r['bucket_name']}"
+                          for r in bad)
         fail(f"assertion 13: {len(bad)} row(s) still hold a PLACEHOLDER address: {names}. "
              f"Pass --allow-placeholders for a dev build; a mainnet build must not.")
     if bad:
@@ -467,9 +472,13 @@ def a16_chain_id(g, expect_evm_id=None):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    here = Path(__file__).parent
+    # allocations.csv is HUMAN-OWNED and stays in tokenomics/ with the brief it belongs to;
+    # this script lives in foundation_scripts/.  Resolve via the repo root, not via __file__'s
+    # own directory -- that is what broke when the scripts moved out of tokenomics/.
+    here = Path(__file__).resolve().parent
+    tokenomics = here.parent / "tokenomics"
     ap.add_argument("--genesis", type=Path, help="path to genesis.json")
-    ap.add_argument("--csv", type=Path, default=here / "allocations.csv")
+    ap.add_argument("--csv", type=Path, default=tokenomics / "allocations.csv")
     ap.add_argument("--csv-only", action="store_true",
                     help="run assertions 1-3 only; no genesis needed")
     ap.add_argument("--allow-placeholders", action="store_true",

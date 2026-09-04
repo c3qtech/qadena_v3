@@ -90,7 +90,7 @@ phase() { print ""; print "=====================================================
 # script has always produced and what the SS/regression suites are written against.
 #
 # --mainnet-source builds a LAUNCH-SHAPED chain instead, from a rendered instance of
-# config/launch-config.yml (tokenomics/fill_launch_config.py --out).  Both paths are legitimate;
+# config/launch-config.yml (foundation_scripts/fill_launch_config.py --out).  Both paths are legitimate;
 # they are different chains with different accounts, and confusing them wastes a whole run --
 # the devnet has `treasury` and `pioneer1`, a launch chain has buckets and `qfi-pioneer1`.
 #
@@ -571,6 +571,7 @@ if run_phase 4; then
     # --build-reproducible run's `git clean -fd` would delete it) and the mnemonic is key
     # material that must never live in a checkout.  Both land in the login user's home.
     mainnet_flag=""
+    mainnet_env=""
     if [[ -n "$MAINNET_SRC" ]]; then
         [[ -f "$MAINNET_SRC" ]] || fail "--mainnet-source $MAINNET_SRC does not exist"
         [[ -n "$MNEMONIC_FILE" ]] || fail "--mainnet-source needs --pioneer-mnemonic-file: ignite
@@ -583,6 +584,13 @@ if run_phase 4; then
         scp -q "$MNEMONIC_FILE" "$PRIMARY:$(basename "$MNEMONIC_FILE")" || fail "cannot copy the mnemonic to $PRIMARY"
         ssh "$PRIMARY" "chmod 600 $(basename "$MNEMONIC_FILE")" 2>/dev/null
         mainnet_flag=" --mainnet-source $rem_src --pioneer-mnemonic \"\$(cat $rem_mn)\""
+        # THIS IS A LAUNCH-SHAPED TEST, NOT A LAUNCH.  tokenomics/allocations.csv holds
+        # <NN_MSIG_ADDR> placeholders until the real bucket multisigs are generated in custody,
+        # which happens once, at the real launch.  The instance we just copied over was rendered
+        # from DEV addresses, so its genesis is real and complete -- but init.sh's CSV gates
+        # (assertion 13) are strict by default and would refuse the build on the placeholders
+        # alone.  Opt this path out by name; a real launch never sets this.
+        mainnet_env="QADENA_ALLOW_PLACEHOLDER_ALLOCATIONS=1 "
         info "building a LAUNCH chain from $(basename "$MAINNET_SRC") (not the devnet config)"
     else
         info "building the DEVNET chain from config/config.yml (no --mainnet-source given)"
@@ -590,7 +598,7 @@ if run_phase 4; then
 
     rsh_user "$PRIMARY" "rm -f $RUNLOG"
     ssh -o ConnectTimeout=10 "$PRIMARY" \
-        "cd $REPO && nohup zsh -lc '$BUILD_PATH ./buildscripts/init.sh --advertise-ip-address $ADVERTISE$sgx_flag$mainnet_flag' > $RUNLOG 2>&1 &" \
+        "cd $REPO && nohup zsh -lc '$BUILD_PATH $mainnet_env./buildscripts/init.sh --advertise-ip-address $ADVERTISE$sgx_flag$mainnet_flag' > $RUNLOG 2>&1 &" \
         || fail "could not launch init.sh on $PRIMARY"
 
     info "waiting for init.sh to finish (log: $PRIMARY:$RUNLOG)"

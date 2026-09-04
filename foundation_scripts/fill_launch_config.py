@@ -5,7 +5,7 @@
     ./fill_launch_config.py --dev-keys addresses.csv      # 1b. DEV ONLY: make throwaway keys
     ./fill_launch_config.py --apply addresses.csv         # 2. paste them in
     ./fill_launch_config.py --enclave                     # 3. SGX ids, from the built enclave
-    ./tokenomics/verify_launch_config.py --strict         # 4. gate
+    ./foundation_scripts/verify_launch_config.py --strict         # 4. gate
 
 WHAT THIS DOES NOT DO: GENERATE PRODUCTION KEYS.  HARD RULE 5.  --dev-keys exists to
 exercise the pipeline on a throwaway chain and refuses to run without --i-understand.
@@ -38,6 +38,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LAUNCH = ROOT / "config" / "launch-config.yml"
+ALLOC  = ROOT / "tokenomics" / "allocations.csv"
 # NO ALLOC CONSTANT.  allocations.csv is human-owned (HARD RULE 1) and this tool used to
 # rewrite it.  Nothing here may open it for writing; a path constant is the first step back
 # to doing so, so it is deliberately absent.
@@ -124,7 +125,165 @@ def cmd_dev_keys(path, understood):
     print(f"\nwrote {path}   (DEV keys, in the `test` keyring -- never use for mainnet)")
 
 
-def render(supplied, pubkeys=None, generate=None, test_gov=False):
+
+# ---------------------------------------------------------------------------------------------
+# AMOUNTS COME FROM allocations.csv, WHICH IS THE AUTHORITY.
+#
+# launch-config.yml carries its own `coins:` values, and until now nothing reconciled the two --
+# only verify_launch_config.py noticed afterwards, if anyone ran it.  Editing the CSV therefore
+# changed nothing about the chain that got built.  Applying them here makes the CSV load-bearing on
+# the path that is actually used.
+#
+# THE JOIN IS ON FIELDS THAT SURVIVE FILLING IN AN ADDRESS.  An earlier renderer (build_config.py,
+# removed 2026-09-04) keyed on the genesis_address PLACEHOLDER, and recorded what that cost: the
+# moment real addresses were pasted in, every multi-row bucket silently mis-mapped and the verifier
+# reported the wrong account's amount as wrong.  bucket_id alone is not enough either -- buckets 01 and 12 hold two
+# rows each -- so the discriminators are bucket_name for 01 and genesis_type for 12.
+SLUG = {"01": "adoption", "02": "ltr", "03": "foundation", "04": "grants", "05": "personnel",
+        "06": "backers", "07": "founders", "09": "contingency", "10": "pubsec", "12": "nodeops"}
+
+
+def account_of(row):
+    """Which launch-config account does this CSV row fund?  None if it funds nothing."""
+    if row["bucket_name"].strip() == "Wallet Incentive Pool":
+        return "wallet-incentive-pool"
+    if row["genesis_type"].strip() == "base":
+        # THE ONLY `base` ROW.  There were two once -- pioneer1 and genval1 -- and genval1 was
+        # merged into the pioneer on 2026-09-01 because a pioneer that is not a validator never
+        # proposes, so it never publishes an address and never carries a share.  The removed
+        # renderer still branched on `stakes == self-bond` to tell them apart and returned
+        # "genval1", an account that no longer exists anywhere -- which is one reason it went.
+        return "qfi-pioneer1"
+    return SLUG.get(row["bucket_id"].strip())
+
+
+def csv_amounts(path=ALLOC):
+    """{account name: whole qdn} from allocations.csv."""
+    out = {}
+    with open(path, encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            name = account_of(row)
+            if not name:
+                continue
+            if name in out:
+                sys.exit(f"allocations.csv maps two rows to '{name}' -- the join is ambiguous")
+            out[name] = int(row["tokens_qdn"])
+    return out
+
+
+def csv_addresses(path=ALLOC):
+    """{account name: genesis_address} from allocations.csv, placeholders included.
+
+    Same join as csv_amounts -- account_of, never the address itself -- so this keeps working
+    once step 3 replaces the placeholders with real keys.
+    """
+    out = {}
+    with open(path, encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            name = account_of(row)
+            if name:
+                out[name] = (row["genesis_address"] or "").strip()
+    return out
+
+
+def is_placeholder(a):
+    return a.startswith("<") and a.endswith(">")
+
+
+def cross_check(supplied, path=ALLOC):
+    """addresses.csv vs allocations.csv, for every account both files name.
+
+    WHY THIS IS FATAL AND NOT A WARNING.  These two files are derived from different things --
+    one from a keyring, one from a human's paste -- and nothing else compares them.  --apply
+    takes ADDRESSES from addresses.csv and AMOUNTS from allocations.csv, so if they disagree
+    about which key holds a bucket, the instance is internally consistent, the genesis builds,
+    every later assertion passes, and the wrong key controls the money.  verify_genesis
+    assertion 5 is the only other thing that could notice, and it is exactly what
+    --allow-placeholders relaxes on the test path.
+
+    A mismatch is never a legitimate state: either the CSV was filled from a stale
+    addresses.csv, or the keys were re-derived after step 3.  Both mean stop and reconcile.
+    """
+    try:
+        alloc = csv_addresses(path)
+    except (OSError, KeyError):
+        return          # csv_amounts reports a broken/missing allocations.csv properly
+    wrong, placeheld = [], []
+    for name, addr in sorted(supplied.items()):
+        want = alloc.get(name)
+        if want is None:
+            continue                       # funds nothing in allocations.csv
+        if is_placeholder(want):
+            placeheld.append(name)
+        elif want != addr:
+            wrong.append((name, want, addr))
+    if wrong:
+        print("ADDRESS MISMATCH -- allocations.csv and addresses.csv disagree:", file=sys.stderr)
+        for name, want, got in wrong:
+            print(f"  {name}\n      allocations.csv : {want}\n      addresses.csv   : {got}",
+                  file=sys.stderr)
+        sys.exit("\nNothing written.  One of the two files is stale -- reconcile them before\n"
+                 "rendering.  If the keys were re-derived, redo step 3 from the new\n"
+                 "addresses.csv; if addresses.csv is the stale one, re-run derive_launch_keys.sh.")
+    if placeheld:
+        print(f"  NOTE: {len(placeheld)} account(s) still hold a PLACEHOLDER address in "
+              f"allocations.csv,")
+        print(f"        so they could not be cross-checked: {', '.join(placeheld)}")
+        print(f"        The instance is still valid -- addresses come from addresses.csv, not "
+              f"from that column.")
+        print(f"        But init.sh --mainnet-source WILL REFUSE until step 3 fills them "
+              f"(assertion 13).")
+    elif supplied:
+        print(f"  cross-checked {len(supplied) - len(placeheld)} address(es) against "
+              f"allocations.csv: all agree")
+
+
+def apply_amounts(lc, amounts):
+    """Set each account's `coins:` from the CSV.  Line-based, so the file's comments survive.
+
+    Parsing and re-dumping the YAML would lose them, and in this file the prose explaining WHY a
+    value was chosen is the most valuable thing in it.
+    """
+    out, cur, changed, seen = [], None, 0, set()
+    for line in lc.splitlines():
+        m = re.match(r'^(\s*)- name:\s*(\S+)\s*$', line)
+        if m:
+            cur = m.group(2)
+        elif re.match(r'^\s*[a-z_]+:', line) and not line.startswith(" "):
+            cur = None                      # left the accounts block entirely
+        if cur and cur in amounts and re.match(r'^\s*coins:', line):
+            indent = line[:len(line) - len(line.lstrip())]
+            want = f'{indent}coins: ["{amounts[cur]}qdn"]'
+            if line.rstrip() != want:
+                changed += 1
+            out.append(want)
+            seen.add(cur)
+            cur = None                      # one coins line per account
+            continue
+        out.append(line)
+    missing = sorted(set(amounts) - seen)
+    if missing:
+        sys.exit("allocations.csv funds accounts with no `coins:` line in launch-config.yml: "
+                 + ", ".join(missing))
+    return "\n".join(out) + "\n", changed
+
+
+def validator_name(lc):
+    """validators[0].name from the template text -- the account that signs the gentx."""
+    inv = False
+    for line in lc.splitlines():
+        if re.match(r'^validators:', line):
+            inv = True
+            continue
+        if inv and re.match(r'^[a-z]', line):
+            break
+        if inv:
+            m = re.match(r'^\s*- name:\s*(\S+)\s*$', line)
+            if m:
+                return m.group(1)
+    return None
+
+def render(supplied, pubkeys=None, generate=None, test_gov=False, amounts=None):
     """Return launch-config.yml with every supplied address substituted.
 
     WRITES NOTHING.  This used to write config/launch-config.yml and tokenomics/allocations.csv
@@ -139,6 +298,16 @@ def render(supplied, pubkeys=None, generate=None, test_gov=False):
     lc = LAUNCH.read_text()
     changed, unknown = 0, []
 
+    # AMOUNTS FIRST, BEFORE ANY ADDRESS SUBSTITUTION.  The join reads allocations.csv, whose rows
+    # are identified by bucket_id/name/type -- fields an address substitution does not touch --
+    # so order does not actually matter here, but doing it first keeps the failure (a funded
+    # account with no `coins:` line) separate from address problems.
+    if amounts is not False:
+        amt = amounts if isinstance(amounts, dict) else csv_amounts()
+        lc, n = apply_amounts(lc, amt)
+        if n:
+            print(f"  {n} amount(s) set from {ALLOC.name}")
+
     # LET IGNITE MINT THIS ONE.  An ignite account given neither `address` nor `mnemonic` gets a
     # freshly generated key in the chain home keyring -- which is the only way a key can be there
     # when the gentx runs, because `ignite chain init` wipes that home first and anything
@@ -148,15 +317,35 @@ def render(supplied, pubkeys=None, generate=None, test_gov=False):
     # buildscripts/setPubKAndPubKID.sh resolves from the keyring AFTER the init -- the mechanism
     # the devnet has always used.  This keeps a mnemonic out of every file: nothing on disk ever
     # holds the key, and init.sh's assertion still fails the build if a placeholder survives.
-    for name in (generate or []):
+    # THE VALIDATOR IS GENERATED BY DEFAULT, because on this path there is no other correct
+    # answer.  ignite must have a SIGNING KEY in the chain home to sign the gentx, and it only
+    # creates one from a `mnemonic:`.  An account left with an `address:` gets funded with no key,
+    # so `ignite chain init` fails at the gentx -- AFTER `rm -rf $QADENAHOME`, with an error about
+    # signing rather than about the flag nobody passed.
+    #
+    # Stripping the address is also what makes init.sh's hidden prompt fire, which is how the
+    # sealed mnemonic reaches ignite without ever being written to a file.
+    #
+    # --no-generate opts out, for a genesis whose validator signs somewhere else.
+    if generate is None:
+        v = validator_name(lc)
+        if v and any(n == v for n, *_ in ACCOUNTS):
+            generate = [v]
+            print(f"  --generate defaulted to '{v}' (validators[0].name); --no-generate to opt out")
+        elif v:
+            print(f"  WARNING: validators[0].name is '{v}', which is not an account here -- "
+                  f"nothing generated")
+
+    generated = set(generate or [])
+    for name in generated:
         todo = next((t for n, _, _, t, _ in ACCOUNTS if n == name), None)
         if not todo:
-            sys.exit(f"--generate {name}: not an account in this config")
+            sys.exit(f"'{name}' is not an account in this config -- cannot generate it")
         before = lc
         lc = "\n".join(l for l in lc.splitlines()
                         if l.strip() != f'address: "{todo}"') + "\n"
         if lc == before:
-            print(f"  WARNING: --generate {name}: no address line to drop")
+            print(f"  WARNING: {name}: no address line to drop (already generated?)")
         lc = lc.replace(todo, f"{name}PubKID")
         changed += 1
 
@@ -182,7 +371,10 @@ def render(supplied, pubkeys=None, generate=None, test_gov=False):
         if todo in lc:
             lc = lc.replace(todo, a)
             changed += 1
-        else:
+        elif name not in generated:
+            # Not a warning for a generated account: the block above deliberately renamed its
+            # TODO_ADDR_ to <name>PubKID, so of course it is no longer in the text.  Warning
+            # there sent operators looking for a template bug that did not exist.
             unknown.append(f"{name} ({todo} not in the template)")
     # TEST-ONLY GOVERNANCE TIMINGS -- INSTANCE ONLY, AND THE ONE DEVIATION THAT IS DEFENSIBLE.
     #
@@ -229,6 +421,9 @@ def cmd_apply(path, out, generate=None, test_gov=False):
             pubkeys[r["name"].strip()] = pk
     if not supplied:
         sys.exit(f"{path} has no addresses filled in")
+
+    # BEFORE ANYTHING IS WRITTEN.  A mismatch here means the wrong key would hold a bucket.
+    cross_check(supplied)
 
     lc, changed, unknown = render(supplied, pubkeys, generate, test_gov)
     missing = [n for n, *_ in ACCOUNTS if n not in supplied]
@@ -324,9 +519,13 @@ def main():
     ap.add_argument("--dev-keys", metavar="FILE")
     ap.add_argument("--i-understand", action="store_true")
     ap.add_argument("--apply", metavar="FILE")
-    ap.add_argument("--generate", metavar="NAME", action="append",
-                    help="leave this account for ignite to mint (no address, no mnemonic); "
-                         "its references become <name>PubKID for post-init substitution")
+    # NO --generate FLAG.  It only ever named validators[0].name, which this now reads for
+    # itself, and passing the wrong name silently produced an instance whose validator had an
+    # address -- so no prompt, no mnemonic, and a gentx that cannot be signed.  One fewer thing
+    # to get right.
+    ap.add_argument("--no-generate", action="store_true",
+                    help="do not strip any account's address, not even the validator's. "
+                         "Only for a genesis whose validator signs its gentx elsewhere")
     ap.add_argument("--test-gov-timings", action="store_true",
                     help="INSTANCE ONLY: shorten gov voting to 300s/30s so proposal-gated tests "
                          "can finish.  Changes no rule, only the wait.  NEVER for a real launch.")
@@ -339,7 +538,8 @@ def main():
     a = ap.parse_args()
     if a.template:  cmd_template(a.template); return 0
     if a.dev_keys:  cmd_dev_keys(a.dev_keys, a.i_understand); return 0
-    if a.apply:     cmd_apply(a.apply, a.out, a.generate, a.test_gov_timings); return 0
+    if a.apply:     cmd_apply(a.apply, a.out, [] if a.no_generate else None,
+                              a.test_gov_timings); return 0
     if a.enclave:   return cmd_enclave_test_fleet() if a.test_fleet else cmd_enclave()
     ap.print_help(); return 1
 
