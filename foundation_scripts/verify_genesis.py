@@ -25,7 +25,15 @@ AQDN_PER_QDN   = 10**18
 TOTAL_AQDN     = TOTAL_QDN * AQDN_PER_QDN          # 4000000000000000000000000000
 BASE_DENOM     = "aqdn"
 DISPLAY_DENOM  = "qdn"
-SYMBOL         = "QDN"
+# DELIBERATELY LOWERCASE, AND A DEVIATION FROM THE BRIEF.  qadena-master-brief.md asks for
+# "symbol": "QDN" (uppercase), and this assertion was written from it.  The CHAIN says otherwise
+# and the chain wins: x/qadena/types/keys.go:30 defines QadenaTokenDenom = "qdn" and
+# app/non_dependency_inject.go:272 sets DisplayDenom: "qdn", so both config/config.yml and
+# config/launch-config.yml ship symbol "qdn".  Confirmed as intended by the chain's owner
+# 2026-09-04.  Uppercasing the template to satisfy the brief would have changed the one field
+# x/qadena hands to the pricefeed via usdRateFor (enclave_grpc_client.go:90) on the erc20 path.
+# Do not "fix" this back to match the brief without changing the Go constants first.
+SYMBOL         = "qdn"
 PREFIX         = "qadena"
 
 # The genesis validator: 10,000 QDN self-bond (the min-self-delegation floor) + 100 gas.
@@ -252,15 +260,50 @@ def a7_denom_metadata(g):
             fail(f"assertion 7: denom_units[{denom}] has no explicit exponent")
         if int(units[denom]["exponent"]) != exp:
             fail(f"assertion 7: {denom} exponent is {units[denom]['exponent']}, expected {exp}")
-    return "base aqdn, display qdn, symbol QDN, exponents 0 and 18 explicit"
+    return (f"base {BASE_DENOM}, display {DISPLAY_DENOM}, symbol {SYMBOL}, "
+            f"exponents 0 and 18 explicit")
+
+
+# THE ONE PLACE THE DISPLAY DENOM IS CORRECT, AND IT IS REQUIRED THERE, NOT MERELY TOLERATED.
+#
+# x/qadena reads these four params and calls sdk.NormalizeCoin on each before paying
+# (keeper/msg_server_create_wallet.go:116-119), which converts a DISPLAY-denom coin to the base
+# denom using the registered metadata: "500 qdn" becomes 500e18 aqdn.
+#
+# So writing "aqdn" here would NOT be the safe choice.  ConvertCoin(aqdn -> aqdn) is a no-op, and
+# NormalizeCoin returns the coin unchanged on any error (types/denom.go:121-131), so "500 aqdn"
+# is paid as 500 aqdn -- a silent 10^18 underpayment that no other assertion would catch.  That
+# makes this an equality check, not an exemption.
+#
+# Confirmed against config/config.yml, which the devnet has run on unchanged for months.
+NORMALIZED_PARAMS = {
+    "app_state.qadena.params.create_wallet_incentive",
+    "app_state.qadena.params.create_wallet_transparent_incentive",
+    "app_state.qadena.params.create_ephemeral_wallet_incentive",
+    "app_state.qadena.params.create_ephemeral_wallet_transparent_incentive",
+}
 
 
 def a8_no_display_denom(g):
+    seen_normalized = set()
     for path, denom, _ in walk_amounts(app_state(g)):
+        if path in NORMALIZED_PARAMS:
+            if denom != DISPLAY_DENOM:
+                fail(f"assertion 8: {path} is in {denom!r}, expected the DISPLAY denom "
+                     f"{DISPLAY_DENOM!r}. x/qadena calls sdk.NormalizeCoin on this param, which "
+                     f"is a NO-OP on {BASE_DENOM!r} -- so {BASE_DENOM!r} here pays 10^18 times "
+                     f"too little, silently.")
+            seen_normalized.add(path)
+            continue
         if denom == DISPLAY_DENOM:
             fail(f"assertion 8: an on-chain amount uses the DISPLAY denom '{DISPLAY_DENOM}' "
                  f"at {path} -- every on-chain amount must be in '{BASE_DENOM}'")
-    return f"no on-chain amount uses '{DISPLAY_DENOM}'"
+    missing = NORMALIZED_PARAMS - seen_normalized
+    if missing:
+        fail(f"assertion 8: these NormalizeCoin params are absent from the genesis: "
+             f"{', '.join(sorted(missing))}")
+    return (f"no on-chain amount uses '{DISPLAY_DENOM}' except the {len(seen_normalized)} "
+            f"NormalizeCoin params, which correctly do")
 
 
 def a9_amounts_are_strings(g):

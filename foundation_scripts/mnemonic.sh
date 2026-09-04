@@ -41,7 +41,10 @@ CMD="$1"; shift
 # Asked once, never echoed, never written down.  -s so it does not reach the terminal or scrollback.
 ask_pass() {
     local p
-    read -s "p?  passphrase: "; print -u2 ""
+    # PROMPT ON STDERR, NOT THROUGH read's ?prompt -- zsh suppresses that prompt whenever stdin
+    # is not a terminal, which is exactly how this is used (piped into init.sh).
+    print -u2 -n "  passphrase: "
+    read -s "p?"; print -u2 ""
     [[ -n "$p" ]] || { print -u2 "empty passphrase"; exit 1 }
     print -r -- "$p"
 }
@@ -53,7 +56,8 @@ seal)
     (( ${#files} )) || { print -u2 "no *.mnemonic files in $DIR -- nothing to seal"; exit 1 }
     print -u2 "sealing ${#files} mnemonic(s) in $DIR"
     PASS=$(ask_pass)
-    read -s "P2?  confirm:    "; print -u2 ""
+    print -u2 -n "  confirm:    "
+    read -s "P2?"; print -u2 ""
     [[ "$PASS" == "$P2" ]] || { print -u2 "passphrases do not match"; exit 1 }
     unset P2
     for f in "${files[@]}"; do

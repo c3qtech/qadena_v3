@@ -277,7 +277,13 @@ if [[ -n "$mainnet_source" ]]; then
             echo "Nothing captures that, and the validator would be unrecoverable."
             echo "You can avoid this prompt by calling init.sh --pioneer-mnemonic \"<words>\""
             echo ""
-            read -s "pioneer_mnemonic?*** Paste the mnemonic for $PIONEER1 (hidden): "
+            # THE PROMPT GOES OUT SEPARATELY, ON STDERR, BECAUSE zsh WILL NOT SHOW IT.
+            # `read -s "var?prompt"` prints its prompt ONLY when stdin is a terminal.  Under any
+            # redirection -- a pipe, a run log, an ssh command -- the prompt vanishes and the read
+            # silently consumes the first line of whatever is on stdin.  The operator sees the
+            # explanation above, then nothing, and has no idea what is being asked for.
+            print -u2 -n "*** Paste the mnemonic for $PIONEER1 (hidden, will not echo): "
+            read -s "pioneer_mnemonic?"
             echo ""
         fi
         wc=$(echo "$pioneer_mnemonic" | wc -w | tr -d ' ')
