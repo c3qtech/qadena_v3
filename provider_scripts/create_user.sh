@@ -80,9 +80,9 @@ grant_user_fees() {   # grant_user_fees <key-name>
 PROVIDER_FEE_GRANTER_FLAG=""
 if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
     USER_FEE_GRANTER_FLAG="--fee-granter $(qadenad_alias keys show $createwalletsponsor --address 2>/dev/null)"
-    PROVIDER_FEE_GRANTER_FLAG="--fee-granter ${VERITAS_FOUNDATION_APPSVR:-foundation-appsvr}"
+    PROVIDER_FEE_GRANTER_FLAG="--fee-granter ${VERITAS_FOUNDATION_APPSVR:-foundation-veritas-appsvr}"
     # resolve the name to an address; --fee-granter takes an address
-    _fg_addr=$(qadenad_alias keys show "${VERITAS_FOUNDATION_APPSVR:-foundation-appsvr}" --address 2>/dev/null)
+    _fg_addr=$(qadenad_alias keys show "${VERITAS_FOUNDATION_APPSVR:-foundation-veritas-appsvr}" --address 2>/dev/null)
     [ -n "$_fg_addr" ] && PROVIDER_FEE_GRANTER_FLAG="--fee-granter $_fg_addr"
 fi
 

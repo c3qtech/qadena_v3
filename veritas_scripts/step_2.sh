@@ -105,7 +105,11 @@ echo "dsvsprovidermnemonic: $dsvsprovidermnemonic"
 # makes sec-treasury unnecessary rather than merely unfunded.
                                    # disagreement between the two means step_2 waits forever for
                                    # funds in a treasury the sponsored flow never fills.
-: ${VERITAS_FOUNDATION_APPSVR:=foundation-appsvr}
+# THE RENAMED ACCOUNT.  The foundation sponsors more than one programme out of bucket 10 -- its
+# notes list "SEC PH VERITAS 60M; future MOUs; OTC swap reserve" -- so the sponsor accounts carry
+# the programme in their names.  A default of `foundation-appsvr` now points at an account that
+# does not exist, and step_2 would wait forever for funds in it.
+: ${VERITAS_FOUNDATION_APPSVR:=foundation-veritas-appsvr}
 feegrant_args=()
 if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
     echo "toll-free: $VERITAS_FOUNDATION_APPSVR sponsors and grants; sec-treasury is not used"

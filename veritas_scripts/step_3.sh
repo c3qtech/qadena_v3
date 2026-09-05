@@ -29,7 +29,11 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 #   banksend           -- the original behaviour: sec-treasury transfers tokens to every wallet.
 #
 # Set VERITAS_FUND_MODE=banksend to restore the old path.
-: ${VERITAS_FOUNDATION_APPSVR:=foundation-appsvr}
+# THE RENAMED ACCOUNT.  The foundation sponsors more than one programme out of bucket 10 -- its
+# notes list "SEC PH VERITAS 60M; future MOUs; OTC swap reserve" -- so the sponsor accounts carry
+# the programme in their names.  A default of `foundation-appsvr` now points at an account that
+# does not exist, and step_2 would wait forever for funds in it.
+: ${VERITAS_FOUNDATION_APPSVR:=foundation-veritas-appsvr}
 
 # Every message a VERITAS provider/signer wallet broadcasts, from the trace of the app-server's
 # GenerateOrBroadcastTxCLISync call sites. A type missing here fails closed at the operation that
