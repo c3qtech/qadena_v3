@@ -314,7 +314,7 @@ def validator_name(lc):
     return None
 
 def render(supplied, pubkeys=None, generate=None, test_gov=False, amounts=None,
-           chain_id=None):
+           chain_id=None, zero_incentives=False):
     """Return launch-config.yml with every supplied address substituted.
 
     WRITES NOTHING.  This used to write config/launch-config.yml and tokenomics/allocations.csv
@@ -436,6 +436,41 @@ def render(supplied, pubkeys=None, generate=None, test_gov=False, amounts=None,
     if chain_id:
         lc, _ = set_chain_id(lc, chain_id)
         changed += 1
+    # ZEROED WALLET INCENTIVES -- TEST ONLY, AND THE REASON IS EVIDENCE, NOT THRIFT.
+    #
+    # The chain endows every new wallet: 500 QDN to a real one, 50 to a transparent ephemeral.
+    # That endowment is a SECOND source of funds, so a wallet whose fee grant is missing or points
+    # at the wrong granter still transacts -- it just pays for itself.  Every such bug then looks
+    # exactly like success.
+    #
+    # Zeroing them is what makes a green run mean something: with no endowment, a transaction can
+    # only succeed if a grant carried it.  It is also what produced the only trustworthy cost
+    # figures we have (352.016 QDN per onboarding), since nothing was subsidised.
+    #
+    # The DENOM stays "qdn".  x/qadena calls sdk.NormalizeCoin on these params, which is a no-op on
+    # aqdn -- so writing aqdn here would pay 10^18 times too little.  verify_genesis assertion 8
+    # enforces that, and zero-with-the-right-denom passes it.
+    if zero_incentives:
+        _INC = ("create_wallet_incentive", "create_wallet_transparent_incentive",
+                "create_ephemeral_wallet_incentive", "create_ephemeral_wallet_transparent_incentive")
+        out, arm, done = [], None, 0
+        for line in lc.splitlines():
+            st = line.strip().rstrip(":")
+            if st in _INC:
+                arm = st
+            elif arm and st.startswith("amount:"):
+                indent = line[:len(line) - len(line.lstrip())]
+                line = f'{indent}amount: "0"'
+                arm = None; done += 1
+            elif arm and not st.startswith(("amount", "denom")):
+                arm = None
+            out.append(line)
+        lc = "\n".join(out) + "\n"
+        print(f"  --zero-incentives: {done}/4 wallet incentives set to 0 (denoms untouched)")
+        if done != 4:
+            print(f"  WARNING: expected 4, changed {done} -- check the template's param names")
+        changed += 1
+
     if test_gov:
         lc = re.sub(r'^(\s*)voting_period: ".*?"',            r'\1voting_period: "300s"',            lc, count=1, flags=re.M)
         lc = re.sub(r'^(\s*)expedited_voting_period: ".*?"',  r'\1expedited_voting_period: "30s"',   lc, count=1, flags=re.M)
@@ -445,7 +480,7 @@ def render(supplied, pubkeys=None, generate=None, test_gov=False, amounts=None,
     return lc, changed, unknown
 
 
-def cmd_apply(path, out, generate=None, test_gov=False, chain_id=None):
+def cmd_apply(path, out, generate=None, test_gov=False, chain_id=None, zero_incentives=False):
     if not out:
         sys.exit("--apply needs --out FILE.\n"
                  "The filled config is a build INSTANCE, not an edit to the template:\n"
@@ -470,7 +505,8 @@ def cmd_apply(path, out, generate=None, test_gov=False, chain_id=None):
     # BEFORE ANYTHING IS WRITTEN.  A mismatch here means the wrong key would hold a bucket.
     cross_check(supplied)
 
-    lc, changed, unknown = render(supplied, pubkeys, generate, test_gov, chain_id=chain_id)
+    lc, changed, unknown = render(supplied, pubkeys, generate, test_gov, chain_id=chain_id,
+                                  zero_incentives=zero_incentives)
     missing = [n for n, *_ in ACCOUNTS if n not in supplied]
 
     outp = pathlib.Path(out)
@@ -568,6 +604,10 @@ def main():
     # itself, and passing the wrong name silently produced an instance whose validator had an
     # address -- so no prompt, no mnemonic, and a gentx that cannot be signed.  One fewer thing
     # to get right.
+    ap.add_argument("--zero-incentives", action="store_true",
+                    help="set the four wallet incentives to 0 in the INSTANCE. TEST ONLY: the "
+                         "endowment is a second funding source that makes a missing fee grant "
+                         "look like success. Denoms are left as qdn (NormalizeCoin needs them).")
     ap.add_argument("--chain-id", metavar="ID",
                     help="rewrite chain_id in the instance, e.g. qadena_4824-1 for a testnet. "
                          "Must be <name>_<eip155>-<epoch>: qadenad parses the EVM chain id out "
@@ -588,7 +628,7 @@ def main():
     if a.template:  cmd_template(a.template); return 0
     if a.dev_keys:  cmd_dev_keys(a.dev_keys, a.i_understand); return 0
     if a.apply:     cmd_apply(a.apply, a.out, [] if a.no_generate else None,
-                              a.test_gov_timings, a.chain_id); return 0
+                              a.test_gov_timings, a.chain_id, a.zero_incentives); return 0
     if a.enclave:   return cmd_enclave_test_fleet() if a.test_fleet else cmd_enclave()
     ap.print_help(); return 1
 
