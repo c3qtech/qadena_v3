@@ -2,7 +2,8 @@
 
 What the **foundation** does to bring up the SEC PH VERITAS deployment on a launch chain.
 
-This is the counterpart to the SEC group's `veritas_scripts/step_1.sh`, `step_2.sh` and `step_3.sh`.
+This is the counterpart to [HOWTO-SEC-VERITAS.md](HOWTO-SEC-VERITAS.md), which is SEC's half —
+`veritas_scripts/step_1.sh`, `step_2.sh` and `step_3.sh`.
 It is deliberately a separate document, because the two sides never run each other's commands and
 neither holds the other's keys — that separation is the point of the whole structure, and a single
 runbook covering both would obscure it.
@@ -21,24 +22,69 @@ The two sides alternate. Neither can proceed without the other's previous output
 
 | # | who | action | hands over |
 |---|---|---|---|
-| 1 | **FOUNDATION** | `sponsor_veritas.sh --stage prepare` | `foundation-veritas-appsvr` + `foundation-veritas-users` addresses, chain-id |
+| 1 | **FOUNDATION** | `sec_veritas_before_step_1.sh --stage prepare` | `foundation-veritas-appsvr` + `foundation-veritas-users` addresses, chain-id |
 | 2 | SEC | `step_1.sh` | SEC's **admin address** |
-| 3 | **FOUNDATION** | `veritas_sec_delegate_grant_authority.sh --sec-admin <addr>` | — |
+| 3 | **FOUNDATION** | `sec_veritas_after_step_1.sh --sec-admin <addr>` | — |
 | 4 | SEC | `step_2.sh` | **two proposal ids** |
-| 5 | **FOUNDATION** | `sponsor_veritas.sh --stage approve <id> <id>` | — |
+| 5 | **FOUNDATION** | `sec_veritas_after_step_2.sh <id> <id>` | — |
 | 6 | both | wait for both proposals to reach **PASSED** | — |
-| 7 | SEC | `step_3.sh` | — |
-| 8 | **FOUNDATION** | `veritas_sec_authorise_pool.sh` | the two sponsor addresses, confirmed |
+| 7 | SEC | `step_3.sh` | the **sponsor pool**, as a paste block |
+| 8 | **FOUNDATION** | `sec_veritas_after_step_3.sh --pool-addresses <file>` | the two sponsor addresses, confirmed |
 
-All four foundation actions live in `foundation_scripts/`, and none of SEC's do. The two that sit
-*between* SEC's steps are named as a pair -- `veritas_sec_delegate_grant_authority.sh` (delegate authority to
-SEC's admin) and `veritas_sec_authorise_pool.sh` (authorise the app-server's sponsor pool) -- so the
-directory listing says who runs what, which the old `step_4.sh` name did not.
+**Every foundation script is named for the step it follows**, so `ls` gives you the order without
+opening anything:
+
+```
+foundation_scripts/                     veritas_scripts/
+  sec_veritas_before_step_1.sh            step_1.sh
+  sec_veritas_after_step_1.sh             step_2.sh
+  sec_veritas_after_step_2.sh             step_3.sh
+  sec_veritas_after_step_3.sh
+```
+
+`sec_veritas_after_step_2.sh` is a thin wrapper on `sec_veritas_before_step_1.sh --stage approve` --
+one implementation, because it shares that script's whole multisig ceremony, but two entry points so
+a stage is never hidden behind a flag on a file named for a different moment.
 
 **Why the foundation must run 3, 5 and 8 rather than delegating them.** A fee grant is signed by its
 *granter*, and `authz` cannot be sub-delegated. So even with the step 3 authorisation, SEC cannot
 issue grants *as* the foundation for the app-server's pool. Moving steps 3, 5 or 8 into SEC's scripts
 would put a foundation private key on a SEC machine — the one thing this structure exists to prevent.
+
+---
+
+## The funding model
+
+Everything below is **foundation-sponsored** -- the same word the node bring-up uses
+(`add_full_node.sh --foundation-sponsored`). The foundation pays, by fee grant, and SEC never
+holds tokens: no SEC treasury, no transfer, no AML whitelist exemption. It is the default in every
+script, settled once in `scripts/setup_env.sh` as `VERITAS_FUND_MODE`, which also accepts the older
+spelling `feegrant`.
+
+`VERITAS_FUND_MODE=banksend` restores the retired path where a `sec-treasury` is funded and fans
+tokens out per wallet. It is kept only for a deployment mid-migration.
+
+> Until 2026-09-05 the three step scripts each declared their **own** default and disagreed --
+> step_2 said `banksend` while step_3 and `create_user.sh` said otherwise. With the variable unset,
+> step_2 waited forever for funds in a treasury the sponsored flow never fills. Only
+> `setup_veritas.sh` exporting the value hid it. One default, one place, now.
+
+---
+
+## What SEC hands over, and when
+
+Three handoffs, each printed by the step that produces it. SEC keeps its own working directory
+(`~/sec-veritas`, or `$VERITAS_SEC_HOME`) holding `variables.json`, `mnemonics.json` and
+`pool_addresses.json` — the counterpart to the foundation's `~/launch`.
+
+| after | SEC gives you | you use it in |
+|---|---|---|
+| `step_1.sh` | the **admin address** (`sec-veritas-admin`) — zero balance, by design | `sec_veritas_after_step_1.sh --sec-admin` |
+| `step_2.sh` | **two proposal ids** | `sec_veritas_after_step_2.sh <id> <id>` |
+| `step_3.sh` | the **sponsor pool**, as a paste block | `sec_veritas_after_step_3.sh --pool-addresses` |
+
+Nothing else crosses between the two sides. No key, no mnemonic, and — in foundation-sponsored
+mode — no tokens.
 
 ---
 
@@ -72,13 +118,23 @@ somewhere: `--fund-bucket` / `--stake-bucket`.
 
 ---
 
-## Step 1 — prepare (before SEC's `step_1.sh`)
+## `sec_veritas_before_step_1.sh` — stake and fund
 
 ```sh
-foundation_scripts/sponsor_veritas.sh --stage prepare \
-    --pubsec-members pubsec-m1,pubsec-m2,pubsec-m3,pubsec-m4,pubsec-m5 \
-    --members        foundation-m1,foundation-m2,foundation-m3
+foundation_scripts/sec_veritas_before_step_1.sh --stage prepare \
+    --coord-home       ~/launch/coord \
+    --keyring-backend  file \
+    --mnemonics-dir    ~/launch/mnemonics \
+    --pubsec-members   pubsec-m1,pubsec-m2,pubsec-m3,pubsec-m4,pubsec-m5 \
+    --members          foundation-m1,foundation-m2,foundation-m3
 ```
+
+`--coord-home` is not optional in practice: the bucket multisigs live in the **coordinator**
+keyring `derive_launch_keys.sh` created, never the node's -- `init.sh` runs `rm -rf $QADENAHOME`.
+Without it you get `no key 'pubsec' in the keyring`. `--mnemonics-dir` is required whenever a
+sponsor account does not exist yet; the script refuses to mint a key whose mnemonic has nowhere
+safe to go. Both are asked for once and reused, using the same single passphrase
+`derive_launch_keys.sh` set.
 
 Three things happen:
 
@@ -131,10 +187,10 @@ Override with `--stake <qdn>` if you know better, or `--validator <valoper>` to 
 
 ---
 
-## Step 3 — authorise SEC (after their `step_1.sh`)
+## `sec_veritas_after_step_1.sh` — delegate grant authority
 
 ```sh
-foundation_scripts/veritas_sec_delegate_grant_authority.sh \
+foundation_scripts/sec_veritas_after_step_1.sh \
     --sec-admin <SEC's ADMIN address -- see below> \
     --foundation-appsvr foundation-veritas-appsvr
 ```
@@ -144,7 +200,7 @@ foundation_scripts/veritas_sec_delegate_grant_authority.sh \
 **Do not use the address `step_1.sh` prints.** That is `sec-treasury`, and it belongs to the
 retired *banksend* model. In the sponsored flow nothing uses it: `step_2.sh:53` and `step_3.sh:73`
 both repoint `treasuryname` at the foundation account and say so on screen -- *"sec-treasury is not
-used"* -- and `veritas_sec_authorise_pool.sh` never mentions a treasury at all. `step_1.sh`'s closing message
+used"* -- and `sec_veritas_after_step_3.sh` never mentions a treasury at all. `step_1.sh`'s closing message
 ("When QFI grants the necessary amount to sec-treasury...") is stale.
 
 The admin is a **different key, defined by holding nothing**:
@@ -160,15 +216,25 @@ A zero-balance account can sign because the fee grant covers it; `testscripts/te
 exercises exactly this (`fresh_key` creates the key with no funding, and `tx authz exec --from
 secadmin --fee-granter foundation-users` then succeeds).
 
-> **GAP -- confirm this with SEC before running the step.** `VERITAS_SEC_ADMIN` is read in three
-> places (`scripts/setup_env.sh:412`, `provider_scripts/create_user.sh:68`,
-> `veritas_scripts/step_3.sh:37`) and **set by nothing**, and no script creates an admin key.
-> `veritas_sec_delegate_grant_authority.sh` ends by telling SEC to `export VERITAS_SEC_ADMIN=<key name>`, assuming such a
-> key already exists. The devnet harness never catches this because it holds every key in one
-> keyring, so `grant_as_foundation` takes its no-signer branch and the authz path is never
-> exercised. **Ask SEC for the address of the key they will sign `MsgExec` with, and do not
-> substitute `sec-treasury` for it.** Authorising the wrong address produces a grant nothing uses,
-> and `step_3.sh` fails on every wallet it tries to create.
+**`step_1.sh` now creates it and prints exactly one address.** In the default
+foundation-sponsored mode it creates `sec-veritas-admin`, skips the treasury entirely, and ends
+with:
+
+```
+SEND THIS ONE ADDRESS TO QFI:
+    sec-veritas-admin : qadena1...
+    export VERITAS_SEC_ADMIN=sec-veritas-admin
+```
+
+That address is what `--sec-admin` takes. `--fund-mode banksend` restores the old treasury path.
+
+> **STILL UNPROVEN END TO END.** `testscripts/test_authz_feegrant.sh` proves the *mechanism* --
+> a genuinely distinct signer, secadmin ending at exactly 0 balance, and a repeat failing after
+> revoke. But `setup_veritas.sh` has never exported `VERITAS_SEC_ADMIN`, so in every full
+> bring-up run `grant_as_foundation` took its no-signer branch and signed directly as the
+> foundation. **The wiring through step_1..3 has not been exercised.** Expect to debug it on the
+> first real run, and check a transaction's `fee.granter` before you suspect the grant -- the
+> recurring cause of `spendable balance 0aqdn` is a transaction that does not NAME the grant.
 
 This replaces the old "QFI grants tokens to sec-treasury" handoff. **Nothing is transferred. SEC
 holds no tokens at all.** What it receives is a revocable permission to spend the foundation's money
@@ -192,12 +258,12 @@ because a year is safe.
 
 ---
 
-## Step 5 — approve the proposals (after their `step_2.sh`)
+## `sec_veritas_after_step_2.sh` — approve the proposals
 
 `step_2.sh` prints two proposal ids — one for the identity service provider, one for DSVS.
 
 ```sh
-foundation_scripts/sponsor_veritas.sh --stage approve 12 13 \
+foundation_scripts/sec_veritas_after_step_2.sh 12 13 \
     --members foundation-m1,foundation-m2,foundation-m3
 ```
 
@@ -217,17 +283,61 @@ about 30 seconds. Plan the handoff accordingly — this is the step where a brin
 
 ---
 
-## Step 8 — the last foundation action (after their `step_3.sh`)
+## `sec_veritas_after_step_3.sh` — authorise the sponsor pool
+
+SEC's `step_3.sh` ends by printing a **paste block**. Paste it into your terminal exactly as given:
 
 ```sh
-foundation_scripts/veritas_sec_authorise_pool.sh \
-    --foundation-users  foundation-veritas-users \
-    --foundation-appsvr foundation-veritas-appsvr \
-    --count 30
+cat > /tmp/veritas-pool.json <<'POOLEOF'
+{
+  "chain_id": "qadena_4824-1",
+  "sponsor_base": "sec-create-wallet-sponsor",
+  "count": 30,
+  "pool": [ {"name": "...", "address": "qadena1..."}, ... ]
+}
+POOLEOF
+foundation_scripts/sec_veritas_after_step_3.sh --pool-addresses /tmp/veritas-pool.json \
+    --coord-home ~/launch/coord
 ```
 
-Authorises the app-server's sponsor pool and returns the two addresses for SEC's configuration.
-`--count` is the size of the pool; match it to what SEC used in `step_1.sh`.
+Per pool wallet it sends **two** transactions, both `--from foundation-veritas-users`:
+
+| grant | effect |
+|---|---|
+| `authz grant <wallet> --msg-type MsgGrantAllowance` | the wallet may issue fee grants **as** `foundation-veritas-users` |
+| `feegrant grant <users> <wallet> --allowed-messages MsgExec` | the foundation pays for those `MsgExec` transactions |
+
+At `count: 30` that is **62 transactions**. Neither moves money; both are revocable in one transaction.
+
+### Why a pool, and why both grants
+
+The app-server picks an **arbitrary pool member per request**, so several onboardings proceed in
+parallel without colliding on one account's sequence number. It sets the inner
+`MsgGrantAllowance.Granter` to `foundation-veritas-users`, wraps it in a `MsgExec` **signed by the
+sponsor wallet**, and names the foundation as fee payer. The first grant makes that exec resolve;
+the second makes it payable. Both are load-bearing — this was confirmed against the app-server
+source, which lives outside this repo.
+
+### The file is checked, not trusted
+
+Every failure here is silent and per-wallet: a short or stale pool means onboarding works for *some*
+citizens and not others, which is the hardest shape to diagnose from a support ticket. So the file is
+validated **before any keyring is touched** — a bad block is refused without even asking for a
+passphrase:
+
+| problem | result |
+|---|---|
+| file from another chain | `REFUSING: generated on chain 'qadena_482-1', this node is 'qadena_4824-1'` |
+| `count` disagrees with the list | `REFUSING: declares count=30 (so 31 wallets) but lists 2` |
+| address mangled in transit | `REFUSING: 'b' has address 'cosmos1nope', which is not a qadena address` |
+| duplicate entry | `REFUSING: qadena1uu29… appears twice` |
+| wallet never created | `NOT ON CHAIN: … / REFUSING: 1 of 2 pool addresses have no account` |
+| good | `pool file verified: 31 wallets, chain qadena_4824-1, all present on chain` |
+
+The count comes **from the file**, so a short pool is impossible rather than a silent partial
+authorisation. `--sponsor-base` / `--count` still work for a devnet where one keyring holds both
+sides' keys, but on a real deployment the foundation does not hold SEC's wallet keys and the paste
+block is the only route.
 
 ---
 
@@ -283,6 +393,37 @@ reads and the final broadcast run remotely; signing stays local.
 | delegation | computed | `foundation` — **not spent**, and unbondable later |
 
 Against bucket 10's 60M QDN VERITAS sub-allocation, the 200,000 float is the only outlay that leaves
-the foundation. Credential issuance is by far the most expensive operation on this chain (measured at
+the foundation.
+
+### What a user actually costs -- measured, not estimated
+
+Differenced across two complete 9-stage runs in `~/veritas-flow-evidence/` (both identical to the
+aqdn):
+
+| stage | fee |
+|---|---|
+| `cred-personal` | 234.677 QDN |
+| `cred-email` | 58.669 QDN |
+| `cred-phone` | 58.669 QDN |
+| everything else (wallet creation, claims, signing) | 0.001 QDN |
+| **one full onboarding** | **352.016 QDN** |
+
+**Credential issuance is 99.99% of the cost.** Wallet creation, claims and signing are noise
+beside it. So the float is really a credential budget:
+
+| float | onboardings |
+|---|---|
+| 100,000 QDN | ~284 |
+| 200,000 QDN (both accounts) | ~568 |
+| 2,000,000 QDN | ~5,681 |
+
+Two caveats. Those runs had all four wallet incentives at **zero**, so nothing was subsidised by
+endowment -- these are true costs, not net-of-subsidy. And `testscripts/setup_veritas.sh`'s
+`2,000,000` figure is **not** a sizing: it was deliberate headroom for a test chain, and should not
+be cited as a mainnet basis.
+
+Top up rather than overfund. Another transfer from `pubsec` is one more ceremony; getting money
+back *out* of a sponsor account needs a governance proposal, because it is not a wallet and not on
+the AML whitelist (code 1159). Credential issuance is by far the most expensive operation on this chain (measured at
 ~5.9×10¹⁹ aqdn, against ~3.2×10¹⁴ for a document signature), which is why the sponsor accounts are
 sized well above the per-provider amounts SEC's own `step_1.sh` uses.

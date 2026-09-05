@@ -6,18 +6,76 @@ set -e
 # get script dir
 SCRIPT_DIR="${0:A:h}"
 
+
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
+
+# THE KEYRING IS THE NODE'S, AND SO IS ITS BACKEND.  These steps do not choose one.
+#
+# An earlier version defaulted them to `file`.  That was wrong for a reason worth recording: the
+# keys these steps need are not all theirs.  Every create-wallet needs `$pioneer` -- the validator
+# key -- which lives in the NODE's keyring-test, the one config/client.toml names and the one the
+# node itself reads.  Defaulting to `file` created a SECOND, empty keyring beside it, prompted for
+# a passphrase to open it, and would then have failed looking for a key that was never in it.
+#
+# Encrypting SEC's keys is still the right end state, but it needs a keyring of its own -- the way
+# derive_launch_keys.sh uses --home ~/launch/coord -- plus a way to reach the pioneer from there.
+# That is a design change, not a default.  Until then: export QADENA_KEYRING_BACKEND=file only if
+# you have arranged both.
 
 
 # read variables from json file
-provideramount=$(jq -r .provideramount variables.json)
-signeramount=$(jq -r .signeramount variables.json)
-createwalletsponsoramount=$(jq -r .createwalletsponsoramount variables.json)
-pioneer=$(jq -r .pioneer variables.json)
-count=$(jq -r .count variables.json)
-treasuryname=$(jq -r .treasuryname variables.json)
-identityprovidername=$(jq -r .identityprovidername variables.json)
-dsvsprovidername=$(jq -r .dsvsprovidername variables.json)
+
+# SEC'S OWN DIRECTORY, THE WAY THE LAUNCH FLOW HAS ONE.
+#
+# Until now step_1 wrote variables.json and mnemonics.json into whatever the CURRENT DIRECTORY
+# happened to be, and steps 2 and 3 read them the same way -- so the run only worked if every step
+# was invoked from the same cwd, and nothing said which.  step_3's pool file went somewhere else
+# again (veritas_scripts/).  One directory, named, with the same shape as ~/launch:
+#
+#   $VERITAS_SEC_HOME/
+#       variables.json        the run's configuration -- names, counts, amounts, fund mode
+#       mnemonics.json        THE KEYS.  Plaintext, 600, because steps 2 and 3 read it.
+#       pool_addresses.json   written by step_3, handed to the foundation
+#
+# 700 on the directory and 600 on the file are the only protection mnemonics.json has.  It is the
+# one artifact here whose loss is unrecoverable and whose disclosure is total: back it up off this
+# machine, and delete it when the deployment is established.
+: ${VERITAS_SEC_HOME:="$HOME/sec-veritas"}
+
+# SEC'S KEYS LIVE WITH SEC'S FILES.
+#
+# Steps 1, 2 and 3 are all run by SEC, and every key they create is SEC's: the admin key, the two
+# service providers, the create-wallet sponsor, the DSVS user.  None of them belongs to the node,
+# and putting them in the node's keyring means `init.sh`'s `rm -rf $QADENAHOME` destroys the
+# deployment's identities -- the same trap the launch flow avoids by keeping its keyring in
+# ~/launch/coord rather than in the node home.
+#
+# --home still points at the node (config, and the RPC it talks to); only the KEYRING moves.
+# Exported so the provider scripts these steps call inherit it without each needing a flag.
+#
+# The pioneer is NOT an obstacle: `create-wallet` takes a home-pioneer-ID string
+# (x/qadena/client/cli/tx_create_wallet.go:160, argHomePioneerID), not a key name, so nothing here
+# needs the validator's key to be in the same keyring.
+export QADENA_KEYRING_DIR="$VERITAS_SEC_HOME/keyring"
+mkdir -p "$QADENA_KEYRING_DIR" 2>/dev/null; chmod 700 "$QADENA_KEYRING_DIR" 2>/dev/null
+
+# READ FROM SEC'S DIRECTORY, AND SAY SO WHEN IT IS NOT THERE.  A missing variables.json used to
+# surface as jq errors and empty variables, which then flowed into transactions as blanks.
+for _f in variables.json mnemonics.json; do
+    [ -r "$VERITAS_SEC_HOME/$_f" ] || {
+        echo "$VERITAS_SEC_HOME/$_f is missing -- run step_1.sh first,"
+        echo "or point at the right directory:  export VERITAS_SEC_HOME=<dir>"
+        exit 1; }
+done
+
+provideramount=$(jq -r .provideramount "$VERITAS_SEC_HOME/variables.json")
+signeramount=$(jq -r .signeramount "$VERITAS_SEC_HOME/variables.json")
+createwalletsponsoramount=$(jq -r .createwalletsponsoramount "$VERITAS_SEC_HOME/variables.json")
+pioneer=$(jq -r .pioneer "$VERITAS_SEC_HOME/variables.json")
+count=$(jq -r .count "$VERITAS_SEC_HOME/variables.json")
+treasuryname=$(jq -r .treasuryname "$VERITAS_SEC_HOME/variables.json")
+identityprovidername=$(jq -r .identityprovidername "$VERITAS_SEC_HOME/variables.json")
+dsvsprovidername=$(jq -r .dsvsprovidername "$VERITAS_SEC_HOME/variables.json")
 
 echo "treasuryname: $treasuryname"
 echo "provideramount: $provideramount"
@@ -27,8 +85,8 @@ echo "pioneer: $pioneer"
 echo "count: $count"
 
 # read mnemonics from json file
-identityprovidermnemonic=$(jq -r .identityprovidermnemonic mnemonics.json)
-dsvsprovidermnemonic=$(jq -r .dsvsprovidermnemonic mnemonics.json)
+identityprovidermnemonic=$(jq -r .identityprovidermnemonic "$VERITAS_SEC_HOME/mnemonics.json")
+dsvsprovidermnemonic=$(jq -r .dsvsprovidermnemonic "$VERITAS_SEC_HOME/mnemonics.json")
 
 echo "identityprovidermnemonic: $identityprovidermnemonic"
 echo "dsvsprovidermnemonic: $dsvsprovidermnemonic"

@@ -819,16 +819,16 @@ genesis:
 
         # Fiat-denominated, so these REQUIRE a working pricefeed: create/update credential converts
         # through cn:qdn:php.  Do not launch with fiat fees until prices are actually being posted.
-        create_credential_fee: "30php"
-        create_bulk_credentials_fee: "10php"
+        create_credential_fee: "3php"
+        create_bulk_credentials_fee: "1php"
 
-        ekyc_submit_new_app_royalty_percentage: "40"
-        ekyc_submit_reuse_app_royalty_percentage: "20"
-        ekyc_submit_reuse_provider_royalty_percentage: "20"
-        ekyc_identity_owner_royalty_percentage: "30"
+        ekyc_submit_new_app_royalty_percentage: "4"
+        ekyc_submit_reuse_app_royalty_percentage: "2"
+        ekyc_submit_reuse_provider_royalty_percentage: "2"
+        ekyc_identity_owner_royalty_percentage: "3"
 
         # CREDENTIAL UPDATE POLICY
-        update_credential_fee: "30php"
+        update_credential_fee: "3php"
         # 2, MATCHING THE POLICY THE CODE ACTUALLY IMPLEMENTS.  Resolved 2026-09-01: this file
         # said 1 while the devnet had moved to 2 in f233c6b6, the commit that rewrote
         # x/qadena/common/credential_policy.go (155 lines).  1 was stale, not a decision.

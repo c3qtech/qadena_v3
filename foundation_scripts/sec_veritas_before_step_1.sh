@@ -8,11 +8,11 @@
 #
 #   HERE     FOUNDATION  stake for voting power; create and fund the two sponsor accounts
 #   step_1   SEC         creates its keys, reports its admin address
-#   *        FOUNDATION  foundation_scripts/veritas_sec_delegate_grant_authority.sh --sec-admin <addr>
+#   *        FOUNDATION  foundation_scripts/sec_veritas_after_step_1.sh --sec-admin <addr>
 #   step_2   SEC         creates its providers, reports two proposal ids
-#   *        FOUNDATION  sponsor_veritas.sh --approve <id> <id>   (deposit + vote, expedited)
+#   *        FOUNDATION  sec_veritas_before_step_1.sh --approve <id> <id>   (deposit + vote, expedited)
 #   step_3   SEC         creates its wallets and users
-#   *        FOUNDATION  veritas_sec_authorise_pool.sh -- the app-server's sponsor pool
+#   *        FOUNDATION  sec_veritas_after_step_3.sh -- the app-server's sponsor pool
 #
 # WHY THIS EXISTS RATHER THAN testscripts/setup_veritas.sh.  That one is a TEST HARNESS: it plays
 # both roles, holds every key in one keyring, and funds everything with `tx bank send --from
@@ -38,9 +38,9 @@
 # With no --members it PROMPTS for them.  Either way the keys stay here; nothing is relayed.  If
 # the members are on separate machines, use --print-ceremony and hand each one their command.
 #
-#   sponsor_veritas.sh --stage prepare  --members foundation-m1,foundation-m2,foundation-m3 \
+#   sec_veritas_before_step_1.sh --stage prepare  --members foundation-m1,foundation-m2,foundation-m3 \
 #                      --pubsec-members pubsec-m1,pubsec-m2,pubsec-m3
-#   sponsor_veritas.sh --stage approve 12 13 --members foundation-m1,foundation-m2,foundation-m3
+#   sec_veritas_before_step_1.sh --stage approve 12 13 --members foundation-m1,foundation-m2,foundation-m3
 
 HERE="${0:A:h}"
 source "$HERE/../scripts/setup_env.sh"
@@ -81,7 +81,12 @@ PUBSEC_MEMBERS=""
 MNEMONICS_DIR=""
 COORD_HOME=""
 KEYRING_PASSFILE=""
-BACKEND="${QADENA_KEYRING_BACKEND:-test}"
+# FILE, NOT test.  These scripts operate on the COORDINATOR keyring, which derive_launch_keys.sh
+# creates with --keyring-backend file -- encrypted.  `test` is an UNENCRYPTED keyring, and pointing
+# foundation tooling at one by default is wrong twice: it is the wrong keyring (the buckets are not
+# in it, so every lookup fails with "no key"), and an unencrypted default has no business anywhere
+# near launch custody.  Pass --keyring-backend test explicitly for a devnet.
+BACKEND="${QADENA_KEYRING_BACKEND:-file}"
 WORKDIR=""
 PRINT_ONLY=0
 VIA_SSH=""
@@ -95,8 +100,8 @@ TXLOG=()
 
 usage() {
     print "Usage:"
-    print "  sponsor_veritas.sh --stage prepare  [options]      # BEFORE SEC's step_1"
-    print "  sponsor_veritas.sh --stage approve <proposal-id>... [options]"
+    print "  sec_veritas_before_step_1.sh --stage prepare  [options]      # BEFORE SEC's step_1"
+    print "  sec_veritas_before_step_1.sh --stage approve <proposal-id>... [options]"
     print ""
     print "  --members <m1,m2,..>        members of the STAKE bucket ($STAKE_BUCKET) that sign."
     print "                              Omit to be prompted."
@@ -115,7 +120,7 @@ usage() {
     print "  --coord-home <dir>          the COORDINATOR keyring holding the bucket multisigs --"
     print "                              derive_launch_keys.sh --home.  The node's own keyring does"
     print "                              NOT hold them, and should not."
-    print "  --keyring-backend <b>       default $BACKEND; use 'file' for an encrypted coordinator"
+    print "  --keyring-backend <b>       default $BACKEND (encrypted); 'test' for a devnet keyring"
     print "  --keyring-passfile <f>      read the keyring passphrase from a file instead of asking"
     print "  --mnemonics-dir <dir>       REQUIRED if $APPSVR/$USERS do not exist yet: where"
     print "                              each new key's mnemonic is SEALED.  Same format as"
@@ -560,7 +565,7 @@ prepare)
     printf "  %-26s %s\n" "$USERS"  "$(addr_of $USERS)"
     print ""
     print "After step_1 returns SEC's admin address:"
-    print "  foundation_scripts/veritas_sec_delegate_grant_authority.sh --sec-admin <addr> --foundation-appsvr $APPSVR"
+    print "  foundation_scripts/sec_veritas_after_step_1.sh --sec-admin <addr> --foundation-appsvr $APPSVR"
     print ""
     print "  <addr> is SEC's ADMIN key -- the one that will sign authz MsgExec, and that holds"
     print "  ZERO tokens by design.  It is NOT the sec-treasury address step_1 prints: that"

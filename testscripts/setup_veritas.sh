@@ -7,6 +7,12 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# THE HARNESS SAYS `test` OUT LOUD.  step_1/2/3 default to the ENCRYPTED keyring now, which is
+# right for SEC's own machine and impossible here: this suite runs unattended in the fleet and
+# cannot answer a passphrase prompt.  Exporting it explicitly is what keeps that default safe --
+# the devnet opts out by name rather than by being the default.
+export QADENA_KEYRING_BACKEND=test
+
 # inputs
 
 sectreasurymnemonic="head recall pear surface flavor inquiry aspect pause snow scheme planet million weapon outdoor text effort enjoy school round expand deposit wave drift reopen"
@@ -175,7 +181,7 @@ $veritasscripts/step_3.sh
 # ---------------------------------------------------------------------------------------------
 # STEP 4 -- the FOUNDATION's final action.
 #
-# Extracted into foundation_scripts/veritas_sec_authorise_pool.sh rather than inlined, because in a real deployment this is
+# Extracted into foundation_scripts/sec_veritas_after_step_3.sh rather than inlined, because in a real deployment this is
 # NOT SEC's to run: every grant it issues is signed by the foundation, and authz cannot be
 # sub-delegated, so SEC could not do it even with the step_1 authorisation. Inlining it here would
 # have hidden that -- this harness holds every key in one keyring and so cannot tell the difference.
@@ -183,6 +189,6 @@ $veritasscripts/step_3.sh
 # The harness calls it because it plays both roles; SEC's real procedure stops after step_3 and waits
 # for the foundation to run this and return the two addresses.
 if [ "$fund_mode" != "banksend" ]; then
-    $qadenabuild/foundation_scripts/veritas_sec_authorise_pool.sh --foundation-users "$foundation_users" \
+    $qadenafoundationscripts/sec_veritas_after_step_3.sh --foundation-users "$foundation_users" \
         --foundation-appsvr "$foundation_appsvr" --count "$count"
 fi

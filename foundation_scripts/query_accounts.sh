@@ -37,7 +37,12 @@ QBIN="${qadenabin:-$HOME/qadena/bin}/qadenad"
 NODE_HOME="${QADENAHOME:-$HOME/qadena}"
 NODE="${QADENA_NODE:-tcp://localhost:26657}"
 COORD_HOME=""
-BACKEND="${QADENA_KEYRING_BACKEND:-test}"
+# FILE, NOT test.  These scripts operate on the COORDINATOR keyring, which derive_launch_keys.sh
+# creates with --keyring-backend file -- encrypted.  `test` is an UNENCRYPTED keyring, and pointing
+# foundation tooling at one by default is wrong twice: it is the wrong keyring (the buckets are not
+# in it, so every lookup fails with "no key"), and an unencrypted default has no business anywhere
+# near launch custody.  Pass --keyring-backend test explicitly for a devnet.
+BACKEND="${QADENA_KEYRING_BACKEND:-file}"
 KEYRING_PASSFILE=""
 WANT=()
 SHOW_BUCKETS=0
@@ -58,7 +63,7 @@ usage() {
     print "  --csv               machine-readable, one row per account"
     print "  --coord-home <dir>  keyring holding the bucket names (derive_launch_keys.sh --home)."
     print "                      Only needed to resolve NAMES; addresses work without it."
-    print "  --keyring-backend <b>   default $BACKEND"
+    print "  --keyring-backend <b>   default $BACKEND (encrypted coordinator keyring)"
     print "  --keyring-passfile <f>  read the keyring passphrase from a file"
     print "  --node <rpc>        default $NODE"
     exit ${1:-1}

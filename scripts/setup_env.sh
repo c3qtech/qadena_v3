@@ -44,6 +44,7 @@ if [[ -d "$SCRIPT_DIR/../cmd" && -d "$SCRIPT_DIR/../x" ]]; then
     export qadenatestdata="$qadenabuild/test_data"
     export qadenaproviderscripts="$qadenabuild/provider_scripts"
     export veritasscripts="$qadenabuild/veritas_scripts"
+    export qadenafoundationscripts="$qadenabuild/foundation_scripts"
 
     echo "Qadena build: $qadenabuild" >&2
     echo "Qadena build scripts: $qadenabuildscripts" >&2
@@ -54,10 +55,87 @@ else
 #    export qadenatestscripts="$QADENAHOME/testscripts"
     export qadenaproviderscripts="$QADENAHOME/provider_scripts"
     export veritasscripts="$QADENAHOME/veritas_scripts"
+    # BOTH BRANCHES, ALWAYS.  qadenabuild is exported only above, so `$qadenabuild/foundation_scripts/x`
+    # expands to `/foundation_scripts/x` here and the call fails on an installed node.  Every other
+    # path in this file is set in both branches; this one has to be too.
+    export qadenafoundationscripts="$QADENAHOME/foundation_scripts"
 fi
 
 export qadenabin="$QADENAHOME/bin"
-alias qadenad_alias="$qadenabin/qadenad --home $QADENAHOME"
+# A FUNCTION, NOT AN ALIAS, SO IT CAN BRANCH ON THE SUBCOMMAND.
+#
+# --keyring-backend is NOT a global flag: `query` rejects it outright ("unknown flag"), so a
+# wrapper that appends it unconditionally breaks every read -- and breaks them QUIETLY, because
+# call sites pipe stderr to /dev/null and read an empty result as a legitimate answer.
+#
+# DEFAULT STAYS `test`, DELIBERATELY.  36 files under testscripts/ depend on it, and an unattended
+# fleet run cannot type a passphrase.  A REAL deployment -- SEC's steps on their own machine, with
+# keys that matter -- should export QADENA_KEYRING_BACKEND=file, which is the whole point of this
+# being a variable.  The foundation_scripts/ already default to `file` on their own.
+: ${QADENA_KEYRING_BACKEND:=test}
+# THE SAME BINARY WITHOUT THE PASSPHRASE WRAPPER, for the handful of calls that must control
+# their own stdin -- `keys add --recover`, which needs the mnemonic first and the passphrase after.
+# WHERE THE KEYS LIVE, SEPARATELY FROM WHERE THE NODE LIVES.
+#
+# --home carries the node's config and data; --keyring-dir carries the keyring, and cosmos lets
+# them differ.  That is what allows a caller to keep its OWN keys beside its own files -- SEC's
+# steps put theirs in $VERITAS_SEC_HOME/keyring -- while still reading config from the node home.
+# Unset, the keyring stays inside --home, which is what every other script in this tree expects.
+_kr_dir_flag() { [ -n "${QADENA_KEYRING_DIR:-}" ] && print -- "--keyring-dir $QADENA_KEYRING_DIR" }
+
+qadenad_alias_raw() {
+    "$qadenabin/qadenad" --home "$QADENAHOME" --keyring-backend "$QADENA_KEYRING_BACKEND" \
+        ${=$(_kr_dir_flag)} "$@"
+}
+
+qadenad_alias() {
+    case "${1:-}" in
+        keys|tx)
+            # THE PASSPHRASE ONLY.  NO `cat`, DELIBERATELY.
+            #
+            # An earlier version forwarded the caller's stdin here so that
+            # `echo "$mn" | qadenad_alias keys add x --recover` could work under backend=file.
+            # It HANGS: when stdin is an open-but-empty pipe -- which is the normal state inside a
+            # script -- `cat` waits for an EOF that never comes.  Measured 2026-09-05, a two-minute
+            # block with no output.
+            #
+            # So this wrapper feeds the passphrase and nothing else, and a call that needs to pipe
+            # something as well does its own redirection at the call site, where the ordering is
+            # visible.  For the record, `keys add --recover` reads the MNEMONIC FIRST and the
+            # passphrase after; putting the passphrase first makes qadenad report "invalid
+            # mnemonic", blaming the wrong input.
+            if [[ -n "${QADENA_KEYRING_PASS:-}" ]]; then
+                { print -r -- "$QADENA_KEYRING_PASS"; print -r -- "$QADENA_KEYRING_PASS" } \
+                  | "$qadenabin/qadenad" --home "$QADENAHOME" \
+                        --keyring-backend "$QADENA_KEYRING_BACKEND" ${=$(_kr_dir_flag)} "$@"
+            else
+                "$qadenabin/qadenad" --home "$QADENAHOME" \
+                    --keyring-backend "$QADENA_KEYRING_BACKEND" ${=$(_kr_dir_flag)} "$@"
+            fi ;;
+        *)  "$qadenabin/qadenad" --home "$QADENAHOME" "$@" ;;
+    esac
+}
+
+# ASK ONCE PER RUN, NOT ONCE PER KEY.  A step creates several keys and reads several more; the
+# file backend prompts on every one of them, and the prompt is invisible wherever a call site
+# captures output.  Collected here and handed to each qadenad invocation by the wrapper above.
+qadena_keyring_unlock() {
+    [ "$QADENA_KEYRING_BACKEND" = "file" ] || return 0
+    [ -z "${QADENA_KEYRING_PASS:-}" ] || return 0
+    if [ -n "${QADENA_KEYRING_PASSFILE:-}" ]; then
+        QADENA_KEYRING_PASS=$(head -1 "$QADENA_KEYRING_PASSFILE")
+    else
+        printf "Keyring passphrase for %s (hidden, will not echo): " "$QADENAHOME" >&2
+        read -rs QADENA_KEYRING_PASS; echo "" >&2
+        if [ ! -d "$QADENAHOME/keyring-file" ]; then
+            printf "  confirm: " >&2; read -rs _kp2; echo "" >&2
+            [ "$QADENA_KEYRING_PASS" = "$_kp2" ] || { echo "passphrases do not match" >&2; exit 1; }
+            unset _kp2
+        fi
+    fi
+    [ -n "$QADENA_KEYRING_PASS" ] || { echo "empty passphrase" >&2; exit 1; }
+    export QADENA_KEYRING_PASS
+}
 export qadenad_binary="$qadenabin/qadenad"
 
 export LD_LIBRARY_PATH="$qadenabin:$LD_LIBRARY_PATH"

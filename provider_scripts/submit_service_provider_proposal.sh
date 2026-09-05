@@ -17,7 +17,11 @@ if [ -z $providername ] || [ -z $json_proposal ] ; then
 fi
 
 # check if address already exists
-address=$(qadenad_alias keys show $providername --output json --keyring-backend test 2> /dev/null| jq -r '.address')
+# NO SECOND --keyring-backend HERE.  qadenad_alias already supplies the backend AND the keyring
+# directory, and passing `test` again overrode both -- so with SEC's keys in
+# $VERITAS_SEC_HOME/keyring this looked in the node's keyring instead and found nothing.  An empty
+# address then flowed into the proposal as a blank field.
+address=$(qadenad_alias keys show $providername --output json 2> /dev/null | jq -r '.address')
 if [ -z $address ] ; then
     echo "Address not found: $providername"
     exit 1
