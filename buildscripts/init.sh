@@ -306,7 +306,9 @@ if [[ -n "$mainnet_source" ]]; then
             echo ""
             echo "Opening the sealed mnemonic for $PIONEER1:"
             echo "  $pioneer_mnemonic_enc"
-            print -u2 -n "*** Keyring passphrase (hidden, will not echo): "
+            print -u2 "*** The SEALING passphrase -- the one derive_launch_keys.sh asked for."
+            print -u2 "    Same passphrase that opens the coordinator keyring."
+            print -u2 -n "*** passphrase (hidden, will not echo): "
             read -s _ppass
             [[ -t 0 ]] && stty echo 2>/dev/null
             echo ""

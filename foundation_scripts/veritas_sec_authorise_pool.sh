@@ -10,7 +10,7 @@
 #   step_2  SEC        creates its providers, reports the two proposal ids
 #   *       FOUNDATION approves the proposals
 #   step_3  SEC        creates its wallets and users
-#   step_4  FOUNDATION authorises the APP-SERVER's sponsor pool, and returns the two addresses
+#   *       FOUNDATION veritas_sec_authorise_pool.sh -- the APP-SERVER's sponsor pool
 #
 # WHY THIS CANNOT BE PART OF step_3. Every grant here is signed by the GRANTER -- the foundation --
 # and authz cannot be sub-delegated, so SEC cannot issue these on the foundation's behalf even with
@@ -53,9 +53,9 @@ if [ -z "$count" ]; then
 fi
 
 fu_addr=$(qadenad_alias keys show "$foundation_users" -a 2>/dev/null) \
-    || { echo "$foundation_users not in this keyring -- step_4 is run by the FOUNDATION, not by SEC"; exit 1; }
+    || { echo "$foundation_users not in this keyring -- this script is run by the FOUNDATION, not by SEC"; exit 1; }
 fa_addr=$(qadenad_alias keys show "$foundation_appsvr" -a 2>/dev/null) \
-    || { echo "$foundation_appsvr not in this keyring -- step_4 is run by the FOUNDATION, not by SEC"; exit 1; }
+    || { echo "$foundation_appsvr not in this keyring -- this script is run by the FOUNDATION, not by SEC"; exit 1; }
 
 echo "-------------------------"
 echo "Step 4: authorising the app-server to grant as $foundation_users"

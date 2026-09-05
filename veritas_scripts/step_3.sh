@@ -15,7 +15,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 #   banksend           -- the original behaviour: sec-treasury transfers tokens to every wallet.
 #
 # Set VERITAS_FUND_MODE=banksend to restore the old path.
-: ${VERITAS_FUND_MODE:=feegrant}
 : ${VERITAS_FOUNDATION_APPSVR:=foundation-appsvr}
 
 # Every message a VERITAS provider/signer wallet broadcasts, from the trace of the app-server's
@@ -68,7 +67,7 @@ treasuryname=$(jq -r .treasuryname variables.json)
 # sec-treasury -- in this mode sec-treasury is never funded, so it has no account at all and
 # create-wallet fails with "account ... not found" / "Couldn't grant fee".  The foundation account
 # is funded and is already the payer for SEC's operational wallets, so it plays the sponsor role.
-if [ "$VERITAS_FUND_MODE" = "feegrant" ]; then
+if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
     echo "toll-free: $VERITAS_FOUNDATION_APPSVR sponsors wallet creation; sec-treasury is not used"
     treasuryname="$VERITAS_FOUNDATION_APPSVR"
 fi

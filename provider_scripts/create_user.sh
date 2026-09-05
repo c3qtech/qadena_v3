@@ -54,12 +54,11 @@ echo "eph count: $eph_count"
 #
 # This runs INSIDE create_user.sh rather than in step_3's fund_wallet because step_3 funds the
 # wallet only AFTER create_user.sh returns -- by which time the claims have already failed.
-: ${VERITAS_FUND_MODE:=banksend}
 USER_FEE_GRANTER_FLAG=""
 USER_MSGS="/qadena.qadena.MsgAddPublicKey,/qadena.qadena.MsgCreateWallet,/qadena.qadena.MsgClaimCredential,/qadena.qadena.MsgUpdateCredential,/qadena.qadena.MsgClaimUpdatedCredential,/qadena.qadena.MsgProtectPrivateKey,/qadena.dsvs.MsgSignDocument,/qadena.dsvs.MsgRegisterAuthorizedSignatory,/qadena.nameservice.MsgBindCredential,/qadena.nameservice.MsgUnbindCredential"
 
 grant_user_fees() {   # grant_user_fees <key-name>
-    [ "$VERITAS_FUND_MODE" = "feegrant" ] || return 0
+    [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ] || return 0
     local addr granter
     addr=$(qadenad_alias keys show "$1" --address 2>/dev/null) || return 0
     [ -n "$addr" ] || return 0
@@ -79,7 +78,7 @@ grant_user_fees() {   # grant_user_fees <key-name>
 # fund_wallet -- but a grant is only used when the transaction NAMES it, so the flag is what makes
 # the difference between working and "spendable balance 0aqdn".
 PROVIDER_FEE_GRANTER_FLAG=""
-if [ "$VERITAS_FUND_MODE" = "feegrant" ]; then
+if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
     USER_FEE_GRANTER_FLAG="--fee-granter $(qadenad_alias keys show $createwalletsponsor --address 2>/dev/null)"
     PROVIDER_FEE_GRANTER_FLAG="--fee-granter ${VERITAS_FOUNDATION_APPSVR:-foundation-appsvr}"
     # resolve the name to an address; --fee-granter takes an address
@@ -101,7 +100,7 @@ fi
 
 # The wallets exist now, so they can be granted. Main wallet first, then each ephemeral one: a
 # grant names ONE address, so every wallet that signs needs its own.
-if [ "$VERITAS_FUND_MODE" = "feegrant" ]; then
+if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
     grant_user_fees "$username"
     if [ -n "$eph_count" ]; then
         for i in $(seq 1 $eph_count); do grant_user_fees "$username-eph$i"; done

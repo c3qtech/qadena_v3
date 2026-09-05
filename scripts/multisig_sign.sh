@@ -48,11 +48,29 @@ VIA_SSH="${QADENA_VIA_SSH:-}"
 # QUIETLY, because each call site pipes stderr to /dev/null and reads an empty result as a
 # legitimate answer.  Measured 2026-09-01: seq_flags returned nothing (so --sequence-offset was
 # silently a no-op) and every broadcast reported failure for a tx that had in fact landed.
+# THE PASSPHRASE IS FED PER CALL, NOT PER SCRIPT.  With backend=file every `keys` and every `tx`
+# prompts, and ONE INVOCATION OF THIS SCRIPT MAKES SEVERAL -- `sign` alone resolves the multisig
+# address, reads the account sequence, then signs.  A caller that pipes the passphrase into the
+# script as a whole therefore fails: the first qadenad drains the pipe and every later one gets
+# EOF, which the backend counts as a wrong attempt.  Three of those and the keyring locks with
+# "too many failed passphrase attempts" -- a message that blames the passphrase when the passphrase
+# was right.  Measured 2026-09-05.
+#
+# So the caller exports QADENA_KEYRING_PASS and each invocation gets its own copy.  Twice, because
+# the backend asks for confirmation the first time it opens a keyring and ignores the surplus line
+# afterwards.  It is an environment variable rather than an argument so it stays out of `ps`; it is
+# still readable by this user's own processes, which is the same trust boundary as the keyring file.
 q() {
+    local -a cmd
     case "${1:-}" in
-        keys|tx) "$QBIN" --home "$HOME_DIR" --keyring-backend "$BACKEND" "$@" ;;
-        *)       "$QBIN" --home "$HOME_DIR" "$@" ;;
+        keys|tx) cmd=("$QBIN" --home "$HOME_DIR" --keyring-backend "$BACKEND" "$@") ;;
+        *)       cmd=("$QBIN" --home "$HOME_DIR" "$@") ;;
     esac
+    if [[ -n "${QADENA_KEYRING_PASS:-}" && ( "${1:-}" == keys || "${1:-}" == tx ) ]]; then
+        { print -r -- "$QADENA_KEYRING_PASS"; print -r -- "$QADENA_KEYRING_PASS" } | "${cmd[@]}"
+    else
+        "${cmd[@]}"
+    fi
 }
 
 # THE CHAIN-TOUCHING CALLS, AND ONLY THOSE.  With --via-ssh they run qadenad ON THE NODE instead
@@ -79,6 +97,9 @@ usage() {
     print "  multisig_sign.sh build-feegrant --granter <msig> --grantee <addr> --msgs <csv>"
     print "                                  [--period <s>] [--period-limit <amt>] --out <file>"
     print "  multisig_sign.sh build-send     --from <msig> --to <addr> --amount <amt> --out <file>"
+    print "  multisig_sign.sh build-delegate --from <msig> --validator <valoper> --amount <amt> --out <f>"
+    print "  multisig_sign.sh build-deposit  --from <msig> --proposal <id> --amount <amt> --out <f>"
+    print "  multisig_sign.sh build-vote     --from <msig> --proposal <id> --vote <opt> --out <f>"
     print "  multisig_sign.sh sign           --tx <unsigned> --multisig <msig> --from <member> --out <sig>"
     print "  multisig_sign.sh combine        --tx <unsigned> --multisig <msig> --out <signed> <sig>..."
     print "  multisig_sign.sh broadcast      --tx <signed>"
@@ -106,6 +127,7 @@ CMD="$1"; shift
 [[ "$CMD" == "--help" || "$CMD" == "-h" ]] && usage 0
 granter="" grantee="" msgs="" period="2592000" period_limit="1000qdn" out=""
 from="" to="" amount="" tx="" msig="" seqoff=0
+validator="" proposal="" vote_opt=""
 sigs=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -117,6 +139,9 @@ while [[ $# -gt 0 ]]; do
         --from) from="$2"; shift 2 ;;
         --to) to="$2"; shift 2 ;;
         --amount) amount="$2"; shift 2 ;;
+        --validator) validator="$2"; shift 2 ;;
+        --proposal) proposal="$2"; shift 2 ;;
+        --vote) vote_opt="$2"; shift 2 ;;
         --out) out="$2"; shift 2 ;;
         --tx) tx="$2"; shift 2 ;;
         --multisig) msig="$2"; shift 2 ;;
@@ -133,7 +158,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -x "$QBIN" ]] || { print -u2 "qadenad not found at $QBIN"; exit 1 }
-[[ -n "$CHAIN" ]] || { print -u2 "--chain-id is required: a signature is bound to one chain, and"
+[[ -n "$CHAIN" ]] || { print -u2 -- "--chain-id is required: a signature is bound to one chain, and"
                        print -u2 "signing for the wrong one produces a tx that is silently invalid."; exit 1 }
 
 # Resolve a key NAME or an address to an address, so either may be passed anywhere.
@@ -188,6 +213,34 @@ build-send)
         --from "$fa" --generate-only --chain-id "$CHAIN" --node "$NODE" \
         --gas "$GAS" --gas-prices "$GAS_PRICES" > "$out" || exit 1
     print "built $out  (from $fa) -- unsigned; the sequence binds at sign"
+    ;;
+build-delegate)
+    # STAKE IS WHAT VOTING POWER IS MADE OF.  A bucket's tokens count for nothing in a tally until
+    # they are BONDED -- x/gov reads delegations, not balances (tally.go, DelegatorDeductions) --
+    # and the vote is credited to the DELEGATOR, not the validator.  So a treasury that must pass
+    # a proposal delegates first and votes second, and this is the first half of that.
+    [[ -n "$from" && -n "$validator" && -n "$amount" && -n "$out" ]] || usage
+    fa=$(addr_of "$from")
+    q tx staking delegate "$validator" "$amount" \
+        --from "$fa" --generate-only --chain-id "$CHAIN" --node "$NODE" \
+        --gas "$GAS" --gas-prices "$GAS_PRICES" > "$out" || exit 1
+    print "built $out  (delegator $fa -> $validator) -- unsigned; the sequence binds at sign"
+    ;;
+build-deposit)
+    [[ -n "$from" && -n "$proposal" && -n "$amount" && -n "$out" ]] || usage
+    fa=$(addr_of "$from")
+    q tx gov deposit "$proposal" "$amount" \
+        --from "$fa" --generate-only --chain-id "$CHAIN" --node "$NODE" \
+        --gas "$GAS" --gas-prices "$GAS_PRICES" > "$out" || exit 1
+    print "built $out  (depositor $fa, proposal $proposal) -- unsigned; the sequence binds at sign"
+    ;;
+build-vote)
+    [[ -n "$from" && -n "$proposal" && -n "$vote_opt" && -n "$out" ]] || usage
+    fa=$(addr_of "$from")
+    q tx gov vote "$proposal" "$vote_opt" \
+        --from "$fa" --generate-only --chain-id "$CHAIN" --node "$NODE" \
+        --gas "$GAS" --gas-prices "$GAS_PRICES" > "$out" || exit 1
+    print "built $out  (voter $fa, proposal $proposal = $vote_opt) -- unsigned; sequence binds at sign"
     ;;
 sign)
     [[ -n "$tx" && -n "$msig" && -n "$from" && -n "$out" ]] || usage
@@ -244,25 +297,51 @@ broadcast)
     outj=$(qnode tx broadcast "$btx" --output json 2>&1) || { print -u2 "$outj"; exit 1 }
     h=$(print "$outj" | grep '^{' | tail -1 | jq -r '.txhash // ""')
     [[ -n "$h" ]] || { print -u2 "no txhash; broadcast said:"; print -u2 "$outj"; exit 1 }
+
+    # THE BROADCAST RESPONSE IS CheckTx, AND IT IS NOT THE ANSWER.  Default --broadcast-mode is
+    # sync, so this code reflects only whether the node ACCEPTED the tx into its mempool -- not
+    # whether it executed.  A tx can pass CheckTx and still fail in the block (code 1159, out of
+    # gas), and it can fail CheckTx outright (bad sequence, fee below minimum) in which case it
+    # will NEVER be included and polling for it just burns the timeout before reporting the wrong
+    # reason.  So: a non-zero CheckTx code is a definitive rejection, reported as itself.
+    ctx_code=$(print "$outj" | grep '^{' | tail -1 | jq -r '.code // 0')
+    if [[ -n "$ctx_code" && "$ctx_code" != "0" ]]; then
+        print -u2 "REJECTED before inclusion (CheckTx code $ctx_code) -- this tx will never land:"
+        print -u2 "  $(print "$outj" | grep '^{' | tail -1 | jq -r '.raw_log // ""' | head -c 300)"
+        [[ -n "$VIA_SSH" ]] && ssh -o ConnectTimeout=10 "$VIA_SSH" "rm -f $btx" 2>/dev/null
+        exit 1
+    fi
     print "broadcast $h"
     # POLL, DO NOT ASK ONCE.  `query wait-tx` is best-effort here (it is swallowed by `|| true`
     # so a missing subcommand cannot fail the run), and a single `query tx` straight after can
     # race inclusion: the tx is accepted, not yet in a block, the query returns nothing, and an
     # empty code reads as failure.  Observed 2026-09-01 on a grant that had in fact landed.
-    qnode query wait-tx "$h" --timeout 60s > /dev/null 2>&1 || true
+    qnode query wait-tx "$h" --timeout ${QADENA_TX_WAIT:-60}s > /dev/null 2>&1 || true
     code=""
-    for _i in {1..30}; do
+    WAIT_SECS=${QADENA_TX_WAIT:-60}
+    for _i in {1..$(( WAIT_SECS / 2 ))}; do
         code=$(qnode query tx "$h" --output json 2>/dev/null | jq -r '.code // ""')
         [[ -n "$code" ]] && break
         sleep 2
     done
     [[ -n "$VIA_SSH" ]] && ssh -o ConnectTimeout=10 "$VIA_SSH" "rm -f $btx" 2>/dev/null
+    # THREE OUTCOMES, NOT TWO.  Conflating "not seen yet" with "failed" is how an operator gets
+    # told a transaction failed when it was merely slow -- and then retries a transfer that is
+    # about to land.  Exit 2 means UNKNOWN: do not retry, go and look.
     if [[ "$code" == "0" ]]; then
-        print "  landed, code 0"
-    else
-        print -u2 "  FAILED on chain, code ${code:-<not included within 60s>}:"
+        print "  landed in a block, code 0 -- executed successfully"
+    elif [[ -n "$code" ]]; then
+        print -u2 "  EXECUTED AND FAILED, code $code:"
         qnode query tx "$h" --output json 2>/dev/null | jq -r '.raw_log' | head -c 300
+        print -u2 ""
+        print -u2 "  The tx IS on chain and it did not do what you wanted.  Re-signing is safe;"
+        print -u2 "  the sequence it consumed is spent either way."
         exit 1
+    else
+        print -u2 "  UNKNOWN: accepted into the mempool, but not in a block after ${WAIT_SECS}s."
+        print -u2 "  This is NOT a failure -- it may still land.  Do not re-broadcast blindly."
+        print -u2 "    qadenad query tx $h"
+        exit 2
     fi
     ;;
 *) usage ;;

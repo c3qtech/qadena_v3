@@ -99,10 +99,10 @@ while [[ $# -gt 0 ]]; do
         *) print -u2 "unknown option: $1"; exit 1 ;;
     esac
 done
-[[ -n "$NAME" && -n "$BUCKET" ]] || { print -u2 "--name and --from-bucket are required"; usage }
-[[ "$MODE" == "banksend" || "$MODE" == "feegrant" ]] || { print -u2 "--mode must be banksend or feegrant"; exit 1 }
-[[ "$MODE" == "banksend" && -z "$AMOUNT" ]] && { print -u2 "--mode banksend needs --amount"; exit 1 }
-[[ -n "$CHAIN" ]] || { print -u2 "--chain-id is required (or set QADENA_CHAIN_ID)"; exit 1 }
+[[ -n "$NAME" && -n "$BUCKET" ]] || { print -u2 -- "--name and --from-bucket are required"; usage }
+[[ "$MODE" == "banksend" || "$MODE" == "feegrant" ]] || { print -u2 -- "--mode must be banksend or feegrant"; exit 1 }
+[[ "$MODE" == "banksend" && -z "$AMOUNT" ]] && { print -u2 -- "--mode banksend needs --amount"; exit 1 }
+[[ -n "$CHAIN" ]] || { print -u2 -- "--chain-id is required (or set QADENA_CHAIN_ID)"; exit 1 }
 
 QBIN="${qadenabin:-$HOME/qadena/bin}/qadenad"
 HOME_DIR="${QADENAHOME:-$HOME/qadena}"
@@ -235,7 +235,7 @@ fi
 # either side anyway, which the staking bonded pool is.
 if [[ -n "$STAKE" ]]; then
     if [[ "$MODE" != "banksend" ]]; then
-        print -u2 "--stake needs coins to delegate; it is meaningless with --mode feegrant"
+        print -u2 -- "--stake needs coins to delegate; it is meaningless with --mode feegrant"
         exit 1
     fi
     valopers=($(q q staking validators --node "$NODE" --output json 2>/dev/null \

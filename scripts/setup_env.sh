@@ -408,6 +408,23 @@ user_log_path() {
 # --generate-only on the inner message is not optional: authz resolves the grant on the INNER
 # message's signer, so a message built with --from <sec key> names SEC as granter, matches no
 # authorisation, and is rejected with ErrNoAuthorizationFound.
+# THE FUNDING MODEL, SETTLED IN ONE PLACE.
+#
+# "foundation-sponsored" is the same thing the node bring-up calls it (add_full_node.sh
+# --foundation-sponsored, testscripts/foundation_sponsor_node.sh): the foundation pays, by fee
+# grant, and the party being onboarded never holds tokens.  VERITAS works exactly that way, so it
+# uses the same word.
+#
+# IT IS SET HERE BECAUSE FOUR SCRIPTS DISAGREED ABOUT IT.  step_2 defaulted to banksend while
+# step_3 and create_user.sh defaulted differently again -- so with the variable unset, step_2 sat
+# in a `while` loop waiting for funds in a treasury the sponsored flow never fills, while step_3
+# assumed sponsorship.  Only setup_veritas.sh exporting the value hid it.  One default, one place.
+#
+# "feegrant" is accepted as the old spelling so anything still exporting it keeps working.
+: ${VERITAS_FUND_MODE:=foundation-sponsored}
+[ "$VERITAS_FUND_MODE" = "feegrant" ] && VERITAS_FUND_MODE=foundation-sponsored
+export VERITAS_FUND_MODE
+
 grant_as_foundation() {
     local granter="$1" grantee="$2" msgs="$3" signer="${4:-${VERITAS_SEC_ADMIN:-}}"
     local gasflags=(--gas-prices "$minimum_gas_prices" --gas "$gas_auto" --gas-adjustment "$gas_adjustment")

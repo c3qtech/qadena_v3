@@ -11,7 +11,7 @@
 #   step_2  SEC        creates its providers, reports the two proposal ids
 #   *       FOUNDATION approves the proposals
 #   step_3  SEC        creates its wallets and users -- granting each one AS the foundation
-#   step_4  FOUNDATION authorises the app-server's sponsor pool, returns the two addresses
+#   *       FOUNDATION veritas_sec_authorise_pool.sh -- the app-server's sponsor pool
 #
 # WHY IT IS NEEDED. A fee grant is signed by its GRANTER. step_3 has to grant every wallet it
 # creates -- a wallet holds nothing on a toll-free chain, and cannot even claim its own credential
@@ -23,7 +23,7 @@
 # limits SEC puts on the grants it issues, and by the foundation's ability to revoke it instantly.
 #
 # Usage:
-#   foundation_authorise_sec.sh --sec-admin <address-from-step_1> [--foundation-appsvr <key>]
+#   veritas_sec_delegate_grant_authority.sh --sec-admin <address-from-step_1> [--foundation-appsvr <key>]
 #                               [--expiration <unix-seconds>]
 
 SCRIPT_DIR="${0:A:h}"

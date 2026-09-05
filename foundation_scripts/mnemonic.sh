@@ -39,11 +39,18 @@ CMD="$1"; shift
 [[ "$CMD" == "--help" || "$CMD" == "-h" ]] && usage 0
 
 # Asked once, never echoed, never written down.  -s so it does not reach the terminal or scrollback.
+# SAY WHICH PASSPHRASE.  There is only one on this system -- derive_launch_keys.sh sets a single
+# string and uses it for BOTH the coordinator keyring and every sealed mnemonic -- but a bare
+# "passphrase:" does not tell the operator that, and someone facing several encrypted things has
+# no way to know which one is wanted.  Name it, and name where it came from.
 ask_pass() {
-    local p
+    local p what="${1:-}"
     # PROMPT ON STDERR, NOT THROUGH read's ?prompt -- zsh suppresses that prompt whenever stdin
     # is not a terminal, which is exactly how this is used (piped into init.sh).
-    print -u2 -n "  passphrase: "
+    print -u2 "  The SEALING passphrase${what:+ for $what}."
+    print -u2 "  This is the one passphrase derive_launch_keys.sh asked for when it created these"
+    print -u2 "  mnemonics -- the same one that unlocks the coordinator keyring."
+    print -u2 -n "  passphrase (hidden, will not echo): "
     read -s "p?"; print -u2 ""
     [[ -n "$p" ]] || { print -u2 "empty passphrase"; exit 1 }
     print -r -- "$p"
@@ -55,8 +62,8 @@ seal)
     files=("$DIR"/*.mnemonic(N))
     (( ${#files} )) || { print -u2 "no *.mnemonic files in $DIR -- nothing to seal"; exit 1 }
     print -u2 "sealing ${#files} mnemonic(s) in $DIR"
-    PASS=$(ask_pass)
-    print -u2 -n "  confirm:    "
+    PASS=$(ask_pass "$DIR")
+    print -u2 -n "  confirm (hidden): "
     read -s "P2?"; print -u2 ""
     [[ "$PASS" == "$P2" ]] || { print -u2 "passphrases do not match"; exit 1 }
     unset P2
@@ -86,7 +93,7 @@ show)
     [[ -n "$DIR" && -n "$NAME" ]] || { print -u2 "show needs <dir> <name>"; exit 1 }
     enc="$DIR/$NAME.mnemonic.enc"
     [[ -r "$enc" ]] || { print -u2 "no $enc"; exit 1 }
-    PASS=$(ask_pass)
+    PASS=$(ask_pass "$enc")
     # BUFFERED, NOT STREAMED.  openssl writes partial plaintext as it decrypts and only reports
     # failure at the end -- so a wrong passphrase emits BINARY GARBAGE to stdout and *then* errors.
     # This command is meant to be piped into init.sh's mnemonic prompt, where that garbage would be

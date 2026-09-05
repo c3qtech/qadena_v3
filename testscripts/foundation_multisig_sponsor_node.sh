@@ -55,7 +55,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$NODE_ADDR" && -n "$GRANTER" && -n "$VIA" ]] \
     || { print -u2 "need --node, --granter and --via; see --help"; exit 1 }
-[[ "$NODE_ADDR" == qadena1* ]] || { print -u2 "--node must be a bech32 address"; exit 1 }
+[[ "$NODE_ADDR" == qadena1* ]] || { print -u2 -- "--node must be a bech32 address"; exit 1 }
 
 lk() { "$QBIN" --home "$HOME_DIR" --keyring-backend test "$@" 2>/dev/null }
 M="$HERE/../scripts/multisig_sign.sh"

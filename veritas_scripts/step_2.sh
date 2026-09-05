@@ -45,10 +45,11 @@ echo "dsvsprovidermnemonic: $dsvsprovidermnemonic"
 # It is repointed rather than dropped because create-wallet takes it as the SPONSOR -- a message
 # field, not a fee, so it cannot be fee-granted.  The foundation plays that role too, which is what
 # makes sec-treasury unnecessary rather than merely unfunded.
-: ${VERITAS_FUND_MODE:=banksend}
+                                   # disagreement between the two means step_2 waits forever for
+                                   # funds in a treasury the sponsored flow never fills.
 : ${VERITAS_FOUNDATION_APPSVR:=foundation-appsvr}
 feegrant_args=()
-if [ "$VERITAS_FUND_MODE" = "feegrant" ]; then
+if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
     echo "toll-free: $VERITAS_FOUNDATION_APPSVR sponsors and grants; sec-treasury is not used"
     treasuryname="$VERITAS_FOUNDATION_APPSVR"
     feegrant_args=(--fee-granter "$VERITAS_FOUNDATION_APPSVR")

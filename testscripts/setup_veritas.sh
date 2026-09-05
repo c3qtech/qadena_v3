@@ -51,8 +51,8 @@ foundation_users="foundation-users"
 foundationusersmnemonic="airport south group aerobic august arm source candy tilt damp stage fork mention clerk plunge garbage nut blood fall flight indoor season broken fog"
 foundationappsvrmnemonic="angle unknown bean lunch base vague awful together dismiss swallow climb common upgrade jelly machine plunge paper vote maple frog junk brisk bind weekend"
 
-# feegrant (no SEC treasury) or banksend (the original).  See the funding block below.
-fund_mode="feegrant"
+# foundation-sponsored (no SEC treasury) or banksend (the original).  See the funding block below.
+fund_mode="foundation-sponsored"
 
 # The DEVNET\'s genesis validator is `pioneer1`; a launch chain names its own
 
@@ -75,12 +75,12 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --help)
-            echo "Usage: $0 [--pioneer <pioneer>] [--fund-mode feegrant|banksend]"
+            echo "Usage: $0 [--pioneer <pioneer>] [--fund-mode foundation-sponsored|banksend]"
             exit 0
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--pioneer <pioneer>] [--fund-mode feegrant|banksend]"
+            echo "Usage: $0 [--pioneer <pioneer>] [--fund-mode foundation-sponsored|banksend]"
             exit 1
             ;;
     esac
@@ -101,7 +101,7 @@ $veritasscripts/step_1.sh --count $count --provideramount $provideramount --sign
 
 # FUNDING.  Two shapes, selected by $fund_mode.
 #
-# feegrant (default) -- NO SEC TREASURY AT ALL.  The Qadena foundation pays, by fee grant, and SEC
+# foundation-sponsored (default) -- NO SEC TREASURY AT ALL.  The Qadena foundation pays, by fee grant, and SEC
 #   holds no tokens.  Two foundation accounts rather than one, because the two populations behave
 #   differently and separating them is worth more than the extra account:
 #
@@ -149,7 +149,7 @@ else
     # NOTE: no whitelist_bank_send.sh here, deliberately.  The exemption existed only because a
     # treasury making direct transfers looks exactly like the pattern the AML scanner is there to
     # catch.  Fee grants are not bank sends, so the hole is not needed and is not opened.
-    export VERITAS_FUND_MODE=feegrant
+    export VERITAS_FUND_MODE=foundation-sponsored
     export VERITAS_FOUNDATION_APPSVR="$foundation_appsvr"
 fi
 
@@ -175,7 +175,7 @@ $veritasscripts/step_3.sh
 # ---------------------------------------------------------------------------------------------
 # STEP 4 -- the FOUNDATION's final action.
 #
-# Extracted into veritas_scripts/step_4.sh rather than inlined, because in a real deployment this is
+# Extracted into foundation_scripts/veritas_sec_authorise_pool.sh rather than inlined, because in a real deployment this is
 # NOT SEC's to run: every grant it issues is signed by the foundation, and authz cannot be
 # sub-delegated, so SEC could not do it even with the step_1 authorisation. Inlining it here would
 # have hidden that -- this harness holds every key in one keyring and so cannot tell the difference.
@@ -183,6 +183,6 @@ $veritasscripts/step_3.sh
 # The harness calls it because it plays both roles; SEC's real procedure stops after step_3 and waits
 # for the foundation to run this and return the two addresses.
 if [ "$fund_mode" != "banksend" ]; then
-    $veritasscripts/step_4.sh --foundation-users "$foundation_users" \
+    $qadenabuild/foundation_scripts/veritas_sec_authorise_pool.sh --foundation-users "$foundation_users" \
         --foundation-appsvr "$foundation_appsvr" --count "$count"
 fi
