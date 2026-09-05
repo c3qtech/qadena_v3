@@ -263,24 +263,14 @@ func CmdCreateWallet() *cobra.Command {
 				return err
 			}
 
-			// we need to do a feegrant from the pioneer to the new account, so we need to get the home pioneer's address
+			// NO KEYRING LOOKUP FOR THE PIONEER.  HomePioneerID travels in the message as a plain
+			// string and the chain resolves it; the fee grant below is signed by the SPONSOR, not
+			// the pioneer.  A lookup used to sit here anyway, feeding one debug Println -- and its
+			// failure was fatal, which meant create-wallet demanded a keyring entry it had no use
+			// for.  That single vestigial print was what forced the validator's key (or a decoy
+			// record under its name) into every keyring that creates wallets, including SEC's.
+			// The printed address was also unverified: any local key named "pioneer1" would do.
 			kb := ctx.Keyring
-
-			homePioneerInfo, err := kb.Key(argHomePioneerID)
-			if err != nil {
-				fmt.Println("Couldn't access private key", argHomePioneerID)
-				cleanupPublicKeys(ctx, argName, argNameCredential)
-				return err
-			}
-
-			homePioneerInfoOutput, err := keys.MkAccKeyOutput(homePioneerInfo)
-			if err != nil {
-				fmt.Println("Couldn't convert key info into address", homePioneerInfo)
-				cleanupPublicKeys(ctx, argName, argNameCredential)
-				return err
-			}
-
-			fmt.Println("homePioneerAddress", homePioneerInfoOutput.Address)
 
 			sponsorInfo, err := kb.Key(argSponsorID)
 			if err != nil {
