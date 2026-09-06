@@ -24,6 +24,11 @@
 #
 # Neither is money. Both are revocable with a single transaction.
 
+# CAPTURE BEFORE SOURCING.  setup_env.sh defaults QADENA_KEYRING_BACKEND to `test` for the
+# harness, and this script sources it first -- so ${QADENA_KEYRING_BACKEND:-file} always saw
+# "test" and the intended file default was dead code (measured 2026-09-06).  Foundation tooling
+# operates on the ENCRYPTED coordinator keyring; only an explicit caller choice says otherwise.
+_kb_caller="${QADENA_KEYRING_BACKEND:-}"
 SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
@@ -34,7 +39,7 @@ set -e
 # init.sh does `rm -rf` on.  An unencrypted default has no business near launch custody.
 POOL_FILE=""
 COORD_HOME=""
-BACKEND="${QADENA_KEYRING_BACKEND:-file}"
+BACKEND="${_kb_caller:-file}"
 KEYRING_PASSFILE=""
 
 foundation_users="${VERITAS_FOUNDATION_USERS:-foundation-veritas-users}"
@@ -45,6 +50,7 @@ count=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --pool-addresses)    POOL_FILE="$2"; shift 2 ;;
+        --node)              NODE="$2"; export QADENA_NODE="$2"; shift 2 ;;
         --coord-home)        COORD_HOME="$2"; shift 2 ;;
         --keyring-backend)   BACKEND="$2"; shift 2 ;;
         --keyring-passfile)  KEYRING_PASSFILE="$2"; shift 2 ;;
@@ -104,7 +110,7 @@ fi
 # share one wrapper: --keyring-backend is rejected outright by `query`.
 QBIN="${qadenabin:-$HOME/qadena/bin}/qadenad"
 NODE_HOME="${QADENAHOME:-$HOME/qadena}"
-NODE="${QADENA_NODE:-tcp://localhost:26657}"
+NODE="${NODE:-${QADENA_NODE:-tcp://localhost:26657}}"
 [ -n "$COORD_HOME" ] || COORD_HOME="$NODE_HOME"
 
 KRPASS=""

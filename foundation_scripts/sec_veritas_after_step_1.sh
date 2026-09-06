@@ -26,6 +26,11 @@
 #   sec_veritas_after_step_1.sh --sec-admin <address-from-step_1> [--foundation-appsvr <key>]
 #                               [--expiration <unix-seconds>]
 
+# CAPTURE BEFORE SOURCING.  setup_env.sh defaults QADENA_KEYRING_BACKEND to `test` for the
+# harness, and this script sources it first -- so ${QADENA_KEYRING_BACKEND:-file} always saw
+# "test" and the intended file default was dead code (measured 2026-09-06).  Foundation tooling
+# operates on the ENCRYPTED coordinator keyring; only an explicit caller choice says otherwise.
+_kb_caller="${QADENA_KEYRING_BACKEND:-}"
 SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
@@ -39,7 +44,7 @@ COORD_HOME=""
 # foundation tooling at one by default is wrong twice: it is the wrong keyring (the buckets are not
 # in it, so every lookup fails with "no key"), and an unencrypted default has no business anywhere
 # near launch custody.  Pass --keyring-backend test explicitly for a devnet.
-BACKEND="${QADENA_KEYRING_BACKEND:-file}"
+BACKEND="${_kb_caller:-file}"
 KEYRING_PASSFILE=""
 foundation_appsvr="${VERITAS_FOUNDATION_APPSVR:-foundation-veritas-appsvr}"
 expiration=""
@@ -50,6 +55,7 @@ while [[ $# -gt 0 ]]; do
         --foundation-appsvr) foundation_appsvr="$2"; shift 2 ;;
         --expiration)        expiration="$2"; shift 2 ;;
         --pregrant)          PREGRANT="$2"; shift 2 ;;
+        --node)              NODE="$2"; export QADENA_NODE="$2"; shift 2 ;;
         --coord-home)        COORD_HOME="$2"; shift 2 ;;
         --keyring-backend)   BACKEND="$2"; shift 2 ;;
         --keyring-passfile)  KEYRING_PASSFILE="$2"; shift 2 ;;
@@ -95,7 +101,7 @@ esac
 # the node -- and --keyring-backend is not valid on `query`, so the two cannot share one wrapper.
 QBIN="${qadenabin:-$HOME/qadena/bin}/qadenad"
 NODE_HOME="${QADENAHOME:-$HOME/qadena}"
-NODE="${QADENA_NODE:-tcp://localhost:26657}"
+NODE="${NODE:-${QADENA_NODE:-tcp://localhost:26657}}"
 [ -n "$COORD_HOME" ] || COORD_HOME="$NODE_HOME"
 
 KRPASS=""
@@ -196,8 +202,15 @@ else
 fi
 
 echo ""
-echo "Tell SEC to run step_2, then step_3, with:"
-echo "    export VERITAS_SEC_ADMIN=<the key name for $sec_admin>"
+echo "==================================================================="
+echo "TELL SEC TO RUN, exactly:"
+echo ""
+echo "    veritas_scripts/step_2.sh${QADENA_NODE:+ --node $QADENA_NODE}"
+echo ""
+echo "No exports needed: step_2 reads the admin name from variables.json and USES the"
+echo "delegation only after verifying this grant on chain.  step_3 the same, after the"
+echo "proposals pass."
+echo "==================================================================="
 echo ""
 echo "To withdraw this at any time:"
 echo "    qadenad tx authz revoke $sec_admin /cosmos.feegrant.v1beta1.MsgGrantAllowance --from $foundation_appsvr"

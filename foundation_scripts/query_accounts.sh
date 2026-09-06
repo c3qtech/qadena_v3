@@ -29,6 +29,10 @@
 #
 # READ-ONLY.  Nothing here signs, broadcasts, or writes to the chain.
 
+# CAPTURE BEFORE SOURCING.  setup_env.sh defaults QADENA_KEYRING_BACKEND to `test` for the
+# harness, and this script sources it first -- so ${QADENA_KEYRING_BACKEND:-file} always saw
+# "test" and the intended file default was dead code (measured 2026-09-06).
+_kb_caller="${QADENA_KEYRING_BACKEND:-}"
 HERE="${0:A:h}"
 source "$HERE/../scripts/setup_env.sh" > /dev/null 2>&1 || true
 SCRIPT_DIR="$HERE"          # setup_env.sh clobbers SCRIPT_DIR
@@ -42,7 +46,7 @@ COORD_HOME=""
 # foundation tooling at one by default is wrong twice: it is the wrong keyring (the buckets are not
 # in it, so every lookup fails with "no key"), and an unencrypted default has no business anywhere
 # near launch custody.  Pass --keyring-backend test explicitly for a devnet.
-BACKEND="${QADENA_KEYRING_BACKEND:-file}"
+BACKEND="${_kb_caller:-file}"
 KEYRING_PASSFILE=""
 WANT=()
 SHOW_BUCKETS=0

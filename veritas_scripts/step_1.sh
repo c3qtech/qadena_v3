@@ -81,6 +81,13 @@ treasuryname="sec-treasury"
 # Dedicated rather than reused: GenericAuthorization cannot cap an amount or restrict a recipient,
 # so whoever holds this can drain its granter.  That belongs on a key which can be rotated and
 # revoked without disturbing the provider identities governance has registered.
+# THE FOUNDATION HANDOFF, AS ARGUMENTS.  QFI's before_step_1 prints these two addresses; they
+# enter here ONCE and travel in variables.json, the same way count and pioneer do -- steps 2 and 3
+# read them from the file instead of each demanding an exported VERITAS_FOUNDATION_APPSVR.  In
+# sponsored mode the appsvr address is REQUIRED: it is the create-wallet sponsor and the fee
+# granter for everything SEC does.
+appsvraddr=""
+usersaddr=""
 adminname="sec-veritas-admin"
 adminmnemonic=""      # filled by `keys add --output json` below, or by --adminmnemonic
 identityprovidername="secidentitysrvprv"
@@ -91,7 +98,11 @@ signermnemonic=$(qadenad_alias keys mnemonic)
 createwalletsponsormnemonic=$(qadenad_alias keys mnemonic)
 identityprovidermnemonic=$(qadenad_alias keys mnemonic)
 dsvsprovidermnemonic=$(qadenad_alias keys mnemonic)
-pioneer="${QADENA_PIONEER:-pioneer1}"
+# NO pioneer1 FALLBACK.  This defaulted to the DEVNET's pioneer, and on a launch chain that
+# poisoned variables.json silently: every create-wallet then died on "Couldn't get jar for
+# pioneer pioneer1" -- twice now.  The chain KNOWS its pioneers; derive it below, override with
+# --pioneer (or QADENA_PIONEER) only when the chain has several.
+pioneer="${QADENA_PIONEER:-}"
 provideramount="100000qdn"
 signeramount="100000qdn"
 createwalletsponsoramount="100000qdn"
@@ -113,6 +124,18 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --treasurymnemonic)
             treasurymnemonic="$2"
+            shift 2
+            ;;
+        --node)
+            export QADENA_NODE="$2"
+            shift 2
+            ;;
+        --appsvr)
+            appsvraddr="$2"
+            shift 2
+            ;;
+        --users)
+            usersaddr="$2"
             shift 2
             ;;
         --sec-home)
@@ -208,6 +231,8 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --help)
+            echo "  --node <rpc>       the chain RPC (e.g. tcp://10.211.55.5:26657); the"
+            echo "                     chain-id is derived from it, never from a local file"
             echo "  --sec-home <dir>   where variables.json / mnemonics.json / pool_addresses.json"
             echo "                     live.  Default \$VERITAS_SEC_HOME or ~/sec-veritas."
             echo "Usage: $0 [--sec-home <dir>] [--treasurymnemonic <mnemonic>] [--treasuryname <name>] [--signermnemonic <mnemonic>] [--createwalletsponsormnemonic <mnemonic>] [--identityprovidermnemonic <mnemonic>] [--dsvsprovidermnemonic <mnemonic>] [--count <count>] [--a <a>] [--email <email>] [--firstname <firstname>] [--birthdate <birthdate>] [--phone <phone>]"
@@ -215,6 +240,8 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown option: $1"
+            echo "  --node <rpc>       the chain RPC (e.g. tcp://10.211.55.5:26657); the"
+            echo "                     chain-id is derived from it, never from a local file"
             echo "  --sec-home <dir>   where variables.json / mnemonics.json / pool_addresses.json"
             echo "                     live.  Default \$VERITAS_SEC_HOME or ~/sec-veritas."
             echo "Usage: $0 [--sec-home <dir>] [--treasurymnemonic <mnemonic>] [--treasuryname <name>] [--signermnemonic <mnemonic>] [--createwalletsponsormnemonic <mnemonic>] [--identityprovidermnemonic <mnemonic>] [--dsvsprovidermnemonic <mnemonic>] [--count <count>] [--a <a>] [--email <email>] [--firstname <firstname>] [--birthdate <birthdate>] [--phone <phone>]"
@@ -240,6 +267,42 @@ if [ -r "$VERITAS_SEC_HOME/mnemonics.json" ]; then
     done
 fi
 
+# DERIVE THE PIONEER FROM THE CHAIN when not given.  Exactly one bonded pioneer -> use it;
+# several -> refuse and list them; unreachable chain -> refuse, because writing a GUESS into
+# variables.json fails later and worse (mid-create-wallet, after keys exist).
+if [ -z "$pioneer" ]; then
+    _pioneers=$(qadenad_alias query qadena list-interval-public-key-id --output json 2>/dev/null \
+                  | jq -r '[.intervalPublicKeyID[]? | select(.nodeType=="pioneer") | .nodeID] | .[]' 2>/dev/null)
+    _n=$(echo "$_pioneers" | grep -c . || true)
+    if [ "$_n" -eq 1 ]; then
+        pioneer="$_pioneers"
+        echo "pioneer derived from the chain: $pioneer"
+    elif [ "$_n" -gt 1 ]; then
+        echo "this chain has $_n pioneers -- pick one with --pioneer <id>:"
+        echo "$_pioneers" | sed 's/^/    /'
+        exit 1
+    else
+        echo "cannot derive the pioneer (chain unreachable?).  Pass --pioneer <id>, e.g."
+        echo "    veritas_scripts/step_1.sh --pioneer qfi-pioneer1 ..."
+        exit 1
+    fi
+fi
+
+if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
+    case "$appsvraddr" in
+        qadena1*) ;;
+        *)
+            echo "sponsored mode needs the foundation sponsor's ADDRESS:"
+            echo "    veritas_scripts/step_1.sh --appsvr qadena1... --users qadena1... --count <n>"
+            echo "Both are printed by QFI's sec_veritas_before_step_1.sh."
+            exit 1 ;;
+    esac
+    case "$usersaddr" in
+        qadena1*|'') ;;
+        *) echo "--users '$usersaddr' is not a qadena address"; exit 1 ;;
+    esac
+fi
+
 case "$count" in
     ''|*[!0-9]*)
         echo "the ephemeral-wallet count is required and must be a number."
@@ -250,7 +313,7 @@ case "$count" in
 esac
 
 # write variables to json
-jq -n --arg pioneer "$pioneer" --arg count "$count" --arg email "$email" --arg avalue "$avalue" --arg firstname "$firstname" --arg birthdate "$birthdate" --arg phone "$phone" --arg dsvsname "$dsvsname" --arg provideramount "$provideramount" --arg signeramount "$signeramount" --arg createwalletsponsoramount "$createwalletsponsoramount" --arg createwalletsponsorname "$createwalletsponsorname" --arg treasuryname "$treasuryname" --arg adminname "$adminname" --arg fundmode "$VERITAS_FUND_MODE"  --arg identityprovidername "$identityprovidername" --arg dsvsprovidername "$dsvsprovidername" '{pioneer: $pioneer, count: $count, provideramount: $provideramount, signeramount: $signeramount, createwalletsponsoramount: $createwalletsponsoramount, createwalletsponsorname: $createwalletsponsorname, treasuryname: $treasuryname, adminname: $adminname, fundmode: $fundmode, identityprovidername: $identityprovidername, dsvsprovidername: $dsvsprovidername, dsvsname: $dsvsname, email: $email, avalue: $avalue, firstname: $firstname, birthdate: $birthdate, phone: $phone}' > "$VERITAS_SEC_HOME/variables.json"
+jq -n --arg pioneer "$pioneer" --arg count "$count" --arg email "$email" --arg avalue "$avalue" --arg firstname "$firstname" --arg birthdate "$birthdate" --arg phone "$phone" --arg dsvsname "$dsvsname" --arg provideramount "$provideramount" --arg signeramount "$signeramount" --arg createwalletsponsoramount "$createwalletsponsoramount" --arg createwalletsponsorname "$createwalletsponsorname" --arg treasuryname "$treasuryname" --arg adminname "$adminname" --arg fundmode "$VERITAS_FUND_MODE" --arg appsvraddr "$appsvraddr" --arg usersaddr "$usersaddr"  --arg identityprovidername "$identityprovidername" --arg dsvsprovidername "$dsvsprovidername" '{pioneer: $pioneer, count: $count, provideramount: $provideramount, signeramount: $signeramount, createwalletsponsoramount: $createwalletsponsoramount, createwalletsponsorname: $createwalletsponsorname, treasuryname: $treasuryname, adminname: $adminname, fundmode: $fundmode, appsvraddr: $appsvraddr, usersaddr: $usersaddr, identityprovidername: $identityprovidername, dsvsprovidername: $dsvsprovidername, dsvsname: $dsvsname, email: $email, avalue: $avalue, firstname: $firstname, birthdate: $birthdate, phone: $phone}' > "$VERITAS_SEC_HOME/variables.json"
 
 # REACHED ONLY WHEN SOMEONE ASKED FOR THE UNENCRYPTED KEYRING.
 #

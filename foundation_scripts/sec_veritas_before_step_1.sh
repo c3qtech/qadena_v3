@@ -43,6 +43,11 @@
 #   sec_veritas_before_step_1.sh --stage approve 12 13 --members foundation-m1,foundation-m2,foundation-m3
 
 HERE="${0:A:h}"
+# CAPTURE BEFORE SOURCING.  setup_env.sh defaults QADENA_KEYRING_BACKEND to `test` for the
+# harness, and every script here sources it first -- so a later ${QADENA_KEYRING_BACKEND:-file}
+# always saw "test" and the intended file default was dead code.  Foundation tooling operates on
+# the ENCRYPTED coordinator keyring; only an explicit caller choice may say otherwise.
+_kb_caller="${QADENA_KEYRING_BACKEND:-}"
 source "$HERE/../scripts/setup_env.sh"
 
 # setup_env.sh CLOBBERS SCRIPT_DIR.  Captured above, before the source, because three scripts have
@@ -86,7 +91,7 @@ KEYRING_PASSFILE=""
 # foundation tooling at one by default is wrong twice: it is the wrong keyring (the buckets are not
 # in it, so every lookup fails with "no key"), and an unencrypted default has no business anywhere
 # near launch custody.  Pass --keyring-backend test explicitly for a devnet.
-BACKEND="${QADENA_KEYRING_BACKEND:-file}"
+BACKEND="${_kb_caller:-file}"
 WORKDIR=""
 PRINT_ONLY=0
 VIA_SSH=""
@@ -115,6 +120,9 @@ usage() {
     print "  --appsvr / --users <name>   account names, defaults $APPSVR / $USERS"
     print "  --print-ceremony            print the commands for members on other machines; sign"
     print "                              nothing here"
+    print "  --node <rpc>                the chain RPC, e.g. tcp://10.211.55.5:26657.  Default"
+    print "                              \$QADENA_NODE or tcp://localhost:26657.  The chain-id is"
+    print "                              then asked of that node -- never trusted from a local file."
     print "  --via-ssh <user@host>       run chain-touching calls on that node (see multisig_sign.sh)"
     print "  --workdir <dir>             where the unsigned/partial tx files go"
     print "  --coord-home <dir>          the COORDINATOR keyring holding the bucket multisigs --"
@@ -141,6 +149,7 @@ while [[ $# -gt 0 ]]; do
         --appsvr)          APPSVR="$2"; shift 2 ;;
         --users)           USERS="$2"; shift 2 ;;
         --print-ceremony)  PRINT_ONLY=1; shift ;;
+        --node)            export QADENA_NODE="$2"; shift 2 ;;
         --via-ssh)         VIA_SSH="$2"; shift 2 ;;
         --workdir)         WORKDIR="$2"; shift 2 ;;
         --mnemonics-dir)   MNEMONICS_DIR="$2"; shift 2 ;;
@@ -559,7 +568,13 @@ prepare)
     fi
 
     print ""
-    print "PREPARE DONE.  Hand SEC these, then they run step_1:"
+    print "PREPARE DONE.  Hand SEC this COMMAND -- the addresses ride as arguments:"
+    print ""
+    print "  veritas_scripts/step_1.sh --count <n> \\"
+    print "      --appsvr $(addr_of $APPSVR) \\"
+    print "      --users  $(addr_of $USERS)"
+    print ""
+    print "Reference copy of the same facts:"
     print "  chain-id          $CHAIN"
     printf "  %-26s %s\n" "$APPSVR" "$(addr_of $APPSVR)"
     printf "  %-26s %s\n" "$USERS"  "$(addr_of $USERS)"

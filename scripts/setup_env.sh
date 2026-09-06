@@ -88,7 +88,36 @@ qadenad_alias_raw() {
         ${=$(_kr_dir_flag)} "$@"
 }
 
+# ONE ENV VAR FOR THE CHAIN'S LOCATION, AND THE CHAIN-ID ASKED OF THE CHAIN ITSELF.
+#
+# QADENA_NODE names the RPC; every qadenad_alias tx/query then carries --node, so pointing a
+# whole run at a remote chain is one export instead of a client.toml hunt.  And when the node is
+# reachable, the chain-id is DERIVED from it (status.node_info.network) rather than trusted from
+# a local file -- a client.toml carrying the wrong id does not fail loudly, it signs invalid
+# transactions that the chain reports as recovered amino panics (measured 2026-09-06, when the
+# coordinator's client.toml held the MAINNET id on a testnet).  QADENA_CHAIN_ID still overrides;
+# with no node and no override, client.toml remains the fallback, as before.
+if [ -n "${QADENA_NODE:-}" ] && [ -z "${QADENA_CHAIN_ID:-}" ]; then
+    QADENA_CHAIN_ID=$("$qadenabin/qadenad" status --node "$QADENA_NODE" 2>/dev/null \
+                        | jq -r '.node_info.network // empty' 2>/dev/null)
+    [ -n "$QADENA_CHAIN_ID" ] && export QADENA_CHAIN_ID
+fi
+
 qadenad_alias() {
+    # --node on tx/query/status when QADENA_NODE is set; --chain-id on tx when known.  keys and
+    # debug take neither.
+    local -a _net; _net=()
+    [ -n "${QADENA_NODE:-}" ] && case "${1:-}" in tx|query|status) _net+=(--node "$QADENA_NODE") ;; esac
+    # LAZY, because --node may be parsed by a script AFTER setup_env was sourced.  The first tx
+    # derives the id from the node and caches it in the environment for everything after.
+    if [ -z "${QADENA_CHAIN_ID:-}" ] && [ -n "${QADENA_NODE:-}" ]; then
+        case "${1:-}" in tx)
+            QADENA_CHAIN_ID=$("$qadenabin/qadenad" status --node "$QADENA_NODE" 2>/dev/null \
+                                | jq -r '.node_info.network // empty' 2>/dev/null)
+            [ -n "$QADENA_CHAIN_ID" ] && export QADENA_CHAIN_ID ;;
+        esac
+    fi
+    [ -n "${QADENA_CHAIN_ID:-}" ] && case "${1:-}" in tx) _net+=(--chain-id "$QADENA_CHAIN_ID") ;; esac
     case "${1:-}" in
         keys|tx)
             # THE PASSPHRASE ONLY.  NO `cat`, DELIBERATELY.
@@ -107,12 +136,12 @@ qadenad_alias() {
             if [[ -n "${QADENA_KEYRING_PASS:-}" ]]; then
                 { print -r -- "$QADENA_KEYRING_PASS"; print -r -- "$QADENA_KEYRING_PASS" } \
                   | "$qadenabin/qadenad" --home "$QADENAHOME" \
-                        --keyring-backend "$QADENA_KEYRING_BACKEND" ${=$(_kr_dir_flag)} "$@"
+                        --keyring-backend "$QADENA_KEYRING_BACKEND" ${=$(_kr_dir_flag)} "${_net[@]}" "$@"
             else
                 "$qadenabin/qadenad" --home "$QADENAHOME" \
-                    --keyring-backend "$QADENA_KEYRING_BACKEND" ${=$(_kr_dir_flag)} "$@"
+                    --keyring-backend "$QADENA_KEYRING_BACKEND" ${=$(_kr_dir_flag)} "${_net[@]}" "$@"
             fi ;;
-        *)  "$qadenabin/qadenad" --home "$QADENAHOME" "$@" ;;
+        *)  "$qadenabin/qadenad" --home "$QADENAHOME" "${_net[@]}" "$@" ;;
     esac
 }
 

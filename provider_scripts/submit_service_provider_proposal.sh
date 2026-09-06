@@ -4,7 +4,17 @@ treasury=$1
 providername=$2
 json_proposal=$3
 service_provider_type=$4
-pioneer=${5:-${QADENA_PIONEER:-pioneer1}}
+# NO pioneer1 FALLBACK.  A wrong pioneer here does not fail -- it goes into a GOVERNANCE
+# PROPOSAL, registering the provider under a pioneer that may not exist (or worse, one that
+# does).  In the sponsored flow this is always passed by setup_provider_base from
+# variables.json, where step_1 derived it from the chain itself.
+pioneer=${5:-${QADENA_PIONEER:-}}
+[ -n "$pioneer" ] || {
+    echo "no pioneer given (arg 5) and QADENA_PIONEER unset."
+    echo "The devnet's is pioneer1; a launch chain names its own (e.g. qfi-pioneer1) --"
+    echo "derive it:  qadenad query qadena list-interval-public-key-id | grep -B1 'nodeType: pioneer'"
+    exit 1
+}
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"

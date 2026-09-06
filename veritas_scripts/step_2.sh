@@ -9,6 +9,19 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# Minimal argument handling: the chain's location is a per-run fact and belongs on the command
+# line, not in ambient environment.  The flag exports QADENA_NODE so every child script and
+# qadenad_alias call inherits it; the chain-id is then derived from that node by setup_env.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --node) export QADENA_NODE="$2"; shift 2 ;;
+        --sec-home) export VERITAS_SEC_HOME="$2"; shift 2 ;;
+        *) echo "unknown option: $1"
+           echo "usage: $0 [--node <rpc>] [--sec-home <dir>]"
+           exit 1 ;;
+    esac
+done
+
 # THE KEYRING IS THE NODE'S, AND SO IS ITS BACKEND.  These steps do not choose one.
 #
 # An earlier version defaulted them to `file`.  That was wrong for a reason worth recording: the
@@ -64,7 +77,7 @@ mkdir -p "$QADENA_KEYRING_DIR" 2>/dev/null; chmod 700 "$QADENA_KEYRING_DIR" 2>/d
 for _f in variables.json mnemonics.json; do
     [ -r "$VERITAS_SEC_HOME/$_f" ] || {
         echo "$VERITAS_SEC_HOME/$_f is missing -- run step_1.sh first,"
-        echo "or point at the right directory:  export VERITAS_SEC_HOME=<dir>"
+        echo "or point at the right directory:  --sec-home <dir>"
         exit 1; }
 done
 
@@ -120,6 +133,14 @@ if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
     # spun on "unknown address" forever (the funds-wait loop did exactly that).  On a SEC box the
     # variable holds the ADDRESS -- printed by QFI's prepare stage -- and a name is accepted only
     # where a keyring can actually resolve it (the single-operator harness).
+    # THE FILE IS THE RUN'S TRUTH.  step_1 recorded the handoff address in variables.json when it
+    # was given --appsvr; that value wins.  When the file has none (the single-keyring harness,
+    # which passes no --appsvr), the exported VERITAS_FOUNDATION_APPSVR fills in, and the name
+    # default after that.  The resolved value is exported so create_user and the provider scripts
+    # inherit one consistent answer.
+    _file_appsvr=$(jq -r '.appsvraddr // empty' "$VERITAS_SEC_HOME/variables.json" 2>/dev/null || true)
+    [ -n "$_file_appsvr" ] && VERITAS_FOUNDATION_APPSVR="$_file_appsvr"
+    export VERITAS_FOUNDATION_APPSVR
     case "$VERITAS_FOUNDATION_APPSVR" in
         qadena1*) sponsor_addr="$VERITAS_FOUNDATION_APPSVR" ;;
         *)
@@ -132,6 +153,26 @@ if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
             } ;;
     esac
     treasuryname="$sponsor_addr"
+
+    # THE DELEGATED SIGNER, SELF-DETECTED.  The admin's key NAME is in variables.json (step_1
+    # wrote it), so nobody has to export VERITAS_SEC_ADMIN -- but the name alone is not enough:
+    # using it is only correct if QFI has actually granted the authz, and the harness never does.
+    # So: explicit env still wins; otherwise use the recorded admin IF AND ONLY IF the chain shows
+    # an authz grant from the sponsor to it.  Delegation-if-delegated, direct-sign otherwise --
+    # the run adapts to what is true on chain instead of what someone remembered to export.
+    if [ -z "${VERITAS_SEC_ADMIN:-}" ]; then
+        _adm=$(jq -r '.adminname // empty' "$VERITAS_SEC_HOME/variables.json" 2>/dev/null || true)
+        _adm_addr=$(qadenad_alias keys show "$_adm" --address 2>/dev/null || true)
+        if [ -n "$_adm_addr" ] && qadenad_alias query authz grants "$sponsor_addr" "$_adm_addr" \
+                --output json 2>/dev/null | jq -e '(.grants|length) > 0' >/dev/null 2>&1; then
+            export VERITAS_SEC_ADMIN="$_adm"
+            echo "delegated signing: $_adm (authz from the sponsor verified on chain)"
+        else
+            echo "no delegation on chain for '${_adm:-<none>}' -- signing directly (harness mode)"
+        fi
+    else
+        export VERITAS_SEC_ADMIN
+    fi
     feegrant_args=(--fee-granter "$sponsor_addr")
 fi
 
