@@ -31,12 +31,17 @@ the bringup.
 
 | name | address | notes |
 |---|---|---|
-| M1 | `alvillarica@192.168.86.162` | primary |
-| M2 | `alvillarica@192.168.86.154` | |
-| M3 | `alvillarica@192.168.86.52`  | **.52, not .53** |
-| M4 | `alvillarica@192.168.86.136` | |
+| M1 | `alvillarica@10.211.55.5` | primary -- **moved 2026-09-06** (was 192.168.86.162) |
+| M2 | `alvillarica@10.211.55.6` | **moved 2026-09-06** (was 192.168.86.154) |
+| M3 | `alvillarica@192.168.86.52`  | **.52, not .53** -- NOT re-confirmed since the move |
+| M4 | `alvillarica@192.168.86.136` | NOT re-confirmed since the move |
 
 All aarch64 debug-enclave boxes: no SGX, no ego, ~3 minute builds.
+
+**M1 and M2 moved to the 10.211.55.x (Parallels) range; M3, M4, SGX1 and SGX2 have not been
+re-confirmed since.**  Do not assume the .5/.6 pattern extends to them -- probe before using an
+address from this table, and update the row when you do.  A stale address in a `--purge` command
+is the one mistake here with no undo.
 
 | name | address | notes |
 |---|---|---|
@@ -110,12 +115,12 @@ current fleet size.
 
 ```sh
 ./testscripts/fleet_bringup_with_tests.sh \
-  --primary alvillarica@192.168.86.162 \
+  --primary alvillarica@10.211.55.5 \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/test_ss_reshare_audit.sh" \
-  --joiner alvillarica@192.168.86.154 \
+  --joiner alvillarica@10.211.55.6 \
     --test "./testscripts/test_ss_reshare_audit.sh" \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
@@ -140,12 +145,12 @@ See *Choosing a sync mode* below for what that costs you.
 
 ```sh
 ./testscripts/fleet_bringup_with_tests.sh \
-  --primary alvillarica@192.168.86.162 \
+  --primary alvillarica@10.211.55.5 \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/test_ss_reshare_audit.sh" \
-  --joiner alvillarica@192.168.86.154 \
+  --joiner alvillarica@10.211.55.6 \
     --test "./testscripts/test_ss_reshare_audit.sh" \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
@@ -186,12 +191,12 @@ the chain-restarting suites, a governance upgrade of every node, and a soak.
 
 ```sh
 ./testscripts/fleet_bringup_with_tests.sh \
-  --primary alvillarica@192.168.86.162 \
+  --primary alvillarica@10.211.55.5 \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/test_ss_reshare_audit.sh" \
-  --joiner alvillarica@192.168.86.154 \
+  --joiner alvillarica@10.211.55.6 \
     --test "./testscripts/test_ss_reshare_audit.sh" \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
@@ -204,8 +209,8 @@ the chain-restarting suites, a governance upgrade of every node, and a soak.
     --test "./testscripts/test_ss_key_rotation.sh --key-added-only" \
     --test "./testscripts/regression.sh" \
   --test-local "./testscripts/test_fleet_upgrade.sh \
-      --primary alvillarica@192.168.86.162 \
-      --joiner alvillarica@192.168.86.154 \
+      --primary alvillarica@10.211.55.5 \
+      --joiner alvillarica@10.211.55.6 \
       --joiner alvillarica@192.168.86.52 \
       --joiner alvillarica@192.168.86.136" \
     --test "./testscripts/run_regression_continually.sh"
@@ -305,11 +310,68 @@ to be three commands with a manual signing session wedged between them.
 **Validated end to end 2026-09-02**: purged fleet -> 4 validators -> treasury by a real 3-of-5
 ceremony -> stake -> self-passing whitelist -> ALL 22 SUITES, unattended, about 40 minutes.
 
+### Preparing the inputs -- from nothing to a rendered instance
+
+The command below needs two files that do not exist on a fresh workstation: a rendered launch
+config and the genesis validator's mnemonic in the clear.  Making them is four commands, and
+skipping the last one is the failure people actually hit -- the bringup dies at phase 4 with
+`--pioneer-mnemonic-file ... does not exist`, having already wiped the primary's home.
+
+```sh
+# 1. MINT THE KEYS.  Encrypted keyring + one sealed mnemonic per key + the addresses CSV.
+#    The account list comes from the template, so it cannot drift from what genesis expects.
+foundation_scripts/derive_launch_keys.sh \
+    --home          ~/fleet-launch/coord \
+    --mnemonics-dir ~/fleet-launch/mnemonics \
+    --out           ~/fleet-launch/addresses.csv
+
+# 2. RENDER THE INSTANCE.
+python3 foundation_scripts/fill_launch_config.py \
+    --apply ~/fleet-launch/addresses.csv \
+    --out   ~/fleet-launch/fleet-launch-config.yml \
+    --chain-id qadena_4824-1 \
+    --test-gov-timings \
+    --zero-incentives
+
+# 3. ENCLAVE IDS for a debug fleet (M1-M4 have no SGX).  Writes the TEMPLATE, so run it
+#    BEFORE step 2 on a fresh checkout -- or re-run step 2 after it.
+python3 foundation_scripts/fill_launch_config.py --enclave --test-fleet
+
+# 4. UNSEAL THE PIONEER MNEMONIC.  derive_launch_keys writes only <name>.mnemonic.enc, and
+#    --pioneer-mnemonic-file wants a plaintext local path.  Prompts for the sealing
+#    passphrase -- the same one that unlocks the coordinator keyring.
+umask 077
+foundation_scripts/mnemonic.sh show ~/fleet-launch/mnemonics qfi-pioneer1 \
+    > ~/fleet-launch/pioneer-mnemonic.txt
+```
+
+**Delete `pioneer-mnemonic.txt` once the fleet is up.**  The sealed `.enc` is the copy worth
+keeping, and `~/fleet-launch/mnemonics/` is the only recovery that exists for all 60 keys -- back
+it up off this machine before you go further.
+
+**`--zero-incentives` is what makes a green run mean something.**  The four wallet incentives
+endow every new wallet from the incentive pool, which is a SECOND funding source: a wallet that
+should have failed for want of a fee grant succeeds anyway, and the suite passes for the wrong
+reason.  Zeroing them makes a fee grant the only way a wallet can transact.
+
+**The chain-id is not free.**  `--test-gov-timings` is REFUSED on `qadena_482-1`, the mainnet
+stem: addresses derive identically on every EVM chain and EIP-155 replay protection *is* the chain
+id, so a short-clock chain sharing mainnet's id makes anything signed there replayable against
+mainnet.  Use `qadena_4824-1` (testnet) or `qadena_4828-1` (devnet).  A fleet run with the real
+72h/6h clock may keep `qadena_482-1`, but then a proposal-gated suite takes three days.
+
+**A DEV-KEY shortcut exists and is not the same thing.**  `fill_launch_config.py --dev-keys
+--i-understand` mints into an UNENCRYPTED `keyring-test` and stamps every row "DEV THROWAWAY KEY".
+That is right for a fleet you purge weekly and wrong for anything whose genesis you intend to
+keep.  `derive_launch_keys.sh` above is the encrypted path; the topology is identical either way.
+
 ### What chain this actually builds
 
 `--mainnet-source` takes a rendered instance of `config/launch-config.yml` -- the **real** token
-design: the ten buckets and their amounts from `tokenomics/allocations.csv`, the mint params, the
-AML whitelist, `qadena_482-1`.  Not the devnet's `config.yml`.
+design: the ten buckets and their amounts from `tokenomics/allocations.csv`, the mint params and
+the AML whitelist.  Not the devnet's `config.yml`.  The chain-id is whatever you rendered with --
+`qadena_4824-1` for a short-clock test fleet, since the mainnet stem is refused with
+`--test-gov-timings` (see above).
 
 **One thing is deliberately different, and only one: the governance clock.**  The instance is
 rendered with `foundation_scripts/fill_launch_config.py --test-gov-timings`, which shortens the periods so
@@ -346,7 +408,7 @@ should be a deliberate act, never a side effect of a flag on a long line:
 
 ```sh
 ./testscripts/stop_fleet.sh \
-  --node alvillarica@192.168.86.162 --node alvillarica@192.168.86.154 \
+  --node alvillarica@10.211.55.5 --node alvillarica@10.211.55.6 \
   --node alvillarica@192.168.86.52  --node alvillarica@192.168.86.136 \
   --purge --reap-archives --immediate
 ```
@@ -355,15 +417,15 @@ Then the run itself:
 
 ```sh
 ./testscripts/fleet_bringup_with_tests.sh \
-  --primary alvillarica@192.168.86.162 \
-  --joiner alvillarica@192.168.86.154 \
+  --primary alvillarica@10.211.55.5 \
+  --joiner alvillarica@10.211.55.6 \
   --joiner alvillarica@192.168.86.52 \
   --joiner alvillarica@192.168.86.136 \
   --block-sync \
-  --mainnet-source ~/qadena-dev-vault/fleet-launch-config.yml \
-  --pioneer-mnemonic-file ~/qadena-dev-vault/pioneer-mnemonic.txt \
+  --mainnet-source ~/fleet-launch/fleet-launch-config.yml \
+  --pioneer-mnemonic-file ~/fleet-launch/pioneer-mnemonic.txt \
   --funder qfi-pioneer1 --fund-qdn 10100 --stake 10000 \
-  --test-local "./testscripts/provision_from_bucket_local.sh --name treasury --from-bucket adoption --amount 50000000 --stake 10000000 --whitelist --host alvillarica@192.168.86.162" \
+  --test-local "./testscripts/provision_from_bucket_local.sh --name treasury --from-bucket adoption --amount 50000000 --stake 10000000 --whitelist --host alvillarica@10.211.55.5" \
   --test "QADENA_PIONEER=qfi-pioneer1 QADENA_GENESIS_NODES=qfi-pioneer1,wallet-incentive-pool QADENA_PF_TARGET=fn:php:usd QADENA_PF_CONTROL=cn:qdn:usd ./testscripts/regression.sh"
 ```
 
@@ -653,8 +715,8 @@ what you ask it to.
 
 ```sh
 ./testscripts/stop_fleet.sh \
-  --node alvillarica@192.168.86.162 \
-  --node alvillarica@192.168.86.154 \
+  --node alvillarica@10.211.55.5 \
+  --node alvillarica@10.211.55.6 \
   --node alvillarica@192.168.86.52 \
   --node alvillarica@192.168.86.136 \
   --purge --reap-archives --clean-logs --immediate
@@ -730,7 +792,7 @@ build runs `git clean -fd` and would destroy uncommitted work.  `docs/static/ope
 is regenerated by builds and is the usual offender:
 
 ```sh
-ssh alvillarica@192.168.86.162 'cd ~/qv3 && git stash -u'
+ssh alvillarica@10.211.55.5 'cd ~/qv3 && git stash -u'
 ```
 
 **Bump the identity if you want a distinct measurement.**  Convention is three files
@@ -762,8 +824,8 @@ real deployment it is a foundation key.
 ```sh
 ./testscripts/fleet_bringup_with_tests.sh \
   --foundation-sponsored \
-  --primary alvillarica@192.168.86.162 \
-  --joiner alvillarica@192.168.86.154 \
+  --primary alvillarica@10.211.55.5 \
+  --joiner alvillarica@10.211.55.6 \
   ...
 ```
 
