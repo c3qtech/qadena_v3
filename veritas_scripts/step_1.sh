@@ -4,9 +4,24 @@ set -e
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
+# CAPTURE BEFORE SOURCING, AND DEFAULT TO `file`.
+#
+# setup_env.sh sets QADENA_KEYRING_BACKEND=test for the devnet harness, and this script sources
+# it -- so a later ${QADENA_KEYRING_BACKEND:-file} would always see "test" and the intended
+# default would be dead code.  The foundation scripts already capture it this way; the SEC steps
+# did not, which is why step_1's own comment claimed it "defaults to file" while it did not.
+#
+# `file` IS THE RIGHT DEFAULT HERE.  These keys are the deployment: secidentitysrvprv signs
+# credential issuance as SEC's identity provider, and sec-veritas-admin carries authz to issue fee
+# grants as the foundation.  A `test` keyring is JWE-wrapped under a passphrase built into the
+# SDK, so it opens with no prompt -- read access to the directory is read access to the keys.
+# The unattended harnesses (setup_veritas/enf/ekycph) export `test` explicitly, which is the
+# correct way to opt out: stated, not inherited.
+_kb_caller="${QADENA_KEYRING_BACKEND:-}"
 
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
+export QADENA_KEYRING_BACKEND="${_kb_caller:-file}"
 
 # THE KEYRING IS THE NODE'S, AND SO IS ITS BACKEND.  These steps do not choose one.
 #

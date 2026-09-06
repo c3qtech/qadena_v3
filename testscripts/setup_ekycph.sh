@@ -5,6 +5,13 @@ set -e
 # get script dir
 SCRIPT_DIR="${0:A:h}"
 
+# UNATTENDED, SO 'test' IS DELIBERATE.  The SEC steps default to `file` -- an encrypted keyring --
+# because on a real deployment those keys ARE the provider identity.  This harness cannot answer a
+# passphrase prompt, so it opts out explicitly rather than relying on a permissive default.
+# setup_veritas.sh has said this since it was written; enf/ekycph inherited the old default
+# silently and would have started prompting when it changed.
+export QADENA_KEYRING_BACKEND=test
+
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 # inputs
