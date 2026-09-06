@@ -134,7 +134,17 @@ qadenad_alias() {
             # passphrase after; putting the passphrase first makes qadenad report "invalid
             # mnemonic", blaming the wrong input.
             if [[ -n "${QADENA_KEYRING_PASS:-}" ]]; then
-                { print -r -- "$QADENA_KEYRING_PASS"; print -r -- "$QADENA_KEYRING_PASS" } \
+                # AS MANY PROMPTS AS IT ASKS FOR, NOT TWO.  A fixed pair covered `keys add`
+                # (passphrase + confirm) and nothing else: `tx qadena claim-credential` opens the
+                # wallet key, the credential key and the provider key, so the third prompt got EOF
+                # and the command died with "too many failed passphrase attempts" -- after
+                # printing a screen of successful work (measured 2026-09-07).  `yes` streams until
+                # qadenad stops reading and then takes SIGPIPE, which costs nothing.
+                # BUILTINS ONLY.  `yes "$pass"` would work, but `yes` is /usr/bin/yes and the
+                # passphrase becomes an ARGUMENT -- visible in `ps` to every user on the box, for
+                # a key that signs as a service provider.  `repeat`/`print` are zsh builtins, so
+                # nothing reaches the process table.  32 is far more than any one command asks.
+                { repeat 32 print -r -- "$QADENA_KEYRING_PASS" } 2>/dev/null \
                   | "$qadenabin/qadenad" --home "$QADENAHOME" \
                         --keyring-backend "$QADENA_KEYRING_BACKEND" ${=$(_kr_dir_flag)} "${_net[@]}" "$@"
             else

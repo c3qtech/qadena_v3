@@ -245,10 +245,39 @@ signermnemonic=$(jq -r .signermnemonic "$VERITAS_SEC_HOME/mnemonics.json")
 # read proposal id from identityprovidername.proposal_id
 identityproposal_id=$(cat $qadenaproviderscripts/proposals/$identityprovidername.proposal_id)
 dsvsproposal_id=$(cat $qadenaproviderscripts/proposals/$dsvsprovidername.proposal_id)
-echo "Waiting for approval of providers"
+# ASK WHETHER THE PROVIDER IS REGISTERED, NOT WHETHER A PARTICULAR PROPOSAL PASSED.
+#
+# The ids come from files step_2 writes, and step_2 OVERWRITES them every run.  A re-run therefore
+# points this wait at the newest proposal -- which, when the provider was already registered by an
+# earlier one, is a duplicate nobody will deposit on.  It then waits forever for something that
+# cannot pass, while the condition it actually cares about has been true the whole time.
+# (Measured 2026-09-07: step_2 re-ran, wrote ids 5 and 6, and step_3 hung on them while proposals
+# 1 and 2 had registered both providers.)
+#
+# Registration is the real precondition -- a provider is usable when it has a TRANSACTION public
+# key, which create-wallet registers and which nothing else here can fake.  Check that first and
+# only fall back to watching a proposal if it is genuinely absent.
+provider_registered() {
+    local _p="$1" _id
+    _id=$(qadenad_alias query qadena list-interval-public-key-id --output json 2>/dev/null \
+            | jq -r --arg n "$_p" '(.intervalPublicKeyID // [])[] | select(.nodeID==$n) | .pubKID' 2>/dev/null)
+    [ -n "$_id" ] || return 1
+    local _k
+    _k=$(qadenad_alias query qadena list-public-key --output json 2>/dev/null \
+           | jq -r --arg i "$_id" '[(.publicKey // [])[] | select(.pubKID==$i and .pubKType=="transaction")] | length' 2>/dev/null)
+    [ "${_k:-0}" -gt 0 ]
+}
 
-$qadenaproviderscripts/query_service_provider_proposal.sh $identityproposal_id --wait
-$qadenaproviderscripts/query_service_provider_proposal.sh $dsvsproposal_id --wait
+echo "Waiting for approval of providers"
+for _pv in "$identityprovidername:$identityproposal_id" "$dsvsprovidername:$dsvsproposal_id"; do
+    _name="${_pv%%:*}"; _pid="${_pv##*:}"
+    if provider_registered "$_name"; then
+        echo "  $_name is already registered on chain -- not waiting on proposal $_pid"
+    else
+        echo "  $_name not registered yet -- waiting on proposal $_pid"
+        $qadenaproviderscripts/query_service_provider_proposal.sh $_pid --wait
+    fi
+done
 
 echo "Providers approved"
 

@@ -48,7 +48,17 @@ echo "eph count: $eph_count"
 # broadcasting, so a failed broadcast leaves a key with no wallet, and a keyring-keyed skip then
 # refuses to retry it forever.  That is how the fleet ended up with 33 keys and zero wallets
 # (2026-09-07) while every downstream step reported success.
-_u_addr=$(qadenad_alias keys show "$username" --address 2>/dev/null || true)
+# THE MAIN WALLET'S ADDRESS COMES FROM THE MNEMONIC, NOT THE KEYRING.
+#
+# `keys show` was the source here, and it is exactly wrong for this decision: create-wallet's
+# cleanup DELETES the local key when a broadcast fails, so after any failed attempt the address is
+# unknowable from the keyring, the on-chain check is skipped entirely, and the script re-creates a
+# wallet that already exists -- "Public key already exists", forever (measured 2026-09-07, three
+# runs in a row).  The address is a pure function of the mnemonic, so derive it; that answer is
+# available whether or not a key survives locally.
+_u_addr=$(print -r -- "$usermnemonic" | "${qadenabin:-$HOME/qadena/bin}/qadenad" \
+            debug derive-wallet-address 0 2>/dev/null | tail -1)
+_u_keyring_addr=$(qadenad_alias keys show "$username" --address 2>/dev/null || true)
 if [ -n "$_u_addr" ]; then
     # Single-address query, parsed from the first JSON line -- see wallet_on_chain() in
     # setup_provider_base.sh for why neither `.wallet.walletID` nor a list-wallet scan works.
@@ -63,14 +73,82 @@ if [ -n "$_u_addr" ]; then
             exit 1 ;;
     esac
     _u_onchain=$(print -r -- "$_u_raw" | sed -n '/^{/,$p' | jq -r '.walletID // empty' 2>/dev/null || true)
-    if [ -n "$_u_onchain" ]; then
-        echo "$username already exists ON CHAIN -- skipping create_user (resume)"
+# eph_ready <index> -- "skip" if that ephemeral already exists on chain, "" if it must be created.
+#
+# THIRD PLACE THIS PATTERN WAS MISSING.  The main wallet above got a chain-keyed check; the
+# ephemerals had none at all, so a local key left by any earlier attempt made create-wallet abort
+# with "friendly name already exists ... Couldn't create public key ... aborted" -- before any
+# broadcast, and with no way to recover by re-running (2026-09-07).
+#
+# The address is derived from the mnemonic, NOT read from the keyring: the whole point is to know
+# the answer when the local key is absent or stale.  A query that cannot be answered stops the run
+# rather than being read as "does not exist", because the branch below DELETES keys.
+eph_ready() {
+    local _i="$1" _addr _raw _on
+    _addr=$(print -r -- "$usermnemonic" | "${qadenabin:-$HOME/qadena/bin}/qadenad" \
+              debug derive-wallet-address "$_i" 2>/dev/null | tail -1)
+    [ -n "$_addr" ] || return 0
+    _raw=$(qadenad_alias query qadena show-wallet "$_addr" --output json 2>&1 || true)
+    case "$_raw" in
+        *"no route to host"*|*"connection refused"*|*"context deadline exceeded"*|*"post failed"*)
+            echo "cannot reach the chain to check $username-eph$_i -- refusing to continue" >&2
+            exit 1 ;;
+    esac
+    _on=$(print -r -- "$_raw" | sed -n '/^{/,$p' | jq -r '.walletID // empty' 2>/dev/null || true)
+    [ -n "$_on" ] && print -r -- "skip"
+}
+
+    # SKIP ONLY IF THE WHOLE FAMILY IS THERE.
+    #
+    # This used to exit as soon as the MAIN wallet existed, which is the state a run that died on
+    # its first ephemeral leaves behind -- so every retry skipped the ephemerals, the claims and
+    # the grants, and reported success.  On the fleet that left sec-create-wallet-sponsor with a
+    # main wallet and none of its three ephemerals, while step_3 finished green (2026-09-07).
+    #
+    # Every create-wallet below now has its own on-chain guard, so re-entering a partial user is
+    # safe: what exists is skipped individually.  The coarse exit is kept ONLY for the fully
+    # complete case, where re-running would repeat claims that are not idempotent.
+    _fam_missing=0
+    if [ -n "$_u_onchain" ] && [ -n "${eph_count:-}" ]; then
+        for _fi in $(seq 1 $eph_count); do
+            [ -n "$(eph_ready "$_fi")" ] || { _fam_missing=1; break; }
+        done
+    fi
+    if [ -n "$_u_onchain" ] && [ "$_fam_missing" -eq 0 ]; then
+        echo "$username and all ${eph_count:-0} ephemeral(s) exist ON CHAIN -- skipping create_user (resume)"
         exit 0
     fi
-    echo "$username has a local key but NO wallet on chain -- a previous run failed after"
-    echo "  writing the key.  Removing it so create-wallet can be retried."
-    qadenad_alias keys delete "$username" --yes > /dev/null 2>&1 || true
-    qadenad_alias keys delete "$username-credential" --yes > /dev/null 2>&1 || true
+    # THE DELETE BELONGS TO THE not-on-chain CASE ONLY.  Left unconditional (as it briefly was),
+    # it deleted the key of a main wallet that EXISTS, and the re-create then failed with "Public
+    # key already exists" -- turning a resumable partial user into a stuck one.
+    if [ -n "$_u_onchain" ]; then
+        echo "$username exists but its ephemerals do not -- resuming this user"
+        SKIP_MAIN_WALLET=1
+        # SELF-HEAL THE KEYS THE FAILED RUN TOOK WITH IT.
+        #
+        # create-wallet's cleanup deletes the local key when its broadcast fails, so the common
+        # state here is: wallet ON CHAIN, key GONE.  Skipping create-wallet is then correct and
+        # not sufficient -- everything downstream signs as $username (claims, grants, the pool's
+        # own operations) and has nothing to sign with.  Both keys are pure functions of the
+        # mnemonic: account 0 is the transaction key, account 1 the credential key (see
+        # hd.CreateHDPath(coinType, accountType, ephIndex) in x/qadena/common/common.go).
+        if [ -z "$_u_keyring_addr" ]; then
+            echo "  its local keys are missing -- recovering both from the mnemonic"
+            for _spec in "$username:0" "$username-credential:1"; do
+                _kn="${_spec%%:*}"; _ka="${_spec##*:}"
+                { print -r -- "$usermnemonic"; repeat 8 print -r -- "${QADENA_KEYRING_PASS:-}" } \
+                  | qadenad_alias keys add "$_kn" --recover --account "$_ka" > /dev/null 2>&1 || true
+                qadenad_alias keys show "$_kn" --address > /dev/null 2>&1 \
+                    && echo "    recovered $_kn" \
+                    || { echo "    FAILED to recover $_kn -- cannot continue"; exit 1; }
+            done
+        fi
+    elif [ -n "$_u_keyring_addr" ]; then
+        echo "$username has a local key but NO wallet on chain -- a previous run failed after"
+        echo "  writing the key.  Removing it so create-wallet can be retried."
+        qadenad_alias keys delete "$username" --yes > /dev/null 2>&1 || true
+        qadenad_alias keys delete "$username-credential" --yes > /dev/null 2>&1 || true
+    fi
 fi
 
 
@@ -139,15 +217,42 @@ if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
 fi
 
 banner "$username Create wallet"
-run_cmd "qadenad_alias tx qadena create-wallet $username $pioneer $createwalletsponsor --account-mnemonic=\"$usermnemonic\"  --service-provider \"$serviceprovider\" --yes"
+# GUARDED LIKE EVERY OTHER SITE.  This one was missed because the audit counted the string
+# "already exists ON CHAIN", which the resume block and the ephemeral guards both contain -- so it
+# reported 6/6 while the main wallet's create was bare.  Count call sites, not messages.
+if [ "${SKIP_MAIN_WALLET:-0}" = "1" ]; then
+    echo "$username main wallet already exists ON CHAIN -- skipping create-wallet"
+else
+    run_cmd "qadenad_alias tx qadena create-wallet $username $pioneer $createwalletsponsor --account-mnemonic=\"$usermnemonic\"  --service-provider \"$serviceprovider\" --yes"
+fi
+
 
 banner "$username Create wallet eph"
 if [ -n "$eph_count" ] ; then
     for i in $(seq 1 $eph_count); do
-        run_cmd "qadenad_alias tx qadena create-wallet $username-eph$i $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic=\"$usermnemonic\" --eph-account-index \"$i\" --yes"
+        if [ -n "$(eph_ready "$i")" ]; then
+            echo "$username-eph$i already exists ON CHAIN -- skipping create-wallet"
+        else
+            if qadenad_alias keys show "$username-eph$i" --address > /dev/null 2>&1; then
+                echo "$username-eph$i has a local key but NO wallet on chain -- removing and retrying"
+                qadenad_alias keys delete "$username-eph$i" --yes > /dev/null 2>&1 || true
+                qadenad_alias keys delete "$username-eph$i-credential" --yes > /dev/null 2>&1 || true
+            fi
+            run_cmd "qadenad_alias tx qadena create-wallet $username-eph$i $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic=\"$usermnemonic\" --eph-account-index \"$i\" --yes"
+        fi
     done
 else
-    run_cmd "qadenad_alias tx qadena create-wallet $username-eph $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic=\"$usermnemonic\" --eph-account-index \"1\" --yes"
+    # Same guard as the indexed loop above -- this branch runs when no --eph-count was given.
+    if [ -n "$(eph_ready 1)" ]; then
+        echo "$username-eph already exists ON CHAIN -- skipping create-wallet"
+    else
+        if qadenad_alias keys show "$username-eph" --address > /dev/null 2>&1; then
+            echo "$username-eph has a local key but NO wallet on chain -- removing and retrying"
+            qadenad_alias keys delete "$username-eph" --yes > /dev/null 2>&1 || true
+            qadenad_alias keys delete "$username-eph-credential" --yes > /dev/null 2>&1 || true
+        fi
+        run_cmd "qadenad_alias tx qadena create-wallet $username-eph $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic=\"$usermnemonic\" --eph-account-index \"1\" --yes"
+    fi
 fi
 
 # The wallets exist now, so they can be granted. Main wallet first, then each ephemeral one: a
@@ -203,7 +308,18 @@ if [ "$eph_count" -eq 1 ]; then
 
     if [ -n "$acceptcredentialtypes" ] ; then
         banner "$username Accept credential types $acceptcredentialtypes"
-        run_cmd "qadenad_alias tx qadena create-wallet $username-eph2 $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic=\"$usermnemonic\" --eph-account-index \"2\" --accept-credential-types $acceptcredentialtypes --yes"
+        # Guarded like every other create-wallet here: a local key from an earlier attempt
+        # makes this abort with "friendly name already exists" before any broadcast.
+        if [ -n "$(eph_ready 2)" ]; then
+            echo "$username-eph2 already exists ON CHAIN -- skipping create-wallet"
+        else
+            if qadenad_alias keys show "$username-eph2" --address > /dev/null 2>&1; then
+                echo "$username-eph2 has a local key but NO wallet on chain -- removing and retrying"
+                qadenad_alias keys delete "$username-eph2" --yes > /dev/null 2>&1 || true
+                qadenad_alias keys delete "$username-eph2-credential" --yes > /dev/null 2>&1 || true
+            fi
+            run_cmd "qadenad_alias tx qadena create-wallet $username-eph2 $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic=\"$usermnemonic\" --eph-account-index \"2\" --accept-credential-types $acceptcredentialtypes --yes"
+        fi
         banner "$username Bind phone nameservice to $username-eph2"
         run_cmd "qadenad_alias tx nameservice bind-credential $username phone-contact-info --from $username-eph2 $USER_FEE_GRANTER_FLAG --yes"
     else
@@ -218,7 +334,18 @@ if [ "$eph_count" -eq 1 ]; then
 
     if [ -n "$requiresendertypes" ] ; then
         banner "$username require sender credential types $requiresendertypes"
-        run_cmd "qadenad_alias tx qadena create-wallet $username-eph3 $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic=\"$usermnemonic\" --eph-account-index \"3\" --require-sender-credential-types $requiresendertypes --yes"
+        # Guarded like every other create-wallet here: a local key from an earlier attempt
+        # makes this abort with "friendly name already exists" before any broadcast.
+        if [ -n "$(eph_ready 3)" ]; then
+            echo "$username-eph3 already exists ON CHAIN -- skipping create-wallet"
+        else
+            if qadenad_alias keys show "$username-eph3" --address > /dev/null 2>&1; then
+                echo "$username-eph3 has a local key but NO wallet on chain -- removing and retrying"
+                qadenad_alias keys delete "$username-eph3" --yes > /dev/null 2>&1 || true
+                qadenad_alias keys delete "$username-eph3-credential" --yes > /dev/null 2>&1 || true
+            fi
+            run_cmd "qadenad_alias tx qadena create-wallet $username-eph3 $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic=\"$usermnemonic\" --eph-account-index \"3\" --require-sender-credential-types $requiresendertypes --yes"
+        fi
         banner "$username Bind email nameservice to $username-eph3"
         run_cmd "qadenad_alias tx nameservice bind-credential $username email-contact-info --from $username-eph3 $USER_FEE_GRANTER_FLAG --yes"
     else 
@@ -233,7 +360,18 @@ if [ "$eph_count" -eq 1 ]; then
 
     if [ -n "$acceptpassword" ] ; then
         banner "$username Accept password"
-        run_cmd "qadenad_alias tx qadena create-wallet $username-eph4 $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic=\"$usermnemonic\" --eph-account-index \"4\" --accept-password=\"$acceptpassword\" --yes"
+        # Guarded like every other create-wallet here: a local key from an earlier attempt
+        # makes this abort with "friendly name already exists" before any broadcast.
+        if [ -n "$(eph_ready 4)" ]; then
+            echo "$username-eph4 already exists ON CHAIN -- skipping create-wallet"
+        else
+            if qadenad_alias keys show "$username-eph4" --address > /dev/null 2>&1; then
+                echo "$username-eph4 has a local key but NO wallet on chain -- removing and retrying"
+                qadenad_alias keys delete "$username-eph4" --yes > /dev/null 2>&1 || true
+                qadenad_alias keys delete "$username-eph4-credential" --yes > /dev/null 2>&1 || true
+            fi
+            run_cmd "qadenad_alias tx qadena create-wallet $username-eph4 $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic=\"$usermnemonic\" --eph-account-index \"4\" --accept-password=\"$acceptpassword\" --yes"
+        fi
     fi
 
 fi
