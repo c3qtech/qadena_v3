@@ -94,15 +94,19 @@ done
 # output.  So this could never have run outside the harness, and the symptom was no error at all.
 #
 # `|| true` keeps set -e out of it; the pool file, when given, overrides this anyway.
-if [ -z "$count" ]; then
+# The pool file is read at line ~146 and its wallet list IS the count, so this whole block is
+# irrelevant when one is given -- it used to fire anyway, refusing a perfectly good
+# `--pool-addresses` run with "no --pool-addresses" (measured 2026-09-06).
+if [ -z "$count" ] && [ -z "$POOL_FILE" ]; then
     count=$(jq -r '.count // empty' "$veritasscripts/variables.json" 2>/dev/null || true)
     # NO 30 FALLBACK.  Inventing a count here authorises a pool of a size nobody stated -- too
     # small leaves wallets unauthorised (per-citizen intermittent failure), too large grants
     # addresses that never exist.  Without --pool-addresses (which carries the true count) the
     # number must come from somewhere real or the run must stop.
     [ -n "$count" ] && [ "$count" != "null" ] || {
-        echo "cannot determine the pool size: no --count, no readable variables.json, no --pool-addresses."
-        echo "Prefer --pool-addresses <file> -- its wallet list IS the count."
+        echo "cannot determine the pool size."
+        echo "Pass --pool-addresses <file> (SEC's step_3 block -- its wallet list IS the count),"
+        echo "or --count <n> if you are authorising names you resolve locally."
         exit 1
     }
 fi
