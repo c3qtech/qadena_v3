@@ -38,6 +38,57 @@ feegranter=""
 # narrowed set with no diagnosis.  The union costs nothing and removes the dependency.
 VERITAS_APPSVR_MSGS="/qadena.dsvs.MsgCreateDocument,/qadena.dsvs.MsgRemoveDocument,/qadena.dsvs.MsgSignDocument,/qadena.dsvs.MsgRegisterAuthorizedSignatory,/qadena.qadena.MsgCreateCredential,/qadena.qadena.MsgRemoveCredential,/qadena.qadena.MsgClaimCredential,/qadena.qadena.MsgUpdateCredential,/qadena.qadena.MsgClaimUpdatedCredential,/qadena.qadena.MsgProtectPrivateKey,/qadena.qadena.MsgSignRecoverPrivateKey,/qadena.qadena.MsgAddPublicKey,/qadena.qadena.MsgCreateWallet,/qadena.nameservice.MsgBindCredential,/qadena.nameservice.MsgUnbindCredential,/cosmos.feegrant.v1beta1.MsgGrantAllowance,/cosmos.feegrant.v1beta1.MsgRevokeAllowance"
 
+
+# provider_address <mnemonic> [eph-index] -- the wallet address this provider WILL have.
+#
+# NOT `keys show`.  The address has to be knowable when the local key is ABSENT, which is exactly
+# the state a failed create-wallet leaves behind -- its cleanup removes the key it wrote.  Asking
+# the keyring then returns nothing, wallet_on_chain is handed an empty address, and the script
+# concludes "no wallet on chain" for a wallet that exists and re-creates it.  That loop is
+# unbreakable by re-running: every attempt dies on "Public key already exists" (2026-09-07).
+#
+# The address is a pure function of the mnemonic and the index, so derive it offline with the same
+# code create-wallet uses (GetEphAccountAddress, via `debug derive-wallet-address`).
+provider_address() {
+    local _m="$1" _i="${2:-0}"
+    print -r -- "$_m" | "${qadenabin:-$HOME/qadena/bin}/qadenad" debug derive-wallet-address "$_i" 2>/dev/null | tail -1
+}
+
+# wallet_on_chain <address> -- echoes the walletID if the chain has a wallet there, else nothing.
+#
+# TWO WRONG VERSIONS PRECEDED THIS ONE, BOTH SILENT:
+#
+#   `show-wallet | jq -r .wallet.walletID`  -- show-wallet prints progress lines BEFORE the JSON
+#       ("Valid bech32 address...", "getWallet <addr>", "Wallet") and emits the object BARE, not
+#       under a `.wallet` key.  jq therefore returned empty for wallets that plainly existed, so
+#       the predicate said "no wallet on chain" for EVERY address.  On 2026-09-07 that made this
+#       script delete a registered provider's local keys; the retry then failed with "Public key
+#       already exists" and only the deterministic re-derivation saved them.
+#
+#   `list-wallet | jq select(.walletID==$a)`  -- correct on a small chain and wrong on a real one:
+#       it fetches EVERY wallet to answer about one, and the response paginates, so past the page
+#       limit an existing wallet reads as absent.  Same false "no wallet" as above, arriving only
+#       once the deployment has grown.
+#
+# So: ask about the one address, and parse from the first line that begins a JSON object.
+wallet_on_chain() {
+    [ -n "${1:-}" ] || return 0
+    local _out
+    _out=$(qadenad_alias query qadena show-wallet "$1" --output json 2>&1 || true)
+    # A QUERY THAT COULD NOT BE ANSWERED IS NOT A "NO".  The caller DELETES LOCAL KEYS on an empty
+    # result, so an unreachable node, a wrong --node, or a mid-run RPC hiccup would destroy the
+    # keys of wallets that exist.  Distinguish the three outcomes explicitly:
+    #   walletID on stdout, rc 0  -> exists
+    #   nothing on stdout, rc 0   -> definitively absent
+    #   rc 2                      -> UNKNOWN; the caller must not act
+    case "$_out" in
+        *"no route to host"*|*"connection refused"*|*"context deadline exceeded"*|*"post failed"*|*"error: rpc"*)
+            return 2 ;;
+    esac
+    print -r -- "$_out" | sed -n '/^{/,$p' | jq -r '.walletID // empty' 2>/dev/null || true
+    return 0
+}
+
 # fund_wallet <address> -- give this wallet the means to transact, however this deployment does it.
 # Emits the tx JSON on stdout either way, so both callers keep their existing code/hash checks.
 fund_wallet() {
@@ -171,14 +222,46 @@ fi
 echo "-------------------------"
 echo "$providername Create wallet"
 echo "-------------------------"
-# IDEMPOTENT: a wallet that exists (locally AND therefore on chain -- the keyring entry is
-# written by the same run that broadcast it) cannot be re-created; CreatePublicKey aborts on the
-# local key and MsgCreateWallet would refuse the on-chain one.  Skipping is what lets a run that
-# died mid-provider -- a failed widen, a network drop -- be resumed by just running it again.
-if qadenad_alias keys show $providername --address > /dev/null 2>&1; then
-    echo "$providername wallet already exists -- skipping create-wallet"
+# IDEMPOTENT, BUT KEYED ON THE CHAIN -- NOT ON THE KEYRING.
+#
+# This used to skip whenever a LOCAL key existed, on the premise that "the keyring entry is
+# written by the same run that broadcast it".  That premise is false in the one case that matters:
+# create-wallet writes the local key FIRST and broadcasts after, so a failed broadcast leaves a key
+# with no wallet -- and every later run then skips it, forever.  The deployment can never recover
+# by re-running, which is exactly what idempotence was supposed to buy.
+#
+# Measured 2026-09-07 on the fleet: 33 keys in the keyring, ZERO wallets on chain, both providers
+# holding an IntervalPublicKeyID from a passed proposal and no public keys at all.  The app-server
+# failed at a query long before any fee was involved, and the verifier was green because a fee
+# grant can be issued to an address that does not exist.
+#
+# So: ask the chain.  A local key with no wallet must RE-RUN create-wallet, not skip it.
+# Derived, not read from the keyring -- see provider_address() for why.
+_paddr=$(provider_address "$providermnemonic" 0)
+_onchain=$(wallet_on_chain "$_paddr") || {
+    echo "cannot determine whether $providername exists on chain -- the node did not answer."
+    echo "  Refusing to continue: the next step would DELETE this key and re-create the wallet."
+    echo "  Check --node and try again."
+    exit 1
+}
+if [ -n "$_onchain" ]; then
+    echo "$providername wallet already exists ON CHAIN -- skipping create-wallet"
 else
-    qadenad_alias tx qadena create-wallet $providername $pioneer $treasury --account-mnemonic="$providermnemonic"  --yes
+    if qadenad_alias keys show $providername --address > /dev/null 2>&1; then
+        # The local key is a corpse from a failed broadcast.  create-wallet's CreatePublicKey
+        # aborts on an existing local key, so it has to go before the retry can work.
+        echo "$providername has a local key but NO wallet on chain -- a previous create-wallet"
+        echo "  failed after writing the key.  Removing it and retrying."
+        qadenad_alias keys delete $providername --yes > /dev/null 2>&1 || true
+        qadenad_alias keys delete $providername-credential --yes > /dev/null 2>&1 || true
+    fi
+    # STATUS CHECKED.  Unchecked, a failure here is invisible: the script carries on to fund and
+    # grant an address that will never be a wallet, and every downstream step "succeeds".
+    if ! qadenad_alias tx qadena create-wallet $providername $pioneer $treasury --account-mnemonic="$providermnemonic" --yes; then
+        echo "FAILED: create-wallet for $providername -- stopping rather than granting to a"
+        echo "  non-existent wallet.  Fix the cause and re-run; this step is resumable."
+        exit 1
+    fi
 fi
 qadena_addr=$(qadenad_alias keys show $providername --address)
 result=$(fund_wallet "$qadena_addr")
@@ -203,10 +286,30 @@ if [ $count -gt 0 ]; then
         echo "-------------------------"
         echo "$providername Create wallet eph$i"
         echo "-------------------------"
-        if qadenad_alias keys show $providername-eph$i --address > /dev/null 2>&1; then
-            echo "$providername-eph$i already exists -- skipping create-wallet"
+        # SAME PREDICATE AS THE MAIN WALLET ABOVE, AND FOR THE SAME REASON.  A keyring-keyed skip
+        # here left every ephemeral uncreated on the fleet while the main wallets succeeded: 2
+        # wallets on chain, 33 keys locally, and no way to recover by re-running (2026-09-07).
+        _eph_addr=$(qadenad_alias keys show $providername-eph$i --address 2>/dev/null || true)
+        _eph_onchain=""
+        if true; then
+            _eph_onchain=$(wallet_on_chain "$(provider_address "$providermnemonic" "$i")") || {
+                echo "cannot determine whether $providername-eph$i exists on chain -- node did not answer."
+                echo "  Refusing to continue rather than deleting a key on a failed query."
+                exit 1
+            }
+        fi
+        if [ -n "$_eph_onchain" ]; then
+            echo "$providername-eph$i already exists ON CHAIN -- skipping create-wallet"
         else
-            qadenad_alias tx qadena create-wallet $providername-eph$i $pioneer $treasury --link-to-real-wallet $providername --account-mnemonic="$providermnemonic" --eph-account-index "$i" --yes
+            if [ -n "$_eph_addr" ]; then
+                echo "$providername-eph$i has a local key but NO wallet on chain -- removing and retrying"
+                qadenad_alias keys delete $providername-eph$i --yes > /dev/null 2>&1 || true
+                qadenad_alias keys delete $providername-eph$i-credential --yes > /dev/null 2>&1 || true
+            fi
+            if ! qadenad_alias tx qadena create-wallet $providername-eph$i $pioneer $treasury --link-to-real-wallet $providername --account-mnemonic="$providermnemonic" --eph-account-index "$i" --yes; then
+                echo "FAILED: create-wallet for $providername-eph$i -- stopping"
+                exit 1
+            fi
         fi
         # transfer funds to eph wallet
         qadena_addr=$(qadenad_alias keys show $providername-eph$i --address)

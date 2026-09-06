@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"os"
 	//	"crypto/ecdsa"
 	"encoding/base64"
 	"encoding/hex"
@@ -153,7 +154,12 @@ func CmdShowWallet() *cobra.Command {
 				argWalletID = sdk.AccAddress(privKey.PubKey().Address()).String()
 			}
 
-			fmt.Println("Getting transparent bank balance")
+			// STDERR, NOT STDOUT.  This is progress, and stdout carries the --output json
+			// payload: a Println here makes `show-wallet --output json | jq` fail with
+			// "Invalid numeric literal", so every script that queries one wallet has to
+			// strip a preamble.  Measured 2026-09-07, after a predicate built on that jq
+			// silently reported EVERY wallet as absent.
+			fmt.Fprintln(os.Stderr, "Getting transparent bank balance")
 			queryBankClient := banktypes.NewQueryClient(clientCtx)
 			addr, err := sdk.AccAddressFromBech32(argWalletID)
 			if err != nil {

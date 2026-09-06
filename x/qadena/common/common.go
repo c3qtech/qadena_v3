@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	time "time"
 
@@ -496,7 +497,7 @@ func GetAddressAndFriendlyName(ctx client.Context, friendlyNameOrBech32Addr stri
 		if err != nil {
 			// it looks at least like a valid bech32 address, let's return
 			if Debug {
-				fmt.Println("Valid bech32 address, but no other info available", friendlyNameOrBech32Addr)
+				fmt.Fprintln(os.Stderr, "Valid bech32 address, but no other info available", friendlyNameOrBech32Addr)
 			}
 			return friendlyNameOrBech32Addr, nil, "", "", "", nil
 		}
@@ -766,7 +767,7 @@ func GetWallet(ctx client.Context, walletID string) (types.Wallet, error) {
 	queryClient := types.NewQueryClient(ctx)
 
 	if Debug {
-		fmt.Println("getWallet", walletID)
+		fmt.Fprintln(os.Stderr, "getWallet", walletID)
 	}
 
 	params := &types.QueryGetWalletRequest{

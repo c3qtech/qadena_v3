@@ -43,9 +43,34 @@ echo "eph count: $eph_count"
 # mid-run failure died here on "friendly name already exists ... aborted", and the only way
 # forward was wiping keyrings for wallets the CHAIN still has -- which cannot be re-created.
 # A user that died between main and ephemerals is mis-skipped by this; delete its keys to redo.
-if qadenad_alias keys show "$username" --address > /dev/null 2>&1; then
-    echo "$username already exists in the keyring -- skipping create_user (resume)"
-    exit 0
+# KEYED ON THE CHAIN, NOT THE KEYRING.  The first version of this checked `keys show` and was
+# wrong in the same way setup_provider_base's skip was: create-wallet writes the local key BEFORE
+# broadcasting, so a failed broadcast leaves a key with no wallet, and a keyring-keyed skip then
+# refuses to retry it forever.  That is how the fleet ended up with 33 keys and zero wallets
+# (2026-09-07) while every downstream step reported success.
+_u_addr=$(qadenad_alias keys show "$username" --address 2>/dev/null || true)
+if [ -n "$_u_addr" ]; then
+    # Single-address query, parsed from the first JSON line -- see wallet_on_chain() in
+    # setup_provider_base.sh for why neither `.wallet.walletID` nor a list-wallet scan works.
+    #
+    # AND A FAILED QUERY IS NOT A "NO".  An empty result here DELETES the user's keys below, so an
+    # unreachable node must stop the run rather than look like an absent wallet.
+    _u_raw=$(qadenad_alias query qadena show-wallet "$_u_addr" --output json 2>&1 || true)
+    case "$_u_raw" in
+        *"no route to host"*|*"connection refused"*|*"context deadline exceeded"*|*"post failed"*)
+            echo "cannot reach the chain to check whether $username exists -- refusing to continue,"
+            echo "  because the next step would delete this key on the assumption it is absent."
+            exit 1 ;;
+    esac
+    _u_onchain=$(print -r -- "$_u_raw" | sed -n '/^{/,$p' | jq -r '.walletID // empty' 2>/dev/null || true)
+    if [ -n "$_u_onchain" ]; then
+        echo "$username already exists ON CHAIN -- skipping create_user (resume)"
+        exit 0
+    fi
+    echo "$username has a local key but NO wallet on chain -- a previous run failed after"
+    echo "  writing the key.  Removing it so create-wallet can be retried."
+    qadenad_alias keys delete "$username" --yes > /dev/null 2>&1 || true
+    qadenad_alias keys delete "$username-credential" --yes > /dev/null 2>&1 || true
 fi
 
 

@@ -153,6 +153,18 @@ qadena_keyring_unlock() {
     [ -z "${QADENA_KEYRING_PASS:-}" ] || return 0
     if [ -n "${QADENA_KEYRING_PASSFILE:-}" ]; then
         QADENA_KEYRING_PASS=$(head -1 "$QADENA_KEYRING_PASSFILE")
+    elif [ ! -t 0 ]; then
+        # NO TTY MEANS NO PROMPT.  `read` here either blocks forever or silently consumes a line
+        # of the caller's data -- both look like a hang, which is exactly how this surfaced
+        # (2026-09-07: step_2 appeared frozen with no output, because the prompt went nowhere).
+        # Fail with the remedy instead.
+        echo "" >&2
+        echo "keyring backend is 'file' and there is no terminal to ask for the passphrase." >&2
+        echo "  Supply it instead:" >&2
+        echo "      --keyring-passfile <file>        (first line is the passphrase)" >&2
+        echo "  or, for an unattended run against a devnet keyring:" >&2
+        echo "      export QADENA_KEYRING_BACKEND=test" >&2
+        exit 1
     else
         printf "Keyring passphrase for %s (hidden, will not echo): " "$QADENAHOME" >&2
         read -rs QADENA_KEYRING_PASS; echo "" >&2

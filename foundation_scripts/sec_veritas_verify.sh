@@ -419,6 +419,52 @@ else
     print "        first: $_first_funded"
 fi
 
+# ---- 7. THE THING BEING GRANTED TO ACTUALLY EXISTS -----------------------------------------
+#
+# EVERY CHECK ABOVE PROVES THE GRANTS, NOT THE WALLETS.  A fee grant is issued to an ADDRESS and
+# the chain does not require anything to exist there -- so "16 wallets hold the exact operational
+# allowance" stays true while `list-wallet` returns ZERO and nothing can transact.  Measured
+# 2026-09-07 on this fleet: 10/10 green, 33 keys in the keyring, no wallets on chain at all, and
+# the app-server's onboarding failing at a query before it ever reached a fee.
+#
+# The provider public keys are the same class.  A passed MsgAddServiceProvider registers the
+# IntervalPublicKeyID; the transaction and credential pubkeys come from create-wallet.  A provider
+# with an interval id and no keys looks registered to `list-interval-public-key-id` and is unusable
+# to anything that resolves a key through it, which is every wallet operation.
+_wcount=$(qq query qadena list-wallet --output json 2>/dev/null | jq -r '(.wallet // [])|length' 2>/dev/null)
+: ${_wcount:=0}
+if [[ "$_wcount" -gt 0 ]]; then
+    ok "$_wcount wallet(s) exist on chain (the grants have something to pay for)"
+else
+    bad "ZERO wallets on chain -- every grant above is issued to an address that does not exist"
+    print "        create-wallet never succeeded.  Keys in a keyring are not wallets on a chain."
+fi
+
+_nokeys=""
+_provseen=0
+for _prov in $(qq query qadena list-interval-public-key-id --output json 2>/dev/null \
+                 | jq -r '(.intervalPublicKeyID // [])[] | select(.nodeType=="srv-prv") | .nodeID' 2>/dev/null); do
+    _pid=$(qq query qadena list-interval-public-key-id --output json 2>/dev/null \
+             | jq -r --arg n "$_prov" '(.intervalPublicKeyID // [])[] | select(.nodeID==$n) | .pubKID')
+    _k=$(qq query qadena list-public-key --output json 2>/dev/null \
+           | jq -r --arg i "$_pid" '[(.publicKey // [])[] | select(.pubKID==$i and .pubKType=="transaction")] | length')
+    _provseen=$(( _provseen + 1 ))
+    [[ "${_k:-0}" -gt 0 ]] || _nokeys="$_nokeys $_prov"
+done
+# A LOOP THAT FOUND NOTHING MUST NOT REPORT SUCCESS.  The first version of this filtered on
+# nodeType "identity"/"dsvs" -- the serviceProviderType, not the node type -- matched zero rows,
+# and printed "ok" on a chain where BOTH providers were keyless.  The node type is "srv-prv";
+# the identity/dsvs distinction lives in the proposal, not here.
+if [[ "$_provseen" -eq 0 ]]; then
+    bad "no service providers found to check (expected 2) -- has governance run?"
+elif [[ -z "$_nokeys" ]]; then
+    ok "all $_provseen registered service provider(s) have a transaction public key"
+else
+    bad "service provider(s) registered with NO public key:$_nokeys"
+    print "        governance recorded the interval id; create-wallet never registered the keys."
+    print "        Anything resolving a key through these providers fails with NotFound."
+fi
+
 # ---- informational: the floats --------------------------------------------------------------
 for _p in "appsvr:$FA" "users:$FU"; do
     _n="${_p%%:*}"; _a="${_p#*:}"

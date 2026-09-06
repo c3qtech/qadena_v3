@@ -30,12 +30,21 @@ export QADENA_KEYRING_BACKEND="${_kb_caller:-file}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --node) export QADENA_NODE="$2"; shift 2 ;;
+        --keyring-passfile) export QADENA_KEYRING_PASSFILE="$2"; shift 2 ;;
         --sec-home) export VERITAS_SEC_HOME="$2"; shift 2 ;;
         *) echo "unknown option: $1"
-           echo "usage: $0 [--node <rpc>] [--sec-home <dir>]"
+           echo "usage: $0 [--node <rpc>] [--sec-home <dir>] [--keyring-passfile <file>]"
            exit 1 ;;
     esac
 done
+
+# UNLOCK ONCE, HERE.  qadena_keyring_unlock has existed in setup_env.sh since the file backend was
+# added and was never called from anywhere -- so with backend=file, QADENA_KEYRING_PASS stayed
+# empty, qadenad_alias took its no-passphrase branch, and qadenad blocked reading stdin with the
+# prompt swallowed by whatever call site had captured its output.  That is a hang with no message
+# and no prompt (measured 2026-09-07 on step_2).  Called after argument parsing so
+# --keyring-passfile is already in effect.
+qadena_keyring_unlock
 
 # THE KEYRING IS THE NODE'S, AND SO IS ITS BACKEND.  These steps do not choose one.
 #

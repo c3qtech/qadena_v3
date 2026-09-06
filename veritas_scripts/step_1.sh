@@ -151,6 +151,9 @@ _usage() {
     echo "Chain and files:"
     echo "  --node <rpc>         the chain RPC (e.g. tcp://10.211.55.5:26657); the chain-id is"
     echo "                       derived from it, never trusted from a local file."
+    echo "  --keyring-passfile <file>  first line is the keyring passphrase.  REQUIRED for an"
+    echo "                       unattended run: the default backend is 'file', which otherwise"
+    echo "                       prompts, and a prompt with no terminal looks like a hang."
     echo "  --sec-home <dir>     where variables.json / mnemonics.json / pool_addresses.json live."
     echo "                       Default \$VERITAS_SEC_HOME or ~/sec-veritas."
     echo "  --pioneer <name>     derived from the chain when omitted; pass it only if the chain"
@@ -175,6 +178,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --node)
             export QADENA_NODE="$2"
+            shift 2
+            ;;
+        --keyring-passfile)
+            export QADENA_KEYRING_PASSFILE="$2"
             shift 2
             ;;
         --appsvr)
@@ -288,6 +295,14 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# UNLOCK ONCE, HERE.  qadena_keyring_unlock has existed in setup_env.sh since the file backend was
+# added and was never called from anywhere -- so with backend=file, QADENA_KEYRING_PASS stayed
+# empty, qadenad_alias took its no-passphrase branch, and qadenad blocked reading stdin with the
+# prompt swallowed by whatever call site had captured its output.  That is a hang with no message
+# and no prompt (measured 2026-09-07 on step_2).  Called after argument parsing so
+# --keyring-passfile is already in effect.
+qadena_keyring_unlock
 
 mkdir -p "$VERITAS_SEC_HOME" || { echo "cannot create $VERITAS_SEC_HOME"; exit 1; }
 chmod 700 "$VERITAS_SEC_HOME" 2>/dev/null
