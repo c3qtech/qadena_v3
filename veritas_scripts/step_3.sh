@@ -38,7 +38,18 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 # Every message a VERITAS provider/signer wallet broadcasts, from the trace of the app-server's
 # GenerateOrBroadcastTxCLISync call sites. A type missing here fails closed at the operation that
 # needs it, so this list and the app-server's allowlist must move together.
-VERITAS_APPSVR_MSGS="/qadena.dsvs.MsgCreateDocument,/qadena.dsvs.MsgRemoveDocument,/qadena.dsvs.MsgSignDocument,/qadena.qadena.MsgCreateCredential,/qadena.qadena.MsgRemoveCredential,/qadena.qadena.MsgSignRecoverPrivateKey,/qadena.qadena.MsgAddPublicKey,/qadena.qadena.MsgCreateWallet,/cosmos.feegrant.v1beta1.MsgGrantAllowance"
+# THE UNION OF BOTH WIDE SETS, DELIBERATELY.
+#
+# Two "wide" allowances used to exist: this operational set, and create_user's USER_MSGS (claims,
+# credential updates, signatory registration, binds, ProtectPrivateKey).  A grantee holds ONE
+# allowance per granter, and step_3's widen ran LAST -- so the end state silently dropped every
+# claim/rotation/bind message, and the bring-up's own claims passed only because they executed
+# between the two grants.  An ordering dependency invisible from the final state.
+#
+# The app-server itself never needs the dropped messages (verified against its code, 2026-09-06),
+# so nothing broke in steady state -- but any re-run, repair or partial recovery would hit the
+# narrowed set with no diagnosis.  The union costs nothing and removes the dependency.
+VERITAS_APPSVR_MSGS="/qadena.dsvs.MsgCreateDocument,/qadena.dsvs.MsgRemoveDocument,/qadena.dsvs.MsgSignDocument,/qadena.dsvs.MsgRegisterAuthorizedSignatory,/qadena.qadena.MsgCreateCredential,/qadena.qadena.MsgRemoveCredential,/qadena.qadena.MsgClaimCredential,/qadena.qadena.MsgUpdateCredential,/qadena.qadena.MsgClaimUpdatedCredential,/qadena.qadena.MsgProtectPrivateKey,/qadena.qadena.MsgSignRecoverPrivateKey,/qadena.qadena.MsgAddPublicKey,/qadena.qadena.MsgCreateWallet,/qadena.nameservice.MsgBindCredential,/qadena.nameservice.MsgUnbindCredential,/cosmos.feegrant.v1beta1.MsgGrantAllowance"
 
 # fund_wallet <address> -- give this wallet the means to transact, however this deployment does it.
 fund_wallet() {

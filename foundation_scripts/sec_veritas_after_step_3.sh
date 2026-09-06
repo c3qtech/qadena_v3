@@ -56,7 +56,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [options]"
             echo ""
             echo "  Authorises the app-server's sponsor pool: TWO transactions per wallet"
-            echo "  (authz MsgGrantAllowance + feegrant MsgExec), so --count 30 sends 62."
+            echo "  (authz MsgGrantAllowance + feegrant MsgExec), so a pool of N sends 2*(N+1)."
             echo ""
             echo "  --foundation-users <k>   granting account, default $foundation_users"
             echo "  --foundation-appsvr <k>  default $foundation_appsvr"
@@ -89,7 +89,15 @@ done
 # `|| true` keeps set -e out of it; the pool file, when given, overrides this anyway.
 if [ -z "$count" ]; then
     count=$(jq -r '.count // empty' "$veritasscripts/variables.json" 2>/dev/null || true)
-    [ -n "$count" ] && [ "$count" != "null" ] || count=30
+    # NO 30 FALLBACK.  Inventing a count here authorises a pool of a size nobody stated -- too
+    # small leaves wallets unauthorised (per-citizen intermittent failure), too large grants
+    # addresses that never exist.  Without --pool-addresses (which carries the true count) the
+    # number must come from somewhere real or the run must stop.
+    [ -n "$count" ] && [ "$count" != "null" ] || {
+        echo "cannot determine the pool size: no --count, no readable variables.json, no --pool-addresses."
+        echo "Prefer --pool-addresses <file> -- its wallet list IS the count."
+        exit 1
+    }
 fi
 
 # Signing needs the coordinator keyring; broadcasting and querying need the node.  They cannot
@@ -108,7 +116,7 @@ if [ "$BACKEND" = "file" ]; then
         read -s KRPASS; echo "" >&2
     fi
 fi
-# PER CALL.  This script makes 2 transactions per wallet -- 62 at --count 30 -- and a passphrase
+# PER CALL.  This script makes 2 transactions per wallet -- 2 per pool wallet -- and a passphrase
 # piped into the script as a whole is drained by the first qadenad, leaving the rest to read EOF,
 # which the backend counts as a failed attempt and locks after three.
 qk() {

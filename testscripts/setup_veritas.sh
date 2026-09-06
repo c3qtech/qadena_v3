@@ -93,7 +93,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 #
-count=30
+# The HARNESS's choice of fleet size, not a protocol number -- override with VERITAS_COUNT.
+# step_1 itself refuses to default this; a harness is the one place a canned value is honest.
+count="${VERITAS_COUNT:-30}"
 
 echo "-------------------------"
 echo "Staking from treasury to $pioneer"

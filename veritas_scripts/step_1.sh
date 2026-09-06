@@ -101,7 +101,10 @@ firstname="SEC"
 birthdate="1936-Oct-26"
 phone="+63282504521"
 
-count=30
+# NO DEFAULT.  The ephemeral count sizes everything downstream -- 4*(count+1) pre-grants, the
+# pool, the per-wallet split of createwalletsponsoramount -- and a silent 30 makes a missing
+# decision look like a made one.  Take it from --count or $VERITAS_COUNT; refuse otherwise.
+count="${VERITAS_COUNT:-}"
 
 
 # accept named parameters to override all these mnemonics
@@ -236,6 +239,15 @@ if [ -r "$VERITAS_SEC_HOME/mnemonics.json" ]; then
         [ -n "$_m" ] && eval "$_v=\$_m"
     done
 fi
+
+case "$count" in
+    ''|*[!0-9]*)
+        echo "the ephemeral-wallet count is required and must be a number."
+        echo "    veritas_scripts/step_1.sh --count <n>      # or: export VERITAS_COUNT=<n>"
+        echo "It sizes the pre-grants (4*(n+1)), the sponsor pool (n+1) and the per-wallet split;"
+        echo "there is deliberately no default."
+        exit 1 ;;
+esac
 
 # write variables to json
 jq -n --arg pioneer "$pioneer" --arg count "$count" --arg email "$email" --arg avalue "$avalue" --arg firstname "$firstname" --arg birthdate "$birthdate" --arg phone "$phone" --arg dsvsname "$dsvsname" --arg provideramount "$provideramount" --arg signeramount "$signeramount" --arg createwalletsponsoramount "$createwalletsponsoramount" --arg createwalletsponsorname "$createwalletsponsorname" --arg treasuryname "$treasuryname" --arg adminname "$adminname" --arg fundmode "$VERITAS_FUND_MODE"  --arg identityprovidername "$identityprovidername" --arg dsvsprovidername "$dsvsprovidername" '{pioneer: $pioneer, count: $count, provideramount: $provideramount, signeramount: $signeramount, createwalletsponsoramount: $createwalletsponsoramount, createwalletsponsorname: $createwalletsponsorname, treasuryname: $treasuryname, adminname: $adminname, fundmode: $fundmode, identityprovidername: $identityprovidername, dsvsprovidername: $dsvsprovidername, dsvsname: $dsvsname, email: $email, avalue: $avalue, firstname: $firstname, birthdate: $birthdate, phone: $phone}' > "$VERITAS_SEC_HOME/variables.json"
