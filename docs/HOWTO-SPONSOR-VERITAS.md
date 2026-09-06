@@ -79,12 +79,17 @@ Three handoffs, each printed by the step that produces it. SEC keeps its own wor
 
 | after | SEC gives you | you use it in |
 |---|---|---|
-| `step_1.sh` | the **admin address** (`sec-veritas-admin`) — zero balance, by design | `sec_veritas_after_step_1.sh --sec-admin` |
+| `step_1.sh` | the **admin address** *and* the **pre-grant block** — every wallet address the deployment will create | `sec_veritas_after_step_1.sh --pregrant` |
 | `step_2.sh` | **two proposal ids** | `sec_veritas_after_step_2.sh <id> <id>` |
 | `step_3.sh` | the **sponsor pool**, as a paste block | `sec_veritas_after_step_3.sh --pool-addresses` |
 
-Nothing else crosses between the two sides. No key, no mnemonic, and — in foundation-sponsored
-mode — no tokens.
+And once, in the other direction: your prepare stage prints the **two sponsor addresses**
+(`foundation-veritas-appsvr` and `-users`), which SEC passes to `step_1.sh --appsvr --users`. That
+printout is a ready-to-run command -- send it as-is.
+
+Nothing else crosses between the two sides. No key, no mnemonic, no file, and — in
+foundation-sponsored mode — no tokens. Every item above is public on-chain data or about to be;
+on a real deployment the printed text *is* the entire channel between the organisations.
 
 ---
 
@@ -123,11 +128,22 @@ somewhere: `--fund-bucket` / `--stake-bucket`.
 ```sh
 foundation_scripts/sec_veritas_before_step_1.sh --stage prepare \
     --coord-home       ~/launch/coord \
-    --keyring-backend  file \
     --mnemonics-dir    ~/launch/mnemonics \
     --pubsec-members   pubsec-m1,pubsec-m2,pubsec-m3,pubsec-m4,pubsec-m5 \
     --members          foundation-m1,foundation-m2,foundation-m3
 ```
+
+Every foundation script defaults to `--keyring-backend file` -- the encrypted coordinator keyring --
+so the flag is only needed to say otherwise (`test`, for a devnet keyring). `--node <rpc>` points at
+a remote chain, and the chain-id is then read from that node rather than from a local `client.toml`;
+a stale `client.toml` chain-id does not fail loudly, it signs invalid transactions that surface as
+an amino decode panic.
+
+It ends by printing the exact `step_1.sh` command for SEC, with both sponsor addresses filled in,
+and records those addresses in `<coord-home>/veritas-sponsors.json` -- your side's only piece of
+persistent state, and what lets every later step avoid retyping them. Retyping matters more than it
+sounds: a stale pair from an earlier deployment produces a run that looks green against the wrong
+accounts.
 
 `--coord-home` is not optional in practice: the bucket multisigs live in the **coordinator**
 keyring `derive_launch_keys.sh` created, never the node's -- `init.sh` runs `rm -rf $QADENAHOME`.
@@ -191,9 +207,26 @@ Override with `--stake <qdn>` if you know better, or `--validator <valoper>` to 
 
 ```sh
 foundation_scripts/sec_veritas_after_step_1.sh \
-    --sec-admin <SEC's ADMIN address -- see below> \
-    --foundation-appsvr foundation-veritas-appsvr
+    --pregrant <the file holding SEC's paste block> \
+    --coord-home ~/launch/coord --keyring-passfile <file>
 ```
+
+The paste block SEC sends after step_1 carries both halves: their admin address and every wallet
+address the deployment will create. Save it to a file and pass it as `--pregrant`; the script reads
+the admin from it, so `--sec-admin` is only needed when granting authority on its own.
+
+This step does **two** things:
+
+1. **Delegates three authorities** to SEC's admin (below), plus a `MsgExec` fee grant so that
+   zero-balance key can sign.
+2. **Pre-grants every wallet** a narrow allowance (`MsgAddPublicKey` + `MsgCreateWallet`) --
+   `4*(count+1)` of them, signed here, before any of those wallets exists. This is what removes the
+   last reason a foundation private key would have to sit on SEC's machine: `create-wallet` finds
+   the allowance already present and skips issuing one.
+
+The file is verified before anything is signed -- chain-id, expected count, bech32 form, duplicates.
+It deliberately does **not** check that the addresses exist on chain: they do not yet, and that is
+the point.
 
 ### Which address is "SEC's admin" -- and it is NOT sec-treasury
 
@@ -223,18 +256,31 @@ with:
 ```
 SEND THIS ONE ADDRESS TO QFI:
     sec-veritas-admin : qadena1...
-    export VERITAS_SEC_ADMIN=sec-veritas-admin
 ```
 
-That address is what `--sec-admin` takes. `--fund-mode banksend` restores the old treasury path.
+That address is what `--sec-admin` takes (or comes from `--pregrant` automatically). `--fund-mode banksend` restores the old treasury path.
 
-> **STILL UNPROVEN END TO END.** `testscripts/test_authz_feegrant.sh` proves the *mechanism* --
-> a genuinely distinct signer, secadmin ending at exactly 0 balance, and a repeat failing after
-> revoke. But `setup_veritas.sh` has never exported `VERITAS_SEC_ADMIN`, so in every full
-> bring-up run `grant_as_foundation` took its no-signer branch and signed directly as the
-> foundation. **The wiring through step_1..3 has not been exercised.** Expect to debug it on the
-> first real run, and check a transaction's `fee.granter` before you suspect the grant -- the
-> recurring cause of `spendable balance 0aqdn` is a transaction that does not NAME the grant.
+> **PROVEN END TO END** on testnet `qadena_4824-1` (2026-09-06) -- the first bring-up in which the
+> delegated path existed at all. The admin signed 200+ transactions and finished at exactly zero
+> balance. What it did *not* prove: the feemarket floored near zero, so the mechanics were
+> exercised but not the cost. If you debug a `spendable balance 0aqdn`, check the transaction's
+> `fee.granter` before suspecting the grant -- the recurring cause is a transaction that does not
+> NAME the grant, and fee grants do not chain.
+
+### The three authorities, and why exactly three
+
+Each was discovered by a real on-chain refusal during that run, so this list is empirical rather
+than designed:
+
+| message type | what would fail without it |
+|---|---|
+| `MsgGrantAllowance` | every wallet grant -- the core of the delegation |
+| `MsgRevokeAllowance` | the *widen*: a grantee holds one allowance per granter, so upgrading a wallet from its bootstrap grant to the operational one must revoke first |
+| `MsgSubmitProposal` | step_2's two provider proposals, which SEC submits on the foundation's behalf |
+
+Do not add a fourth without deciding you meant to. `GenericAuthorization` is uncapped, so each entry
+is unbounded permission for that message type; `sec_veritas_verify.sh` fails if it finds one it does
+not recognise.
 
 This replaces the old "QFI grants tokens to sec-treasury" handoff. **Nothing is transferred. SEC
 holds no tokens at all.** What it receives is a revocable permission to spend the foundation's money
@@ -340,6 +386,60 @@ sides' keys, but on a real deployment the foundation does not hold SEC's wallet 
 block is the only route.
 
 ---
+
+---
+
+## Verifying the result
+
+Either side can check the whole deployment against the chain at any time. It is **read-only** --
+no keyring, no passphrase, no transactions:
+
+You type nothing. `--stage prepare` recorded the two sponsor addresses in
+`<coord-home>/veritas-sponsors.json`, and every wallet this flow grants is enumerable on chain, so:
+
+```sh
+foundation_scripts/sec_veritas_verify.sh --coord-home ~/launch/coord
+```
+
+Where each fact comes from, since none of it is SEC's to give you:
+
+| fact | source |
+|---|---|
+| the two sponsor addresses | `<coord-home>/veritas-sponsors.json`, written by your own prepare stage |
+| SEC's admin | the one grantee whose allowance is scoped to `MsgExec` alone -- the property that *defines* the delegation key, so it identifies itself |
+| the wallet set | `feegrant grants-by-granter <appsvr>` |
+| the sponsor pool | `feegrant grants-by-granter <users>` |
+| stray authority | `authz grants-by-granter` on both accounts |
+
+`--node <rpc>` points at a remote chain; `--appsvr` / `--users` override the recorded pair. Exit 0
+means every check passed, otherwise each failure is named. The script never opens a keyring, never
+prompts, and never signs.
+
+**Optionally**, add your own saved copies of SEC's two paste blocks -- the same files you passed to
+`--pregrant` and `--pool-addresses`:
+
+```sh
+foundation_scripts/sec_veritas_verify.sh --coord-home ~/launch/coord \
+    --pregrant ~/launch/veritas-pregrant.json \
+    --pool     ~/launch/veritas-pool.json
+```
+
+The difference is real: **without the files the run checks what exists; with them it checks what
+exists against what was supposed to exist.** A wallet that was never granted at all is invisible to
+the chain-only form -- it simply is not in the list -- and only the expected set can catch it. The
+script says which mode it is in.
+
+What it asserts, and why each one matters:
+
+| check | what a failure means |
+|---|---|
+| admin balance is **exactly 0** | someone funded the delegation key. It signs hundreds of transactions and must never hold value; investigate, then sweep |
+| admin authz is **exactly three** message types | fewer breaks the flow; **more** is worse -- `GenericAuthorization` is uncapped, so every extra type is unreviewed drainage surface |
+| admin feegrant is scoped to `MsgExec` **only** | a wider allowance lets the admin spend foundation fees on anything |
+| every wallet holds the operational allowance | a narrow or missing one is a wallet that dies on its first real transaction |
+| pool wallets hold **both** halves | the app-server picks pool members arbitrarily, so one missing half fails onboarding for *some* citizens and not others |
+| **no stray authz grantees** | the only check that proves nothing exists *beyond* the specification -- an unexpected grantee is standing permission to spend a foundation account |
+| both providers registered | governance did not complete |
 
 ## The multisig ceremonies
 

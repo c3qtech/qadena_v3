@@ -120,6 +120,38 @@ count="${VERITAS_COUNT:-}"
 
 # accept named parameters to override all these mnemonics
 # Process command line arguments
+_usage() {
+    echo "Usage: veritas_scripts/step_1.sh --count <n> --appsvr <addr> [--users <addr>] [options]"
+    echo ""
+    echo "SEC's first step: creates this deployment's keys, writes \$VERITAS_SEC_HOME/variables.json"
+    echo "and mnemonics.json, and prints the ADMIN ADDRESS plus the PRE-GRANT BLOCK for QFI."
+    echo ""
+    echo "Required:"
+    echo "  --count <n>          ephemeral wallets per user.  NO DEFAULT: it sizes the pre-grants"
+    echo "                       (4*(n+1)), the sponsor pool (n+1) and the per-wallet split."
+    echo "  --appsvr <addr>      QFI's foundation-veritas-appsvr ADDRESS (sponsored mode)."
+    echo "  --users  <addr>      QFI's foundation-veritas-users ADDRESS.  QFI's prepare stage"
+    echo "                       prints both, as a ready-to-run copy of this command."
+    echo ""
+    echo "Chain and files:"
+    echo "  --node <rpc>         the chain RPC (e.g. tcp://10.211.55.5:26657); the chain-id is"
+    echo "                       derived from it, never trusted from a local file."
+    echo "  --sec-home <dir>     where variables.json / mnemonics.json / pool_addresses.json live."
+    echo "                       Default \$VERITAS_SEC_HOME or ~/sec-veritas."
+    echo "  --pioneer <name>     derived from the chain when omitted; pass it only if the chain"
+    echo "                       has several pioneers."
+    echo ""
+    echo "Rarely needed:"
+    echo "  --fund-mode banksend         restore the retired model where SEC holds a funded"
+    echo "                               treasury.  You almost certainly do not want it."
+    echo "  --<name>name / --<name>mnemonic    override a key's name, or supply an existing"
+    echo "                               mnemonic instead of generating one.  Applies to: admin,"
+    echo "                               treasury, signer, createwalletsponsor, identityprovider,"
+    echo "                               dsvsprovider, dsvs."
+    echo "  --provideramount / --createwalletsponsoramount / --signeramount / --avalue"
+    echo "  --email / --firstname / --birthdate / --phone"
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --treasurymnemonic)
@@ -230,22 +262,14 @@ while [[ $# -gt 0 ]]; do
             count="$2"
             shift 2
             ;;
-        --help)
-            echo "  --node <rpc>       the chain RPC (e.g. tcp://10.211.55.5:26657); the"
-            echo "                     chain-id is derived from it, never from a local file"
-            echo "  --sec-home <dir>   where variables.json / mnemonics.json / pool_addresses.json"
-            echo "                     live.  Default \$VERITAS_SEC_HOME or ~/sec-veritas."
-            echo "Usage: $0 [--sec-home <dir>] [--treasurymnemonic <mnemonic>] [--treasuryname <name>] [--signermnemonic <mnemonic>] [--createwalletsponsormnemonic <mnemonic>] [--identityprovidermnemonic <mnemonic>] [--dsvsprovidermnemonic <mnemonic>] [--count <count>] [--a <a>] [--email <email>] [--firstname <firstname>] [--birthdate <birthdate>] [--phone <phone>]"
-            exit 0
+        --help|-h)
+            _usage
+                        exit 0
             ;;
         *)
             echo "Unknown option: $1"
-            echo "  --node <rpc>       the chain RPC (e.g. tcp://10.211.55.5:26657); the"
-            echo "                     chain-id is derived from it, never from a local file"
-            echo "  --sec-home <dir>   where variables.json / mnemonics.json / pool_addresses.json"
-            echo "                     live.  Default \$VERITAS_SEC_HOME or ~/sec-veritas."
-            echo "Usage: $0 [--sec-home <dir>] [--treasurymnemonic <mnemonic>] [--treasuryname <name>] [--signermnemonic <mnemonic>] [--createwalletsponsormnemonic <mnemonic>] [--identityprovidermnemonic <mnemonic>] [--dsvsprovidermnemonic <mnemonic>] [--count <count>] [--a <a>] [--email <email>] [--firstname <firstname>] [--birthdate <birthdate>] [--phone <phone>]"
-            exit 1
+            _usage
+                        exit 1
             ;;
     esac
 done

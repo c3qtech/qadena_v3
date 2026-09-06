@@ -3,12 +3,14 @@
 # Verify the END STATE of a SEC VERITAS bring-up against the chain -- every invariant the flow
 # claims, queried rather than assumed.  READ-ONLY: no keyring, no passphrase, no transaction.
 #
-#   sec_veritas_verify.sh --pregrant ~/sec-veritas/pregrant_addresses.json \
-#                         --pool     ~/sec-veritas/pool_addresses.json \
-#                         --appsvr <address> --users <address>
+#   sec_veritas_verify.sh --coord-home ~/launch/coord          # the foundation: types nothing
+#   sec_veritas_verify.sh --pregrant <file> --pool <file> \
+#                         --appsvr <address> --users <address>  # SEC: also checks the EXPECTED set
 #
-# Either side can run it -- SEC holds the two JSON files, QFI holds the account addresses its
-# prepare stage printed; both are public data.
+# Either side can run it, and neither needs the other's files.  The foundation's prepare stage
+# records the sponsor addresses beside its keyring; everything else -- the wallet set, the pool,
+# SEC's admin -- is enumerable on chain with grants-by-granter.  SEC additionally holds the two
+# paste blocks, which turn "what exists" into "what exists vs what was supposed to".
 #
 # THE INVARIANTS, and why each one is the design working:
 #
@@ -54,11 +56,40 @@ while [[ $# -gt 0 ]]; do
         --appsvr)    FA="$2"; shift 2 ;;
         --users)     FU="$2"; shift 2 ;;
         --sec-admin) SA="$2"; shift 2 ;;
+        --coord-home) COORD_HOME="$2"; shift 2 ;;
         --node)      NODE="$2"; shift 2 ;;
         --help|-h)
-            print "Usage: sec_veritas_verify.sh --pregrant <file> --pool <file> --appsvr <addr> --users <addr>"
-            print "  --sec-admin <addr>  override; default read from the pregrant file"
-            print "  Read-only: verifies every bring-up invariant against the chain."
+            print "Usage: sec_veritas_verify.sh [--coord-home <dir> | --appsvr <addr> --users <addr>] [options]"
+            print ""
+            print "Verifies a VERITAS bring-up against the chain.  READ-ONLY: no keyring, no"
+            print "passphrase, no transactions.  Exit 0 only if every check passes."
+            print ""
+            print "The sponsor addresses -- one of:"
+            print "  --coord-home <dir>    read them from <dir>/veritas-sponsors.json, written by"
+            print "                        sec_veritas_before_step_1.sh --stage prepare.  The"
+            print "                        foundation needs nothing else."
+            print "  --appsvr <addr>       the foundation-veritas-appsvr account"
+            print "  --users <addr>        the foundation-veritas-users account"
+            print ""
+            print "Optional -- the EXPECTED sets, as SEC's paste blocks:"
+            print "  --pregrant <file>     step_1's block (admin + every wallet address)"
+            print "  --pool <file>         step_3's block (the sponsor pool)"
+            print "  Without these the wallet and pool sets are read from the chain, which verifies"
+            print "  what EXISTS but cannot detect a wallet that was never granted at all."
+            print ""
+            print "Other:"
+            print "  --sec-admin <addr>    override; else taken from --pregrant, else identified on"
+            print "                        chain as the grantee scoped to MsgExec alone"
+            print "  --node <rpc>          default \$QADENA_NODE or tcp://localhost:26657"
+            print ""
+            print "  # foundation, nothing typed:"
+            print "  sec_veritas_verify.sh --coord-home ~/launch/coord"
+            print ""
+            print "  # SEC, with the expected sets:"
+            print "  sec_veritas_verify.sh --pregrant ~/sec-veritas/pregrant_addresses.json \\"
+            print "      --pool ~/sec-veritas/pool_addresses.json \\"
+            print "      --appsvr \$(jq -r .appsvraddr ~/sec-veritas/variables.json) \\"
+            print "      --users  \$(jq -r .usersaddr  ~/sec-veritas/variables.json)"
             exit 0 ;;
         *) print -u2 -- "unknown option: $1"; exit 1 ;;
     esac
@@ -66,15 +97,60 @@ done
 
 qq() { "$QBIN" --home "$NODE_HOME" "$@" --node "$NODE"; }
 
-[[ -r "$PREGRANT" ]] || { print -u2 "need --pregrant <file> (step_1's block)"; exit 1 }
-[[ -n "$SA" ]] || SA=$(jq -r '.sec_admin // empty' "$PREGRANT")
-[[ -n "$SA" && -n "$FA" && -n "$FU" ]] || { print -u2 "need --appsvr and --users (and an admin in the pregrant file)"; exit 1 }
+# THE FILES ARE OPTIONAL.  The foundation has no access to SEC's directory, and on a real
+# deployment neither side holds the other's files -- so the chain is the primary source: every
+# grant this flow issues is enumerable with grants-by-granter.  Pass --pregrant/--pool when you
+# have them (QFI's own saved copies of SEC's paste blocks count) and the run additionally checks
+# the on-chain set against the EXPECTED one; without them it checks what exists, which cannot
+# detect a wallet that was never granted at all.  That difference is reported, not glossed.
+# THE FOUNDATION TYPES NOTHING.  before_step_1 records the two sponsor addresses beside the
+# coordinator keyring; read them from there so the addresses in play are the ones that RUN
+# actually used, not a pair remembered from an earlier deployment's scrollback.
+if [[ -z "$FA" || -z "$FU" ]]; then
+    _st="${COORD_HOME:-$HOME/launch/coord}/veritas-sponsors.json"
+    if [[ -r "$_st" ]]; then
+        [[ -n "$FA" ]] || FA=$(jq -r '.appsvr // empty' "$_st")
+        [[ -n "$FU" ]] || FU=$(jq -r '.users  // empty' "$_st")
+        print "sponsors read from $_st"
+    fi
+fi
+[[ -n "$FA" && -n "$FU" ]] || {
+    print -u2 "need the two sponsor addresses.  Either:"
+    print -u2 "    --coord-home <dir>   read them from <dir>/veritas-sponsors.json (written by"
+    print -u2 "                         sec_veritas_before_step_1.sh --stage prepare), or"
+    print -u2 "    --appsvr <addr> --users <addr>"
+    print -u2 "  --pregrant/--pool are optional; with them the expected wallet set is checked too."
+    exit 1
+}
+# The expected sets, if the foundation retained them (after_step_1/after_step_3 copy the blocks
+# they signed into the coordinator home).  Explicit flags win.
+if [[ -n "${COORD_HOME:-}" ]]; then
+    [[ -n "$PREGRANT" ]] || { [[ -r "$COORD_HOME/veritas-pregrant.json" ]] && PREGRANT="$COORD_HOME/veritas-pregrant.json" }
+    [[ -n "$POOL"     ]] || { [[ -r "$COORD_HOME/veritas-pool.json"     ]] && POOL="$COORD_HOME/veritas-pool.json" }
+fi
+if [[ -r "$PREGRANT" ]]; then
+    [[ -n "$SA" ]] || SA=$(jq -r '.sec_admin // empty' "$PREGRANT")
+fi
+# Without a file, the admin is the one grantee holding the MsgExec-scoped allowance -- the
+# delegation key is defined by exactly that, so it identifies itself.
+if [[ -z "$SA" ]]; then
+    SA=$(qq query feegrant grants-by-granter "$FA" --output json 2>/dev/null \
+          | jq -r '[(.allowances // [])[]
+                    | select((.allowance.value.allowed_messages // [])
+                             == ["/cosmos.authz.v1beta1.MsgExec"])
+                    | .grantee] | first // empty')
+fi
+[[ -n "$SA" ]] || { print -u2 "cannot identify SEC's admin: pass --sec-admin <addr> or --pregrant <file>"; exit 1 }
 
 PASS=0; FAIL=0
 ok()   { print "  ok    $1"; PASS=$(( PASS + 1 )) }
 bad()  { print "  FAIL  $1"; FAIL=$(( FAIL + 1 )) }
 
 print "VERITAS end-state verification  (chain $(qq status 2>/dev/null | jq -r '.node_info.network // "?"'))"
+if [[ ! -r "$PREGRANT" ]]; then
+    print "reading the wallet set FROM THE CHAIN (no --pregrant): this verifies what exists,"
+    print "but cannot detect a wallet that was never granted at all."
+fi
 print ""
 
 # ---- 1. the admin holds exactly zero --------------------------------------------------------
@@ -131,8 +207,19 @@ qq query authz grants "$FA" "$SA" --output json 2>/dev/null \
 # state is now the UNION of both (the widen grants it as of 2026-09-06), so a wallet showing the
 # appsvr marker without the claim marker is from a pre-union bring-up -- functional for the
 # app-server, broken for any later claim/rotation/bind.  Reported distinctly.
+# The wallet list: the file's expected set when given, else every grantee the chain shows
+# (minus the admin, whose allowance is MsgExec and is checked separately).
+if [[ -r "$PREGRANT" ]]; then
+    _wallets=$(jq -r '.wallets[].address' "$PREGRANT")
+    _src="the pregrant file"
+else
+    _wallets=$(qq query feegrant grants-by-granter "$FA" --output json 2>/dev/null \
+                | jq -r --arg sa "$SA" '(.allowances // [])[] | select(.grantee != $sa) | .grantee')
+    _src="the chain"
+fi
 _narrow=0; _missing=0; _wide=0; _userset=0
 while read -r _ad; do
+    [[ -n "$_ad" ]] || continue
     _al=$(qq query feegrant grant "$FA" "$_ad" --output json 2>/dev/null \
             | jq -r '.allowance.allowance.value.allowed_messages // [] | join(",")')
     if [[ -z "$_al" ]]; then
@@ -144,8 +231,8 @@ while read -r _ad; do
     else
         _narrow=$(( _narrow + 1 ))
     fi
-done < <(jq -r '.wallets[].address' "$PREGRANT")
-_total=$(jq -r '.wallets|length' "$PREGRANT")
+done < <(print -r -- "$_wallets")
+_total=$(print -r -- "$_wallets" | grep -c . || true)
 if [[ $(( _wide + _userset )) -eq $_total && $_userset -eq 0 ]]; then
     ok "all $_total wallets hold the operational (appsvr) allowance"
 elif [[ $(( _narrow + _missing )) -eq 0 ]]; then
@@ -156,22 +243,36 @@ fi
 
 # ---- 4. the pool holds both halves ----------------------------------------------------------
 if [[ -r "$POOL" ]]; then
+    _pool_list=$(jq -r '.pool[].address' "$POOL")
+else
+    # Chain-derived: the pool is exactly who foundation-users has granted.
+    _pool_list=$(qq query feegrant grants-by-granter "$FU" --output json 2>/dev/null \
+                  | jq -r '(.allowances // [])[].grantee')
+fi
+if [[ -n "$_pool_list" ]]; then
     _pmiss=0; _ptot=0
     while read -r _ad; do
+        [[ -n "$_ad" ]] || continue
         _ptot=$(( _ptot + 1 ))
+        # `.grants` is NULL, not [], when a grantee has none -- iterating it makes jq spew
+        # "Cannot iterate over null" onto the operator's screen mid-report.  `// []` first.
         _a1=$(qq query authz grants "$FU" "$_ad" --output json 2>/dev/null \
-                | jq -r '[.grants[].authorization.value.msg] | index("/cosmos.feegrant.v1beta1.MsgGrantAllowance") // empty')
+                | jq -r '[(.grants // [])[].authorization.value.msg] | index("/cosmos.feegrant.v1beta1.MsgGrantAllowance") // empty')
         _pf=$(qq query feegrant grant "$FU" "$_ad" --output json 2>/dev/null \
                 | jq -r '.allowance.allowance.value.allowed_messages // [] | join(",")')
         { [[ -n "$_a1" ]] && [[ "$_pf" == *MsgExec* ]]; } || _pmiss=$(( _pmiss + 1 ))
-    done < <(jq -r '.pool[].address' "$POOL")
+    done < <(print -r -- "$_pool_list")
     if [[ $_pmiss -eq 0 ]]; then
         ok "pool: all $_ptot wallets hold BOTH the authz and the MsgExec feegrant from users"
+    elif [[ $_pmiss -eq $_ptot ]]; then
+        # ALL missing is a different situation from SOME missing: it means the step simply has not
+        # run yet.  Reported as an unfinished deployment, not as damage.
+        bad "pool: none of the $_ptot wallets are authorised -- has sec_veritas_after_step_3.sh been run?"
     else
         bad "pool: $_pmiss of $_ptot wallets missing a half -- onboarding will fail for SOME citizens"
     fi
 else
-    print "  skip  pool (--pool not given)"
+    bad "pool: none of the wallets are authorised -- has sec_veritas_after_step_3.sh been run?"
 fi
 
 # ---- 5.5 NO STRAY AUTHORITY.  The per-grantee checks above prove what SHOULD exist; only a
@@ -182,13 +283,13 @@ _stray=0
 while read -r _g; do
     [[ "$_g" == "$SA" ]] || { print "  FAIL  appsvr has an UNEXPECTED authz grantee: $_g"; _stray=$(( _stray + 1 )); }
 done < <(qq query authz grants-by-granter "$FA" --limit 1000 --output json 2>/dev/null \
-           | jq -r '[.grants[].grantee] | unique | .[]')
-if [[ -r "$POOL" ]]; then
-    _poolset=$(jq -r '[.pool[].address]|join(" ")' "$POOL")
+           | jq -r '[(.grants // [])[].grantee] | unique | .[]')
+if [[ -n "$_pool_list" ]]; then
+    _poolset=$(print -r -- "$_pool_list" | tr '\n' ' ')
     while read -r _g; do
         [[ " $_poolset " == *" $_g "* ]] || { print "  FAIL  users has an UNEXPECTED authz grantee: $_g"; _stray=$(( _stray + 1 )); }
     done < <(qq query authz grants-by-granter "$FU" --limit 1000 --output json 2>/dev/null \
-               | jq -r '[.grants[].grantee] | unique | .[]')
+               | jq -r '[(.grants // [])[].grantee] | unique | .[]')
 fi
 if [[ $_stray -eq 0 ]]; then
     ok "no stray authz grantees on either foundation account"

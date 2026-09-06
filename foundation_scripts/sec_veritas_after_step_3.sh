@@ -73,6 +73,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --sponsor-base <name>    pool base name; -eph1..-ephN are derived from it"
             echo "  --count <n>              ephemeral wallets in the pool; match SEC's step_1"
             echo "  --coord-home <dir>       keyring holding the foundation accounts --"
+            echo "  --node <rpc>                the chain RPC; the chain-id is derived from it"
             echo "                           derive_launch_keys.sh --home.  Not the node's."
             echo "  --keyring-backend <b>    default $BACKEND (encrypted); 'test' for a devnet"
             echo "  --keyring-passfile <f>   read the keyring passphrase from a file"
@@ -251,6 +252,13 @@ done
 
 echo ""
 echo "authorised $authorised wallet(s); $incomplete incomplete"
+
+# RETAIN WHAT WE AUTHORISED -- see the same note in sec_veritas_after_step_1.sh.
+if [ -n "$POOL_FILE" ] && [ -n "$COORD_HOME" ] && [ -d "$COORD_HOME" ]; then
+    cp "$POOL_FILE" "$COORD_HOME/veritas-pool.json" 2>/dev/null \
+        && chmod 600 "$COORD_HOME/veritas-pool.json" 2>/dev/null \
+        && echo "retained the expected pool in $COORD_HOME/veritas-pool.json"
+fi
 if [ "$incomplete" -gt 0 ]; then
     echo ""
     echo "WARNING: partial coverage. The app-server picks an arbitrary pool member per request, so"

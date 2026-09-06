@@ -16,18 +16,31 @@ other's keys — that separation is the point of the whole structure.
 ## The three commands
 
 ```sh
-export VERITAS_SEC_HOME=~/sec-veritas          # where this run's files live
-export QADENA_KEYRING_BACKEND=file             # encrypted keyring (the default for these steps)
-
-veritas_scripts/step_1.sh                      # -> gives QFI your ADMIN ADDRESS
+# QFI's prepare stage prints this first command with the two addresses already filled in --
+# paste what they send you rather than retyping it.
+veritas_scripts/step_1.sh --count 30 \
+    --appsvr qadena1...   \
+    --users  qadena1...
+#   -> gives QFI your ADMIN ADDRESS and the PRE-GRANT BLOCK
 #   ... QFI runs sec_veritas_after_step_1.sh, tells you when it is done
 
-export VERITAS_SEC_ADMIN=sec-veritas-admin     # REQUIRED before step_2 (see below)
 veritas_scripts/step_2.sh                      # -> gives QFI TWO PROPOSAL IDS
 #   ... QFI deposits and votes; wait for both proposals to PASS
 
 veritas_scripts/step_3.sh                      # -> gives QFI a PASTE BLOCK for the sponsor pool
 ```
+
+**No exports.** Everything each step needs it either takes as an argument or reads from the run's
+own file (`$VERITAS_SEC_HOME/variables.json`, written by step_1). In particular step_2 and step_3
+find the admin key themselves and use the delegation only after **verifying the grant exists on
+chain** -- so a step cannot silently sign the wrong way because someone forgot a variable.
+
+Options shared by all three: `--node <rpc>` (default `tcp://localhost:26657`; the chain-id is then
+derived from that node, never trusted from a local file) and `--sec-home <dir>` (default
+`~/sec-veritas`).
+
+`--count` is **required** on step_1 and has no default: it sizes the pre-grants (`4*(n+1)`), the
+sponsor pool (`n+1`) and the per-wallet split. Use a small number (`--count 3`) for a rehearsal.
 
 Everything else is QFI's.
 
@@ -109,14 +122,19 @@ Then writes `variables.json` and `mnemonics.json`, and ends with:
 ```
 SEND THIS ONE ADDRESS TO QFI:
     sec-veritas-admin : qadena1...
-    export VERITAS_SEC_ADMIN=sec-veritas-admin
 ```
 
-**Send QFI that address and nothing else.** Not a mnemonic, not `mnemonics.json`, not the provider
-keys.
+...followed by the **pre-grant block**: every wallet address this deployment will ever create,
+derived offline from your mnemonics before anything exists on chain. QFI signs a narrow allowance
+for each one, which is what lets your wallets be born without a QFI key ever touching your machine.
 
-Useful flags: `--count <n>` (ephemeral wallets per user, default **30**), `--pioneer <name>`,
-`--sec-home <dir>`, and `--<name>name` / `--<name>mnemonic` overrides for each key above.
+**Send QFI that address and the block, and nothing else.** Not a mnemonic, not `mnemonics.json`,
+not the provider keys.
+
+Useful flags: `--count <n>` (**required**, no default), `--appsvr` / `--users` (QFI's two sponsor
+addresses, from their prepare stage), `--node <rpc>`, `--pioneer <name>` (derived from the chain
+when omitted -- pass it only if the chain has several), `--sec-home <dir>`, and
+`--<name>name` / `--<name>mnemonic` overrides for each key above.
 `--fund-mode banksend` restores the retired model where SEC holds a funded treasury; you almost
 certainly do not want it.
 
@@ -136,13 +154,20 @@ your machine.
 ## Step 2 — create the service providers
 
 ```sh
-export VERITAS_SEC_ADMIN=sec-veritas-admin
 veritas_scripts/step_2.sh
 ```
 
-**`VERITAS_SEC_ADMIN` is not optional.** Unset, the scripts fall back to signing grants directly as
-the foundation — which works only where one keyring holds both sides' keys, i.e. never on your
-machine. Export it before step_2 and keep it exported through step_3.
+**Nothing to export.** step_2 reads the admin's key name from `variables.json` and then checks the
+chain for QFI's authz grant to it. It announces which path it took, in one line:
+
+```
+delegated signing: sec-veritas-admin (authz from the sponsor verified on chain)
+```
+
+If instead it says `no delegation on chain`, QFI has not run `sec_veritas_after_step_1.sh` yet (or
+ran it against a different sponsor) -- stop and tell them, because everything after this point
+depends on that grant. The direct-signing fallback exists only for the single-keyring devnet
+harness and cannot work on your machine.
 
 The script waits for QFI's sponsor account to be funded, then registers both providers and submits
 a governance proposal for each. It ends with:
@@ -220,6 +245,45 @@ never needs any of them, and no step asks for them.
 
 ---
 
+---
+
+## Verifying the result
+
+Either side can check the whole deployment against the chain at any time. It is **read-only** --
+no keyring, no passphrase, no transactions:
+
+```sh
+V=$VERITAS_SEC_HOME                     # or ~/sec-veritas
+foundation_scripts/sec_veritas_verify.sh \
+    --pregrant $V/pregrant_addresses.json \
+    --pool     $V/pool_addresses.json \
+    --appsvr $(jq -r .appsvraddr $V/variables.json) \
+    --users  $(jq -r .usersaddr  $V/variables.json)
+```
+
+The two sponsor addresses come straight out of `variables.json` -- step_1 recorded them there from
+QFI's `--appsvr` / `--users` arguments, so you never need to ask for them again.
+
+The files are optional: with only `--appsvr` and `--users` the script reads the wallet set from the
+chain instead. Pass them when you have them -- the chain-only form checks what exists, while the
+files check it against what was *supposed* to exist, which is the only way to notice a wallet that
+was never granted at all. QFI runs the chain-only form, having no access to your directory.
+
+`--pool` is optional -- omit it before step_3 has run. `--node <rpc>` points at a remote chain.
+Exit 0 means every check passed; otherwise each failure is named.
+
+What it asserts, and why each one matters:
+
+| check | what a failure means |
+|---|---|
+| admin balance is **exactly 0** | someone funded the delegation key. It signs hundreds of transactions and must never hold value; investigate, then sweep |
+| admin authz is **exactly three** message types | fewer breaks the flow; **more** is worse -- `GenericAuthorization` is uncapped, so every extra type is unreviewed drainage surface |
+| admin feegrant is scoped to `MsgExec` **only** | a wider allowance lets the admin spend foundation fees on anything |
+| every wallet holds the operational allowance | a narrow or missing one is a wallet that dies on its first real transaction |
+| pool wallets hold **both** halves | the app-server picks pool members arbitrarily, so one missing half fails onboarding for *some* citizens and not others |
+| **no stray authz grantees** | the only check that proves nothing exists *beyond* the specification -- an unexpected grantee is standing permission to spend a foundation account |
+| both providers registered | governance did not complete |
+
 ## What can stop you
 
 | symptom | cause |
@@ -235,14 +299,32 @@ never needs any of them, and no step asks for them.
 
 ## Status of this procedure
 
-**The delegated `authz` path has not been run end to end.** `testscripts/test_authz_feegrant.sh`
-proves the *mechanism* — a genuinely distinct signer, ending at zero balance, and a repeat failing
-after revoke — but the devnet harness holds every key in one keyring and never exports
-`VERITAS_SEC_ADMIN`, so it has always taken the direct-signing branch instead. The wiring through
-steps 1–3 is unproven. Expect to debug it on the first real run, and start from a failing
-transaction's `fee.granter`.
+**The delegated path has been run end to end** (testnet `qadena_4824-1`, 2026-09-06) -- the first
+time it has existed at all: before this, `step_1.sh` never created an admin key, so every earlier
+run took the direct-signing branch. One bring-up completed all seven steps, and
+`sec_veritas_verify.sh` reports 7/7 against the chain: admin balance exactly 0 after 200+ signed
+transactions, three delegated authorities and no strays, every wallet widened, the pool authorised
+both ways, both providers registered by governance.
 
-One known inconsistency, not yet resolved: `provider_scripts/create_user.sh` sets the grant's
-granter to the **sponsor wallet**, while the app-server sets it to QFI's users account. Fee grants
-do **not** chain, so the CLI path currently draws on the sponsor's own balance. It passes on the
-devnet only because the harness funds that sponsor.
+What that run **did not** prove, stated plainly:
+
+- **Fee economics.** The testnet's feemarket floored near zero, so transactions were effectively
+  free. The grant *mechanics* were exercised on every transaction -- each named its granter and the
+  chain resolved the allowance -- but not the *cost*. The per-user figures in the sponsor HOWTO come
+  from measurements at real gas prices, not from this run.
+- **The app-server's own path.** Everything here is the CLI. The server broadcasts citizen
+  onboarding itself, and a defect in that path was found by code review during this bring-up (the
+  create-wallet grant is issued from `foundation-users` but the transaction names the *pool wallet*
+  as fee granter, and grants do not chain). Onboarding one citizen through the server is the
+  decisive test, and it has not been run.
+- **Recovery and rotation.** `MsgSignRecoverPrivateKey` and `MsgRemoveCredential` are in the
+  wallets' allowance but were never exercised.
+
+Two things this run fixed that are worth knowing if you read older notes:
+
+- The widen now grants the **union** of the operational and user message sets. Previously the two
+  overwrote each other -- a grantee holds one allowance per granter -- so the end state silently
+  dropped every claim, rotation and bind message, and the bring-up's own claims passed only because
+  they ran between the two grants.
+- `create_user.sh`'s granter was long suspected wrong. It is correct: in sponsored mode the treasury
+  argument *is* the foundation's appsvr account, so the grant comes from the foundation, as intended.

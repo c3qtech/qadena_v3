@@ -568,6 +568,18 @@ prepare)
     fi
 
     print ""
+    # THE FOUNDATION'S OWN RECORD, the counterpart to SEC's variables.json.  Until now this side
+    # persisted nothing but a keyring: the two sponsor addresses existed only in this printout, so
+    # every later step made an operator retype them from scrollback -- and retyping a stale pair
+    # from an earlier deployment reads as a green run against the wrong accounts.  Written beside
+    # the keyring that holds the keys, so the record travels with them.
+    _STATE="$COORD_HOME/veritas-sponsors.json"
+    jq -n --arg a "$(addr_of $APPSVR)" --arg u "$(addr_of $USERS)" \
+          --arg an "$APPSVR" --arg un "$USERS" --arg c "$CHAIN" \
+        '{appsvr:$a, users:$u, appsvr_name:$an, users_name:$un, chain_id:$c}' > "$_STATE" \
+        && chmod 600 "$_STATE" \
+        && print -r -- "recorded the sponsor addresses in $_STATE"
+    print ""
     print "PREPARE DONE.  Hand SEC this COMMAND -- the addresses ride as arguments:"
     print ""
     print "  veritas_scripts/step_1.sh --count <n> \\"

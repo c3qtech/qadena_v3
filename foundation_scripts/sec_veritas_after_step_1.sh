@@ -72,6 +72,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --foundation-appsvr <k>  the granting account, default $foundation_appsvr"
             echo "  --expiration <unix>      when the authorisation lapses, default now + 1 year"
             echo "  --coord-home <dir>       keyring holding the foundation account --"
+            echo "  --node <rpc>                the chain RPC; the chain-id is derived from it"
             echo "                           derive_launch_keys.sh --home.  The node's keyring does"
             echo "                           NOT hold it."
             echo "  --keyring-backend <b>    default $BACKEND (encrypted); 'test' for a devnet keyring"
@@ -283,6 +284,16 @@ if [ -n "$PREGRANT" ]; then
 
     echo ""
     echo "pre-grant done: $granted granted, $skipped already present, $failed failed"
+
+    # RETAIN WHAT WE SIGNED.  These addresses are the EXPECTED set: without a copy, later
+    # verification can only enumerate what exists on chain, which by construction cannot notice a
+    # wallet that was never granted at all.  The foundation authorised these -- it should be able
+    # to check its own work without asking SEC for the file back.
+    if [ -n "$COORD_HOME" ] && [ -d "$COORD_HOME" ]; then
+        cp "$PREGRANT" "$COORD_HOME/veritas-pregrant.json" 2>/dev/null \
+            && chmod 600 "$COORD_HOME/veritas-pregrant.json" 2>/dev/null \
+            && echo "retained the expected wallet set in $COORD_HOME/veritas-pregrant.json"
+    fi
     if [ "$failed" -gt 0 ]; then
         echo ""
         echo "PARTIAL: $failed wallet(s) have no allowance.  step_2/step_3 will fail on exactly"
