@@ -59,10 +59,17 @@ done
 # claim/rotation/bind message, and the bring-up's own claims passed only because they executed
 # between the two grants.  An ordering dependency invisible from the final state.
 #
+# MsgRevokeAllowance joins MsgGrantAllowance because the server always does revoke-then-grant
+# (api/handlers/fee_grant.go:224-232) -- allowances do not layer, so a re-grant must revoke
+# first.  Permitting the grant but not the revoke allows half of a pair that is only ever
+# used together: with FoundationUsersAddress blank, wrapForGranter returns the BARE message
+# and the pool wallet signs a raw revoke this allowance would refuse.  Verified in the
+# app-server source 2026-09-06.
+#
 # The app-server itself never needs the dropped messages (verified against its code, 2026-09-06),
 # so nothing broke in steady state -- but any re-run, repair or partial recovery would hit the
 # narrowed set with no diagnosis.  The union costs nothing and removes the dependency.
-VERITAS_APPSVR_MSGS="/qadena.dsvs.MsgCreateDocument,/qadena.dsvs.MsgRemoveDocument,/qadena.dsvs.MsgSignDocument,/qadena.dsvs.MsgRegisterAuthorizedSignatory,/qadena.qadena.MsgCreateCredential,/qadena.qadena.MsgRemoveCredential,/qadena.qadena.MsgClaimCredential,/qadena.qadena.MsgUpdateCredential,/qadena.qadena.MsgClaimUpdatedCredential,/qadena.qadena.MsgProtectPrivateKey,/qadena.qadena.MsgSignRecoverPrivateKey,/qadena.qadena.MsgAddPublicKey,/qadena.qadena.MsgCreateWallet,/qadena.nameservice.MsgBindCredential,/qadena.nameservice.MsgUnbindCredential,/cosmos.feegrant.v1beta1.MsgGrantAllowance"
+VERITAS_APPSVR_MSGS="/qadena.dsvs.MsgCreateDocument,/qadena.dsvs.MsgRemoveDocument,/qadena.dsvs.MsgSignDocument,/qadena.dsvs.MsgRegisterAuthorizedSignatory,/qadena.qadena.MsgCreateCredential,/qadena.qadena.MsgRemoveCredential,/qadena.qadena.MsgClaimCredential,/qadena.qadena.MsgUpdateCredential,/qadena.qadena.MsgClaimUpdatedCredential,/qadena.qadena.MsgProtectPrivateKey,/qadena.qadena.MsgSignRecoverPrivateKey,/qadena.qadena.MsgAddPublicKey,/qadena.qadena.MsgCreateWallet,/qadena.nameservice.MsgBindCredential,/qadena.nameservice.MsgUnbindCredential,/cosmos.feegrant.v1beta1.MsgGrantAllowance,/cosmos.feegrant.v1beta1.MsgRevokeAllowance"
 
 # fund_wallet <address> -- give this wallet the means to transact, however this deployment does it.
 fund_wallet() {
@@ -485,7 +492,7 @@ echo ""
 echo "cat > /tmp/veritas-pool.json <<'POOLEOF'"
 cat "$pool_file"
 echo "POOLEOF"
-echo "foundation_scripts/sec_veritas_after_step_3.sh --pool-addresses /tmp/veritas-pool.json"
+echo "foundation_scripts/sec_veritas_after_step_3.sh --pool-addresses /tmp/veritas-pool.json${QADENA_NODE:+ --node $QADENA_NODE}"
 echo ""
 echo "==================================================================="
 jq -r '"  \(.pool|length) wallet(s), base \(.sponsor_base), chain \(.chain_id)"' "$pool_file" 2>/dev/null

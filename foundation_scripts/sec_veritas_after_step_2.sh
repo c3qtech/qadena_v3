@@ -32,7 +32,7 @@ case "${1:-}" in
         print "      --members foundation-m1,foundation-m2,foundation-m3"
         print ""
         print "  Then watch both to PASSED before SEC runs step_3:"
-        print "      provider_scripts/query_service_provider_proposal.sh <id> --wait"
+        print "      provider_scripts/query_service_provider_proposal.sh <id> --wait${QADENA_NODE:+ --node $QADENA_NODE}"
         exit 0 ;;
 esac
 

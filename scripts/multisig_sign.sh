@@ -39,7 +39,26 @@ HOME_DIR="${QADENAHOME:-$HOME/qadena}"
 BACKEND="${QADENA_KEYRING_BACKEND:-test}"
 NODE="${QADENA_NODE:-tcp://localhost:26657}"
 CHAIN="${QADENA_CHAIN_ID:-}"
-GAS="${QADENA_GAS:-300000}"
+# GAS SCALES WITH THE SIGNATURE COUNT.  WritePerByte charges per byte of the SERIALISED tx, and
+# every additional multisig signature adds bytes -- so a limit sized against a 3-of-5 bucket is
+# not enough for a 5-of-7.  Measured 2026-09-06 on the fleet: a 7-signature pubsec MsgSend wanted
+# 300000 and used 302221, missing by 2221.  That failure is expensive out of proportion to its
+# size: the tx still lands, still burns the fee, and still CONSUMES THE SEQUENCE, so the next
+# ceremony in the same run dies on "account sequence mismatch" -- which looks like a different
+# bug entirely, three steps from the real one.
+#
+# SIZING.  300000 covered SIX signatures and missed seven by 2221, so a signature costs on the
+# order of a couple of thousand gas -- it is bytes, not verification.  20000/signature is ~10x
+# that margin and still cheap: at 500000000aqdn a 7-signer limit of 440000 is 0.00022 QDN, and
+# the FULL limit is charged whether used or not, so there is no case for padding it further.
+GAS="${QADENA_GAS:-}"
+# n = number of signatures this tx will carry.  QADENA_SIGNERS lets the caller say so at GENERATE
+# time, when no signature exists yet to count.  --gas always wins.
+_gas_default() {
+    local n="${QADENA_SIGNERS:-3}"
+    print -r -- $(( 300000 + n * 20000 ))
+}
+[[ -n "$GAS" ]] || GAS="$(_gas_default)"
 GAS_PRICES="${QADENA_GAS_PRICES:-500000000aqdn}"
 VIA_SSH="${QADENA_VIA_SSH:-}"
 

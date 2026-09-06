@@ -291,9 +291,23 @@ if [ -r "$VERITAS_SEC_HOME/mnemonics.json" ]; then
     done
 fi
 
-# DERIVE THE PIONEER FROM THE CHAIN when not given.  Exactly one bonded pioneer -> use it;
-# several -> refuse and list them; unreachable chain -> refuse, because writing a GUESS into
-# variables.json fails later and worse (mid-create-wallet, after keys exist).
+# DERIVE THE PIONEER FROM THE CHAIN when not given.
+#
+# TWO SOURCES, AND THEY ANSWER DIFFERENT QUESTIONS:
+#
+#   list-interval-public-key-id   WHICH PIONEERS EXIST.  Authoritative -- a pioneer that is not
+#                                 registered here cannot serve a jar, so this is the set we are
+#                                 allowed to choose from.
+#   status .node_info.moniker     WHICH ONE YOU ARE TALKING TO.  A node names itself, and the
+#                                 fleet bringup sets moniker = pioneer id (verified on M1/M2,
+#                                 2026-09-06).  It cannot be trusted alone -- a moniker is free
+#                                 text -- but it is the operator's OWN choice of endpoint, which
+#                                 is exactly the information missing when several pioneers exist.
+#
+# So: the registry decides what is valid, the moniker breaks the tie.  A moniker that is not a
+# registered pioneer is ignored rather than trusted.  Never guess: writing a wrong pioneer into
+# variables.json surfaces much later as "Couldn't get jar for pioneer X", mid-create-wallet,
+# after keys exist.
 if [ -z "$pioneer" ]; then
     _pioneers=$(qadenad_alias query qadena list-interval-public-key-id --output json 2>/dev/null \
                   | jq -r '[.intervalPublicKeyID[]? | select(.nodeType=="pioneer") | .nodeID] | .[]' 2>/dev/null)
@@ -302,9 +316,17 @@ if [ -z "$pioneer" ]; then
         pioneer="$_pioneers"
         echo "pioneer derived from the chain: $pioneer"
     elif [ "$_n" -gt 1 ]; then
-        echo "this chain has $_n pioneers -- pick one with --pioneer <id>:"
-        echo "$_pioneers" | sed 's/^/    /'
-        exit 1
+        _moniker=$(qadenad_alias status 2>/dev/null | jq -r '.node_info.moniker // empty' 2>/dev/null)
+        if [ -n "$_moniker" ] && echo "$_pioneers" | grep -qx "$_moniker"; then
+            pioneer="$_moniker"
+            echo "this chain has $_n pioneers; using '$pioneer' -- the node you pointed --node at."
+            echo "  (override with --pioneer <id>; the others are: $(echo "$_pioneers" | grep -vx "$_moniker" | tr '\n' ' '))"
+        else
+            echo "this chain has $_n pioneers and the node you are connected to is not one of them"
+            echo "(moniker '${_moniker:-<none>}') -- pick one with --pioneer <id>:"
+            echo "$_pioneers" | sed 's/^/    /'
+            exit 1
+        fi
     else
         echo "cannot derive the pioneer (chain unreachable?).  Pass --pioneer <id>, e.g."
         echo "    veritas_scripts/step_1.sh --pioneer qfi-pioneer1 ..."
@@ -454,7 +476,7 @@ else
     cat "$pregrant_file"
     echo "PREGRANTEOF"
     echo "foundation_scripts/sec_veritas_after_step_1.sh --pregrant /tmp/veritas-pregrant.json \\"
-    echo "    --coord-home ~/launch/coord"
+    echo "    --coord-home ~/launch/coord${QADENA_NODE:+ --node $QADENA_NODE}"
     echo ""
     echo "==================================================================="
     jq -r '"  sec-admin \(.sec_admin)   wallets \(.wallets|length)   chain \(.chain_id)"' "$pregrant_file" 2>/dev/null

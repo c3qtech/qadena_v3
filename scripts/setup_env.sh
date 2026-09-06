@@ -556,11 +556,16 @@ grant_as_foundation() {
         tmp=$(mktemp)
         qadenad_alias tx feegrant grant "$granter" "$grantee" --allowed-messages "$msgs" \
             --from "$granter" --generate-only > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+        # `|| true` ON BOTH: this file is sourced, so the caller's `set -e` makes a failing
+        # `out=$(...)` fatal RIGHT HERE -- skipping the no-txhash check below that exists to
+        # report it.  A rejected grant would kill step_3 mid-widen with no message, after some
+        # wallets had already been done.  The next two lines handle an empty $out correctly.
         out=$(qadenad_alias tx authz exec "$tmp" --from "$signer" --fee-granter "$granter" \
-              --yes --output json "${gasflags[@]}" 2>&1); rm -f "$tmp"
+              --yes --output json "${gasflags[@]}" 2>&1) || true
+        rm -f "$tmp"
     else
         out=$(qadenad_alias tx feegrant grant "$granter" "$grantee" --allowed-messages "$msgs" \
-              --from "$granter" --yes --output json "${gasflags[@]}" 2>&1)
+              --from "$granter" --yes --output json "${gasflags[@]}" 2>&1) || true
     fi
 
     hash=$(echo "$out" | grep '^{' | tail -1 | jq -r '.txhash // ""' 2>/dev/null)
@@ -874,7 +879,12 @@ set_min_gas_price() {
   fi
 
   local params_json
-  params_json=$(qadenad_alias query feemarket params --output json 2>/dev/null)
+  # `|| true` IS LOad-BEARING.  This file is SOURCED, so the CALLER's `set -e` applies here, and
+  # `x=$(cmd)` with a failing cmd is fatal -- it kills the caller before the `== ""` check on the
+  # next line, which exists precisely to handle this.  Measured 2026-09-06: veritas_scripts/step_1.sh
+  # exited 1 with NO output at all when the local node was down, because setup_env runs at source
+  # time (before --node is parsed) and queries localhost.  Every fleet-directed run does that.
+  params_json=$(qadenad_alias query feemarket params --output json 2>/dev/null) || true
   if [[ "$params_json" == "" ]] ; then
     #echo "feemarket params not found, will try to get minimum gas prices from config.yml"
     fallback=true

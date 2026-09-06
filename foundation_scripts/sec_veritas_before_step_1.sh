@@ -223,7 +223,63 @@ ssh_args=(); [[ -n "$VIA_SSH" ]] && ssh_args=(--via-ssh "$VIA_SSH")
 # multisig_sign.sh requires one for every subcommand -- and its "missing --chain-id" message was
 # itself unprintable, so the failure surfaced as `print: bad option: -h` after five good
 # signatures.  Exporting it once covers every subcommand.
-msig() { QADENA_KEYRING_PASS="$KRPASS" QADENA_CHAIN_ID="$CHAIN" "$MSIG" "$@" }
+# QADENA_SIGNERS SIZES THE GAS.  WritePerByte charges per byte of the SIGNED tx, so the limit has
+# to account for signatures that do not exist yet when the tx is generated.  Measured 2026-09-06:
+# a 7-signature pubsec MsgSend used 302221 against a flat 300000 default and failed -- burning the
+# fee, consuming the sequence, and making the NEXT ceremony die on "account sequence mismatch".
+# `--gas auto` does not help: it simulates the UNSIGNED tx (signer_infos: []) and returned 186907,
+# lower still.  The count is per-ceremony, set by each call below.
+# EVERY EXIT IS EXPLAINED, INCLUDING THE ONES NOBODY WROTE A MESSAGE FOR.
+#
+# A ceremony is dozens of screens, and its failures are not all anticipated: the one measured on
+# 2026-09-06 was a `set -e` death inside a command substitution, which by construction prints
+# nothing at all -- the run ended between "signing as pubsec-m7" and the shell prompt.  A trap is
+# the only thing that catches THAT class, because no branch was ever reached.
+#
+# It also prints the TXLOG, which previously appeared only on the success path -- so a run that
+# died mid-way took the record of what it had already sent with it, and those transactions are
+# real money that is NOT undone by the failure.
+_LAST_STEP="starting up"
+step() { _LAST_STEP="$1" }
+
+_on_exit() {
+    local rc=$?
+    (( rc == 0 )) && return 0
+    print -u2 ""
+    print -u2 "==========================================================="
+    print -u2 "FAILED during: $_LAST_STEP   (exit $rc)"
+    print -u2 "==========================================================="
+    if (( ${#TXLOG} )); then
+        print -u2 "  transactions this run already sent -- these are NOT undone:"
+        for t in "${TXLOG[@]}"; do print -u2 "    $t"; done
+    else
+        print -u2 "  no transaction was broadcast."
+    fi
+    case "${_LAST_CODE:-}" in
+        11)   print -u2 ""
+              print -u2 "  code 11 is OUT OF GAS.  The tx landed, burned its fee and CONSUMED THE"
+              print -u2 "  SEQUENCE -- so a re-run may next fail with 'account sequence mismatch'."
+              print -u2 "  Raise the limit and run again:   QADENA_GAS=600000 $ME ..." ;;
+        1159) print -u2 ""
+              print -u2 "  code 1159 is the AML gate: the SENDER is not on the bank-send whitelist."
+              print -u2 "  A launch genesis whitelists only what launch-config.yml lists." ;;
+        32)   print -u2 ""
+              print -u2 "  code 32 is a SEQUENCE MISMATCH -- an earlier tx from this bucket landed"
+              print -u2 "  (possibly having FAILED) and took the sequence.  Look before re-running:"
+              print -u2 "  the shares were signed for the old number and cannot be reused." ;;
+    esac
+    print -u2 ""
+    print -u2 "  look at the state before deciding anything:"
+    print -u2 "      foundation_scripts/query_accounts.sh --coord-home $COORD_HOME --sponsors"
+    print -u2 "  the ceremony's files are kept:  ${WORKDIR:-<none>}"
+    return $rc
+}
+trap _on_exit EXIT
+
+msig() { QADENA_KEYRING_PASS="$KRPASS" QADENA_CHAIN_ID="$CHAIN" QADENA_SIGNERS="${_SIGNERS:-3}" "$MSIG" "$@" }
+
+# _SIGNERS is set to the member count of whichever bucket is signing, before each ceremony.
+_count_members() { print -r -- "${#${(s:,:)1}}" }
 
 # RETURNS NON-ZERO WHEN THERE IS NO SUCH KEY.  The obvious one-liner pipes into `tr`, and a
 # pipeline's status is the LAST command's -- so it returned 0 for a missing key and every
@@ -256,6 +312,7 @@ ask_members() {
 run_ceremony() {
     local label="$1" unsigned="$2" bucket="$3" members="$4" so="${5:-0}"
     local -a mem; mem=(${(s:,:)members})
+    local _SIGNERS=${#mem}          # gas sizing for every msig call in this ceremony
     local -a shares; shares=()
     local i=1 m sig
     local -a soff; soff=(); (( so > 0 )) && soff=(--sequence-offset "$so")
@@ -294,8 +351,13 @@ run_ceremony() {
     # CAPTURED, NOT JUST PRINTED.  The hash is the only thing that lets anyone answer "did it
     # land?" after the fact, and it scrolls away.
     local _out rc _h
-    _out=$(msig broadcast --tx "${unsigned:r}.signed.json" "${ssh_args[@]}" 2>&1)
-    rc=$?
+    # `x=$(cmd)` IS FATAL UNDER set -e WHEN cmd FAILS -- and this captured stderr too, so the
+    # diagnosis went into a variable the script died before printing.  Measured 2026-09-06: a
+    # funding tx failed with "EXECUTED AND FAILED, code 11" and the operator saw NOTHING between
+    # the last signature and the shell prompt.  The `|| rc=$?` form puts the substitution in a
+    # list, which set -e does not act on, so rc survives and $_out gets printed.
+    rc=0
+    _out=$(msig broadcast --tx "${unsigned:r}.signed.json" "${ssh_args[@]}" 2>&1) || rc=$?
     print -r -- "$_out"
     _h=$(print -r -- "$_out" | grep -oE '\b[0-9A-F]{64}\b' | head -1)
     TXLOG+=("${_h:-<no-hash>}  rc=$rc  $label")
@@ -307,7 +369,9 @@ run_ceremony() {
            print -u2 "    foundation_scripts/query_accounts.sh --coord-home $COORD_HOME \\"
            print -u2 "        --keyring-backend $BACKEND --sponsors"
            exit 2 ;;
-        *) print -u2 "  $label: FAILED (see above)"; exit 1 ;;
+        *) # Keep the code the chain reported so _on_exit can say what it MEANS.
+           _LAST_CODE=$(print -r -- "$_out" | grep -oE 'code [0-9]+' | tail -1 | tr -dc '0-9')
+           print -u2 "  $label: FAILED (see above)"; exit 1 ;;
     esac
 }
 
@@ -378,6 +442,7 @@ prepare)
     # exist to be the grantee of fee grants and the payer of record.  If they already exist in
     # this keyring they are reused -- re-minting would change the address SSM already points at.
     print ""
+    step "creating the two sponsor accounts"
     print -r -- "--- 1. sponsor accounts"
     for n in "$APPSVR" "$USERS"; do
         if addr_of "$n" > /dev/null 2>&1; then
@@ -443,6 +508,7 @@ prepare)
 
     # ---- 2. fund them from pubsec ---------------------------------------------------------
     print ""
+    step "funding the sponsors from $FUND_BUCKET"
     print -r -- "--- 2. funding ${AMOUNT}qdn each from $FUND_BUCKET"
     PUBSEC_MEMBERS=$(ask_members "$FUND_BUCKET" "$PUBSEC_MEMBERS")
     # ALREADY-FUNDED ACCOUNTS ARE SKIPPED, AND THAT IS WHAT MAKES THIS RESUMABLE.
@@ -471,6 +537,9 @@ prepare)
             continue
         fi
         u="$WORKDIR/fund-$acct.json"
+        # The GAS is fixed HERE, at build time, and must already cover signatures that do not
+        # exist yet -- see the note on msig().  pubsec is 5-of-7 on the fleet.
+        _SIGNERS=$(_count_members "$PUBSEC_MEMBERS")
         msig build-send --from "$FUND_BUCKET" --to "$(addr_of $acct)" \
                 --amount "${AMOUNT}qdn" --chain-id "$CHAIN" "${ssh_args[@]}" --out "$u" > /dev/null \
             || { print -u2 "  build failed for $acct"; exit 1 }
@@ -494,6 +563,7 @@ prepare)
 
     # ---- 3. stake for expedited voting power ----------------------------------------------
     print ""
+    step "staking from $STAKE_BUCKET for expedited voting"
     print -r -- "--- 3. stake for EXPEDITED voting power"
     [[ -n "$VALIDATOR" ]] || VALIDATOR=$(largest_validator)
     [[ -n "$VALIDATOR" ]] || { print -u2 "no bonded validator found; pass --validator"; exit 1 }
@@ -506,6 +576,7 @@ prepare)
         print "  already holds enough bonded stake; nothing to delegate"
     else
         u="$WORKDIR/stake.json"
+        _SIGNERS=$(_count_members "$MEMBERS")
         msig build-delegate --from "$STAKE_BUCKET" --validator "$VALIDATOR" \
                 --amount "${STAKE}qdn" --chain-id "$CHAIN" "${ssh_args[@]}" --out "$u" > /dev/null \
             || { print -u2 "  build failed"; exit 1 }
@@ -525,6 +596,7 @@ prepare)
     #
     # So finish by asking the CHAIN what is true, and exit non-zero if it disagrees with intent.
     print ""
+    step "verifying against the chain"
     print -r -- "--- 4. verifying against the chain"
     _fail=0
     for acct in "$APPSVR" "$USERS"; do
@@ -574,29 +646,55 @@ prepare)
     # from an earlier deployment reads as a green run against the wrong accounts.  Written beside
     # the keyring that holds the keys, so the record travels with them.
     _STATE="$COORD_HOME/veritas-sponsors.json"
+    # THE NODE IS PART OF THE RECORD.  Without it, a later --coord-home run defaults to
+    # localhost, and every check fails against a chain that is merely absent -- which reads as a
+    # broken deployment rather than a wrong endpoint (measured 2026-09-06).
     jq -n --arg a "$(addr_of $APPSVR)" --arg u "$(addr_of $USERS)" \
-          --arg an "$APPSVR" --arg un "$USERS" --arg c "$CHAIN" \
-        '{appsvr:$a, users:$u, appsvr_name:$an, users_name:$un, chain_id:$c}' > "$_STATE" \
+          --arg an "$APPSVR" --arg un "$USERS" --arg c "$CHAIN" --arg n "${QADENA_NODE:-}" \
+        '{appsvr:$a, users:$u, appsvr_name:$an, users_name:$un, chain_id:$c, node:$n}' > "$_STATE" \
         && chmod 600 "$_STATE" \
         && print -r -- "recorded the sponsor addresses in $_STATE"
     print ""
-    print "PREPARE DONE.  Hand SEC this COMMAND -- the addresses ride as arguments:"
+    print "==================================================================="
+    print "PREPARE DONE -- both sponsors are funded and the stake is delegated."
     print ""
-    print "  veritas_scripts/step_1.sh --count <n> \\"
-    print "      --appsvr $(addr_of $APPSVR) \\"
-    print "      --users  $(addr_of $USERS)"
+    print "1. SEND SEC THIS COMMAND.  The addresses ride as arguments, so it is"
+    print "   paste-and-run; only --count is theirs to choose (wallets per user):"
+    print ""
+    print "     veritas_scripts/step_1.sh --count 30 \\"
+    print "         --appsvr $(addr_of $APPSVR) \\"
+    # A ${VAR:+...} expansion cannot span two print statements -- the closing brace lands on the
+    # next line and the word `print` is emitted literally.  Branch instead.
+    if [[ -n "${QADENA_NODE:-}" ]]; then
+        print "         --users  $(addr_of $USERS) \\"
+        print "         --node   $QADENA_NODE"
+    else
+        print "         --users  $(addr_of $USERS)"
+    fi
+    print ""
+    print "   Use a small --count (3) to rehearse: it sizes the pre-grants (4*(n+1)),"
+    print "   the sponsor pool and the per-wallet split, so a rehearsal is much faster."
+    print ""
+    print "2. SEC RETURNS a PRE-GRANT BLOCK -- their admin address plus every wallet"
+    print "   address this deployment will ever create.  Save it to a file, then:"
+    print ""
+    print "     foundation_scripts/sec_veritas_after_step_1.sh --pregrant <that file> \\"
+    print "         --coord-home $COORD_HOME${QADENA_NODE:+ --node $QADENA_NODE}"
+    print ""
+    print "   That one command does BOTH halves: it delegates the three authorities to"
+    print "   SEC's admin, and pre-grants every wallet in the block -- before any of them"
+    print "   exists, which is what keeps a foundation key off SEC's machine entirely."
+    print ""
+    print "   The admin address is NOT the sec-treasury address step_1 also prints: that"
+    print "   belongs to the retired banksend model and nothing in this flow uses it."
     print ""
     print "Reference copy of the same facts:"
     print "  chain-id          $CHAIN"
     printf "  %-26s %s\n" "$APPSVR" "$(addr_of $APPSVR)"
     printf "  %-26s %s\n" "$USERS"  "$(addr_of $USERS)"
-    print ""
-    print "After step_1 returns SEC's admin address:"
-    print "  foundation_scripts/sec_veritas_after_step_1.sh --sec-admin <addr> --foundation-appsvr $APPSVR"
-    print ""
-    print "  <addr> is SEC's ADMIN key -- the one that will sign authz MsgExec, and that holds"
-    print "  ZERO tokens by design.  It is NOT the sec-treasury address step_1 prints: that"
-    print "  belongs to the retired banksend model and steps 2/3/4 do not use it.  Ask SEC."
+    print "  (also recorded in $COORD_HOME/veritas-sponsors.json -- later steps read it"
+    print "   from there, so you never need to retype these.)"
+    print "==================================================================="
     ;;
 
 approve)
@@ -609,13 +707,63 @@ approve)
     print "==========================================================="
     print "  proposals: ${PROPOSALS[*]}"
     MEMBERS=$(ask_members "$STAKE_BUCKET" "$MEMBERS")
+
+    # LOOK AT EACH PROPOSAL BEFORE PUTTING 10M QDN ON IT.
+    #
+    # The ids are typed by an operator from step_2's output -- nothing derives them -- so a
+    # transposed digit deposits the foundation's money on somebody else's proposal and votes YES
+    # on it.  Two checks, both cheap:
+    #
+    #   WHAT IT IS      MsgAddServiceProvider naming a SEC provider.  Anything else is refused,
+    #                   because "deposit and vote yes" is not a safe default for an unknown
+    #                   proposal.
+    #   WHERE IT IS     already PASSED/REJECTED/FAILED means the work is done or moot; depositing
+    #                   then is money spent for nothing.  Skipped, not failed -- re-running this
+    #                   stage after a partial run is normal and must stay safe.
+    _todo=()
+    for pid in "${PROPOSALS[@]}"; do
+        _pj=$(qq query gov proposal "$pid" --output json 2>/dev/null || true)
+        if [[ -z "$_pj" ]]; then
+            print -u2 "  proposal $pid: NOT FOUND on $CHAIN -- check the id step_2 printed"
+            exit 1
+        fi
+        _pstatus=$(print -r -- "$_pj" | jq -r '.proposal.status // ""')
+        _ptype=$(print -r -- "$_pj"   | jq -r '.proposal.messages[0].type // .proposal.messages[0]["@type"] // ""')
+        _pnode=$(print -r -- "$_pj"   | jq -r '.proposal.messages[0].value.nodeID // ""')
+        if [[ "$_ptype" != *MsgAddServiceProvider ]]; then
+            print -u2 "  proposal $pid is NOT a service-provider proposal (it is ${_ptype:-unknown})."
+            print -u2 "  Refusing: this stage deposits ${DEPOSIT_QDN:-10000000}qdn and votes YES."
+            exit 1
+        fi
+        case "$_pstatus" in
+            *DEPOSIT_PERIOD|*VOTING_PERIOD)
+                print "  proposal $pid: $_pnode ($_pstatus) -- will deposit and vote"
+                _todo+=("$pid") ;;
+            *PASSED)
+                print "  proposal $pid: $_pnode already PASSED -- skipping (nothing to do)" ;;
+            *)
+                print -u2 "  proposal $pid: $_pnode is $_pstatus -- cannot be helped by a vote"
+                exit 1 ;;
+        esac
+    done
+    if (( ${#_todo} == 0 )); then
+        print ""
+        print "Nothing to do -- every proposal given is already decided."
+        exit 0
+    fi
+    PROPOSALS=("${_todo[@]}")
+
     for pid in "${PROPOSALS[@]}"; do
         for kind in deposit vote; do
             u="$WORKDIR/$kind-$pid.json"
             if [[ "$kind" == deposit ]]; then
+                _SIGNERS=$(_count_members "$MEMBERS")
+                step "depositing on proposal $pid"
                 msig build-deposit --from "$STAKE_BUCKET" --proposal "$pid" \
                         --amount "10000000qdn" --chain-id "$CHAIN" "${ssh_args[@]}" --out "$u" > /dev/null || exit 1
             else
+                _SIGNERS=$(_count_members "$MEMBERS")
+                step "voting YES on proposal $pid"
                 msig build-vote --from "$STAKE_BUCKET" --proposal "$pid" --vote yes \
                         --chain-id "$CHAIN" "${ssh_args[@]}" --out "$u" > /dev/null || exit 1
             fi
@@ -631,10 +779,34 @@ approve)
     fi
 
     print ""
-    print "APPROVE DONE.  Watch each proposal to PASSED before SEC runs step_3:"
+    print "==================================================================="
+    print "APPROVE DONE -- deposited and voted YES on ${#PROPOSALS[@]} proposal(s)."
+    print ""
+    print "1. WAIT for each to reach PASSED.  Each command blocks until it does:"
     for pid in "${PROPOSALS[@]}"; do
-        print "  provider_scripts/query_service_provider_proposal.sh $pid --wait"
+        print "     provider_scripts/query_service_provider_proposal.sh $pid --wait${QADENA_NODE:+ --node $QADENA_NODE}"
     done
+    print ""
+    print "   A vote is not a result: the provider is registered by the proposal EXECUTING,"
+    print "   and step_3 creates wallets that need those providers to exist.  Started early,"
+    print "   it fails partway through with wallets already on chain."
+    print ""
+    print "2. THEN TELL SEC TO RUN, exactly:"
+    print ""
+    print "     veritas_scripts/step_3.sh${QADENA_NODE:+ --node $QADENA_NODE}"
+    print ""
+    print "   No exports and no addresses: step_3 reads them from the run's own variables.json"
+    print "   and verifies the delegation on chain before using it."
+    print ""
+    print "3. SEC returns a POOL BLOCK.  Save it to a file and finish with:"
+    print ""
+    print "     foundation_scripts/sec_veritas_after_step_3.sh --pool-addresses <that file> \\"
+    print "         --coord-home $COORD_HOME${QADENA_NODE:+ --node $QADENA_NODE}"
+    print ""
+    print "4. VERIFY the whole deployment (read-only, no keyring, no passphrase):"
+    print ""
+    print "     foundation_scripts/sec_veritas_verify.sh --coord-home $COORD_HOME${QADENA_NODE:+ --node $QADENA_NODE}"
+    print "==================================================================="
     ;;
 
 *)  print -u2 "unknown --stage '$STAGE' (prepare | approve)"; usage ;;

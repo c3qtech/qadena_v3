@@ -111,6 +111,12 @@ if [[ -z "$FA" || -z "$FU" ]]; then
     if [[ -r "$_st" ]]; then
         [[ -n "$FA" ]] || FA=$(jq -r '.appsvr // empty' "$_st")
         [[ -n "$FU" ]] || FU=$(jq -r '.users  // empty' "$_st")
+        # The endpoint too, unless the caller named one.  NODE still holds its default here, so
+        # compare against that rather than testing for emptiness.
+        if [[ "$NODE" == "${QADENA_NODE:-tcp://localhost:26657}" ]]; then
+            _n=$(jq -r '.node // empty' "$_st")
+            [[ -n "$_n" ]] && NODE="$_n"
+        fi
         print "sponsors read from $_st"
     fi
 fi
@@ -146,7 +152,22 @@ PASS=0; FAIL=0
 ok()   { print "  ok    $1"; PASS=$(( PASS + 1 )) }
 bad()  { print "  FAIL  $1"; FAIL=$(( FAIL + 1 )) }
 
-print "VERITAS end-state verification  (chain $(qq status 2>/dev/null | jq -r '.node_info.network // "?"'))"
+# REACHABILITY FIRST.  Every check below reads the chain, so against a dead endpoint they all
+# "fail" -- and a run that prints five FAILs reads as a broken deployment when the truth is that
+# nothing was asked.  Measured 2026-09-06: a --coord-home run with no node defaulted to localhost
+# and reported 5 failed, 2 passed on a deployment that was in fact fine.
+_CHAIN=$(qq status 2>/dev/null | jq -r '.node_info.network // empty' 2>/dev/null)
+if [[ -z "$_CHAIN" ]]; then
+    print -u2 "cannot reach a chain at $NODE -- nothing was verified."
+    print -u2 ""
+    print -u2 "  This is NOT a statement about the deployment: no query succeeded."
+    print -u2 "  Point at the right node:"
+    print -u2 "      --node tcp://<host>:26657"
+    print -u2 "  (a --coord-home run uses the node recorded by sec_veritas_before_step_1.sh;"
+    print -u2 "   a record written before 2026-09-06 has no node field and defaults to localhost.)"
+    exit 1
+fi
+print "VERITAS end-state verification  (chain $_CHAIN via $NODE)"
 if [[ ! -r "$PREGRANT" ]]; then
     print "reading the wallet set FROM THE CHAIN (no --pregrant): this verifies what exists,"
     print "but cannot detect a wallet that was never granted at all."
@@ -197,48 +218,102 @@ qq query authz grants "$FA" "$SA" --output json 2>/dev/null \
         fi
     done
 
-# ---- 3. every operational wallet is widened -------------------------------------------------
+# ---- 3. every operational wallet holds the EXACT expected allowance -----------------------
 #
-# TWO "WIDE" SETS EXIST, AND THE LAST WRITER WINS.  create_user grants USER_MSGS (claims,
-# signatory registration, binds); step_3's fund_wallet then revokes and re-grants
-# VERITAS_APPSVR_MSGS (documents, credential ISSUANCE, MsgGrantAllowance) -- which lacks
-# MsgClaimCredential, MsgClaimUpdatedCredential, MsgRegisterAuthorizedSignatory and the binds.
-# The bring-up's own claims succeed only because they run BETWEEN the two grants.  So the END
-# state is now the UNION of both (the widen grants it as of 2026-09-06), so a wallet showing the
-# appsvr marker without the claim marker is from a pre-union bring-up -- functional for the
-# app-server, broken for any later claim/rotation/bind.  Reported distinctly.
-# The wallet list: the file's expected set when given, else every grantee the chain shows
-# (minus the admin, whose allowance is MsgExec and is checked separately).
+# THE SET, NOT JUST ITS EXISTENCE.  A narrowed allowance and a correct one are indistinguishable
+# to any check that only asks "is there a grant" -- and narrowing is precisely how this broke
+# before: two wide sets overwrote each other and the survivor silently lacked every claim,
+# rotation and bind message.  Nothing about the final on-chain state showed it.  So compare the
+# full sorted set, and report what is MISSING and what is EXTRA rather than a verdict.
+#
+# The expected set is READ FROM step_3.sh, not restated here.  A second copy is a second thing to
+# forget: the last time this list changed it had to change in two places, and a verifier holding
+# a stale third copy would fail every wallet while the deployment was correct.
+_expect_msgs=$(grep -h '^VERITAS_APPSVR_MSGS=' "$SCRIPT_DIR/../veritas_scripts/step_3.sh" 2>/dev/null \
+                 | sed 's/^VERITAS_APPSVR_MSGS="//; s/"$//' | tr ',' '\n' | sort -u)
+if [[ -z "$_expect_msgs" ]]; then
+    bad "cannot read VERITAS_APPSVR_MSGS from veritas_scripts/step_3.sh -- wallet check skipped"
+else
 if [[ -r "$PREGRANT" ]]; then
     _wallets=$(jq -r '.wallets[].address' "$PREGRANT")
-    _src="the pregrant file"
 else
     _wallets=$(qq query feegrant grants-by-granter "$FA" --output json 2>/dev/null \
                 | jq -r --arg sa "$SA" '(.allowances // [])[] | select(.grantee != $sa) | .grantee')
-    _src="the chain"
 fi
-_narrow=0; _missing=0; _wide=0; _userset=0
+_exact=0 _narrow=0 _missing=0 _first_bad=""
 while read -r _ad; do
     [[ -n "$_ad" ]] || continue
-    _al=$(qq query feegrant grant "$FA" "$_ad" --output json 2>/dev/null \
-            | jq -r '.allowance.allowance.value.allowed_messages // [] | join(",")')
-    if [[ -z "$_al" ]]; then
+    _got=$(qq query feegrant grant "$FA" "$_ad" --output json 2>/dev/null \
+            | jq -r '(.allowance.allowance.value.allowed_messages // [])[]' | sort -u)
+    if [[ -z "$_got" ]]; then
         _missing=$(( _missing + 1 ))
-    elif [[ "$_al" == *MsgCreateDocument* ]]; then
-        _wide=$(( _wide + 1 ))
-    elif [[ "$_al" == *MsgClaimCredential* ]]; then
-        _userset=$(( _userset + 1 ))     # widened but never re-widened -- fund_wallet skipped it
+        [[ -n "$_first_bad" ]] || _first_bad="$_ad (no allowance at all)"
+    elif [[ "$_got" == "$_expect_msgs" ]]; then
+        _exact=$(( _exact + 1 ))
     else
         _narrow=$(( _narrow + 1 ))
+        if [[ -z "$_first_bad" ]]; then
+            _miss=$(comm -23 <(print -r -- "$_expect_msgs") <(print -r -- "$_got") | sed 's|.*Msg|Msg|' | tr '\n' ' ')
+            _extra=$(comm -13 <(print -r -- "$_expect_msgs") <(print -r -- "$_got") | sed 's|.*Msg|Msg|' | tr '\n' ' ')
+            _first_bad="$_ad${_miss:+ -- MISSING: $_miss}${_extra:+ -- EXTRA: $_extra}"
+        fi
     fi
 done < <(print -r -- "$_wallets")
 _total=$(print -r -- "$_wallets" | grep -c . || true)
-if [[ $(( _wide + _userset )) -eq $_total && $_userset -eq 0 ]]; then
-    ok "all $_total wallets hold the operational (appsvr) allowance"
-elif [[ $(( _narrow + _missing )) -eq 0 ]]; then
-    ok "all $_total wallets widened ($_wide operational, $_userset user-set -- mixed but functional)"
+if [[ $_exact -eq $_total && $_total -gt 0 ]]; then
+    ok "all $_total wallets hold the exact operational allowance ($(print -r -- "$_expect_msgs" | grep -c .) messages)"
+elif [[ $_total -eq 0 ]]; then
+    bad "no wallets found to check"
 else
-    bad "wallet allowances: $_wide operational, $_userset user-set, $_narrow narrow, $_missing missing of $_total"
+    bad "wallet allowances: $_exact exact, $_narrow wrong, $_missing absent of $_total"
+    print "        first: $_first_bad"
+fi
+fi
+
+# ---- 3b. THE FLOOR: an independently-sourced minimum ---------------------------------------
+#
+# CHECK 3 IS A DRIFT CHECK, NOT A CORRECTNESS CHECK.  It reads the expected set out of step_3.sh,
+# so it proves the chain matches the SCRIPT.  If that list is itself short a type something needs,
+# every wallet passes while under-granted and the check says "exact" with total confidence -- the
+# same shape as the bug it was written to catch, one level up.
+#
+# This is the other half: a minimum derived from a DIFFERENT source -- the app-server's own
+# message constructors, swept from api/ independently 2026-09-06 for BOTH construction forms --
+# `types.NewMsgX(...)` AND `types.MsgX{...}` struct literals.  Grepping only the first form is how
+# the first version of this list came back short: MsgRemoveDocument is a struct literal, and a
+# check that misses it reports "covers everything" with full confidence.  It cannot drift with
+# step_3.sh because it does not come from there.
+#
+# THREE MESSAGE POPULATIONS ARE DELIBERATELY EXCLUDED, each signed by a wallet family this
+# bring-up does not create:  MsgExec (pool wallets, covered by check 4 under a DIFFERENT granter),
+# MsgExecuteContract (DBM/notarial wallets), MsgCreateBulkCredentials (eKYC partner wallets).
+# If any of those families is ever deployed here, it needs its own grant and its own check.  A superset is
+# expected and fine: the bring-up's wallets also claim, bind and rotate, which the server never
+# does.  What must never happen is a wallet that cannot pay for something the server will ask of
+# it.  MsgExec is deliberately NOT here -- only pool wallets sign that, and check 4 covers it.
+_floor=(
+    /qadena.qadena.MsgAddPublicKey
+    /qadena.qadena.MsgCreateWallet
+    /qadena.qadena.MsgClaimCredential
+    /qadena.qadena.MsgCreateCredential
+    /qadena.qadena.MsgRemoveCredential
+    /qadena.qadena.MsgSignRecoverPrivateKey
+    /qadena.dsvs.MsgCreateDocument
+    /qadena.dsvs.MsgRemoveDocument
+    /qadena.dsvs.MsgSignDocument
+    /qadena.dsvs.MsgRegisterAuthorizedSignatory
+    /cosmos.feegrant.v1beta1.MsgGrantAllowance
+    /cosmos.feegrant.v1beta1.MsgRevokeAllowance
+)
+_short=""
+for _m in "${_floor[@]}"; do
+    print -r -- "$_expect_msgs" | grep -qx -- "$_m" || _short="$_short ${_m##*.}"
+done
+if [[ -z "$_short" ]]; then
+    ok "the granted set covers all ${#_floor[@]} messages the app-server builds (independent source)"
+else
+    bad "the granted set is SHORT of what the app-server builds:$_short"
+    print "        this is not drift -- step_3.sh's list itself cannot serve the server."
 fi
 
 # ---- 4. the pool holds both halves ----------------------------------------------------------
@@ -304,6 +379,44 @@ if [[ "${_prov:-0}" -ge 2 ]]; then
     ok "both service providers registered (identity + dsvs)"
 else
     bad "expected 2 registered providers, found ${_prov:-0}"
+fi
+
+# ---- 6. CAN THE PAYERS ACTUALLY PAY, AND DO THE NON-PAYERS HOLD NOTHING ---------------------
+#
+# Every check above asks whether the PERMISSIONS are right.  This one asks whether the money is,
+# which is a separate way for the same deployment to stop working: a fee grant is an authorisation
+# to spend someone else's balance, and it authorises nothing once that balance is gone.  A drained
+# sponsor fails exactly like a missing grant -- "spendable balance 0aqdn" -- so the two are worth
+# distinguishing before someone re-issues grants that were never the problem.
+#
+# The mirror check matters as much.  Pool and operational wallets are supposed to hold NOTHING:
+# that is the whole toll-free claim, and it is what makes a stolen wallet key worthless.  A
+# balance on one of them means somebody funded it -- usually to "fix" a failure whose real cause
+# was a missing grant -- and the deployment has quietly acquired a second funding source that
+# masks the first.  That is the endowment trap the zeroed incentives exist to prevent.
+for _p in "appsvr:$FA" "users:$FU"; do
+    _n="${_p%%:*}"; _a="${_p#*:}"
+    _b=$(qq query bank balances "$_a" --output json 2>/dev/null | jq -r '(.balances[]?|select(.denom=="aqdn")|.amount) // "0"')
+    if [[ "${_b:-0}" == "0" ]]; then
+        bad "foundation-$_n holds NOTHING -- every grant it issued is now unfundable"
+    else
+        ok "foundation-$_n can still pay ($(python3 -c "v=int('${_b:-0}');print(f'{v//10**18:,}')") QDN)"
+    fi
+done
+_funded=0 _first_funded=""
+while read -r _ad; do
+    [[ -n "$_ad" ]] || continue
+    _b=$(qq query bank balances "$_ad" --output json 2>/dev/null | jq -r '(.balances[]?|select(.denom=="aqdn")|.amount) // "0"')
+    if [[ "${_b:-0}" != "0" ]]; then
+        _funded=$(( _funded + 1 ))
+        [[ -n "$_first_funded" ]] || _first_funded="$_ad ($(python3 -c "v=int('${_b:-0}');print(f'{v/10**18:,.6f}')") QDN)"
+    fi
+done < <(print -r -- "$_wallets")
+if [[ $_funded -eq 0 ]]; then
+    ok "no operational wallet holds tokens -- fee grants are the only funding source"
+else
+    bad "$_funded operational wallet(s) hold TOKENS -- a second funding source masks missing grants"
+    print "        first: $_first_funded"
 fi
 
 # ---- informational: the floats --------------------------------------------------------------

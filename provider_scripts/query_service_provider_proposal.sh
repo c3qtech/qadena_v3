@@ -27,8 +27,14 @@ while [[ $# -gt 0 ]]; do
             proposal_status="$2"
             shift 2
             ;;
+        --node)
+            # Exported, not just local: qadenad_alias reads QADENA_NODE, and setup_env derives
+            # the chain-id from it.  Parsed BEFORE setup_env is sourced, below.
+            export QADENA_NODE="$2"
+            shift 2
+            ;;
         --help)
-            echo "Usage: $0 <proposal_id> [--wait] [--status <status>]"
+            echo "Usage: $0 <proposal_id> [--wait] [--status <status>] [--node <rpc>]"
             exit 0
             ;;
         --*) # Handle unknown options
@@ -53,7 +59,10 @@ fi
 
 # wait until proposal is passed
 while true; do
-    stat=$(qadenad_alias query gov proposal $proposal_id --output json | jq -r '.proposal.status')
+    # `|| true`: a failed query here (node down, wrong chain) would kill the loop with no
+    # message under set -e, and an empty $stat simply keeps waiting -- which is the right
+    # behaviour for a proposal that is not visible yet.
+    stat=$(qadenad_alias query gov proposal $proposal_id --output json 2>/dev/null | jq -r '.proposal.status // ""' 2>/dev/null || true)
     if [ "$stat" = "$proposal_status" ]; then
         echo "Proposal $proposal_id is $stat"
         break
