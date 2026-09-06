@@ -29,6 +29,7 @@ import (
 
 	wasmkeeper "github.com/CosmWasm/wasmd/x/wasm/keeper"
 	"github.com/c3qtech/qadena_v3/app"
+	qadenacli "github.com/c3qtech/qadena_v3/x/qadena/client/cli"
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 
 	evmcosmoscmd "github.com/cosmos/evm/client"
@@ -54,10 +55,16 @@ func initRootCmd(
 		return newApp(l, d, w, ao)
 	}
 
+	// debug IS the cosmos home for offline conversion utilities -- `debug addr` turns hex into
+	// bech32 with no chain and no keys, and derive-wallet-address is the same species one level
+	// up: mnemonic -> address at an HD index.  It broadcasts nothing and queries nothing, so
+	// neither `tx` nor `query` says the true thing about it.
+	debugCmd := evmdebug.Cmd() // EVM flavor; replaced the stock debug.Cmd()
+	debugCmd.AddCommand(qadenacli.CmdDeriveWalletAddress())
+
 	rootCmd.AddCommand(
 		genutilcli.InitCmd(basicManager, app.DefaultNodeHome),
-		evmdebug.Cmd(), // EVM
-		//		debug.Cmd(), -- replaced by above
+		debugCmd,
 		confixcmd.ConfigCommand(),
 		pruning.Cmd(sdkAppCreator, app.DefaultNodeHome),
 		snapshot.Cmd(sdkAppCreator),
@@ -83,27 +90,22 @@ func initRootCmd(
 	// refuses to run in that state (app.assertStoresAreReadable) and points here.
 	rootCmd.AddCommand(newRepairFastIndexCmd(app.DefaultNodeHome))
 
-	// add Cosmos EVM key commands
-	rootCmd.AddCommand(
-		evmcosmoscmd.KeyCommands(app.DefaultNodeHome, true),
-	)
-
 	// add keybase, auxiliary RPC, query, genesis, and tx child commands
 	rootCmd.AddCommand(
 		server.StatusCommand(),
 		genesisCommand(txConfig, basicManager),
 		queryCommand(),
 		txCommand(),
-		//		keys.Commands(), // replaced by evm version
+		// keys: the EVM-flavored KeyCommands below; stock keys.Commands() replaced by it
 	)
 
-	defaultNodeHome := app.DefaultNodeHome
-
-	// add Cosmos EVM key commands
+	// add Cosmos EVM key commands.  ONCE.  This block used to appear twice with identical
+	// arguments (the second behind a `defaultNodeHome := app.DefaultNodeHome` alias), a merge
+	// leftover -- harmless to dispatch, since cobra found two identical commands, but `qadenad
+	// --help` listed `keys` twice, which reads as exactly the kind of wiring mistake it was.
 	rootCmd.AddCommand(
-		evmcosmoscmd.KeyCommands(defaultNodeHome, true),
+		evmcosmoscmd.KeyCommands(app.DefaultNodeHome, true),
 	)
-
 }
 
 func addModuleInitFlags(startCmd *cobra.Command) {

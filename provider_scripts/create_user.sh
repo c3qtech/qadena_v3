@@ -36,6 +36,18 @@ echo "accept password: $acceptpassword"
 echo "create wallet sponsor: $createwalletsponsor"
 echo "eph count: $eph_count"
 
+# RESUMABLE, COARSELY.  A user is onboarded as one atomic sequence -- wallet, ephemerals, grants,
+# claims -- and the local key for the MAIN wallet is written by the same run that broadcast it, so
+# its presence means this user's sequence already completed (or nearly; the widen that follows in
+# step_3 re-runs regardless and repairs the grants).  Without this, a step_3 resumed after a
+# mid-run failure died here on "friendly name already exists ... aborted", and the only way
+# forward was wiping keyrings for wallets the CHAIN still has -- which cannot be re-created.
+# A user that died between main and ephemerals is mis-skipped by this; delete its keys to redo.
+if qadenad_alias keys show "$username" --address > /dev/null 2>&1; then
+    echo "$username already exists in the keyring -- skipping create_user (resume)"
+    exit 0
+fi
+
 
 # TOLL-FREE SUPPORT.
 #
@@ -62,8 +74,11 @@ grant_user_fees() {   # grant_user_fees <key-name>
     local addr granter
     addr=$(qadenad_alias keys show "$1" --address 2>/dev/null) || return 0
     [ -n "$addr" ] || return 0
-    granter=$(qadenad_alias keys show "$createwalletsponsor" --address 2>/dev/null)
-    [ -n "$granter" ] || granter="$createwalletsponsor"
+    case "$createwalletsponsor" in
+        qadena1*) granter="$createwalletsponsor" ;;
+        *)        granter=$(qadenad_alias keys show "$createwalletsponsor" --address 2>/dev/null || true)
+                  [ -n "$granter" ] || granter="$createwalletsponsor" ;;
+    esac
     # Signed by SEC's admin key as a MsgExec when VERITAS_SEC_ADMIN is set, so a real deployment
     # never needs a foundation key here; signed directly by the granter otherwise (harness only).
     if grant_as_foundation "$granter" "$addr" "$USER_MSGS"; then
@@ -79,10 +94,22 @@ grant_user_fees() {   # grant_user_fees <key-name>
 # the difference between working and "spendable balance 0aqdn".
 PROVIDER_FEE_GRANTER_FLAG=""
 if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
-    USER_FEE_GRANTER_FLAG="--fee-granter $(qadenad_alias keys show $createwalletsponsor --address 2>/dev/null)"
+    # THE SPONSOR MAY BE AN ADDRESS, NOT A KEY NAME.  On a split deployment SEC's keyring holds no
+    # foundation key, so `keys show` fails -- and under set -e a failing substitution inside an
+    # assignment kills the whole script with NO output past the argument echos (measured
+    # 2026-09-06).  Same resolution rule as everywhere else: bech32 passes through untouched.
+    case "$createwalletsponsor" in
+        qadena1*) _sponsor_addr="$createwalletsponsor" ;;
+        *)        _sponsor_addr=$(qadenad_alias keys show $createwalletsponsor --address 2>/dev/null || true) ;;
+    esac
+    [ -n "$_sponsor_addr" ] || { echo "cannot resolve sponsor '$createwalletsponsor' to an address"; exit 1; }
+    USER_FEE_GRANTER_FLAG="--fee-granter $_sponsor_addr"
     PROVIDER_FEE_GRANTER_FLAG="--fee-granter ${VERITAS_FOUNDATION_APPSVR:-foundation-veritas-appsvr}"
     # resolve the name to an address; --fee-granter takes an address
-    _fg_addr=$(qadenad_alias keys show "${VERITAS_FOUNDATION_APPSVR:-foundation-veritas-appsvr}" --address 2>/dev/null)
+    # `|| true`: on a split box this is an ADDRESS, keys show fails, and a failing substitution
+    # in an assignment is fatal under set -e -- the same silent death as the sponsor line above.
+    _fg_addr=$(qadenad_alias keys show "${VERITAS_FOUNDATION_APPSVR:-foundation-veritas-appsvr}" --address 2>/dev/null || true)
+    case "${VERITAS_FOUNDATION_APPSVR:-}" in qadena1*) _fg_addr="$VERITAS_FOUNDATION_APPSVR" ;; esac
     [ -n "$_fg_addr" ] && PROVIDER_FEE_GRANTER_FLAG="--fee-granter $_fg_addr"
 fi
 

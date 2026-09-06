@@ -261,10 +261,17 @@ def set_chain_id(lc, chain_id):
     if int(m.group(2)) == 0:
         sys.exit(f"--chain-id {chain_id!r}: the EIP-155 number may not be 0 -- qadenad treats a\n"
                  f"parsed 0 as a parse failure and leaves EVMChainID unset.")
-    lc, n = re.subn(r'^(\s*)chain_id: ".*?"', lambda mm: f'{mm.group(1)}chain_id: "{chain_id}"',
+    # BOTH SPELLINGS.  The template carries the id THREE times: top-level `chain_id`, the nested
+    # genesis `chain_id`, and the CLIENT section's `chain-id` (hyphen) that init.sh writes into
+    # the node's client.toml.  Matching only the underscore form shipped a testnet whose genesis
+    # said qadena_4824-1 while every CLI signature said qadena_482-1 -- the MAINNET id -- and the
+    # chain reported each one as a recovered amino panic (measured 2026-09-06).  A client.toml
+    # carrying the mainnet id on a testnet is also precisely the replay-adjacent confusion the
+    # --chain-id flag exists to prevent.
+    lc, n = re.subn(r'^(\s*)chain[-_]id: ".*?"', lambda mm: f'{mm.group(1)}{mm.group(0).strip().split(":")[0]}: "{chain_id}"',
                     lc, flags=re.M)
-    if n < 2:
-        print(f"  WARNING: rewrote only {n} chain_id line(s); the template normally has 2")
+    if n < 3:
+        print(f"  WARNING: rewrote only {n} chain-id line(s); the template normally has 3")
     return lc, n
 
 

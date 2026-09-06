@@ -55,7 +55,7 @@ fund_wallet() {
     # require a foundation key. Progress goes to STDERR: the caller captures stdout as JSON, and a
     # stray echo there corrupts it and kills jq with "Invalid numeric literal".
     local granter
-    granter=$(qadenad_alias keys show "$VERITAS_FOUNDATION_APPSVR" --address 2>/dev/null)
+    granter=$(qadenad_alias keys show "$VERITAS_FOUNDATION_APPSVR" --address 2>/dev/null || true)
     [ -n "$granter" ] || granter="$VERITAS_FOUNDATION_APPSVR"
     echo "Granting fees to $qadena_addr from $VERITAS_FOUNDATION_APPSVR" >&2
     grant_as_foundation "$granter" "$qadena_addr" "$VERITAS_APPSVR_MSGS" \
@@ -131,7 +131,25 @@ treasuryname=$(jq -r .treasuryname "$VERITAS_SEC_HOME/variables.json")
 # is funded and is already the payer for SEC's operational wallets, so it plays the sponsor role.
 if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
     echo "toll-free: $VERITAS_FOUNDATION_APPSVR sponsors wallet creation; sec-treasury is not used"
-    treasuryname="$VERITAS_FOUNDATION_APPSVR"
+    # RESOLVE THE SPONSOR TO AN ADDRESS, HERE, ONCE -- SEC's keyring does not hold it.
+    #
+    # The foundation account lives in QFI's coordinator keyring; after the keyring split SEC's box
+    # has no entry for the NAME, so every place that passed it to a query or a sponsor argument
+    # spun on "unknown address" forever (the funds-wait loop did exactly that).  On a SEC box the
+    # variable holds the ADDRESS -- printed by QFI's prepare stage -- and a name is accepted only
+    # where a keyring can actually resolve it (the single-operator harness).
+    case "$VERITAS_FOUNDATION_APPSVR" in
+        qadena1*) sponsor_addr="$VERITAS_FOUNDATION_APPSVR" ;;
+        *)
+            sponsor_addr=$(qadenad_alias keys show "$VERITAS_FOUNDATION_APPSVR" --address 2>/dev/null | tr -d '\r')
+            [ -n "$sponsor_addr" ] || {
+                echo "cannot resolve '$VERITAS_FOUNDATION_APPSVR' -- not an address, and not in this keyring."
+                echo "On a SEC machine export the ADDRESS QFI handed over:"
+                echo "    export VERITAS_FOUNDATION_APPSVR=qadena1..."
+                exit 1
+            } ;;
+    esac
+    treasuryname="$sponsor_addr"
 fi
 
 
@@ -206,9 +224,15 @@ echo "Result: $result"
 tx_hash=$(echo $result | jq -r .txhash)
 echo "tx hash: $tx_hash"
 # wait for result
+# The feegrant sentinel carries no hash; `wait-tx` with an EMPTY argument does not error, it
+# WAITS -- the run sat at 3216 log lines for minutes doing exactly that (measured 2026-09-06).
+if [ -n "$tx_hash" ]; then
 result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
+else
+result='{"code":0}'
+fi
 echo "Result: $result"
-if [ $(echo $result | jq -r .code) -ne 0 ]; then
+if [ "$(echo $result | jq -r '.code // -1')" -ne 0 ]; then
     echo "Failed to send $per_account_amount to $qadena_addr from $treasuryname"
     exit 1
 fi
@@ -223,9 +247,15 @@ for i in $(seq 1 $eph_count); do
     tx_hash=$(echo $result | jq -r .txhash)
     echo "tx hash: $tx_hash"
     # wait for result
-    result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
+    # The feegrant sentinel carries no hash; `wait-tx` with an EMPTY argument does not error, it
+# WAITS -- the run sat at 3216 log lines for minutes doing exactly that (measured 2026-09-06).
+if [ -n "$tx_hash" ]; then
+result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
+else
+result='{"code":0}'
+fi
     echo "Result: $result"
-    if [ $(echo $result | jq -r .code) -ne 0 ]; then
+    if [ "$(echo $result | jq -r '.code // -1')" -ne 0 ]; then
         echo "Failed to send $per_account_amount to $qadena_addr from $treasuryname"
         exit 1
     fi
@@ -281,9 +311,15 @@ echo "Result: $result"
 tx_hash=$(echo $result | jq -r .txhash)
 echo "tx hash: $tx_hash"
 # wait for result
+# The feegrant sentinel carries no hash; `wait-tx` with an EMPTY argument does not error, it
+# WAITS -- the run sat at 3216 log lines for minutes doing exactly that (measured 2026-09-06).
+if [ -n "$tx_hash" ]; then
 result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
+else
+result='{"code":0}'
+fi
 echo "Result: $result"
-if [ $(echo $result | jq -r .code) -ne 0 ]; then
+if [ "$(echo $result | jq -r '.code // -1')" -ne 0 ]; then
     echo "Failed to send $per_account_amount to $qadena_addr from $treasuryname"
     exit 1
 fi
@@ -297,9 +333,15 @@ for i in $(seq 1 $eph_count); do
     tx_hash=$(echo $result | jq -r .txhash)
     echo "tx hash: $tx_hash"
     # wait for result
-    result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
+    # The feegrant sentinel carries no hash; `wait-tx` with an EMPTY argument does not error, it
+# WAITS -- the run sat at 3216 log lines for minutes doing exactly that (measured 2026-09-06).
+if [ -n "$tx_hash" ]; then
+result=$(qadenad_alias query wait-tx $tx_hash --output json --timeout 30s)
+else
+result='{"code":0}'
+fi
     echo "Result: $result"
-    if [ $(echo $result | jq -r .code) -ne 0 ]; then
+    if [ "$(echo $result | jq -r '.code // -1')" -ne 0 ]; then
         echo "Failed to send $per_account_amount to $qadena_addr from $treasuryname"
         exit 1
     fi

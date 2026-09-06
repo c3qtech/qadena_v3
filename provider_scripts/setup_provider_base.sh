@@ -37,17 +37,21 @@ fund_wallet() {
     # issue credentials and sign.  A grantee holds at most ONE allowance per granter, so a second
     # grant does not stack: it fails with "fee allowance already exists".  Revoke, then re-grant the
     # wider set, which is a superset of the two above and so loses nothing.
+    # THROUGH grant_as_foundation, NOT --from $feegranter DIRECTLY.  The granter is the
+    # foundation sponsor, and on a SEC machine its key is not here -- this used to sign the
+    # revoke and re-grant directly as the foundation, which is a foundation signature demanded
+    # of SEC's keyring: the same defect step_3's fund_wallet had before it was rerouted.  With
+    # VERITAS_SEC_ADMIN set, the inner messages are built --generate-only (no key needed) and
+    # exec'd under the admin's authz; grant_as_foundation also does revoke-first and waits, so
+    # the "already exists" race the sleep 3 papered over is handled there.
     echo "Widening the sponsor's fee grant for $qadena_addr from $feegranter (toll-free: no tokens moved)" >&2
-    qadenad_alias tx feegrant revoke "$feegranter" "$qadena_addr" \
-        --from "$feegranter" --yes --output json \
-        --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment > /dev/null 2>&1 || true
-    # The revoke is broadcast async, so let it land before the grant that replaces it -- otherwise
-    # the grant races the revoke and hits "already exists" again, intermittently.
-    sleep 3
-    qadenad_alias tx feegrant grant "$feegranter" "$qadena_addr" \
-        --allowed-messages "$VERITAS_APPSVR_MSGS" \
-        --from "$feegranter" --yes --output json \
-        --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment
+    grant_as_foundation "$feegranter" "$qadena_addr" "$VERITAS_APPSVR_MSGS" \
+        || { echo "  WARNING: could not widen the grant for $qadena_addr" >&2; echo '{"code":1,"txhash":"","note":"widen-failed"}'; return 1; }
+    # THE CALLER READS STDOUT AS A TX RESULT.  The old direct-signing code's last line was the
+    # grant broadcast, whose JSON became fund_wallet's return value; grant_as_foundation does its
+    # own waiting and prints nothing to stdout, so without this sentinel the caller saw an empty
+    # result and died on "txhash not found".  Same convention as step_3's fund_wallet.
+    echo '{"code":0,"txhash":"","note":"feegrant"}'
 }
 
 
@@ -149,7 +153,15 @@ fi
 echo "-------------------------"
 echo "$providername Create wallet"
 echo "-------------------------"
-qadenad_alias tx qadena create-wallet $providername $pioneer $treasury --account-mnemonic="$providermnemonic"  --yes
+# IDEMPOTENT: a wallet that exists (locally AND therefore on chain -- the keyring entry is
+# written by the same run that broadcast it) cannot be re-created; CreatePublicKey aborts on the
+# local key and MsgCreateWallet would refuse the on-chain one.  Skipping is what lets a run that
+# died mid-provider -- a failed widen, a network drop -- be resumed by just running it again.
+if qadenad_alias keys show $providername --address > /dev/null 2>&1; then
+    echo "$providername wallet already exists -- skipping create-wallet"
+else
+    qadenad_alias tx qadena create-wallet $providername $pioneer $treasury --account-mnemonic="$providermnemonic"  --yes
+fi
 qadena_addr=$(qadenad_alias keys show $providername --address)
 result=$(fund_wallet "$qadena_addr")
 echo "Result: $result"
@@ -157,19 +169,27 @@ echo "Result: $result"
 tx_hash=$(echo $result | jq -r .txhash)
 echo "tx hash: $tx_hash"
 # check if code is 0
-if [ $(echo $result | jq -r .code) -ne 0 ]; then
-    echo "Error: $(echo $result | jq -r .message)"
+# `// -1` so an EMPTY result -- a tx that never broadcast -- fails here with a message instead of
+# `[: unknown condition: -ne` followed by a wait loop on an empty hash (measured 2026-09-06).
+if [ "$(echo $result | jq -r '.code // -1')" -ne 0 ]; then
+    echo "Error: broadcast failed or returned nothing: $(echo $result | jq -r '.raw_log // .message // "no output"')"
     exit 1
 fi
-# wait for result
-qadenad_alias query wait-tx $tx_hash --timeout 30s
+# wait for result -- unless the sentinel above already did (feegrant path has no hash to wait on)
+if [ -n "$tx_hash" ]; then
+    qadenad_alias query wait-tx $tx_hash --timeout 30s
+fi
 
 if [ $count -gt 0 ]; then
     for i in $(seq 1 $count); do
         echo "-------------------------"
         echo "$providername Create wallet eph$i"
         echo "-------------------------"
-        qadenad_alias tx qadena create-wallet $providername-eph$i $pioneer $treasury --link-to-real-wallet $providername --account-mnemonic="$providermnemonic" --eph-account-index "$i" --yes
+        if qadenad_alias keys show $providername-eph$i --address > /dev/null 2>&1; then
+            echo "$providername-eph$i already exists -- skipping create-wallet"
+        else
+            qadenad_alias tx qadena create-wallet $providername-eph$i $pioneer $treasury --link-to-real-wallet $providername --account-mnemonic="$providermnemonic" --eph-account-index "$i" --yes
+        fi
         # transfer funds to eph wallet
         qadena_addr=$(qadenad_alias keys show $providername-eph$i --address)
         result=$(fund_wallet "$qadena_addr")
@@ -177,13 +197,15 @@ if [ $count -gt 0 ]; then
         # get tx hash
         tx_hash=$(echo $result | jq -r .txhash)
         echo "tx hash: $tx_hash"
-        # check if code is 0
-        if [ $(echo $result | jq -r .code) -ne 0 ]; then
-            echo "Error: $(echo $result | jq -r .message)"
+        # check if code is 0 (`// -1`: an empty result must FAIL, not crash the [ test)
+        if [ "$(echo $result | jq -r '.code // -1')" -ne 0 ]; then
+            echo "Error: $(echo $result | jq -r '.raw_log // .message // "no output"')"
             exit 1
         fi
-        # wait for result
-        qadenad_alias query wait-tx $tx_hash --timeout 30s
+        # wait for result -- the feegrant sentinel carries no hash
+        if [ -n "$tx_hash" ]; then
+            qadenad_alias query wait-tx $tx_hash --timeout 30s
+        fi
     done
 fi
 

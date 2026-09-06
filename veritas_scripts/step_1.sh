@@ -91,7 +91,7 @@ signermnemonic=$(qadenad_alias keys mnemonic)
 createwalletsponsormnemonic=$(qadenad_alias keys mnemonic)
 identityprovidermnemonic=$(qadenad_alias keys mnemonic)
 dsvsprovidermnemonic=$(qadenad_alias keys mnemonic)
-pioneer="pioneer1"
+pioneer="${QADENA_PIONEER:-pioneer1}"
 provideramount="100000qdn"
 signeramount="100000qdn"
 createwalletsponsoramount="100000qdn"
@@ -223,6 +223,20 @@ done
 mkdir -p "$VERITAS_SEC_HOME" || { echo "cannot create $VERITAS_SEC_HOME"; exit 1; }
 chmod 700 "$VERITAS_SEC_HOME" 2>/dev/null
 
+# RE-RUNS REUSE THE EXISTING MNEMONICS.  Every mnemonic above was freshly generated -- which on a
+# re-run would ORPHAN everything derived from the previous set: the foundation pre-grants 124
+# addresses computed from these exact mnemonics, and regenerating them silently strands every
+# grant already signed.  If a mnemonics.json exists, it is the deployment; the generated values
+# are discarded in its favour.  Delete the file (or point --sec-home elsewhere) to start over.
+if [ -r "$VERITAS_SEC_HOME/mnemonics.json" ]; then
+    echo "reusing mnemonics from $VERITAS_SEC_HOME/mnemonics.json (re-run; delete it to regenerate)"
+    for _v in treasurymnemonic adminmnemonic signermnemonic createwalletsponsormnemonic \
+              identityprovidermnemonic dsvsprovidermnemonic; do
+        _m=$(jq -r ".$_v // empty" "$VERITAS_SEC_HOME/mnemonics.json")
+        [ -n "$_m" ] && eval "$_v=\$_m"
+    done
+fi
+
 # write variables to json
 jq -n --arg pioneer "$pioneer" --arg count "$count" --arg email "$email" --arg avalue "$avalue" --arg firstname "$firstname" --arg birthdate "$birthdate" --arg phone "$phone" --arg dsvsname "$dsvsname" --arg provideramount "$provideramount" --arg signeramount "$signeramount" --arg createwalletsponsoramount "$createwalletsponsoramount" --arg createwalletsponsorname "$createwalletsponsorname" --arg treasuryname "$treasuryname" --arg adminname "$adminname" --arg fundmode "$VERITAS_FUND_MODE"  --arg identityprovidername "$identityprovidername" --arg dsvsprovidername "$dsvsprovidername" '{pioneer: $pioneer, count: $count, provideramount: $provideramount, signeramount: $signeramount, createwalletsponsoramount: $createwalletsponsoramount, createwalletsponsorname: $createwalletsponsorname, treasuryname: $treasuryname, adminname: $adminname, fundmode: $fundmode, identityprovidername: $identityprovidername, dsvsprovidername: $dsvsprovidername, dsvsname: $dsvsname, email: $email, avalue: $avalue, firstname: $firstname, birthdate: $birthdate, phone: $phone}' > "$VERITAS_SEC_HOME/variables.json"
 
@@ -288,7 +302,65 @@ else
     echo "foundation's behalf, and pays for those transactions.  Export it before step_2/step_3:"
     echo "    export VERITAS_SEC_ADMIN=$adminname"
     echo ""
-    echo "QFI runs:  foundation_scripts/sec_veritas_after_step_1.sh --sec-admin $admin_addr"
+    # ------------------------------------------------------------------------------------------
+    # EVERY WALLET THE WHOLE BRING-UP WILL CREATE, DERIVED NOW, OFFLINE.
+    #
+    # Four user families -- the two providers (created by step_2), the create-wallet sponsor and
+    # the DSVS user (created by step_3) -- each a main wallet plus $count ephemerals: 4*(count+1)
+    # addresses, 124 at the default count.  Each one's FIRST transaction needs a fee allowance
+    # SIGNED by the foundation sponsor (chain rule: MsgGrantAllowance is signed by its granter,
+    # and the granter's balance pays -- grants do not chain).  Deriving the addresses here, from
+    # mnemonics this step just generated, lets QFI pre-grant all of them from their own machine
+    # BEFORE anything is created -- so no step of SEC's ever needs a foundation key.  An earlier
+    # version emitted this at the end of step_2, which was too late for step_2's own provider
+    # wallets: the first create-wallet refused with "no fee allowance ... sponsor's key is not in
+    # this keyring", which is exactly the refusal working as designed, one step early.
+    #
+    # `debug derive-wallet-address` wraps the SAME GetEphAccountAddress create-wallet uses, so
+    # what QFI grants against is what the chain will see -- by construction.
+    derive_addr() {   # derive_addr <mnemonic> <index>
+        echo "$1" | qadenad_alias_raw debug derive-wallet-address "$2" 2>/dev/null | tail -1
+    }
+    pregrant_file="$VERITAS_SEC_HOME/pregrant_addresses.json"
+    {
+        printf '{\n'
+        printf '  "chain_id": "%s",\n' "$(qadenad_alias status 2>/dev/null | jq -r '.node_info.network // ""')"
+        printf '  "sec_admin": "%s",\n' "$admin_addr"
+        printf '  "count": %s,\n' "$count"
+        printf '  "wallets": [\n'
+        _first=1
+        for _pair in "$identityprovidername:$identityprovidermnemonic" \
+                     "$dsvsprovidername:$dsvsprovidermnemonic" \
+                     "$createwalletsponsorname:$createwalletsponsormnemonic" \
+                     "$dsvsname:$signermnemonic"; do
+            _wname="${_pair%%:*}"; _wmn="${_pair#*:}"
+            for _i in $(seq 0 "$count"); do
+                _a=$(derive_addr "$_wmn" "$_i")
+                [ -n "$_a" ] || { echo "  WARNING: could not derive $_wname index $_i" >&2; continue; }
+                if [ "$_i" -eq 0 ]; then _n="$_wname"; else _n="$_wname-eph$_i"; fi
+                [ "$_first" -eq 1 ] || printf ',\n'
+                printf '    {"name": "%s", "address": "%s"}' "$_n" "$_a"
+                _first=0
+            done
+        done
+        printf '\n  ]\n}\n'
+    } > "$pregrant_file"
+
+    echo ""
+    echo "==================================================================="
+    echo "SEND THIS BLOCK TO QFI -- they paste it into a terminal as-is:"
+    echo "==================================================================="
+    echo ""
+    echo "cat > /tmp/veritas-pregrant.json <<'PREGRANTEOF'"
+    cat "$pregrant_file"
+    echo "PREGRANTEOF"
+    echo "foundation_scripts/sec_veritas_after_step_1.sh --pregrant /tmp/veritas-pregrant.json \\"
+    echo "    --coord-home ~/launch/coord"
+    echo ""
+    echo "==================================================================="
+    jq -r '"  sec-admin \(.sec_admin)   wallets \(.wallets|length)   chain \(.chain_id)"' "$pregrant_file" 2>/dev/null
+    echo ""
+    echo "QFI authorises the admin AND pre-grants every wallet above, from their machine."
     echo "Then run:  $veritasscripts/step_2.sh"
 fi
 

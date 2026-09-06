@@ -272,37 +272,72 @@ func CmdCreateWallet() *cobra.Command {
 			// The printed address was also unverified: any local key named "pioneer1" would do.
 			kb := ctx.Keyring
 
-			sponsorInfo, err := kb.Key(argSponsorID)
+			// THE SPONSOR: A KEY NAME, OR JUST AN ADDRESS.
+			//
+			// The sponsor authorizes and funds the new wallet's first fees.  Chain rules require
+			// two things of it: the initial MsgGrantAllowance must be SIGNED by the granter, and
+			// the granter's real balance pays (fee grants do not chain).  Neither rule says the
+			// signature must happen HERE.  If the foundation pre-granted this wallet's address
+			// from its own machine, the allowance already exists on chain and this process needs
+			// no sponsor key at all -- the argument may then be a bare bech32 address.
+			//
+			// So: resolve the sponsor to an address (keyring name first, literal address second),
+			// then check for an existing allowance BEFORE trying to create one.  The order
+			// matters twice over -- MsgGrantAllowance FAILS if an allowance already exists, so a
+			// pre-granted wallet would break the old sign-unconditionally code even with the key
+			// present; and checking first is what lets a keyless box proceed at all.
+			var sponsorAddrStr string
+			sponsorInKeyring := false
+			sponsorInfo, kerr := kb.Key(argSponsorID)
+			if kerr == nil {
+				sponsorInfoOutput, err := keys.MkAccKeyOutput(sponsorInfo)
+				if err != nil {
+					fmt.Println("Couldn't convert key info into address", sponsorInfo)
+					cleanupPublicKeys(ctx, argName, argNameCredential)
+					return err
+				}
+				sponsorAddrStr = sponsorInfoOutput.Address
+				sponsorInKeyring = true
+			} else if _, perr := sdk.AccAddressFromBech32(argSponsorID); perr == nil {
+				sponsorAddrStr = argSponsorID
+			} else {
+				fmt.Println("sponsor", argSponsorID, "is neither a key in this keyring nor a bech32 address")
+				cleanupPublicKeys(ctx, argName, argNameCredential)
+				return kerr
+			}
+
+			fmt.Println("sponsorAddress", sponsorAddrStr)
+
+			sponsorAccAddress, err := sdk.AccAddressFromBech32(sponsorAddrStr)
 			if err != nil {
-				fmt.Println("Couldn't access private key", argSponsorID)
+				fmt.Println("Couldn't convert key info into address", sponsorAddrStr)
 				cleanupPublicKeys(ctx, argName, argNameCredential)
 				return err
 			}
 
-			sponsorInfoOutput, err := keys.MkAccKeyOutput(sponsorInfo)
-			if err != nil {
-				fmt.Println("Couldn't convert key info into address", sponsorInfo)
+			feegrantClient := feegrant.NewQueryClient(ctx)
+			_, allowanceErr := feegrantClient.Allowance(cmd.Context(), &feegrant.QueryAllowanceRequest{
+				Granter: sponsorAddrStr,
+				Grantee: from,
+			})
+			if allowanceErr == nil {
+				fmt.Println("fee allowance already exists (pre-granted); skipping grantFee")
+			} else if !sponsorInKeyring {
+				fmt.Println("no fee allowance from", sponsorAddrStr, "to", from,
+					"and the sponsor's key is not in this keyring.")
+				fmt.Println("Either the foundation pre-grants this wallet's address, or run where the sponsor key lives.")
 				cleanupPublicKeys(ctx, argName, argNameCredential)
-				return err
-			}
+				return allowanceErr
+			} else {
+				newCtx := ctx.WithFrom(sponsorAddrStr).WithFromAddress(sponsorAccAddress).WithFromName(argSponsorID)
 
-			fmt.Println("sponsorAddress", sponsorInfoOutput.Address)
+				err = grantFee(newCtx, cmd.Flags(), sponsorAddrStr, from)
 
-			sponsorAccAddress, err := sdk.AccAddressFromBech32(sponsorInfoOutput.Address)
-			if err != nil {
-				fmt.Println("Couldn't convert key info into address", sponsorInfo)
-				cleanupPublicKeys(ctx, argName, argNameCredential)
-				return err
-			}
-
-			newCtx := ctx.WithFrom(sponsorInfoOutput.Address).WithFromAddress(sponsorAccAddress).WithFromName(argSponsorID)
-
-			err = grantFee(newCtx, cmd.Flags(), sponsorInfoOutput.Address, from)
-
-			if err != nil {
-				fmt.Println("Couldn't grant fee")
-				cleanupPublicKeys(ctx, argName, argNameCredential)
-				return err
+				if err != nil {
+					fmt.Println("Couldn't grant fee")
+					cleanupPublicKeys(ctx, argName, argNameCredential)
+					return err
+				}
 			}
 
 			ctx = ctx.WithFrom(from).WithFromAddress(fromAddr).WithFromName(fromName)

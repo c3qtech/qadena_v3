@@ -113,8 +113,26 @@ echo "dsvsprovidermnemonic: $dsvsprovidermnemonic"
 feegrant_args=()
 if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
     echo "toll-free: $VERITAS_FOUNDATION_APPSVR sponsors and grants; sec-treasury is not used"
-    treasuryname="$VERITAS_FOUNDATION_APPSVR"
-    feegrant_args=(--fee-granter "$VERITAS_FOUNDATION_APPSVR")
+    # RESOLVE THE SPONSOR TO AN ADDRESS, HERE, ONCE -- SEC's keyring does not hold it.
+    #
+    # The foundation account lives in QFI's coordinator keyring; after the keyring split SEC's box
+    # has no entry for the NAME, so every place that passed it to a query or a sponsor argument
+    # spun on "unknown address" forever (the funds-wait loop did exactly that).  On a SEC box the
+    # variable holds the ADDRESS -- printed by QFI's prepare stage -- and a name is accepted only
+    # where a keyring can actually resolve it (the single-operator harness).
+    case "$VERITAS_FOUNDATION_APPSVR" in
+        qadena1*) sponsor_addr="$VERITAS_FOUNDATION_APPSVR" ;;
+        *)
+            sponsor_addr=$(qadenad_alias keys show "$VERITAS_FOUNDATION_APPSVR" --address 2>/dev/null | tr -d '\r')
+            [ -n "$sponsor_addr" ] || {
+                echo "cannot resolve '$VERITAS_FOUNDATION_APPSVR' -- not an address, and not in this keyring."
+                echo "On a SEC machine export the ADDRESS QFI handed over:"
+                echo "    export VERITAS_FOUNDATION_APPSVR=qadena1..."
+                exit 1
+            } ;;
+    esac
+    treasuryname="$sponsor_addr"
+    feegrant_args=(--fee-granter "$sponsor_addr")
 fi
 
 # wait until there are funds in $treasuryname
@@ -136,7 +154,12 @@ $qadenaproviderscripts/setup_provider_base.sh $identityprovidername identity --p
 # load proposal id from identity.proposal_id
 identityproposal_id=$(cat $qadenaproviderscripts/proposals/$identityprovidername.proposal_id)
 
-$qadenaproviderscripts/query_service_provider_proposal.sh $identityproposal_id --wait --status "PROPOSAL_STATUS_VOTING_PERIOD"
+# NOT waited to VOTING_PERIOD in sponsored mode: with no SEC deposit the proposal sits in
+# DEPOSIT_PERIOD until QFI deposits -- blocking here would deadlock SEC (waiting for a status
+# only QFI can cause) against QFI (waiting for the ids this step has not yet printed).
+if [ "${VERITAS_FUND_MODE:-}" != "foundation-sponsored" ]; then
+    $qadenaproviderscripts/query_service_provider_proposal.sh $identityproposal_id --wait --status "PROPOSAL_STATUS_VOTING_PERIOD"
+fi
 
 
 # setup dsvs provider
@@ -149,13 +172,13 @@ $qadenaproviderscripts/setup_provider_base.sh $dsvsprovidername dsvs --pioneer $
 # load proposal id from dsvssrvprv.proposal_id
 dsvsproposal_id=$(cat $qadenaproviderscripts/proposals/$dsvsprovidername.proposal_id)
 
-$qadenaproviderscripts/query_service_provider_proposal.sh $dsvsproposal_id --wait --status "PROPOSAL_STATUS_VOTING_PERIOD"
+if [ "${VERITAS_FUND_MODE:-}" != "foundation-sponsored" ]; then
+    $qadenaproviderscripts/query_service_provider_proposal.sh $dsvsproposal_id --wait --status "PROPOSAL_STATUS_VOTING_PERIOD"
+fi
 
 echo "Send the following information to QFI"
 echo "$identityprovidername proposal_id: $identityproposal_id"
 echo "$dsvsprovidername proposal_id: $dsvsproposal_id"
-
-echo "QFI will inform you when the providers are approved."
-echo "Once approved, run $veritasscripts/step_3.sh"
-
-
+echo ""
+echo "QFI votes with:  foundation_scripts/sec_veritas_after_step_2.sh $identityproposal_id $dsvsproposal_id ..."
+echo "Wait for both to reach PASSED, then run $veritasscripts/step_3.sh"

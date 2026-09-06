@@ -32,6 +32,7 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 set -e
 
 sec_admin=""
+PREGRANT=""
 COORD_HOME=""
 # FILE, NOT test.  These scripts operate on the COORDINATOR keyring, which derive_launch_keys.sh
 # creates with --keyring-backend file -- encrypted.  `test` is an UNENCRYPTED keyring, and pointing
@@ -48,13 +49,18 @@ while [[ $# -gt 0 ]]; do
         --sec-admin)         sec_admin="$2"; shift 2 ;;
         --foundation-appsvr) foundation_appsvr="$2"; shift 2 ;;
         --expiration)        expiration="$2"; shift 2 ;;
+        --pregrant)          PREGRANT="$2"; shift 2 ;;
         --coord-home)        COORD_HOME="$2"; shift 2 ;;
         --keyring-backend)   BACKEND="$2"; shift 2 ;;
         --keyring-passfile)  KEYRING_PASSFILE="$2"; shift 2 ;;
         --help)
             echo "Usage: $0 --sec-admin <address> [options]"
             echo ""
-            echo "  --sec-admin <address>    REQUIRED.  SEC's ADMIN address -- the key that will sign"
+            echo "  --pregrant <file>        the paste block step_1 emitted: the admin address plus"
+            echo "                           EVERY wallet the bring-up will create (4 families x"
+            echo "                           count+1).  Each gets a narrow fee allowance signed here,"
+            echo "                           so no SEC step ever needs a foundation key."
+            echo "  --sec-admin <address>    SEC's ADMIN address -- the key that will sign"
             echo "                           authz MsgExec, and that holds ZERO tokens by design."
             echo "                           step_1.sh prints it.  NOT the sec-treasury address."
             echo "  --foundation-appsvr <k>  the granting account, default $foundation_appsvr"
@@ -69,6 +75,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# The pregrant file carries the admin address, so --sec-admin may be omitted when it is given.
+if [ -z "$sec_admin" ] && [ -n "$PREGRANT" ] && [ -r "$PREGRANT" ]; then
+    sec_admin=$(jq -r '.sec_admin // empty' "$PREGRANT" 2>/dev/null)
+fi
 [ -n "$sec_admin" ] || {
     echo "--sec-admin is required."
     echo "It is SEC's ADMIN address -- the zero-balance key that signs authz MsgExec, which"
@@ -109,6 +119,15 @@ qk() {
     fi
 }
 qq() { "$QBIN" --home "$NODE_HOME" "$@" --node "$NODE"; }
+
+# THE CHAIN-ID IS SIGNED, AND THE COORDINATOR HOME DOES NOT KNOW IT.  A signature binds the
+# chain-id; the tx client fills it from client.toml of whatever --home it was given, and the
+# COORDINATOR home's client.toml says chain-id = "" (observed).  Signing with that and
+# broadcasting to qadena_4824-1 is an invalid signature -- which this chain reports, via cosmos/
+# evm's EIP-712 fallback, as a recovered amino panic with a goroutine dump (see app/ante/ante.go).
+# Resolve it from the node once and pass it explicitly on every tx.
+CHAIN="${QADENA_CHAIN_ID:-$(qq status 2>/dev/null | jq -r '.node_info.network // empty')}"
+[ -n "$CHAIN" ] || { echo "cannot determine the chain-id; set QADENA_CHAIN_ID"; exit 1; }
 fa_addr=$(qk keys show "$foundation_appsvr" -a 2>/dev/null | tr -d '\r')
 [ -n "$fa_addr" ] || {
     echo "no key '$foundation_appsvr' in the keyring at $COORD_HOME (backend $BACKEND)"
@@ -126,7 +145,7 @@ gasflags=(--gas-prices "$minimum_gas_prices" --gas "$gas_auto" --gas-adjustment 
 send_and_wait() {   # send_and_wait <label> <tx args...>
     local label="$1"; shift
     local out hash code
-    out=$(qk "$@" --from "$foundation_appsvr" --node "$NODE" --yes --output json "${gasflags[@]}" 2>&1) \
+    out=$(qk "$@" --from "$foundation_appsvr" --node "$NODE" --chain-id "$CHAIN" --yes --output json "${gasflags[@]}" 2>&1) \
         || { echo "  FAILED: $label did not broadcast: $(echo "$out" | tail -1)"; return 1; }
     hash=$(echo "$out" | grep '^{' | tail -1 | jq -r '.txhash // ""' 2>/dev/null)
     [ -n "$hash" ] || { echo "  FAILED: $label produced no txhash"; return 1; }
@@ -146,10 +165,35 @@ echo "expires:           $(date -r "$expiration" 2>/dev/null || echo "$expiratio
 send_and_wait "authz (MsgGrantAllowance)" tx authz grant "$sec_admin" generic \
     --msg-type /cosmos.feegrant.v1beta1.MsgGrantAllowance --expiration "$expiration"
 
+# REVOKE AUTHORITY TOO.  GenericAuthorization is one message type per grant, and widening an
+# allowance is revoke-then-grant: a grantee holds at most ONE allowance per granter, so the
+# narrow bootstrap grant must be revoked before the wide one lands.  With only MsgGrantAllowance
+# delegated, the delegated revoke failed SILENTLY (grant_as_foundation fire-and-forgets it) and
+# every widen died on "fee allowance already exists" -- unmeasurable before pre-granting, because
+# the old inline flow rarely had an existing allowance to displace.  Measured 2026-09-06.
+send_and_wait "authz (MsgRevokeAllowance)" tx authz grant "$sec_admin" generic \
+    --msg-type /cosmos.feegrant.v1beta1.MsgRevokeAllowance --expiration "$expiration"
+
+# AND PROPOSAL SUBMISSION.  Registering a service provider is a governance proposal, and the
+# chain demands a MINIMUM INITIAL DEPOSIT from the PROPOSER (x/gov deposit.go: "was (), need
+# 12500000000000000000000aqdn") -- real tokens, which no fee grant can carry and SEC holds none
+# of by design.  So the proposer must be the foundation, and SEC submits AS the foundation under
+# this authz: inner MsgSubmitProposal with the sponsor as proposer (its balance pays the initial
+# deposit), exec signed by the admin.  Same shape as every other delegated act in this flow.
+send_and_wait "authz (MsgSubmitProposal)" tx authz grant "$sec_admin" generic \
+    --msg-type /cosmos.gov.v1.MsgSubmitProposal --expiration "$expiration"
+
 # Without this, SEC pays for its own MsgExec transactions -- and SEC has no tokens, which is the
 # whole point. This one allowance is what keeps its balance at zero.
-send_and_wait "feegrant (MsgExec)" tx feegrant grant "$fa_addr" "$sec_admin" \
-    --allowed-messages /cosmos.authz.v1beta1.MsgExec
+# IDEMPOTENT, unlike the authz grant above.  authz re-granting OVERWRITES; feegrant re-granting
+# REFUSES ("fee allowance already exists"), so a re-run -- the normal recovery after a partial
+# pregrant phase below -- died here on its own earlier success.  Skip when present.
+if qq query feegrant grant "$fa_addr" "$sec_admin" --output json >/dev/null 2>&1; then
+    echo "  ok: feegrant (MsgExec) already present -- skipped"
+else
+    send_and_wait "feegrant (MsgExec)" tx feegrant grant "$fa_addr" "$sec_admin" \
+        --allowed-messages /cosmos.authz.v1beta1.MsgExec
+fi
 
 echo ""
 echo "Tell SEC to run step_2, then step_3, with:"
@@ -157,3 +201,79 @@ echo "    export VERITAS_SEC_ADMIN=<the key name for $sec_admin>"
 echo ""
 echo "To withdraw this at any time:"
 echo "    qadenad tx authz revoke $sec_admin /cosmos.feegrant.v1beta1.MsgGrantAllowance --from $foundation_appsvr"
+
+# ---------------------------------------------------------------------------------------------
+# PRE-GRANT PHASE: one narrow allowance per upcoming wallet, signed by the sponsor AT HOME.
+#
+# Chain rules pin the bootstrap grant to the foundation -- MsgGrantAllowance is signed by its
+# granter and the granter's balance pays (grants do not chain) -- but nothing pins WHEN.  A grant
+# is keyed on the grantee ADDRESS; SEC derived every upcoming wallet's address offline in step_1;
+# so the foundation signs all of them here, before anything exists, and create-wallet later finds
+# each allowance on chain and skips its own inline grantFee.  This is what removes the last
+# foundation private key from SEC's box.
+#
+# The allowance is deliberately NARROW -- MsgAddPublicKey + MsgCreateWallet, mirroring the inline
+# grantFee it replaces.  step_2/step_3 widen each wallet afterwards through the admin's delegated
+# authz (grant_as_foundation, revoke-first).
+if [ -n "$PREGRANT" ]; then
+    [ -r "$PREGRANT" ] || { echo "cannot read $PREGRANT"; exit 1; }
+    jq -e . "$PREGRANT" >/dev/null 2>&1 || { echo "$PREGRANT is not valid JSON"; exit 1; }
+
+    _fchain=$(jq -r '.chain_id // ""' "$PREGRANT")
+    if [ -n "$_fchain" ] && [ -n "$CHAIN" ] && [ "$_fchain" != "$CHAIN" ]; then
+        echo "REFUSING: $PREGRANT was generated on chain '$_fchain', this node is '$CHAIN'."
+        exit 1
+    fi
+    _count=$(jq -r '.count // empty' "$PREGRANT")
+    _n=$(jq -r '.wallets | length' "$PREGRANT")
+    # 4 user families (2 providers, sponsor, dsvs user), each main + eph1..count.
+    if [ -n "$_count" ] && [ "$_n" -ne $(( 4 * (_count + 1) )) ]; then
+        echo "REFUSING: count=$_count implies $(( 4 * (_count + 1) )) wallets; file lists $_n."
+        echo "  step_1 warns and continues when a derivation fails; this is that gap."
+        exit 1
+    fi
+
+    W_NAMES=(); W_ADDRS=()
+    while IFS="$(printf '\t')" read -r _nm _ad; do
+        case "$_ad" in
+            qadena1*) ;;
+            *) echo "REFUSING: '$_nm' has address '$_ad', not a qadena address"; exit 1 ;;
+        esac
+        for _seen in "${W_ADDRS[@]}"; do
+            [ "$_seen" = "$_ad" ] && { echo "REFUSING: $_ad appears twice"; exit 1; }
+        done
+        W_NAMES+=("$_nm"); W_ADDRS+=("$_ad")
+    done < <(jq -r '.wallets[] | "\(.name)\t\(.address)"' "$PREGRANT")
+    [ ${#W_ADDRS[@]} -gt 0 ] || { echo "REFUSING: $PREGRANT lists no wallets"; exit 1; }
+
+    # Only these two messages: everything a wallet needs to come into existence, nothing more.
+    NARROW="/qadena.qadena.MsgAddPublicKey,/qadena.qadena.MsgCreateWallet"
+
+    echo ""
+    echo "--- pre-granting ${#W_ADDRS[@]} wallet(s) from $foundation_appsvr ($fa_addr)"
+    granted=0; skipped=0; failed=0
+    i=1
+    while [ $i -le ${#W_ADDRS[@]} ]; do
+        _nm="${W_NAMES[$i]}"; _ad="${W_ADDRS[$i]}"
+        # Idempotent: an existing allowance is a re-run or an already-created wallet; skipping is
+        # right either way, which is what makes a partial failure safe to just re-run.
+        if qq query feegrant grant "$fa_addr" "$_ad" --output json >/dev/null 2>&1; then
+            skipped=$(( skipped + 1 ))
+        elif send_and_wait "pregrant $_nm" tx feegrant grant "$fa_addr" "$_ad" \
+                --allowed-messages "$NARROW"; then
+            granted=$(( granted + 1 ))
+        else
+            failed=$(( failed + 1 ))
+        fi
+        i=$(( i + 1 ))
+    done
+
+    echo ""
+    echo "pre-grant done: $granted granted, $skipped already present, $failed failed"
+    if [ "$failed" -gt 0 ]; then
+        echo ""
+        echo "PARTIAL: $failed wallet(s) have no allowance.  step_2/step_3 will fail on exactly"
+        echo "those and no others.  Re-run this command; existing grants are skipped."
+        exit 1
+    fi
+fi

@@ -75,11 +75,47 @@ echo "-------------------------"
 
 
 # submit json_proposal
-result=$(qadenad_alias tx gov submit-proposal "$qadenaproviderscripts/proposals/$providername.gen.json" --from $treasury -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+# WHO SUBMITS DEPENDS ON THE FUNDING MODEL.
+#
+# banksend: $treasury is sec-treasury, SEC's own funded key -- it signs and deposits directly.
+#
+# Sponsored: the chain demands a MINIMUM INITIAL DEPOSIT from the PROPOSER ("was (), need
+# 12500000000000000000000aqdn") -- real tokens, which no fee grant can carry and SEC holds none
+# of.  A provider can therefore never be the proposer.  The proposer is the FOUNDATION: the inner
+# MsgSubmitProposal is built --generate-only --from the sponsor's address (no key needed), its
+# balance pays the template's 100000qdn initial deposit, and SEC's admin execs it under the
+# MsgSubmitProposal authz from sec_veritas_after_step_1.sh.  The proposal_id is read from the
+# exec's events exactly as before -- authz re-emits the inner message's events.
+# SIGNER-OPTIONAL, THE SAME WAY grant_as_foundation IS.  With VERITAS_SEC_ADMIN set (a real
+# split deployment) the admin execs the submission under its authz.  Unset -- the single-keyring
+# harness -- fall through to signing directly as $treasury, which is exactly what "worked in
+# sponsored mode before": the harness holds the foundation key, so the direct signature succeeds
+# and the deposit comes from the same balance either way.  The on-chain outcome is identical;
+# only who signs differs.
+if [ "${VERITAS_FUND_MODE:-}" = "foundation-sponsored" ] && [ -n "${VERITAS_SEC_ADMIN:-}" ]; then
+    # THE TEMPLATE'S DEPOSIT IS THE SPONSOR'S WHOLE FLOAT.  100000qdn was sized for the retired
+    # 2M sec-treasury; the sponsor holds exactly 100,000 and has paid fees from it, so the
+    # submission died on "spendable balance 99999.99997... is smaller than 100000" (measured
+    # 2026-09-06).  The chain's minimum INITIAL deposit is 12,500 (also measured); 20000 clears
+    # it with margin and leaves the float intact for its real job.  Deposits are REFUNDED when
+    # the proposal passes, and QFI's after_step_2 tops the total up to the full minimum anyway.
+    jq '.deposit = "20000qdn"' "$qadenaproviderscripts/proposals/$providername.gen.json" \
+        > "$qadenaproviderscripts/proposals/$providername-0.gen.json"
+    mv "$qadenaproviderscripts/proposals/$providername-0.gen.json" "$qadenaproviderscripts/proposals/$providername.gen.json"
+    _inner=$(mktemp)
+    qadenad_alias tx gov submit-proposal "$qadenaproviderscripts/proposals/$providername.gen.json" \
+        --from $treasury --generate-only > "$_inner" 2>/dev/null \
+        || { echo "could not build the inner submit-proposal"; rm -f "$_inner"; exit 1; }
+    result=$(qadenad_alias tx authz exec "$_inner" --from "$VERITAS_SEC_ADMIN" --fee-granter $treasury \
+        -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+    rm -f "$_inner"
+else
+    result=$(qadenad_alias tx gov submit-proposal "$qadenaproviderscripts/proposals/$providername.gen.json" --from $treasury -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+fi
 echo "Result: $result"
 submit_hash=$(echo $result | jq -r .txhash)
 # check if code is 0
-if [ $(echo $result | jq -r .code) -ne 0 ]; then
+if [ "$(echo $result | jq -r '.code // -1')" -ne 0 ]; then
     echo "Error: $(echo $result | jq -r .message)"
     exit 1
 fi
@@ -97,22 +133,29 @@ echo "Deposit into proposal"
 echo "-------------------------"
 
 # deposit into the proposal
+if [ "${VERITAS_FUND_MODE:-}" = "foundation-sponsored" ]; then
+    echo "sponsored mode: no SEC-side deposit -- QFI deposits in sec_veritas_after_step_2.sh"
+    result='{"code":0,"txhash":""}'
+else
 result=$(qadenad_alias tx gov deposit $proposal_id 100000qdn --from $treasury -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)
+fi
 echo "Result: $result"
 deposit_hash=$(echo $result | jq -r .txhash)
 # check if code is 0
-if [ $(echo $result | jq -r .code) -ne 0 ]; then
+if [ "$(echo $result | jq -r '.code // -1')" -ne 0 ]; then
     echo "Error: $(echo $result | jq -r .message)"
     exit 1
 fi
 echo "deposit_hash: $deposit_hash"
 
-# wait for the deposit to be submitted
-result=$(qadenad_alias query wait-tx $deposit_hash --output json --timeout 30s)
-echo "Result: $result"
-if [ $(echo $result | jq -r .code) -ne 0 ]; then
-    echo "Error: $(echo $result | jq -r .message)"
-    exit 1
+# wait for the deposit to be submitted -- the sponsored-mode sentinel has no hash to wait on
+if [ -n "$deposit_hash" ]; then
+    result=$(qadenad_alias query wait-tx $deposit_hash --output json --timeout 30s)
+    echo "Result: $result"
+    if [ "$(echo $result | jq -r '.code // -1')" -ne 0 ]; then
+        echo "Error: $(echo $result | jq -r '.raw_log // .message // "no output"')"
+        exit 1
+    fi
 fi
 
 # get deposit status
