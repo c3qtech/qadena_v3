@@ -31,12 +31,15 @@ set -u
 SCRIPT_DIR="${0:A:h}"
 REPO="${SCRIPT_DIR:h}"
 
-NODE="${QADENA_NODE:-tcp://localhost:26657}"
-PASSFILE=""
-COORD_HOME="$HOME/fleet-launch/coord"
+NODE="${QADENA_NODE:-}"
+NODE_EXPLICIT=0
+PASSFILE="$HOME/.sec-veritas-password"
+LAUNCH_DIR="$HOME/fleet-launch"
+CHAIN_ID="qadena_4824-1"
+COORD_HOME="$LAUNCH_DIR/coord"
 SEC_HOME="${VERITAS_SEC_HOME:-$HOME/sec-veritas}"
 COUNT=3
-FROM="prepare"
+FROM="bootstrap"
 REBUILD=0
 STACK="$HOME/test/follow-the-money/stacks/veritas"
 ENV_FILE="env-sponsored-test"
@@ -48,22 +51,30 @@ ADVERTISE_P=""
 ADVERTISE_J=""
 
 usage() {
-    print -r -- "Usage: veritas_full_setup.sh --passfile <file> [options]"
+    print -r -- "Usage: veritas_full_setup.sh [options]"
     print -r -- ""
-    print -r -- "  --passfile <file>   keyring passphrase, first line.  REQUIRED: the keyrings default"
+    print -r -- "  --passfile <file>   keyring passphrase, first line.  Default ~/.sec-veritas-password."
+    print -r -- "                      The keyrings default"
     print -r -- "                      to the encrypted 'file' backend and a prompt with no terminal"
     print -r -- "                      looks exactly like a hang."
-    print -r -- "  --node <rpc>        default \$QADENA_NODE or tcp://localhost:26657"
+    print -r -- "  --node <rpc>        the chain RPC.  Default: derived from --primary"
+    print -r -- "                      (tcp://<primary-host>:26657), or \$QADENA_NODE, or"
+    print -r -- "                      tcp://localhost:26657 when there is no --primary."
     print -r -- "  --count <n>         ephemeral wallets per user (default 3; 30 for a real run)"
     print -r -- "  --coord-home <dir>  foundation keyring (default ~/fleet-launch/coord)"
     print -r -- "  --sec-home <dir>    SEC's directory (default ~/sec-veritas)"
-    print -r -- "  --from <stage>      resume: prepare|step1|delegate|step2|approve|step3|pool|verify|app"
+    print -r -- "  --from <stage>      resume: bootstrap|prepare|step1|delegate|step2|approve|step3|pool|verify|app"
     print -r -- "  --rebuild-chain     PURGE both fleet nodes and rebuild the chain first."
     print -r -- "                      Destroys every wallet and credential on them."
     print -r -- "  --advertise-ip-address <ip>         what the PRIMARY tells peers to dial"
     print -r -- "                                      (reaches init.sh).  Default: the ssh host."
     print -r -- "  --joiner-advertise-ip-address <ip>   same for each JOINER (reaches"
     print -r -- "                                      add_full_node.sh).  Default: the ssh host."
+    print -r -- "  --launch-dir <dir>  the foundation's directory (default ~/fleet-launch).  Created"
+    print -r -- "                      by the bootstrap stage if absent -- keys, sealed mnemonics,"
+    print -r -- "                      addresses.csv and the rendered launch config."
+    print -r -- "  --chain-id <id>     for the rendered config (default qadena_4824-1).  Only used"
+    print -r -- "                      when bootstrap has to create it."
     print -r -- "  --skip-app          stop after verify; do not touch the app-server stack"
     print -r -- "  --stack <dir>       app-server stack (default ~/test/follow-the-money/stacks/veritas)"
     print -r -- "  --env-file <name>   env file inside the stack (default env-sponsored-test)"
@@ -72,13 +83,15 @@ usage() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --passfile)      PASSFILE="$2"; shift 2 ;;
-        --node)          NODE="$2"; shift 2 ;;
+        --node)          NODE="$2"; NODE_EXPLICIT=1; shift 2 ;;
         --count)         COUNT="$2"; shift 2 ;;
         --coord-home)    COORD_HOME="$2"; shift 2 ;;
         --sec-home)      SEC_HOME="$2"; shift 2 ;;
         --from)          FROM="$2"; shift 2 ;;
         --rebuild-chain) REBUILD=1; shift ;;
         --skip-app)      SKIP_APP=1; shift ;;
+        --launch-dir)    LAUNCH_DIR="$2"; shift 2 ;;
+        --chain-id)      CHAIN_ID="$2"; shift 2 ;;
         --stack)         STACK="$2"; shift 2 ;;
         --env-file)      ENV_FILE="$2"; shift 2 ;;
         --primary)       PRIMARY="$2"; shift 2 ;;
@@ -92,12 +105,27 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# THE NODE FOLLOWS THE PRIMARY unless you say otherwise.  --primary already names the host the
+# chain runs on, and the RPC is on it at 26657, so requiring --node too meant writing the same
+# address twice and let them disagree -- a run that ssh'd to one machine and queried another would
+# report a perfectly consistent chain that was not the one it just built.
+#
+# localhost is only right when there is no --primary at all, which is the single-box devnet case.
+if [[ "$NODE_EXPLICIT" -eq 0 && -z "$NODE" ]]; then
+    if [[ -n "$PRIMARY" ]]; then
+        NODE="tcp://${PRIMARY##*@}:26657"
+        print -r -- "node derived from --primary: $NODE"
+    else
+        NODE="tcp://localhost:26657"
+    fi
+fi
+
 [[ -n "$PASSFILE" && -r "$PASSFILE" ]] || { print -u2 "need a readable --passfile"; usage >&2; exit 1 }
 export QADENA_NODE="$NODE"
 export QADENA_KEYRING_PASSFILE="$PASSFILE"
 
 # STAGE ORDER, and the gate that lets --from skip forward.
-STAGES=(prepare step1 delegate step2 approve step3 pool verify app)
+STAGES=(bootstrap prepare step1 delegate step2 approve step3 pool verify app)
 _stage_index() { local i=1; for s in "${STAGES[@]}"; do [[ "$s" == "$1" ]] && { print -r -- $i; return }; i=$(( i + 1 )); done; print -r -- 0 }
 START=$(_stage_index "$FROM")
 (( START > 0 )) || { print -u2 "unknown --from stage '$FROM'"; exit 1 }
@@ -131,13 +159,87 @@ trap _on_exit EXIT
 
 cd "$REPO"
 
+
+# --------------------------------------------------------------------------------------------
+if _want bootstrap; then
+    _CURRENT="bootstrap"
+    # CREATE THE FOUNDATION'S SIDE IF IT IS NOT THERE.
+    #
+    # ~/fleet-launch holds four things the bring-up cannot run without: the coordinator keyring,
+    # the sealed mnemonics, addresses.csv, and the rendered launch config.  On a fresh machine none
+    # of it exists, and the failure without it arrives deep inside the chain build as a missing
+    # file -- so check here, where the message can say what to do.
+    #
+    # Each piece is created only if MISSING.  derive_launch_keys.sh mints keys, and re-minting them
+    # would change every bucket address in genesis, so it must never run against an existing
+    # keyring by accident.
+    _need_keys=0; _need_cfg=0
+    [[ -d "$LAUNCH_DIR/coord" ]] && ls "$LAUNCH_DIR"/mnemonics/*.mnemonic.enc > /dev/null 2>&1 || _need_keys=1
+    [[ -r "$LAUNCH_DIR/fleet-launch-config.yml" ]] || _need_cfg=1
+
+    if (( _need_keys || _need_cfg )); then
+        banner "0. BOOTSTRAP the foundation directory ($LAUNCH_DIR)"
+    fi
+
+    if (( _need_keys )); then
+        print -r -- "  minting the launch keys -- coordinator keyring, sealed mnemonics, addresses.csv"
+        print -r -- "  (this is a ONE-TIME act: these addresses go into genesis and cannot change afterwards)"
+        mkdir -p "$LAUNCH_DIR"
+        foundation_scripts/derive_launch_keys.sh \
+            --home          "$LAUNCH_DIR/coord" \
+            --mnemonics-dir "$LAUNCH_DIR/mnemonics" \
+            --out           "$LAUNCH_DIR/addresses.csv" \
+            --passphrase-file "$PASSFILE"
+    else
+        print -r -- "  keys present: $(ls "$LAUNCH_DIR"/mnemonics/*.mnemonic.enc 2>/dev/null | wc -l | tr -d ' ') sealed mnemonic(s)"
+    fi
+
+    if (( _need_cfg )); then
+        print -r -- "  rendering the launch config for $CHAIN_ID"
+        # ENCLAVE IDS FIRST.  --enclave writes the TEMPLATE, so running it after --apply would
+        # leave the instance carrying whatever the template held before.
+        python3 foundation_scripts/fill_launch_config.py --enclave --test-fleet
+        python3 foundation_scripts/fill_launch_config.py \
+            --apply "$LAUNCH_DIR/addresses.csv" \
+            --out   "$LAUNCH_DIR/fleet-launch-config.yml" \
+            --chain-id "$CHAIN_ID" --test-gov-timings --zero-incentives
+    else
+        print -r -- "  launch config present: $LAUNCH_DIR/fleet-launch-config.yml"
+    fi
+fi
+
 # --------------------------------------------------------------------------------------------
 if (( REBUILD )); then
     _CURRENT="rebuild"
     banner "0. PURGE AND REBUILD THE CHAIN  (destroys everything on both nodes)"
     ./testscripts/stop_fleet.sh --node "$PRIMARY" --node "$JOINER" \
         --purge --reap-archives --immediate
-    rm -rf "$SEC_HOME"
+    # SAY WHAT IS BEING DESTROYED, AND REFUSE IF IT BELONGS TO ANOTHER CHAIN.
+    #
+    # This is an unrecoverable delete: mnemonics.json (or the sealed mnemonics) and the keyring are
+    # the only copies of every SEC key, and the wallets they control stay on chain afterwards with
+    # nobody able to sign for them.  It ran silently, and when the staging script shared this path
+    # with the local one it destroyed a working deployment on the way to rebuilding a different
+    # chain.  variables.json records which sponsor -- and therefore which chain -- this home
+    # belongs to, so a mismatch is detectable rather than merely regrettable.
+    if [[ -d "$SEC_HOME" ]]; then
+        _existing=$(jq -r '.appsvraddr // empty' "$SEC_HOME/variables.json" 2>/dev/null || true)
+        _keys=$(ls "$SEC_HOME"/keyring/keyring-*/*.info 2>/dev/null | wc -l | tr -d ' ')
+        print -r -- "  about to DELETE $SEC_HOME ($_keys key(s)${_existing:+, sponsor ${_existing:0:16}...})"
+        if [[ -n "$_existing" && -r "$COORD_HOME/veritas-sponsors.json" ]]; then
+            _target=$(jq -r '.appsvr // empty' "$COORD_HOME/veritas-sponsors.json" 2>/dev/null || true)
+            if [[ -n "$_target" && "$_existing" != "$_target" ]]; then
+                print -u2 "REFUSING: $SEC_HOME belongs to a DIFFERENT deployment."
+                print -u2 "  its sponsor:   $_existing"
+                print -u2 "  this run's:    $_target"
+                print -u2 "  Deleting it would strand wallets on that chain with no keys."
+                print -u2 "  Use --sec-home <dir> for this deployment, or remove it deliberately."
+                exit 1
+            fi
+        fi
+        rm -rf "$SEC_HOME"
+        print -r -- "  deleted $SEC_HOME"
+    fi
     # The pioneer mnemonic must be in the clear for the bringup; unseal it here and remove it the
     # moment the chain is up -- it is the genesis validator's key.
     # UNSEAL PROPERLY, OR NOT AT ALL.
@@ -149,12 +251,12 @@ if (( REBUILD )); then
     # quotes" -- a message about quoting, three layers from a passphrase that was never supplied.
     #
     # Write to a temp, CHECK IT IS A MNEMONIC, and only then put it in place.
-    _pm="$HOME/fleet-launch/pioneer-mnemonic.txt"
+    _pm="$LAUNCH_DIR/pioneer-mnemonic.txt"
     if [[ ! -s "$_pm" ]] || (( $(wc -w < "$_pm") < 12 )); then
         umask 077
         _tmp=$(mktemp)
         if ! print -r -- "$(head -1 "$PASSFILE")" \
-              | foundation_scripts/mnemonic.sh show "$HOME/fleet-launch/mnemonics" qfi-pioneer1 > "$_tmp" 2>/dev/null; then
+              | foundation_scripts/mnemonic.sh show "$LAUNCH_DIR/mnemonics" qfi-pioneer1 > "$_tmp" 2>/dev/null; then
             rm -f "$_tmp"
             print -u2 "could not unseal qfi-pioneer1 from $HOME/fleet-launch/mnemonics"
             print -u2 "  the sealing passphrase is the one in $PASSFILE -- is it right?"
@@ -174,7 +276,7 @@ if (( REBUILD )); then
     [[ -n "$ADVERTISE_J" ]] && _adv+=(--joiner-advertise-ip-address "$ADVERTISE_J")
     ./testscripts/fleet_bringup_with_tests.sh \
         --primary "$PRIMARY" --joiner "$JOINER" --block-sync "${_adv[@]}" \
-        --mainnet-source        "$HOME/fleet-launch/fleet-launch-config.yml" \
+        --mainnet-source        "$LAUNCH_DIR/fleet-launch-config.yml" \
         --pioneer-mnemonic-file "$_pm" \
         --funder qfi-pioneer1 --fund-qdn 10100 --stake 10000
     rm -f "$_pm"
@@ -188,7 +290,7 @@ if _want prepare; then
     # convention, not something the chain knows, so they have to be named.
     foundation_scripts/sec_veritas_before_step_1.sh --stage prepare \
         --coord-home "$COORD_HOME" --keyring-passfile "$PASSFILE" \
-        --mnemonics-dir "$HOME/fleet-launch/mnemonics" --node "$NODE" \
+        --mnemonics-dir "$LAUNCH_DIR/mnemonics" --node "$NODE" \
         --pubsec-members pubsec-m1,pubsec-m2,pubsec-m3,pubsec-m4,pubsec-m5,pubsec-m6,pubsec-m7 \
         --members foundation-m1,foundation-m2,foundation-m3
 fi
