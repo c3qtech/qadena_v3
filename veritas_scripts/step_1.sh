@@ -312,8 +312,20 @@ chmod 700 "$VERITAS_SEC_HOME" 2>/dev/null
 # addresses computed from these exact mnemonics, and regenerating them silently strands every
 # grant already signed.  If a mnemonics.json exists, it is the deployment; the generated values
 # are discarded in its favour.  Delete the file (or point --sec-home elsewhere) to start over.
-if [ -r "$VERITAS_SEC_HOME/mnemonics.json" ]; then
-    echo "reusing mnemonics from $VERITAS_SEC_HOME/mnemonics.json (re-run; delete it to regenerate)"
+# REUSE WHAT EXISTS, WHATEVER FORM IT IS IN.  Regenerating these would orphan every pre-grant the
+# foundation has already signed against the derived addresses, so a re-run must reuse them.  Sealed
+# files are the current form; mnemonics.json is the legacy one and is still honoured so a
+# deployment created before this change keeps working.
+if [ -d "$VERITAS_SEC_HOME/mnemonics" ] && ls "$VERITAS_SEC_HOME/mnemonics"/*.mnemonic.enc > /dev/null 2>&1; then
+    echo "reusing sealed mnemonics from $VERITAS_SEC_HOME/mnemonics (re-run)"
+    for _v in treasurymnemonic adminmnemonic signermnemonic createwalletsponsormnemonic \
+              identityprovidermnemonic dsvsprovidermnemonic; do
+        _m=$(sec_mnemonic "$VERITAS_SEC_HOME" "$_v" 2>/dev/null || true)
+        [ -n "$_m" ] && eval "$_v=\$_m"
+    done
+elif [ -r "$VERITAS_SEC_HOME/mnemonics.json" ]; then
+    echo "reusing mnemonics from $VERITAS_SEC_HOME/mnemonics.json (LEGACY plaintext; seal it with"
+    echo "  veritas_scripts/seal_sec_mnemonics.sh --remove-plaintext)"
     for _v in treasurymnemonic adminmnemonic signermnemonic createwalletsponsormnemonic \
               identityprovidermnemonic dsvsprovidermnemonic; do
         _m=$(jq -r ".$_v // empty" "$VERITAS_SEC_HOME/mnemonics.json")
@@ -515,8 +527,53 @@ else
     echo "Then run:  $veritasscripts/step_2.sh"
 fi
 
-# create a json file containing all the mnemonics
-jq -n --arg treasurymnemonic "$treasurymnemonic" --arg adminmnemonic "$adminmnemonic" --arg signermnemonic "$signermnemonic" --arg createwalletsponsormnemonic "$createwalletsponsormnemonic" --arg identityprovidermnemonic "$identityprovidermnemonic" --arg dsvsprovidermnemonic "$dsvsprovidermnemonic" '{treasurymnemonic: $treasurymnemonic, adminmnemonic: $adminmnemonic, signermnemonic: $signermnemonic, createwalletsponsormnemonic: $createwalletsponsormnemonic, identityprovidermnemonic: $identityprovidermnemonic, dsvsprovidermnemonic: $dsvsprovidermnemonic}' > "$VERITAS_SEC_HOME/mnemonics.json"
-chmod 600 "$VERITAS_SEC_HOME/mnemonics.json" 2>/dev/null
+# SEALED DIRECTLY FROM THE VARIABLES.  NO PLAINTEXT FILE IS WRITTEN.
+#
+# This used to write mnemonics.json -- six seed phrases in the clear, protected by 600 on the file
+# and 700 on the directory and nothing else.  They derive every SEC wallet on the chain: both
+# service providers, the whole citizen sponsor pool, the document counter-signer, the delegation
+# key.  One `cat` was the deployment.
+#
+# The foundation has never done that (derive_launch_keys.sh): the mnemonic goes from qadenad's
+# stdout through a shell variable into openssl's stdin and lands as ciphertext, so it is never
+# readable at rest and a crash mid-run leaves nothing behind.  Same here now.
+#
+# THE PASSPHRASE GOES ON FD 3, not stdin.  stdin carries the mnemonic; openssl given both on one
+# stream takes the first line as the passphrase and mis-reads the rest as data, producing a file
+# that seals "successfully" and never decrypts.  The verification below is what catches that.
+_MDIR="$VERITAS_SEC_HOME/mnemonics"
+mkdir -p "$_MDIR"; chmod 700 "$_MDIR"
+if [ -z "${QADENA_KEYRING_PASS:-}" ]; then
+    echo "REFUSING to write mnemonics: no keyring passphrase in this run, so they could only be"
+    echo "  stored in the clear.  Re-run with --keyring-passfile <file>, or export"
+    echo "  QADENA_KEYRING_BACKEND=test for a throwaway devnet."
+    exit 1
+fi
+_sealed=0
+for _spec in "treasurymnemonic:$treasurymnemonic" "adminmnemonic:$adminmnemonic" \
+             "signermnemonic:$signermnemonic" "createwalletsponsormnemonic:$createwalletsponsormnemonic" \
+             "identityprovidermnemonic:$identityprovidermnemonic" "dsvsprovidermnemonic:$dsvsprovidermnemonic"; do
+    _mk="${_spec%%:*}"; _mv="${_spec#*:}"
+    [ -n "$_mv" ] || continue
+    _mf="$_MDIR/$_mk.mnemonic.enc"
+    if ! print -r -- "$_mv" | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
+            -out "$_mf" -pass fd:3 3< <(print -r -- "$QADENA_KEYRING_PASS") 2>/dev/null; then
+        echo "FAILED to seal $_mk -- the key exists but would be UNRECOVERABLE.  Stopping."
+        rm -f "$_mf"
+        exit 1
+    fi
+    chmod 600 "$_mf"
+    # VERIFY THE ROUND TRIP BEFORE MOVING ON.  A sealed file that does not decrypt is worse than no
+    # file: it looks like a backup.  This is the check that caught the fd-3 problem above.
+    _back=$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$_mf" \
+              -pass fd:3 3< <(print -r -- "$QADENA_KEYRING_PASS") 2>/dev/null || true)
+    if [ "$_back" != "$_mv" ]; then
+        echo "FAILED to verify $_mk -- it sealed but does not decrypt back.  Stopping."
+        rm -f "$_mf"
+        exit 1
+    fi
+    _sealed=$(( _sealed + 1 ))
+done
+echo "$_sealed mnemonic(s) sealed and verified in $_MDIR -- no plaintext was written"
 
 

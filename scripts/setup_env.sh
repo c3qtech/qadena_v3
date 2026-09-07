@@ -158,6 +158,36 @@ qadenad_alias() {
 # ASK ONCE PER RUN, NOT ONCE PER KEY.  A step creates several keys and reads several more; the
 # file backend prompts on every one of them, and the prompt is invisible wherever a call site
 # captures output.  Collected here and handed to each qadenad invocation by the wrapper above.
+# sec_mnemonic <sec-home> <key> -- one of SEC's mnemonics, from whichever form exists.
+#
+# step_1 writes BOTH mnemonics.json (plaintext, because steps 2 and 3 read it) and a sealed
+# <key>.mnemonic.enc beside it.  The sealed copy is the one that should survive: those six seed
+# phrases derive every SEC wallet on the chain, and the plaintext file's only protection is 600.
+#
+# Reading through here means the plaintext can be DELETED once a deployment is established and the
+# later steps keep working -- they ask for a mnemonic by name and do not care which form answered.
+# Falls back rather than preferring the seal, because unsealing costs a passphrase and the
+# plaintext is present during a normal bring-up anyway.
+sec_mnemonic() {
+    local _home="$1" _key="$2" _v
+    if [ -r "$_home/mnemonics.json" ]; then
+        _v=$(jq -r --arg k "$_key" '.[$k] // empty' "$_home/mnemonics.json" 2>/dev/null)
+        [ -n "$_v" ] && { print -r -- "$_v"; return 0; }
+    fi
+    if [ -r "$_home/mnemonics/$_key.mnemonic.enc" ]; then
+        [ -n "${QADENA_KEYRING_PASS:-}" ] || {
+            print -u2 "need the sealing passphrase to read $_key (no plaintext mnemonics.json)"
+            return 1
+        }
+        _v=$(print -r -- "$QADENA_KEYRING_PASS" \
+               | "${qadenascripts:-$PWD/scripts}/../foundation_scripts/mnemonic.sh" \
+                   show "$_home/mnemonics" "$_key" 2>/dev/null)
+        [ -n "$_v" ] && { print -r -- "$_v"; return 0; }
+    fi
+    print -u2 "no mnemonic '$_key' in $_home (neither mnemonics.json nor a sealed file)"
+    return 1
+}
+
 qadena_keyring_unlock() {
     [ "$QADENA_KEYRING_BACKEND" = "file" ] || return 0
     [ -z "${QADENA_KEYRING_PASS:-}" ] || return 0

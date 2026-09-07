@@ -156,7 +156,9 @@ mkdir -p "$QADENA_KEYRING_DIR" 2>/dev/null; chmod 700 "$QADENA_KEYRING_DIR" 2>/d
 
 # READ FROM SEC'S DIRECTORY, AND SAY SO WHEN IT IS NOT THERE.  A missing variables.json used to
 # surface as jq errors and empty variables, which then flowed into transactions as blanks.
-for _f in variables.json mnemonics.json; do
+# mnemonics.json is no longer written -- step_1 seals directly -- so require only
+# variables.json here and let sec_mnemonic() report a missing mnemonic in either form.
+for _f in variables.json; do
     [ -r "$VERITAS_SEC_HOME/$_f" ] || {
         echo "$VERITAS_SEC_HOME/$_f is missing -- run step_1.sh first,"
         echo "or point at the right directory:  --sec-home <dir>"
@@ -239,8 +241,8 @@ fi
 
 
 # read mnemonics from json file
-createwalletsponsormnemonic=$(jq -r .createwalletsponsormnemonic "$VERITAS_SEC_HOME/mnemonics.json")
-signermnemonic=$(jq -r .signermnemonic "$VERITAS_SEC_HOME/mnemonics.json")
+createwalletsponsormnemonic=$(sec_mnemonic "$VERITAS_SEC_HOME" createwalletsponsormnemonic)
+signermnemonic=$(sec_mnemonic "$VERITAS_SEC_HOME" signermnemonic)
 
 # read proposal id from identityprovidername.proposal_id
 identityproposal_id=$(cat $qadenaproviderscripts/proposals/$identityprovidername.proposal_id)
