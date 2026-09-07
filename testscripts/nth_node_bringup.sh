@@ -59,6 +59,7 @@
 # ---------------------------------------------------------------------------------------------
 
 set -u
+ADVERTISE_J_OVERRIDE=""
 
 PRIMARY=""
 JOINER=""
@@ -107,6 +108,11 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --primary) PRIMARY="$2"; shift 2 ;;
         --joiner)  JOINER="$2";  shift 2 ;;
+        # WHAT THIS NODE TELLS PEERS TO DIAL.  Defaults to the ssh host below, which is right only
+        # when you ssh to the same address peers use.  Behind NAT (a cloud VM: public ssh address,
+        # private interface) or across networks it is wrong, and a joiner that advertises an
+        # unreachable address peers in one direction only -- which presents as an intermittent fleet.
+        --advertise-ip-address)  ADVERTISE_J_OVERRIDE="$2"; shift 2 ;;
         --quiesce) QUIESCE=1; shift ;;
         --quiesce-immediate) QUIESCE=1; QUIESCE_NOW=1; shift ;;
         --from)    FROM="$2";    shift 2 ;;
@@ -306,7 +312,7 @@ sgx_state() { ssh -o ConnectTimeout=10 "$1" "$SGX_PROBE" >/dev/null 2>&1; print 
 #
 # $PRIMARY and $JOINER stay WHOLE below -- ssh needs the account.  Only these derived forms go into
 # add_full_node.sh.
-ADVERTISE_J="${JOINER##*@}"
+ADVERTISE_J="${ADVERTISE_J_OVERRIDE:-${JOINER##*@}}"
 ADVERTISE_P="${PRIMARY##*@}"
 
 # THE TRUST ANCHOR SITS 10 BLOCKS BACK ON A TEST FLEET, not the 2000 add_full_node.sh defaults to.

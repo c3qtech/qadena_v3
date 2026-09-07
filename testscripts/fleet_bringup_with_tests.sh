@@ -103,6 +103,8 @@ FUNDER="treasury"
 # rendered instance instead; see the note above the joiner loop for what that costs.
 MAINNET_SRC=""
 MNEMONIC_FILE=""
+ADVERTISE_P=""
+ADVERTISE_J=""
 # Passed through to nth_node_bringup.sh.  Empty means "use its defaults", which are DEVNET-sized.
 FUND_QDN_ARG=""
 STAKE_ARG=""
@@ -261,6 +263,13 @@ while [[ $# -gt 0 ]]; do
         --fund-qdn)      FUND_QDN_ARG="$2"; shift 2 ;;
         --stake)         STAKE_ARG="$2"; shift 2 ;;
         --pioneer-mnemonic-file) MNEMONIC_FILE="$2"; shift 2 ;;
+        # WHAT EACH NODE TELLS PEERS TO DIAL.  Both default to the ssh host, which is wrong behind
+        # NAT and across networks -- see nth_node_bringup.sh.  --advertise-ip-address reaches
+        # init.sh on the primary; --joiner-advertise-ip-address reaches add_full_node.sh on each
+        # joiner.  One value per joiner is not supported: give them the same routable address or
+        # run nth_node_bringup.sh per node.
+        --advertise-ip-address)        ADVERTISE_P="$2"; shift 2 ;;
+        --joiner-advertise-ip-address) ADVERTISE_J="$2"; shift 2 ;;
         --foundation-sponsored)
             SPONSORED=1
             if [[ -n "$2" && "$2" != --* ]]; then SPONSOR_GRANTER="$2"; shift 2; else shift; fi ;;
@@ -577,7 +586,13 @@ stage "A0. preflight every host BEFORE anything is stopped or moved"
 mainnet_args=()
 [[ -n "$MAINNET_SRC" ]]   && mainnet_args+=(--mainnet-source "$MAINNET_SRC")
 [[ -n "$MNEMONIC_FILE" ]] && mainnet_args+=(--pioneer-mnemonic-file "$MNEMONIC_FILE")
-"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG "${mainnet_args[@]}" --only 1 \
+
+# ARRAYS, NOT ${VAR:+...}.  zsh does not word-split an unquoted parameter expansion, so
+# `${ADVERTISE_P:+--advertise-ip-address "$ADVERTISE_P"}` would arrive as ONE argument and be
+# rejected as an unknown option -- the same bug that made sec_veritas_verify.sh reject --pool.
+adv_p=(); [[ -n "$ADVERTISE_P" ]] && adv_p=(--advertise-ip-address "$ADVERTISE_P")
+adv_j=(); [[ -n "$ADVERTISE_J" ]] && adv_j=(--advertise-ip-address "$ADVERTISE_J")
+"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG "${mainnet_args[@]}" "${adv_p[@]}" --only 1 \
     2>&1 | tee "$RUN_DIR/stage-A0-preflight.log"
 [[ ${pipestatus[1]} -eq 0 ]] || fail "the primary failed preflight; nothing has been changed on any host. See $RUN_DIR/stage-A0-preflight.log"
 
@@ -649,10 +664,10 @@ stage "B. 1st_node_bringup phases 1-6: build, init and start the primary"
 # Stops at 6 deliberately.  Packaging is stage D, AFTER the regression has upgraded the enclave --
 # see trap 1.  This is the fix for the sequence that failed on 2026-08-18.
 if (( $SKIP_UPDATE == 1)); then
-    "$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG "${mainnet_args[@]}" --from 1 --except 3 --until 6 \
+    "$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG "${mainnet_args[@]}" "${adv_p[@]}" --from 1 --except 3 --until 6 \
         2>&1 | tee "$RUN_DIR/stage-B-bringup.log"
 else
-    "$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG "${mainnet_args[@]}" --from 1 --until 6 \
+    "$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG "${mainnet_args[@]}" "${adv_p[@]}" --from 1 --until 6 \
         2>&1 | tee "$RUN_DIR/stage-B-bringup.log"
 fi
 [[ ${pipestatus[1]} -eq 0 ]] || fail "1st_node_bringup phases 1-6 failed; it is phase-resumable (--from N) once fixed. See $RUN_DIR/stage-B-bringup.log"
@@ -911,7 +926,7 @@ fi
     [[ -n "$STAKE_ARG" ]]    && amount_args+=(--stake "$STAKE_ARG")
     info "joining $j as $pioneer by $SYNC_KIND (through phase 8: join, bond, agree)"
     print "$j joined by: $SYNC_KIND (as $pioneer)" >> "$RUN_DIR/fleet.txt"
-    "$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" \
+    "$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" "${adv_j[@]}" \
         --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" "${sponsor_arg[@]}" "${amount_args[@]}" \
         --convert-to-validator --from 1 --until 8 \
         2>&1 | tee "$RUN_DIR/stage-G-join-${j##*@}.log"

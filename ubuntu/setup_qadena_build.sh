@@ -386,6 +386,43 @@ else
     echo "jq already installed"
 fi
 
+# check if yq installed
+#
+# IT MUST BE MIKEFARAH'S yq (Go), NOT THE APT PACKAGE.  `apt-get install yq` on Ubuntu gives
+# kislyuk/yq -- a Python wrapper around jq with different flags -- and every caller here uses
+# `yq -o=json <expr> <file>`, which is mikefarah v4 syntax.  The apt one fails on -o and the
+# failure surfaces two layers up as "the instance disagrees with allocations.csv", which is about
+# the config and not about the tool.
+#
+# WHY IT IS REQUIRED, not optional: foundation_scripts/verify_launch_config.py shells out to it to
+# read the launch config, and buildscripts/init.sh runs that as the gate before it wipes the chain
+# home.  A host without yq cannot build a launch chain at all -- measured 2026-09-07 on
+# traxion-vm-01, where init.sh refused with a Python traceback about a missing 'yq'.
+if ! command -v yq > /dev/null 2>&1; then
+    echo "Installing yq (mikefarah/yq v4)"
+    if command -v snap > /dev/null 2>&1 && snap install yq > /dev/null 2>&1; then
+        echo "yq installed via snap"
+    else
+        # No snap, or snap refused: fetch the release binary for this architecture.  Same shape as
+        # the Go install above, which is the pattern this file already uses for pinned tools.
+        case "$(uname -m)" in
+            aarch64|arm64) YQ_ARCH=arm64 ;;
+            *)             YQ_ARCH=amd64 ;;
+        esac
+        (cd installers 2>/dev/null || cd /tmp; \
+         wget -q "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${YQ_ARCH}" -O yq \
+         && install -m 0755 yq /usr/local/bin/yq && rm -f yq)
+    fi
+    if command -v yq > /dev/null 2>&1; then
+        echo "yq: $(yq --version 2>&1 | head -1)"
+    else
+        echo "WARNING: yq could not be installed -- a LAUNCH chain build will fail here."
+        echo "  buildscripts/init.sh gates on verify_launch_config.py, which requires it."
+    fi
+else
+    echo "yq already installed"
+fi
+
 # check if bc installed
 # Used by setup_env.sh to compute gas prices, so its absence breaks every transaction rather than
 # one suite.  Present on a desktop Ubuntu and absent on the minimal/cloud images.

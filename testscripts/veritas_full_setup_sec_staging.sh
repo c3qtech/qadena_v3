@@ -41,11 +41,11 @@ REBUILD=0
 STACK="$HOME/test/follow-the-money/stacks/veritas"
 ENV_FILE="env-sponsored-test"
 PREFIX="sec"
-PRIMARY="alvillarica@10.211.55.5"
-JOINER="alvillarica@10.211.55.6"
+PRIMARY="azureuser@20.212.178.16"
+JOINER="ubuntu@172.31.20.18"
 SKIP_APP=0
-ADVERTISE_P=""
-ADVERTISE_J=""
+ADVERTISE_P="20.212.178.16"
+ADVERTISE_J="dev-nlb-97f5978861fac526.elb.ap-southeast-1.amazonaws.com"
 
 usage() {
     print -r -- "Usage: veritas_full_setup.sh --passfile <file> [options]"
