@@ -1447,16 +1447,36 @@ print -r -- "$out" | tail -20 | sed 's/^/  /'
 
 # Belt and braces: the suite exits 0 when it has NO PEERS and says to treat that as 'not tested'.
 # Passing on that would be the same false green in a different costume.
+NOT_TESTED=0
 if print -r -- "$out" | grep -q "NOTHING COMPARED"; then
-    rc=1
+    NOT_TESTED=1
     print ""
-    print "  NOT A PASS: the suite found no peers and compared nothing."
+    # A PERMANENTLY UNREACHABLE PEER IS A CONFIGURATION, NOT A FAULT.  Defaulting to failure is
+    # right -- "we could not check" must never read as "we checked and it was fine".  But on a
+    # fleet whose only other node sits behind NAT that verdict never changes, and a gate that can
+    # never pass gets worked around rather than fixed.  So it stays a failure unless someone says,
+    # explicitly and per-run, that they know agreement is unverifiable here.
+    if [[ -n "${QADENA_ALLOW_UNVERIFIED_AGREEMENT:-}" ]]; then
+        print "  agreement NOT VERIFIED, and QADENA_ALLOW_UNVERIFIED_AGREEMENT is set -- continuing."
+        print "  Nothing about the peers was checked; this run proves the joiner syncs, not that"
+        print "  the chain has not forked."
+    else
+        rc=1
+        print "  NOT A PASS: the suite found no peers and compared nothing."
+    fi
 fi
 
 print ""
 print "======================================================================"
 if [[ $rc -eq 0 ]]; then
-    print "NTH-NODE BRING-UP COMPLETE ($PIONEER_NAME) -- the nodes agree on the same app hash at the same height)"
+    # DO NOT CLAIM WHAT WAS NOT MEASURED.  With the opt-out set, rc is 0 and nothing was compared,
+    # so the old headline ("the nodes agree on the same app hash") would assert precisely the thing
+    # the suite just said it could not check.
+    if (( NOT_TESTED )); then
+        print "NTH-NODE BRING-UP COMPLETE ($PIONEER_NAME) -- the joiner syncs; AGREEMENT WAS NOT VERIFIED"
+    else
+        print "NTH-NODE BRING-UP COMPLETE ($PIONEER_NAME) -- the nodes agree on the same app hash at the same height)"
+    fi
     print ""
     # SAY WHICH PATH ACTUALLY RAN.  This used to print the block-sync caveat unconditionally, so a
     # --state-sync run ended by announcing that state-sync was not covered -- in the same output
@@ -1475,6 +1495,19 @@ if [[ $rc -eq 0 ]]; then
         print "test needs a NEGATIVE CONTROL (repeat with the import disabled and confirm the peers DO"
         print "diverge), or it cannot distinguish 'fixed' from 'the scenario never happened'."
     fi
+elif (( NOT_TESTED )); then
+    # NOT VERIFIED IS NOT DISAGREEMENT.  This branch used to print the fork wording for ANY
+    # non-zero rc, so a run that had just said "It is not a pass and it is not a fork" was
+    # immediately told it was a fork -- two contradictory verdicts about the same evidence, and
+    # the alarming one last.  Measured 2026-09-08 with a peer behind NAT.
+    print "PEER AGREEMENT NOT VERIFIED -- no peer could be reached to compare against."
+    print ""
+    print "This is NOT a fork and NOT a pass.  The joiner is running and following the chain; what"
+    print "is missing is a second node whose RPC this one can query.  Either give the peer a"
+    print "reachable address:"
+    print "    ./testscripts/test_peer_agreement.sh --peer-rpc <moniker>=<url>"
+    print "or accept that agreement is untested on this fleet -- which is the honest state of a"
+    print "chain whose only other node sits behind NAT."
 else
     print "PEER AGREEMENT FAILED -- the two nodes do not agree.  That is a fork; investigate before"
     print "running anything else."

@@ -66,6 +66,7 @@ JOINER="ubuntu@172.31.20.18"
 SKIP_APP=0
 ADVERTISE_P="20.212.178.16"
 ADVERTISE_J="dev-nlb-97f5978861fac526.elb.ap-southeast-1.amazonaws.com"
+QADENA_ALLOW_UNVERIFIED_AGREEMENT=1
 
 usage() {
     print -r -- "Usage: veritas_full_setup.sh [options]"
