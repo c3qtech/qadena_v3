@@ -73,6 +73,34 @@ if [ -n "$_u_addr" ]; then
             exit 1 ;;
     esac
     _u_onchain=$(print -r -- "$_u_raw" | sed -n '/^{/,$p' | jq -r '.walletID // empty' 2>/dev/null || true)
+
+# credential_claimed <type> -- non-empty when this user has already claimed that credential type.
+#
+# CLAIMING IS NOT IDEMPOTENT.  x/qadena/keeper/msg_server_claim_credential.go:25-30 WRITES a new
+# credential keyed by (CredentialID, CredentialType) and rejects a second attempt with
+# ErrCredentialExists -- the same error text `create-credential` produces, so a repeat claim reads
+# in the logs as an issuance problem rather than a re-claim.  (The intended ErrCredentialClaimed
+# guard at :52 is commented out; the existence check is what actually rejects it.)
+#
+# The CredentialID is the CREDENTIAL WALLET's address -- account 1 of the same mnemonic -- so it is
+# derivable offline, exactly like the wallet addresses.  Exit status is NOT usable here: the
+# command returns 0 either way and prints "err rpc error: ... NotFound" for a missing one, so
+# match on the output.
+credential_claimed() {
+    local _type="$1" _cw _out
+    _cw=$(print -r -- "$usermnemonic" | "${qadenabin:-$HOME/qadena/bin}/qadenad" \
+            debug derive-wallet-address 0 --credential 2>/dev/null | tail -1)
+    [ -n "$_cw" ] || return 0
+    _out=$(qadenad_alias query qadena show-credential "$_cw" "$_type" 2>&1 || true)
+    case "$_out" in
+        *"no route to host"*|*"connection refused"*|*"post failed"*)
+            echo "cannot reach the chain to check $username's $_type credential -- stopping" >&2
+            exit 1 ;;
+        *NotFound*|*"not found"*) return 0 ;;
+        *CREDENTIAL:*) print -r -- "claimed" ;;
+    esac
+}
+
 # eph_ready <index> -- "skip" if that ephemeral already exists on chain, "" if it must be created.
 #
 # THIRD PLACE THIS PATTERN WAS MISSING.  The main wallet above got a chain-keyed check; the
@@ -114,9 +142,31 @@ eph_ready() {
             [ -n "$(eph_ready "$_fi")" ] || { _fam_missing=1; break; }
         done
     fi
+    # THE RESUME EXIT IS KEYED ON WALLETS AND GUARDS WORK THAT IS NOT WALLETS.
+    #
+    # Claims, contact binds and the DSVS signatory registration all happen AFTER the wallets, and
+    # exiting here skipped every one of them for a user whose wallets already existed.  On the
+    # fleet that left secdsvs with 16 wallets, 18 credentials and NO authorized signatory, so SEC
+    # could not counter-sign anything -- and the run reported success (2026-09-07, found by the
+    # app-server team hitting "Unauthorized signer", qadena 1137).
+    #
+    # So: only skip when the SIGNATORY is also in place, which is the last thing this script does
+    # and therefore a reasonable proxy for "this user is fully set up".  When it is missing, fall
+    # through -- every wallet step below is individually guarded and will skip itself.
+    _sig_ok=0
     if [ -n "$_u_onchain" ] && [ "$_fam_missing" -eq 0 ]; then
-        echo "$username and all ${eph_count:-0} ephemeral(s) exist ON CHAIN -- skipping create_user (resume)"
+        if [ -z "$serviceprovider" ]; then
+            _sig_ok=1          # no signatory is registered for a user with no service provider
+        elif qadenad_alias query dsvs show-authorized-signatory "$_u_addr" > /dev/null 2>&1; then
+            _sig_ok=1
+        fi
+    fi
+    if [ -n "$_u_onchain" ] && [ "$_fam_missing" -eq 0 ] && [ "$_sig_ok" -eq 1 ]; then
+        echo "$username is fully set up ON CHAIN -- skipping create_user (resume)"
         exit 0
+    fi
+    if [ -n "$_u_onchain" ] && [ "$_fam_missing" -eq 0 ]; then
+        echo "$username wallets exist but its authorized signatory does not -- resuming"
     fi
     # THE DELETE BELONGS TO THE not-on-chain CASE ONLY.  Left unconditional (as it briefly was),
     # it deleted the key of a main wallet that EXISTS, and the re-create then failed with "Public
@@ -276,13 +326,25 @@ banner "$username Create credential email"
 run_cmd "qadenad_alias tx qadena create-credential $user_a $user_bf email-contact-info $email --from \"$identityprovider\" $PROVIDER_FEE_GRANTER_FLAG --yes"
 
 banner "$username Claim credential personal-info"
-run_cmd "qadenad_alias tx qadena claim-credential $user_a $user_bf personal-info --from \"$username\" $USER_FEE_GRANTER_FLAG --yes"
+if [ -n "$(credential_claimed personal-info)" ]; then
+    echo "$username already holds a personal-info credential -- skipping claim"
+else
+    run_cmd "qadenad_alias tx qadena claim-credential $user_a $user_bf personal-info --from \"$username\" $USER_FEE_GRANTER_FLAG --yes"
+fi
 
 banner "$username Claim credential phone"
-run_cmd "qadenad_alias tx qadena claim-credential $user_a $user_bf phone-contact-info --from \"$username\" $USER_FEE_GRANTER_FLAG --yes"
+if [ -n "$(credential_claimed phone-contact-info)" ]; then
+    echo "$username already holds a phone-contact-info credential -- skipping claim"
+else
+    run_cmd "qadenad_alias tx qadena claim-credential $user_a $user_bf phone-contact-info --from \"$username\" $USER_FEE_GRANTER_FLAG --yes"
+fi
 
 banner "$username Claim credential email"
-run_cmd "qadenad_alias tx qadena claim-credential $user_a $user_bf email-contact-info --from \"$username\" $USER_FEE_GRANTER_FLAG --yes"
+if [ -n "$(credential_claimed email-contact-info)" ]; then
+    echo "$username already holds a email-contact-info credential -- skipping claim"
+else
+    run_cmd "qadenad_alias tx qadena claim-credential $user_a $user_bf email-contact-info --from \"$username\" $USER_FEE_GRANTER_FLAG --yes"
+fi
 
 #if serviceprovider is not empty, then do this
 if [ -n "$serviceprovider" ] ; then

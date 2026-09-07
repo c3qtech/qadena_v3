@@ -465,6 +465,30 @@ else
     print "        Anything resolving a key through these providers fails with NotFound."
 fi
 
+# ---- 8. SEC CAN ACTUALLY COUNTER-SIGN --------------------------------------------------------
+#
+# THIRD INSTANCE OF THE SAME BLIND SPOT.  Checks 1-7 prove grants, allowances and registrations --
+# every one a POINTER to a capability.  A document flow needs the capability itself: SEC's
+# counter-signature is signed by a secdsvs ephemeral, and the chain rejects it with "Unauthorized
+# signer" (qadena 1137) unless that wallet is a registered authorized signatory.
+#
+# On this fleet the whole bring-up passed 13/13 with ZERO signatory records for secdsvs, because
+# the registration is the last thing create_user.sh does and a resume that skipped to the end
+# never reached it.  Nothing else asserted here would have noticed.
+_sig_addr=""
+if [[ -r "$PREGRANT" ]]; then
+    _sig_addr=$(jq -r '(.wallets // [])[] | select(.name=="secdsvs") | .address' "$PREGRANT" 2>/dev/null | head -1)
+fi
+if [[ -z "$_sig_addr" ]]; then
+    print "  skip  SEC signatory (no secdsvs address in the pregrant file)"
+elif qq query dsvs show-authorized-signatory "$_sig_addr" > /dev/null 2>&1; then
+    ok "secdsvs has an authorized signatory registered (SEC can counter-sign)"
+else
+    bad "NO authorized signatory registered for secdsvs -- SEC cannot counter-sign any document"
+    print "        the wallets and credentials exist; the registration does not.  Re-run the"
+    print "        register-authorized-signatory step, or step_3 for that user."
+fi
+
 # ---- informational: the floats --------------------------------------------------------------
 for _p in "appsvr:$FA" "users:$FU"; do
     _n="${_p%%:*}"; _a="${_p#*:}"
