@@ -125,8 +125,11 @@ echo "count: $count"
 identityprovidermnemonic=$(jq -r .identityprovidermnemonic "$VERITAS_SEC_HOME/mnemonics.json")
 dsvsprovidermnemonic=$(jq -r .dsvsprovidermnemonic "$VERITAS_SEC_HOME/mnemonics.json")
 
-echo "identityprovidermnemonic: $identityprovidermnemonic"
-echo "dsvsprovidermnemonic: $dsvsprovidermnemonic"
+# NOT THE MNEMONICS THEMSELVES.  These two seed phrases derive every provider wallet on the
+# chain; printing them put them in the scrollback of every run.  A word count is enough to confirm
+# they were read from mnemonics.json and are the right shape.
+echo "identityprovidermnemonic: <redacted, $(print -r -- "$identityprovidermnemonic" | wc -w | tr -d ' ') words>"
+echo "dsvsprovidermnemonic: <redacted, $(print -r -- "$dsvsprovidermnemonic" | wc -w | tr -d ' ') words>"
 
 
 

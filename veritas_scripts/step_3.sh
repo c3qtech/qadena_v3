@@ -325,7 +325,9 @@ else
     per_account_amount=$createwalletsponsoramount
 fi
 
-echo "create-user.sh" $name $mnemonic $pioneer "$dsvsserviceprovider" "$firstname" "$middlename" "$lastname" $birthdate $citizenship $residency $gender $email $phone $a $bf "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" $eph_count "$treasuryname"
+# $mnemonic is ARG 2 and this echoed it verbatim -- the same seed phrase the command below
+# consumes.  Print the call without it; the command itself still receives it.
+echo "create-user.sh" $name "<mnemonic redacted>" $pioneer "$dsvsserviceprovider" "$firstname" "$middlename" "$lastname" $birthdate $citizenship $residency $gender $email $phone $a $bf "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" $eph_count "$treasuryname"
 
 $qadenaproviderscripts/create_user.sh $name $mnemonic $pioneer "$dsvsserviceprovider" "$firstname" "$middlename" "$lastname" $birthdate $citizenship $residency $gender $email $phone $a $bf "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" $eph_count "$treasuryname"
 qadena_addr=$(qadenad_alias keys show $name --address)

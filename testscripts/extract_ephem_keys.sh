@@ -3,7 +3,11 @@
 # get script dir
 SCRIPT_DIR="${0:A:h}"
 
+# Capture before sourcing: setup_env defaults the backend to `test` for the harness, so a later
+# ${QADENA_KEYRING_BACKEND:-file} would never see the caller's choice.
+_kb_caller="${QADENA_KEYRING_BACKEND:-}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
+export QADENA_KEYRING_BACKEND="${_kb_caller:-file}"
 
 # Default provider name
 provider="secidentitysrvprv"
@@ -15,6 +19,10 @@ json=false
 # Process command line arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --keyring-passfile)
+            export QADENA_KEYRING_PASSFILE="$2"
+            shift 2
+            ;;
         --include-base-provider)
             include_base_provider=true
             shift
@@ -46,6 +54,19 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# ASK FOR THE PASSPHRASE IF NOBODY SUPPLIED ONE.
+#
+# This exports PRIVATE KEYS from the keyring, so on the encrypted backend it needs the
+# passphrase.  Run from step_3 the caller has already unlocked it; run BY HAND -- which is the
+# normal way to regenerate the .base64 files after a deployment -- nothing had, and qadenad
+# prompted once PER KEY into whatever stdin the call site happened to have.  With output
+# captured (which it is, three lines below) those prompts are invisible and the run looks hung.
+#
+# qadena_keyring_unlock asks once, on the terminal, and refuses with the remedy when there is no
+# terminal to ask on.  --keyring-passfile skips the prompt for an unattended run.
+qadena_keyring_unlock
+
 
 # Generate names array
 names=()
@@ -96,10 +117,21 @@ echo "Extracting private keys..." >&2
 keys=()
 for name in "${names[@]}"; do
     echo "Processing $name..." >&2
-    # Use a dummy passphrase to export the key
-    key=$(echo "dummy-passphrase" | qadenad_alias keys export "$name" 2>/dev/null)
-    
-    if [ $? -eq 0 ]; then
+    # THE ARMOR PASSPHRASE IS THE KEYRING PASSPHRASE.  This line used to pipe
+    # `echo "dummy-passphrase"` in, which read as though it chose the armor passphrase.  It never
+    # did: qadenad_alias supplies its OWN stdin -- the keyring passphrase, repeated for however
+    # many prompts a command has -- and that overrides the pipe.  The armor was always encrypted
+    # with the keyring passphrase, so the echo documented a fiction.
+    #
+    # It matters downstream: the app-server imports these with ARMOR_PASS_PHRASE and dies at
+    # startup on a mismatch, reporting "Failed to import private key for <name>:" with an EMPTY
+    # reason.  Anyone reading the old line would have set that variable to "dummy-passphrase" and
+    # been wrong -- which is exactly what shipped (measured 2026-09-07: api in a restart loop).
+    # Pass the same passfile to patch_env_file.sh --armor-passfile and the two stay in step.
+    #
+    # `if key=$(...)` rather than a later `$?`: the old check tested the status of the ASSIGNMENT,
+    # so a failed export stored whatever $key held and was reported as success.
+    if key=$(qadenad_alias keys export "$name" 2>/dev/null); then
         # Replace actual newlines and carriage returns with literal escape sequences
         # Using perl for macOS compatibility with multiline replacements
         key=$(echo "$key" | perl -pe 's/\n/\\\\n/g' | perl -pe 's/\r/\\\\r/g')

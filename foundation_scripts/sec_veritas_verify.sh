@@ -431,14 +431,77 @@ fi
 # IntervalPublicKeyID; the transaction and credential pubkeys come from create-wallet.  A provider
 # with an interval id and no keys looks registered to `list-interval-public-key-id` and is unusable
 # to anything that resolves a key through it, which is every wallet operation.
-_wcount=$(qq query qadena list-wallet --output json 2>/dev/null | jq -r '(.wallet // [])|length' 2>/dev/null)
-: ${_wcount:=0}
-if [[ "$_wcount" -gt 0 ]]; then
-    ok "$_wcount wallet(s) exist on chain (the grants have something to pay for)"
+# EVERY EXPECTED WALLET, NOT A COUNT.  The first version asserted only that list-wallet was
+# non-empty, and 13 of an expected 16 passed it -- the three missing were an entire family's
+# ephemerals, and the run that produced them reported success.  A count cannot notice a gap; the
+# expected set can, and we have it in the pregrant file.
+#
+# Asked one address at a time on purpose: list-wallet paginates, so scanning it would start
+# reporting existing wallets as absent once a deployment outgrows a page.
+if [[ -r "$PREGRANT" ]]; then
+    _wmiss=0 _wseen=0 _wfirst=""
+    while read -r _wa; do
+        [[ -n "$_wa" ]] || continue
+        _wseen=$(( _wseen + 1 ))
+        _wr=$(qq query qadena show-wallet "$_wa" --output json 2>&1 || true)
+        case "$_wr" in
+            *"no route to host"*|*"connection refused"*|*"post failed"*)
+                bad "cannot reach the chain to check wallets"; break ;;
+        esac
+        if [[ -z "$(print -r -- "$_wr" | sed -n '/^{/,$p' | jq -r '.walletID // empty' 2>/dev/null)" ]]; then
+            _wmiss=$(( _wmiss + 1 ))
+            [[ -n "$_wfirst" ]] || _wfirst="$_wa"
+        fi
+    done < <(jq -r '.wallets[].address' "$PREGRANT")
+    if [[ $_wmiss -eq 0 && $_wseen -gt 0 ]]; then
+        ok "all $_wseen expected wallets exist on chain"
+    else
+        bad "$_wmiss of $_wseen expected wallets DO NOT exist on chain"
+        print "        first missing: $_wfirst"
+        print "        their grants are issued to addresses with nothing behind them."
+    fi
 else
-    bad "ZERO wallets on chain -- every grant above is issued to an address that does not exist"
-    print "        create-wallet never succeeded.  Keys in a keyring are not wallets on a chain."
+    # Without the expected set this degrades to the old, weak assertion -- said plainly.
+    _wcount=$(qq query qadena list-wallet --output json 2>/dev/null | jq -r '(.wallet // [])|length' 2>/dev/null)
+    : ${_wcount:=0}
+    if [[ "$_wcount" -gt 0 ]]; then
+        ok "$_wcount wallet(s) exist on chain (no --pregrant: cannot tell if any are MISSING)"
+    else
+        bad "ZERO wallets on chain -- every grant is issued to an address that does not exist"
+    fi
 fi
+
+# ---- CREDENTIALS ACTUALLY CLAIMED ----------------------------------------------------------
+#
+# A user with wallets and no credentials looks finished and cannot do anything: claiming is what
+# binds a credential to the wallet, and register-authorized-signatory REFUSES without one
+# (qadena 1118).  On 2026-09-07 secdsvs had 4 wallets, 0 credentials, and every check then in this
+# file passed.  The claim is keyed by the CREDENTIAL WALLET address -- account 1 of the same
+# mnemonic -- which is why the pregrant file's `-credential` entries are the right thing to ask
+# about.
+# BY OWNER, NOT BY CREDENTIAL ID.  show-credential is keyed on the CREDENTIAL WALLET address --
+# account 1 of the user's mnemonic -- and this script deliberately holds no mnemonics: it is
+# foundation-side and read-only.  list-credential carries the owning walletID, so ask that way and
+# match on the MAIN wallet address, which the pregrant file does have.
+#
+# This scans the credential list, which paginates; on a chain with many citizens it would need a
+# by-owner query that does not exist today.  Said here rather than discovered later.
+_credmiss=""
+_credlist=$(qq query qadena list-credential --output json 2>/dev/null | sed -n '/^{/,$p' || true)
+for _un in sec-create-wallet-sponsor secdsvs; do
+    _uw=$(jq -r --arg n "$_un" '(.wallets // [])[] | select(.name==$n) | .address' "$PREGRANT" 2>/dev/null | head -1)
+    [[ -n "$_uw" ]] || continue
+    _n=$(print -r -- "$_credlist" | jq -r --arg w "$_uw" '[(.credential // [])[] | select(.walletID==$w)] | length' 2>/dev/null)
+    [[ "${_n:-0}" -gt 0 ]] || _credmiss="$_credmiss $_un"
+done
+if [[ -z "$_credmiss" ]]; then
+    ok "both user wallets own claimed credentials"
+else
+    bad "NO claimed credentials for:$_credmiss"
+    print "        the wallets exist but nothing is bound to them -- SEC cannot register a"
+    print "        signatory (qadena 1118) and the app cannot present a credential."
+fi
+
 
 _nokeys=""
 _provseen=0

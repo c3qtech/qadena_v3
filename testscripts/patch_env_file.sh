@@ -40,6 +40,7 @@ PREFIX=""
 ENV_FILE=""
 KEY_DIR="."
 SPONSORS=""
+ARMOR_PASSFILE=""
 DRY_RUN=0
 
 usage() {
@@ -55,6 +56,12 @@ Options:
   --sponsors <file>  also set QADENA_FOUNDATION_USERS_ADDRESS and
                      QADENA_FOUNDATION_APPSVR_ADDRESS from a veritas-sponsors.json
                      (written by sec_veritas_before_step_1.sh --stage prepare)
+  --armor-passfile <file>
+                     also set ARMOR_PASS_PHRASE from this file's first line.  The
+                     app-server needs the passphrase the KEYS WERE EXPORTED WITH,
+                     which is the keyring passphrase -- pass the same file you gave
+                     the bring-up.  Without it the app dies at startup with
+                     "Failed to import private key" and no further detail.
   --dry-run          report what would change; write nothing
 
   A timestamped backup is written beside the env file before anything is modified.
@@ -70,6 +77,7 @@ while [ $# -gt 0 ]; do
 	case "$1" in
 	--key-dir)  KEY_DIR="$2"; shift 2 ;;
 	--sponsors) SPONSORS="$2"; shift 2 ;;
+	--armor-passfile) ARMOR_PASSFILE="$2"; shift 2 ;;
 	--dry-run)  DRY_RUN=1; shift ;;
 	--help|-h)  usage; exit 0 ;;
 	--*)        echo "unknown option: $1" >&2; usage >&2; exit 1 ;;
@@ -123,6 +131,24 @@ if [ -n "$SPONSORS" ]; then
 	echo "  appsvr $FOUNDATION_APPSVR"
 fi
 
+# THE ARMOR PASSPHRASE IS THE KEYRING PASSPHRASE, and that is not a choice anyone made -- it is a
+# consequence.  extract_ephem_keys.sh pipes `echo "dummy-passphrase"` into `keys export`, but the
+# export runs through qadenad_alias, which supplies its OWN stdin (the keyring passphrase, fed
+# repeatedly for however many prompts a command has).  That overrides the echo, so the armor ends
+# up encrypted with the keyring passphrase whatever the script intended.
+#
+# The app-server then imports with ARMOR_PASS_PHRASE and dies at startup on a mismatch --
+# "Failed to import private key for <name>:" with an EMPTY reason, which points nowhere near the
+# cause.  Measured 2026-09-07: the env shipped dummy-passphrase, the keys were encrypted with the
+# keyring passphrase, and the api container exited 1 in a restart loop.
+ARMOR_PASS=""
+if [ -n "$ARMOR_PASSFILE" ]; then
+	[ -r "$ARMOR_PASSFILE" ] || { echo "error: cannot read $ARMOR_PASSFILE" >&2; exit 1; }
+	ARMOR_PASS=$(head -1 "$ARMOR_PASSFILE")
+	[ -n "$ARMOR_PASS" ] || { echo "error: $ARMOR_PASSFILE is empty" >&2; exit 1; }
+	echo "armor passphrase: taken from $ARMOR_PASSFILE (${#ARMOR_PASS} chars, not shown)"
+fi
+
 BACKUP="${ENV_FILE}.bak.$(date -u '+%Y%m%dT%H%M%SZ')"
 if [ "$DRY_RUN" -eq 0 ]; then
 	cp -p "$ENV_FILE" "$BACKUP"
@@ -134,6 +160,7 @@ ENV_FILE="$ENV_FILE" \
 BLOCK="$BLOCK" \
 FOUNDATION_USERS="$FOUNDATION_USERS" \
 FOUNDATION_APPSVR="$FOUNDATION_APPSVR" \
+ARMOR_PASS="$ARMOR_PASS" \
 python3 - <<'PY'
 import os, re, sys
 
@@ -153,6 +180,13 @@ for var in ("QADENA_FOUNDATION_USERS_ADDRESS", "QADENA_FOUNDATION_APPSVR_ADDRESS
     val = os.environ.get(var.replace("QADENA_FOUNDATION_", "FOUNDATION_").replace("_ADDRESS", ""), "")
     if val:
         pairs[var] = f"{var}={val}"
+
+# Not base64 and not a key, but it is the thing that DECRYPTS the keys above -- so it belongs in
+# the same atomic edit as they do: a run that updated the keys and left the old passphrase would
+# produce an app that cannot start.
+_armor = os.environ.get("ARMOR_PASS", "")
+if _armor:
+    pairs["ARMOR_PASS_PHRASE"] = f"ARMOR_PASS_PHRASE={_armor}"
 
 if not pairs:
     sys.exit("error: the generated block contained no assignments")

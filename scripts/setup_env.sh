@@ -1191,6 +1191,21 @@ banner() {
 
 run_cmd() {
   local cmd="$*"
+  # REDACT SECRETS FROM THE BANNER, NOT FROM THE COMMAND.
+  #
+  # This prints the command it is about to run, and wallet creation passes the seed phrase as an
+  # argument -- so every create-wallet printed 24 words that control every wallet derived from
+  # them, into the terminal, the scrollback, and any CI transcript or pasted log.  Measured
+  # 2026-09-07 in a pasted step_3 run.
+  #
+  # $cmd is displayed; $* is executed.  Splitting them is the whole point: the redaction must not
+  # reach the command, and the command must not reach the screen.
+  local shown="$cmd"
+  shown=$(print -r -- "$shown" | sed -E \
+      -e 's/(--account-mnemonic=")[^"]*(")/\1<redacted>\2/g' \
+      -e "s/(--account-mnemonic=')[^']*(')/\1<redacted>\2/g" \
+      -e 's/(--recover[[:space:]]+)[a-z]+([[:space:]]+[a-z]+){11,}/\1<redacted>/g' \
+      -e 's/(--mnemonic[=[:space:]]+)[^ ]+([[:space:]]+[a-z]+){11,}/\1<redacted>/g')
   local wrap_width=80
   local wrapped
   local maxlen=0
@@ -1198,7 +1213,7 @@ run_cmd() {
   local border
   local i=0
 
-  wrapped="$(echo "$cmd" | fold -s -w "$wrap_width")"
+  wrapped="$(echo "$shown" | fold -s -w "$wrap_width")"
 
   while IFS= read -r line; do
     if (( ${#line} > maxlen )); then
@@ -1224,6 +1239,11 @@ run_cmd() {
 }
 
 run_cmd_capture() {
+  # Same redaction as run_cmd -- this one also prints the command it runs.
+  local shown="$cmd"
+  shown=$(print -r -- "$shown" | sed -E \
+      -e 's/(--account-mnemonic=")[^"]*(")/\1<redacted>\2/g' \
+      -e "s/(--account-mnemonic=')[^']*(')/\1<redacted>\2/g")
   local cmd="$*"
   local wrap_width=80
   local wrapped
@@ -1232,7 +1252,7 @@ run_cmd_capture() {
   local border
   local i=0
 
-  wrapped="$(echo "$cmd" | fold -s -w "$wrap_width")"
+  wrapped="$(echo "$shown" | fold -s -w "$wrap_width")"
 
   while IFS= read -r line; do
     if (( ${#line} > maxlen )); then
