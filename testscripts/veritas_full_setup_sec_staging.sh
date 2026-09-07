@@ -34,7 +34,7 @@ REPO="${SCRIPT_DIR:h}"
 NODE="${QADENA_NODE:-}"
 NODE_EXPLICIT=0
 PASSFILE="$HOME/.sec-veritas-password"
-LAUNCH_DIR="$HOME/sec-staging-fleet-launch"
+LAUNCH_DIR="$HOME/sec-veritas-staging-fleet-launch"
 CHAIN_ID="qadena_4824-1"
 # SGX=0 BUILDS A DEBUG ENCLAVE, and that has to be said explicitly rather than left to inference.
 # build.sh's default is "ego installed means SGX", so a host with ego and NO /dev/sgx* devices --
