@@ -36,6 +36,15 @@ NODE_EXPLICIT=0
 PASSFILE="$HOME/.sec-veritas-password"
 LAUNCH_DIR="$HOME/fleet-launch"
 CHAIN_ID="qadena_4824-1"
+# SGX=0 BUILDS A DEBUG ENCLAVE, and that has to be said explicitly rather than left to inference.
+# build.sh's default is "ego installed means SGX", so a host with ego and NO /dev/sgx* devices --
+# traxion-vm-01 is exactly that -- produces a signed enclave it cannot load unless --no-sgx is
+# passed.  Omitting --build-sgx is not the same as passing --no-sgx; the bringup's own comment
+# records that this once printed "debug (forced)" while producing a signed SGX build.
+#
+# SGX=1 passes nothing and lets the bringup probe the host: ego plus devices -> SGX, otherwise
+# debug.  Use it on the SGX fleet.
+SGX=0
 COORD_HOME="$LAUNCH_DIR/coord"
 SEC_HOME="${VERITAS_SEC_HOME:-$HOME/sec-veritas}"
 COUNT=3
@@ -73,6 +82,10 @@ usage() {
     print -r -- "  --launch-dir <dir>  the foundation's directory (default ~/fleet-launch).  Created"
     print -r -- "                      by the bootstrap stage if absent -- keys, sealed mnemonics,"
     print -r -- "                      addresses.csv and the rendered launch config."
+    print -r -- "  --sgx 0|1           0 (default) builds a DEBUG enclave via --no-build-sgx;"
+    print -r -- "                      1 lets the bringup probe the host.  Omitting --build-sgx is"
+    print -r -- "                      NOT the same as --no-sgx: build.sh defaults to SGX wherever"
+    print -r -- "                      ego is installed, devices or not."
     print -r -- "  --chain-id <id>     for the rendered config (default qadena_4824-1).  Only used"
     print -r -- "                      when bootstrap has to create it."
     print -r -- "  --skip-app          stop after verify; do not touch the app-server stack"
@@ -92,6 +105,7 @@ while [[ $# -gt 0 ]]; do
         --skip-app)      SKIP_APP=1; shift ;;
         --launch-dir)    LAUNCH_DIR="$2"; shift 2 ;;
         --chain-id)      CHAIN_ID="$2"; shift 2 ;;
+        --sgx)           SGX="$2"; shift 2 ;;
         --stack)         STACK="$2"; shift 2 ;;
         --env-file)      ENV_FILE="$2"; shift 2 ;;
         --primary)       PRIMARY="$2"; shift 2 ;;
@@ -271,11 +285,15 @@ if (( REBUILD )); then
         mv "$_tmp" "$_pm"; chmod 600 "$_pm"
         print -r -- "  unsealed the pioneer mnemonic ($_wc words) for the bringup"
     fi
+    # SGX=0 -> --no-build-sgx (which reaches build.sh as --no-sgx).  SGX=1 -> pass nothing and let
+    # the bringup detect what the host can actually do.
+    _sgx=()
+    [[ "$SGX" == "0" ]] && _sgx=(--no-build-sgx)
     _adv=()
     [[ -n "$ADVERTISE_P" ]] && _adv+=(--advertise-ip-address "$ADVERTISE_P")
     [[ -n "$ADVERTISE_J" ]] && _adv+=(--joiner-advertise-ip-address "$ADVERTISE_J")
     ./testscripts/fleet_bringup_with_tests.sh \
-        --primary "$PRIMARY" --joiner "$JOINER" --block-sync "${_adv[@]}" \
+        --primary "$PRIMARY" --joiner "$JOINER" --block-sync "${_sgx[@]}" "${_adv[@]}" \
         --mainnet-source        "$LAUNCH_DIR/fleet-launch-config.yml" \
         --pioneer-mnemonic-file "$_pm" \
         --funder qfi-pioneer1 --fund-qdn 10100 --stake 10000
