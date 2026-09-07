@@ -30,6 +30,37 @@ set -e
 
 RPC="http://localhost:26657"
 
+# WHO the peers are still comes from net_info.  HOW to reach them can be overridden.
+#
+# The two are different questions and this script used to conflate them.  net_info is the right
+# source for WHO: it lists the peers actually connected, which is the point -- a supplied list
+# would check the nodes you believe exist and miss one that is connected and diverging, which is
+# the fork this suite was written for.
+#
+# But it reported each peer's `remote_ip`, which is where the CONNECTION CAME FROM.  For a peer
+# that dialled out through NAT that is the NAT's address, nothing serves 26657 there, and the
+# check degrades to "cannot compare" for a peer that is perfectly healthy.  Measured 2026-09-08:
+# pioneer2 at 13.213.217.124, connected and syncing, unverifiable.
+#
+#   --peer-rpc <moniker>=<url>   check that peer at <url> instead of its remote_ip
+#   --rpc <url>                  this node's RPC (default http://localhost:26657)
+#
+# An override never ADDS a peer -- if the moniker is not in net_info it is not connected, and
+# saying so is the honest answer.
+typeset -A PEER_RPC
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --rpc)      RPC="$2"; shift 2 ;;
+        --peer-rpc) PEER_RPC[${2%%=*}]="${2#*=}"; shift 2 ;;
+        --help|-h)
+            print -r -- "Usage: test_peer_agreement.sh [--rpc <url>] [--peer-rpc <moniker>=<url>]..."
+            print -r -- "  Peers are discovered from this node's net_info; --peer-rpc only changes"
+            print -r -- "  the address used to reach one, for peers behind NAT."
+            exit 0 ;;
+        *) print -u2 -- "unknown option: $1"; exit 1 ;;
+    esac
+done
+
 fail() {
     echo "FAILED: $1"
     exit 1
@@ -69,7 +100,12 @@ diverged=0
 
 echo "$peers" | while IFS='|' read -r moniker ip; do
     [ -n "$ip" ] || continue
-    prpc="http://$ip:26657"
+    # An override for this moniker wins over the remote_ip; see --peer-rpc above.
+    if [[ -n "${PEER_RPC[$moniker]:-}" ]]; then
+        prpc="${PEER_RPC[$moniker]}"
+    else
+        prpc="http://$ip:26657"
+    fi
 
     pstatus=$(curl -s -m 8 "$prpc/status" 2>/dev/null) || pstatus=""
     if [ -z "$pstatus" ]; then
@@ -111,13 +147,33 @@ echo "========================="
 # So (a) is caught by comparison and (b) by the halt check, and both are failures.
 divergence=0
 halted=0
+compared=0
+skipped=0
 while IFS='|' read -r moniker ip; do
     [ -n "$ip" ] || continue
-    prpc="http://$ip:26657"
+    # An override for this moniker wins over the remote_ip; see --peer-rpc above.
+    if [[ -n "${PEER_RPC[$moniker]:-}" ]]; then
+        prpc="${PEER_RPC[$moniker]}"
+    else
+        prpc="http://$ip:26657"
+    fi
 
-    pstatus=$(curl -s -m 8 "$prpc/status" 2>/dev/null)
-    if [ -z "$pstatus" ]; then
-        echo "  $moniker: RPC unreachable -- NOT compared"
+    # `|| pstatus=""` IS WHAT KEEPS THIS SUITE ALIVE.  curl exits 7 when it cannot connect, and
+    # under `set -e` a failing command substitution in an assignment TERMINATES THE SCRIPT -- here,
+    # silently, mid-section.  nth_node_bringup.sh then sees a non-zero exit and prints "PEER
+    # AGREEMENT FAILED ... That is a fork", so an UNREACHABLE peer was reported as a FORKED chain.
+    # Measured 2026-09-08 against pioneer2 behind NAT: section 2 printed its header and nothing
+    # else, and the bringup declared a fork that did not exist.  Section 1 had the guard; section 2
+    # did not, which is why the same peer produced a clean message there and a fork verdict here.
+    pstatus=$(curl -s -m 8 "$prpc/status" 2>/dev/null) || pstatus=""
+    # NOT REACHED IS NOT THE SAME AS DISAGREED, and this is a FORK DETECTOR -- a false positive
+    # here sends someone hunting a split that does not exist.  An empty body was handled; a
+    # NON-EMPTY body that is not CometBFT status was not.  A load balancer or proxy in front of a
+    # peer answers with HTML, curl succeeds, jq yields nulls, and the comparison then runs on
+    # nothing.  Require the shape before believing anything it says.
+    if [ -z "$pstatus" ] || [ -z "$(echo "$pstatus" | jq -r '.result.sync_info.latest_block_height // empty' 2>/dev/null)" ]; then
+        echo "  $moniker: RPC unreachable or not a CometBFT status -- NOT compared"
+        skipped=$(( skipped + 1 ))
         continue
     fi
     pheight=$(echo "$pstatus" | jq -r '.result.sync_info.latest_block_height')
@@ -127,18 +183,23 @@ while IFS='|' read -r moniker ip; do
 
     # LIKE FOR LIKE: the peer's latest app hash is the header of ITS block at pheight, so compare it
     # against this node's header for the SAME height.
+    # Same guard: this one queries the LOCAL node, but a node that is restarting answers nothing
+    # and the assignment would be just as fatal.
     mine=$(curl -s -m 8 "$RPC/block?height=$pheight" 2>/dev/null \
-           | jq -r '.result.block.header.app_hash' 2>/dev/null)
+           | jq -r '.result.block.header.app_hash' 2>/dev/null) || mine=""
 
     if [ -z "$mine" ] || [ "$mine" = "null" ]; then
         echo "  $moniker: this node has no block at $pheight -- NOT compared"
+        skipped=$(( skipped + 1 ))
     elif [ "$ptheirs" = "$mine" ]; then
         echo "  $moniker: MATCH at height $pheight  ${mine:0:32}"
+        compared=$(( compared + 1 ))
     else
         echo "  $moniker: DIVERGED at height $pheight"
         echo "      peer      ($moniker): $ptheirs"
         echo "      this node ($local_moniker): $mine"
         divergence=1
+        compared=$(( compared + 1 ))
     fi
 
     behind=$(( local_height - pheight ))
@@ -147,6 +208,22 @@ while IFS='|' read -r moniker ip; do
         halted=1
     fi
 done <<< "$peers"
+
+echo ""
+echo "  compared $compared peer(s); $skipped not compared"
+# SAY WHAT WAS ACTUALLY MEASURED.  A verdict that does not name its evidence is how "cannot reach a
+# peer" gets read as "the chain forked".
+if [ "$compared" -eq 0 ]; then
+    echo ""
+    echo "========================="
+    echo "NOTHING COMPARED -- NOT TESTED"
+    echo "========================="
+    echo "Every peer was unreachable or served no comparable block, so this suite proves nothing"
+    echo "about agreement.  It is not a pass and it is not a fork.  If a peer sits behind NAT or a"
+    echo "load balancer, give it an address that answers /status:"
+    echo "    --peer-rpc <moniker>=<url>"
+    exit 0
+fi
 
 if [ "$divergence" -ne 0 ]; then
     fail "peers published DIFFERENT app hashes for the same height -- the chain has FORKED and both

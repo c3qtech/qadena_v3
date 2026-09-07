@@ -34,7 +34,7 @@ REPO="${SCRIPT_DIR:h}"
 NODE="${QADENA_NODE:-}"
 NODE_EXPLICIT=0
 PASSFILE="$HOME/.sec-veritas-password"
-LAUNCH_DIR="$HOME/fleet-launch"
+LAUNCH_DIR="$HOME/sec-staging-fleet-launch"
 CHAIN_ID="qadena_4824-1"
 # SGX=0 BUILDS A DEBUG ENCLAVE, and that has to be said explicitly rather than left to inference.
 # build.sh's default is "ego installed means SGX", so a host with ego and NO /dev/sgx* devices --
@@ -59,7 +59,7 @@ COUNT=3
 FROM="bootstrap"
 REBUILD=0
 STACK="$HOME/test/follow-the-money/stacks/veritas"
-ENV_FILE="env-sponsored-test"
+ENV_FILE="env-staging-no-aws"
 PREFIX="sec"
 PRIMARY="azureuser@20.212.178.16"
 JOINER="ubuntu@172.31.20.18"
