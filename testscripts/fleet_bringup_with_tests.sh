@@ -246,6 +246,12 @@ while [[ $# -gt 0 ]]; do
         --ref)           REF="$2"; shift 2 ;;
         --build-sgx)     BUILD_SGX="yes"; shift ;;
         --no-build-sgx)  BUILD_SGX="no"; shift ;;
+        # JOINERS BECOME VALIDATORS BY DEFAULT, which is what a test fleet wants: bonded stake is
+        # what makes a joiner count toward quorum, and several suites need more than one voter.
+        # A full node that never bonds is the right shape when you want a second RPC, a sync
+        # target, or a node whose failure cannot stall the chain -- and on a two-node fleet it
+        # leaves the primary as the SOLE validator, so its downtime is the chain's downtime.
+        --no-convert-joiners) CONVERT_JOINERS=0; shift ;;
         --skip-update)     SKIP_UPDATE=1; shift ;;
         --pioneer-prefix) PIONEER_PREFIX="$2"; shift 2 ;;
         --snapshot-interval) SNAP_INTERVAL="$2"; shift 2 ;;
@@ -526,7 +532,13 @@ esac
 # The one combination that cannot work: an ego-signed enclave needs /dev/sgx_enclave to RUN, so an
 # SGX build cannot be installed onto a joiner without the devices.  The reverse is fine.  Refused
 # here, before a ~24-minute build, rather than at that joiner's first start.
-if [[ -n "$SGX_FLAG" ]]; then
+# TEST WHAT THE FLAG SAYS, NOT WHETHER IT IS SET.  SGX_FLAG holds one of "", "--build-sgx" or
+# "--no-sgx", so `-n` is true for the NO case as well -- and the guard below then refused a
+# device-less joiner on a run that had explicitly asked for a debug build, with a message claiming
+# "the primary builds an SGX enclave" when it was doing the opposite.  Measured 2026-09-07: the
+# first run to actually use --no-build-sgx against a joiner with no devices, which is precisely the
+# combination this branch exists to support.
+if [[ "$SGX_FLAG" == "--build-sgx" ]]; then
     for j in "${JOINERS[@]}"; do
         [[ $(sgx_state "$j") == 2 ]] \
             && fail "$j has no SGX devices but the primary builds an SGX enclave -- that binary cannot run there. Drop that joiner, provision its devices, or pass --no-build-sgx for a debug fleet."
@@ -590,6 +602,7 @@ mainnet_args=()
 # ARRAYS, NOT ${VAR:+...}.  zsh does not word-split an unquoted parameter expansion, so
 # `${ADVERTISE_P:+--advertise-ip-address "$ADVERTISE_P"}` would arrive as ONE argument and be
 # rejected as an unknown option -- the same bug that made sec_veritas_verify.sh reject --pool.
+conv=(); (( CONVERT_JOINERS )) && conv=(--convert-to-validator)
 adv_p=(); [[ -n "$ADVERTISE_P" ]] && adv_p=(--advertise-ip-address "$ADVERTISE_P")
 adv_j=(); [[ -n "$ADVERTISE_J" ]] && adv_j=(--advertise-ip-address "$ADVERTISE_J")
 "$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG "${mainnet_args[@]}" "${adv_p[@]}" --only 1 \
@@ -906,7 +919,7 @@ fi
         print "$j joined by: $SYNC_KIND (as $pioneer, sponsored by $SPONSOR_GRANTER)" >> "$RUN_DIR/fleet.txt"
         sjargs=(--primary "$PRIMARY" --joiner "$j" --pioneer "$pioneer"
                 --granter "$SPONSOR_GRANTER" "${sync_arg[@]}" "${seed2_arg[@]}"
-                --convert-to-validator)
+                "${conv[@]}")
         "$SCRIPT_DIR/nth_node_sponsored_join.sh" "${sjargs[@]}" \
             2>&1 | tee "$RUN_DIR/stage-G-join-${j##*@}.log"
         [[ ${pipestatus[1]} -eq 0 ]] || fail "sponsored join failed for $j -- see $RUN_DIR/stage-G-join-${j##*@}.log
@@ -928,7 +941,7 @@ fi
     print "$j joined by: $SYNC_KIND (as $pioneer)" >> "$RUN_DIR/fleet.txt"
     "$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" "${adv_j[@]}" \
         --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" "${sponsor_arg[@]}" "${amount_args[@]}" \
-        --convert-to-validator --from 1 --until 8 \
+        "${conv[@]}" --from 1 --until 8 \
         2>&1 | tee "$RUN_DIR/stage-G-join-${j##*@}.log"
     [[ ${pipestatus[1]} -eq 0 ]] || fail "join failed for $j; nth_node_bringup is phase-resumable (--from N). See $RUN_DIR/stage-G-join-${j##*@}.log"
     JOINED+=("$j")
@@ -962,10 +975,15 @@ print ""
 # WHAT THIS SCRIPT DID AND DID NOT DO -- and it must describe THIS script.  This block was once a
 # copy of the old bringup's, which stopped at phase 5 and said so; here the joiners are bonded by
 # phase 7, so the text told the operator to go and re-run a conversion that had already happened.
+if (( CONVERT_JOINERS )); then
 print "Joiners WERE converted to validators: nth_node_bringup ran --convert-to-validator --until 8, so each one is"
 print "bonded, has proposed a block, and is therefore addressable, an SS key owner and visible to the"
 print "re-share audit.  Stopping at phase 5 instead would leave them unbonded, and every audit would"
 print "sit at target=1 healing nothing.  See the stage G comment."
+else
+print "Joiners were NOT converted to validators (--no-convert-joiners): they sync and serve RPC,"
+print "  but do not bond, do not vote, and do not count toward quorum.  The primary is the only validator."
+fi
 # (I) is the INDEX of the last match, 0 when there is none -- so this asks "was any --test
 # scheduled?" without a loop.  A plain `print ... || print ...` chain would have made only the
 # FIRST line of each group conditional and printed the rest unconditionally.

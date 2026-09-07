@@ -45,6 +45,11 @@ CHAIN_ID="qadena_4824-1"
 # SGX=1 passes nothing and lets the bringup probe the host: ego plus devices -> SGX, otherwise
 # debug.  Use it on the SGX fleet.
 SGX=0
+# JOINER_VALIDATOR=1 bonds each joiner so it counts toward quorum -- what a test fleet wants, and
+# what several suites need (an audit with one validator heals nothing).  0 leaves them as full
+# nodes: they sync and serve RPC but never bond, which makes the PRIMARY the only validator and
+# therefore a single point of failure for the chain.
+JOINER_VALIDATOR=0
 COORD_HOME="$LAUNCH_DIR/coord"
 # A SEPARATE HOME PER DEPLOYMENT.  This shared ~/sec-veritas with the local-fleet script, and the
 # rebuild stage below deletes it -- so running staging wiped the LOCAL deployment's keys and
@@ -89,6 +94,10 @@ usage() {
     print -r -- "                      1 lets the bringup probe the host.  Omitting --build-sgx is"
     print -r -- "                      NOT the same as --no-sgx: build.sh defaults to SGX wherever"
     print -r -- "                      ego is installed, devices or not."
+    print -r -- "  --joiner-validator 0|1"
+    print -r -- "                      1 (default) bonds each joiner so it counts toward quorum;"
+    print -r -- "                      0 leaves them as full nodes -- they sync and serve RPC but"
+    print -r -- "                      never vote, making the primary the only validator."
     print -r -- "  --chain-id <id>     for the rendered config (default qadena_4824-1).  Only used"
     print -r -- "                      when bootstrap has to create it."
     print -r -- "  --skip-app          stop after verify; do not touch the app-server stack"
@@ -109,6 +118,7 @@ while [[ $# -gt 0 ]]; do
         --launch-dir)    LAUNCH_DIR="$2"; shift 2 ;;
         --chain-id)      CHAIN_ID="$2"; shift 2 ;;
         --sgx)           SGX="$2"; shift 2 ;;
+        --joiner-validator) JOINER_VALIDATOR="$2"; shift 2 ;;
         --stack)         STACK="$2"; shift 2 ;;
         --env-file)      ENV_FILE="$2"; shift 2 ;;
         --primary)       PRIMARY="$2"; shift 2 ;;
@@ -292,11 +302,13 @@ if (( REBUILD )); then
     # the bringup detect what the host can actually do.
     _sgx=()
     [[ "$SGX" == "0" ]] && _sgx=(--no-build-sgx)
+    _jv=()
+    [[ "$JOINER_VALIDATOR" == "0" ]] && _jv=(--no-convert-joiners)
     _adv=()
     [[ -n "$ADVERTISE_P" ]] && _adv+=(--advertise-ip-address "$ADVERTISE_P")
     [[ -n "$ADVERTISE_J" ]] && _adv+=(--joiner-advertise-ip-address "$ADVERTISE_J")
     ./testscripts/fleet_bringup_with_tests.sh \
-        --primary "$PRIMARY" --joiner "$JOINER" --block-sync "${_sgx[@]}" "${_adv[@]}" \
+        --primary "$PRIMARY" --joiner "$JOINER" --block-sync "${_sgx[@]}" "${_jv[@]}" "${_adv[@]}" \
         --mainnet-source        "$LAUNCH_DIR/fleet-launch-config.yml" \
         --pioneer-mnemonic-file "$_pm" \
         --funder qfi-pioneer1 --fund-qdn 10100 --stake 10000
