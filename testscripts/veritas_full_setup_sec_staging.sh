@@ -66,7 +66,11 @@ JOINER="ubuntu@172.31.20.18"
 SKIP_APP=0
 ADVERTISE_P="20.212.178.16"
 ADVERTISE_J="dev-nlb-97f5978861fac526.elb.ap-southeast-1.amazonaws.com"
-QADENA_ALLOW_UNVERIFIED_AGREEMENT=1
+# EXPORTED, or it does nothing.  A bare assignment is a SHELL variable; nth_node_bringup.sh runs
+# as a grandchild (via fleet_bringup_with_tests.sh) and reads it from the ENVIRONMENT, so without
+# `export` the opt-out is set here and invisible there -- the run still fails on an unreachable
+# peer and the setting looks broken rather than absent.
+export QADENA_ALLOW_UNVERIFIED_AGREEMENT=1
 
 usage() {
     print -r -- "Usage: veritas_full_setup.sh [options]"
