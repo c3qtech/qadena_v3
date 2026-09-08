@@ -54,7 +54,7 @@ COORD_HOME="$LAUNCH_DIR/coord"
 # A SEPARATE HOME PER DEPLOYMENT.  This shared ~/sec-veritas with the local-fleet script, and the
 # rebuild stage below deletes it -- so running staging wiped the LOCAL deployment's keys and
 # mnemonics before it had even reached its own chain (2026-09-07).  Two deployments, two homes.
-SEC_HOME=$HOME/sec-veritas-staging"
+SEC_HOME="$HOME/sec-veritas-staging"
 COUNT=3
 FROM="bootstrap"
 REBUILD=0
