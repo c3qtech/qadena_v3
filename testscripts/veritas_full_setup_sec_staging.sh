@@ -462,7 +462,7 @@ banner "9. APP-SERVER: patch the env, install it, restart the stack"
 ENV_FILE="${ENV_FILE:A}"
 STACK="${ENV_FILE:h}"
 [[ -f "$ENV_FILE" ]] || { print -u2 "no env file at $ENV_FILE"; exit 1 }
-[[ -f "$STACK/compose.yml" ]] || { print -u2 "no compose.yml beside $ENV_FILE -- is $STACK the stack?"; exit 1 }
+
 _n=$(ls "$REPO"/${PREFIX}*-names.base64 2>/dev/null | wc -l | tr -d ' ')
 (( _n > 0 )) || { print -u2 "no ${PREFIX}*.base64 files in $REPO -- did step_3 run?"; exit 1 }
 # ARE THESE KEYS FROM THIS DEPLOYMENT?  Not "are they recent" -- my first version compared mtimes
