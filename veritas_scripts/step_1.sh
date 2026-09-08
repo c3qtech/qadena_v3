@@ -80,6 +80,7 @@ treasurymnemonic=$(qadenad_alias keys mnemonic)
 export QADENA_KEYRING_DIR="$VERITAS_SEC_HOME/keyring"
 mkdir -p "$QADENA_KEYRING_DIR" 2>/dev/null; chmod 700 "$QADENA_KEYRING_DIR" 2>/dev/null
 
+
 treasuryname="sec-treasury"
 
 # THE ADMIN KEY, AND WHY IT HOLDS NOTHING.
@@ -295,6 +296,36 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# RE-DERIVE AFTER PARSING.  $VERITAS_SEC_HOME is defaulted at the top and QADENA_KEYRING_DIR is
+# exported from it there -- both BEFORE this loop runs, so --sec-home arrived too late to move the
+# keyring.  The run then SPLIT itself across two directories: keys into the default
+# ~/sec-veritas/keyring, mnemonics and variables.json into the requested one.  Everything after
+# looked fine (the admin key was created, its address printed), and step_2 -- pointed at the
+# requested home -- could not find that key, fell back to signing as the foundation, and died on
+# "key with address <sponsor> not found".  Measured 2026-09-08 on the staging box, where
+# ~/sec-veritas and ~/sec-veritas-staging both existed, two minutes apart.
+export QADENA_KEYRING_DIR="$VERITAS_SEC_HOME/keyring"
+mkdir -p "$QADENA_KEYRING_DIR" 2>/dev/null; chmod 700 "$QADENA_KEYRING_DIR" 2>/dev/null
+
+# WARN ABOUT A SPLIT DEPLOYMENT, which is what the ordering bug above used to produce.
+#
+# step_1 fixed QADENA_KEYRING_DIR from the DEFAULT home before parsing --sec-home, so a run with
+# --sec-home wrote keys to ~/sec-veritas and mnemonics to the requested directory.  Nothing said
+# so: the admin key was created and its address printed, and the failure surfaced two steps later
+# as "key with address <sponsor> not found" while signing as the foundation.  The ordering is
+# fixed, but a directory left behind by an earlier run still looks like a working deployment.
+if [[ "$VERITAS_SEC_HOME" != "$HOME/sec-veritas" ]] \
+   && ls "$HOME/sec-veritas"/keyring/keyring-*/*.info > /dev/null 2>&1; then
+    echo ""
+    echo "NOTE: $HOME/sec-veritas also holds keys, and this run uses $VERITAS_SEC_HOME."
+    echo "  A version of step_1 before 2026-09-08 wrote keys to the default home while writing"
+    echo "  mnemonics to --sec-home, splitting a deployment across both.  If this run cannot find"
+    echo "  a key it expects, look there:"
+    echo "      ls $HOME/sec-veritas/keyring/keyring-file/"
+    echo "  and either move them across or start clean.  Nothing is read from there automatically."
+    echo ""
+fi
 
 # UNLOCK ONCE, HERE.  qadena_keyring_unlock has existed in setup_env.sh since the file backend was
 # added and was never called from anywhere -- so with backend=file, QADENA_KEYRING_PASS stayed

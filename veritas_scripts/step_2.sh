@@ -96,6 +96,25 @@ qadena_keyring_unlock
 export QADENA_KEYRING_DIR="$VERITAS_SEC_HOME/keyring"
 mkdir -p "$QADENA_KEYRING_DIR" 2>/dev/null; chmod 700 "$QADENA_KEYRING_DIR" 2>/dev/null
 
+# WARN ABOUT A SPLIT DEPLOYMENT, which is what the ordering bug above used to produce.
+#
+# step_1 fixed QADENA_KEYRING_DIR from the DEFAULT home before parsing --sec-home, so a run with
+# --sec-home wrote keys to ~/sec-veritas and mnemonics to the requested directory.  Nothing said
+# so: the admin key was created and its address printed, and the failure surfaced two steps later
+# as "key with address <sponsor> not found" while signing as the foundation.  The ordering is
+# fixed, but a directory left behind by an earlier run still looks like a working deployment.
+if [[ "$VERITAS_SEC_HOME" != "$HOME/sec-veritas" ]] \
+   && ls "$HOME/sec-veritas"/keyring/keyring-*/*.info > /dev/null 2>&1; then
+    echo ""
+    echo "NOTE: $HOME/sec-veritas also holds keys, and this run uses $VERITAS_SEC_HOME."
+    echo "  A version of step_1 before 2026-09-08 wrote keys to the default home while writing"
+    echo "  mnemonics to --sec-home, splitting a deployment across both.  If this run cannot find"
+    echo "  a key it expects, look there:"
+    echo "      ls $HOME/sec-veritas/keyring/keyring-file/"
+    echo "  and either move them across or start clean.  Nothing is read from there automatically."
+    echo ""
+fi
+
 # READ FROM SEC'S DIRECTORY, AND SAY SO WHEN IT IS NOT THERE.  A missing variables.json used to
 # surface as jq errors and empty variables, which then flowed into transactions as blanks.
 # mnemonics.json is no longer written -- step_1 seals directly -- so require only
@@ -190,14 +209,39 @@ if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
     # an authz grant from the sponsor to it.  Delegation-if-delegated, direct-sign otherwise --
     # the run adapts to what is true on chain instead of what someone remembered to export.
     if [ -z "${VERITAS_SEC_ADMIN:-}" ]; then
+        # SAY WHICH CONDITION FAILED.  This had ONE message for four different causes -- no
+        # adminname recorded, no local key, an unreachable chain, or a genuinely absent grant --
+        # and then fell back to direct signing, which needs the FOUNDATION's key.  On a split
+        # keyring that key is not here, so the run continued and died much later with
+        # "key with address <sponsor> not found", naming the granter rather than the delegation
+        # that should have avoided needing it.  Measured 2026-09-08 on the staging chain, where
+        # the three authz grants were present the whole time.
         _adm=$(jq -r '.adminname // empty' "$VERITAS_SEC_HOME/variables.json" 2>/dev/null || true)
-        _adm_addr=$(qadenad_alias keys show "$_adm" --address 2>/dev/null || true)
-        if [ -n "$_adm_addr" ] && qadenad_alias query authz grants "$sponsor_addr" "$_adm_addr" \
-                --output json 2>/dev/null | jq -e '(.grants|length) > 0' >/dev/null 2>&1; then
-            export VERITAS_SEC_ADMIN="$_adm"
-            echo "delegated signing: $_adm (authz from the sponsor verified on chain)"
+        if [ -z "$_adm" ]; then
+            echo "no adminname in $VERITAS_SEC_HOME/variables.json -- signing directly (harness mode)"
         else
-            echo "no delegation on chain for '${_adm:-<none>}' -- signing directly (harness mode)"
+            _adm_addr=$(qadenad_alias keys show "$_adm" --address 2>/dev/null || true)
+            if [ -z "$_adm_addr" ]; then
+                echo "WARNING: '$_adm' is recorded but NOT in this keyring -- cannot use the delegation."
+                echo "  Signing will fall back to the foundation's own key, which a SEC box does not have."
+                echo "  Is VERITAS_SEC_HOME ($VERITAS_SEC_HOME) the home step_1 wrote?"
+            else
+                _gr=$(qadenad_alias query authz grants "$sponsor_addr" "$_adm_addr" --output json 2>&1 || true)
+                case "$_gr" in
+                    *"no route to host"*|*"connection refused"*|*"post failed"*)
+                        echo "WARNING: cannot reach the chain to check the delegation -- NOT falling back"
+                        echo "  silently.  Fix --node and re-run."
+                        exit 1 ;;
+                esac
+                if print -r -- "$_gr" | jq -e '(.grants|length) > 0' >/dev/null 2>&1; then
+                    export VERITAS_SEC_ADMIN="$_adm"
+                    echo "delegated signing: $_adm ($_adm_addr) -- authz from $sponsor_addr verified on chain"
+                else
+                    echo "WARNING: '$_adm' ($_adm_addr) holds NO authz from $sponsor_addr."
+                    echo "  Has the foundation run sec_veritas_after_step_1.sh against THIS chain?"
+                    echo "  Signing will fall back to the foundation's own key, which a SEC box does not have."
+                fi
+            fi
         fi
     else
         export VERITAS_SEC_ADMIN

@@ -237,7 +237,13 @@ grant_user_fees() {   # grant_user_fees <key-name>
     if grant_as_foundation "$granter" "$addr" "$USER_MSGS"; then
         echo "  granted $1 the full user message set from $createwalletsponsor" >&2
     else
-        echo "  WARNING: could not grant $1 -- its transactions will fall back to its own balance" >&2
+        # STOP, DO NOT WARN.  "Falls back to its own balance" is not a degraded mode on this
+        # chain: the wallet incentives are zero, so the balance is zero, and every transaction this
+        # user makes from here fails.  Continuing produces a user that looks created and cannot
+        # act, and the first symptom appears in a later step with no reference to this grant.
+        echo "  FAILED to grant $1 -- on a zero-incentive chain that wallet cannot transact." >&2
+        echo "  Fix the grant and re-run; this step is resumable." >&2
+        exit 1
     fi
 }
 
