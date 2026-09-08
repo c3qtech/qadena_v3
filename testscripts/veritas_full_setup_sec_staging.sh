@@ -487,8 +487,14 @@ if [[ -n "$_check_name" ]] && [[ -r "$POOL" ]]; then
     print -r -- "  key files verified against this deployment ($_check_name)"
 fi
 
+# --armor-passfile IS NOT OPTIONAL HERE.  The keys in the block below are armored with the KEYRING
+# passphrase (extract_ephem_keys exports through qadenad_alias, which supplies its own stdin), so
+# the app-server's ARMOR_PASS_PHRASE has to be that same value.  Patching the keys and leaving the
+# old passphrase produces an app that starts, fails to import every key, and exits 1 in a restart
+# loop -- reporting "Failed to import private key for <name>:" with an EMPTY reason.  Measured
+# 2026-09-07.  Same passfile as the rest of the run, so they cannot drift.
 ./testscripts/patch_env_file.sh "$PREFIX" "$ENV_FILE" \
-    --key-dir "$REPO" --sponsors "$_sponsors"
+    --key-dir "$REPO" --sponsors "$_sponsors" --armor-passfile "$PASSFILE"
 
 # .env IS WHAT compose READS (env_file: .env in compose.yml).  The stack keeps several env files
 # for different targets; installing the one we just patched is a deliberate copy, not a symlink,
