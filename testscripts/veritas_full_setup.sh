@@ -55,8 +55,8 @@ SEC_HOME="${VERITAS_SEC_HOME:-$HOME/sec-veritas}"
 COUNT=3
 FROM="bootstrap"
 REBUILD=0
-STACK="$HOME/test/follow-the-money/stacks/veritas"
-ENV_FILE="env-sponsored-test"
+# ONE PATH, NOT A DIRECTORY PLUS A NAME -- see the staging script for why.
+ENV_FILE="$HOME/test/follow-the-money/stacks/veritas/env-sponsored-test"
 PREFIX="sec"
 PRIMARY="alvillarica@10.211.55.5"
 JOINER="alvillarica@10.211.55.6"
@@ -98,8 +98,8 @@ usage() {
     print -r -- "  --chain-id <id>     for the rendered config (default qadena_4824-1).  Only used"
     print -r -- "                      when bootstrap has to create it."
     print -r -- "  --skip-app          stop after verify; do not touch the app-server stack"
-    print -r -- "  --stack <dir>       app-server stack (default ~/test/follow-the-money/stacks/veritas)"
-    print -r -- "  --env-file <name>   env file inside the stack (default env-sponsored-test)"
+    print -r -- "  --env-file <path>   FULL PATH to the stack's env file.  Its directory is taken"
+    print -r -- "                      as the stack (compose.yml and the Makefile live beside it)."
 }
 
 while [[ $# -gt 0 ]]; do
@@ -116,7 +116,6 @@ while [[ $# -gt 0 ]]; do
         --chain-id)      CHAIN_ID="$2"; shift 2 ;;
         --sgx)           SGX="$2"; shift 2 ;;
         --joiner-validator) JOINER_VALIDATOR="$2"; shift 2 ;;
-        --stack)         STACK="$2"; shift 2 ;;
         --env-file)      ENV_FILE="$2"; shift 2 ;;
         --primary)       PRIMARY="$2"; shift 2 ;;
         # What each node tells peers to dial.  Both default to the ssh host, which is wrong behind
@@ -448,7 +447,11 @@ banner "9. APP-SERVER: patch the env, install it, restart the stack"
 # the REPO ROOT (its cwd).  Stale ones from a previous deployment decode cleanly and name wallets
 # that do not exist on this chain -- a failure that surfaces much later as a signing error, so
 # check they are newer than step_3's own output rather than merely present.
-[[ -d "$STACK" ]] || { print -u2 "no stack at $STACK"; exit 1 }
+# The stack is the env file's directory.  Checked together so a wrong --env-file cannot half-run.
+ENV_FILE="${ENV_FILE:A}"
+STACK="${ENV_FILE:h}"
+[[ -f "$ENV_FILE" ]] || { print -u2 "no env file at $ENV_FILE"; exit 1 }
+[[ -f "$STACK/compose.yml" ]] || { print -u2 "no compose.yml beside $ENV_FILE -- is $STACK the stack?"; exit 1 }
 _n=$(ls "$REPO"/${PREFIX}*-names.base64 2>/dev/null | wc -l | tr -d ' ')
 (( _n > 0 )) || { print -u2 "no ${PREFIX}*.base64 files in $REPO -- did step_3 run?"; exit 1 }
 # ARE THESE KEYS FROM THIS DEPLOYMENT?  Not "are they recent" -- my first version compared mtimes
@@ -473,15 +476,15 @@ if [[ -n "$_check_name" ]] && [[ -r "$POOL" ]]; then
     print -r -- "  key files verified against this deployment ($_check_name)"
 fi
 
-./testscripts/patch_env_file.sh "$PREFIX" "$STACK/$ENV_FILE" \
+./testscripts/patch_env_file.sh "$PREFIX" "$ENV_FILE" \
     --key-dir "$REPO" --sponsors "$_sponsors"
 
 # .env IS WHAT compose READS (env_file: .env in compose.yml).  The stack keeps several env files
 # for different targets; installing the one we just patched is a deliberate copy, not a symlink,
 # so the source stays readable as the record of what was deployed.
-cp "$STACK/$ENV_FILE" "$STACK/.env"
+cp "$ENV_FILE" "$STACK/.env"
 chmod 600 "$STACK/.env"
-print -r -- "  installed $ENV_FILE -> $STACK/.env"
+print -r -- "  installed ${ENV_FILE:t} -> $STACK/.env"
 
 # `docker compose restart` does NOT re-read env_file -- it restarts the existing containers with
 # the environment they were created with, so a patched .env would appear to deploy and change

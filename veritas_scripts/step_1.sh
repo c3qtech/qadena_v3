@@ -77,8 +77,12 @@ treasurymnemonic=$(qadenad_alias keys mnemonic)
 # The pioneer is NOT an obstacle: `create-wallet` takes a home-pioneer-ID string
 # (x/qadena/client/cli/tx_create_wallet.go:160, argHomePioneerID), not a key name, so nothing here
 # needs the validator's key to be in the same keyring.
+# EXPORTED HERE, CREATED LATER.  The mkdir used to be on this line, and it ran BEFORE --sec-home
+# was parsed -- so every run with --sec-home left an empty ~/sec-veritas/keyring behind, which
+# looks exactly like a second deployment to anyone reading `ls ~`.  The only commands between here
+# and the argument loop are `keys mnemonic`, which generates words and touches no keyring, so the
+# directory is not needed until after parsing.  It is created there instead.
 export QADENA_KEYRING_DIR="$VERITAS_SEC_HOME/keyring"
-mkdir -p "$QADENA_KEYRING_DIR" 2>/dev/null; chmod 700 "$QADENA_KEYRING_DIR" 2>/dev/null
 
 
 treasuryname="sec-treasury"
