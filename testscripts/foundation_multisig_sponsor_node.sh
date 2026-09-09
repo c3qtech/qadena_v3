@@ -57,7 +57,19 @@ done
     || { print -u2 "need --node, --granter and --via; see --help"; exit 1 }
 [[ "$NODE_ADDR" == qadena1* ]] || { print -u2 -- "--node must be a bech32 address"; exit 1 }
 
-lk() { "$QBIN" --home "$HOME_DIR" --keyring-backend test "$@" 2>/dev/null }
+# HONOURS THE ENVIRONMENT.  This pinned `test`, so it could only ever see a granter in the node's
+# own keyring -- but a launch chain's buckets are multisigs in the COORDINATOR keyring, a different
+# home and an encrypted backend.  nth_node_sponsored_join.sh exports all three before calling this,
+# the same way the veritas ceremonies point multisig_sign.sh at that keyring.
+LK_BACKEND="${QADENA_KEYRING_BACKEND:-test}"
+lk() {
+    if [[ "$LK_BACKEND" == "file" && -n "${QADENA_KEYRING_PASS:-}" ]]; then
+        { repeat 16 print -r -- "$QADENA_KEYRING_PASS" } 2>/dev/null \
+            | "$QBIN" --home "$HOME_DIR" --keyring-backend "$LK_BACKEND" "$@" 2>/dev/null
+    else
+        "$QBIN" --home "$HOME_DIR" --keyring-backend "$LK_BACKEND" "$@" 2>/dev/null
+    fi
+}
 M="$HERE/../scripts/multisig_sign.sh"
 
 THR=$(lk keys show "$GRANTER" --output json | jq -r '.pubkey | fromjson? // . | .threshold // empty')

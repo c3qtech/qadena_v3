@@ -108,6 +108,8 @@ MNEMONIC_FILE=""
 # keyring-backend: file; without it that build stops rather than shipping a node whose
 # client.toml and keys disagree.
 KEYRING_PASSFILE=""
+# The coordinator keyring, where the bucket multisigs live.  Only the sponsored join needs it.
+COORD_HOME=""
 # Bond each joiner unless --no-convert-joiners says otherwise.  Only that flag ever assigned this,
 # so without a default `(( CONVERT_JOINERS ))` errors under set -u, the && chain is skipped, and the
 # joiner silently stays a full node -- the opposite of the default.
@@ -279,6 +281,7 @@ while [[ $# -gt 0 ]]; do
         --stake)         STAKE_ARG="$2"; shift 2 ;;
         --pioneer-mnemonic-file) MNEMONIC_FILE="$2"; shift 2 ;;
         --keyring-passfile) KEYRING_PASSFILE="$2"; shift 2 ;;
+        --coord-home) COORD_HOME="$2"; shift 2 ;;
         # WHAT EACH NODE TELLS PEERS TO DIAL.  Both default to the ssh host, which is wrong behind
         # NAT and across networks -- see nth_node_bringup.sh.  --advertise-ip-address reaches
         # init.sh on the primary; --joiner-advertise-ip-address reaches add_full_node.sh on each
@@ -942,6 +945,7 @@ fi
         sjargs=(--primary "$PRIMARY" --joiner "$j" --pioneer "$pioneer"
                 --granter "$SPONSOR_GRANTER" "${sync_arg[@]}" "${seed2_arg[@]}"
                 "${kp_arg[@]}" "${conv[@]}")
+        [[ -n "$COORD_HOME" ]] && sjargs+=(--coord-home "$COORD_HOME")
         [[ -n "$STAKE_ARG" ]] && sjargs+=(--stake "$STAKE_ARG")
         "$SCRIPT_DIR/nth_node_sponsored_join.sh" "${sjargs[@]}" \
             2>&1 | tee "$RUN_DIR/stage-G-join-${j##*@}.log"

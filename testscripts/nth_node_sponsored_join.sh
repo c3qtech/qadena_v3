@@ -50,6 +50,11 @@ PRIMARY="" JOINER="" PIONEER="" GRANTER="" CONVERT=0 EXTRA=() SYNC_ARG=()
 # Forwarded to nth_node_bringup: the node keyring's passphrase, needed once client.toml asks for
 # `file`, and the self-bond amount, whose default is a devnet figure a launch funder does not hold.
 KEYRING_PASSFILE="" STAKE=""
+# WHERE THE SPONSORING BUCKET'S KEY LIVES.  On a devnet the granter is `treasury`, a key in the
+# node's own ~/qadena.  On a launch chain it is a bucket MULTISIG in the COORDINATOR keyring, which
+# is a different home and an encrypted backend -- so looking it up in ~/qadena answers
+# "'nodeops' is not a key in this keyring" for a key that is right there in the other one.
+COORD_HOME=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --primary) PRIMARY="$2"; shift 2 ;;
@@ -60,6 +65,7 @@ while [[ $# -gt 0 ]]; do
         --state-sync) SYNC_ARG=(--state-sync); shift ;;
         --convert-to-validator) CONVERT=1; shift ;;
         --keyring-passfile) KEYRING_PASSFILE="$2"; shift 2 ;;
+        --coord-home) COORD_HOME="$2"; shift 2 ;;
         --stake) STAKE="$2"; shift 2 ;;
         --seed2) EXTRA+=(--seed2 "$2"); shift 2 ;;
         -h|--help) sed -n '3,32p' "$0"; exit 0 ;;
@@ -69,7 +75,30 @@ done
 [[ -n "$PRIMARY" && -n "$JOINER" && -n "$PIONEER" && -n "$GRANTER" ]] \
     || { print -u2 "need --primary, --joiner, --pioneer and --granter; see --help"; exit 1 }
 
-lk() { "$QBIN" --home "$HOME_DIR" --keyring-backend test "$@" 2>/dev/null }
+# EXPORTED, NOT PASSED.  multisig_sign.sh and foundation_multisig_sponsor_node.sh both read
+# QADENAHOME / QADENA_KEYRING_BACKEND / QADENA_KEYRING_PASS from the environment -- the same way
+# foundation_scripts/sec_veritas_before_step_1.sh points them at the coordinator keyring.
+LK_BACKEND="${QADENA_KEYRING_BACKEND:-test}"
+if [[ -n "$COORD_HOME" ]]; then
+    HOME_DIR="$COORD_HOME"
+    LK_BACKEND="file"
+    export QADENAHOME="$COORD_HOME"
+    export QADENA_KEYRING_BACKEND="$LK_BACKEND"
+    if [[ -n "$KEYRING_PASSFILE" ]]; then
+        [[ -r "$KEYRING_PASSFILE" ]] || { print -u2 "cannot read --keyring-passfile $KEYRING_PASSFILE"; exit 1 }
+        QADENA_KEYRING_PASS=$(head -1 "$KEYRING_PASSFILE")
+        export QADENA_KEYRING_PASS
+    fi
+fi
+# Feeds the passphrase when the backend needs one; zsh builtins, so it never reaches `ps`.
+lk() {
+    if [[ "$LK_BACKEND" == "file" && -n "${QADENA_KEYRING_PASS:-}" ]]; then
+        { repeat 16 print -r -- "$QADENA_KEYRING_PASS" } 2>/dev/null \
+            | "$QBIN" --home "$HOME_DIR" --keyring-backend "$LK_BACKEND" "$@" 2>/dev/null
+    else
+        "$QBIN" --home "$HOME_DIR" --keyring-backend "$LK_BACKEND" "$@" 2>/dev/null
+    fi
+}
 ph() { ssh -o ConnectTimeout=15 "$PRIMARY" "bash -lc $(printf '%q' "\$HOME/qadena/bin/qadenad --home \$HOME/qadena $* --node tcp://localhost:26657")" 2>/dev/null | tr -d '\r' }
 
 # THE GRANTER IS PASSED TO nth_node AS AN ADDRESS.  Both of its funding branches resolve the

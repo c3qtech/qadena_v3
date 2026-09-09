@@ -405,6 +405,7 @@ if (( REBUILD )); then
         --mainnet-source        "$LAUNCH_DIR/fleet-launch-config.yml" \
         --pioneer-mnemonic-file "$_pm" \
         --keyring-passfile      "$PASSFILE" \
+        --coord-home            "$COORD_HOME" \
         --foundation-sponsored "$NODE_GRANTER" --stake 10000
     rm -f "$_pm"
 fi
