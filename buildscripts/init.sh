@@ -810,36 +810,7 @@ if [[ $skip_build -eq 1 ]] ; then
         exit 1
     fi
 
-    # ---------------------------------------------------------------------------------------
-    # MIGRATE THE NODE KEYRING, now that there is a qadenad to do it with and nothing left that
-    # needs keyring-test.  ignite creates the keys in keyring-test whatever client.toml says, so a
-    # config asking for `file` is not self-fulfilling: without this the node comes up with an
-    # unencrypted keyring, or with a client.toml and a keyring that disagree.
-    _kb=$(grep -aE '^keyring-backend' "$QADENAHOME/config/client.toml" 2>/dev/null | cut -d'"' -f2)
-    if [[ "$_kb" == "file" ]] && ls "$QADENAHOME"/keyring-test/*.info > /dev/null 2>&1; then
-        echo "client.toml asks for the 'file' keyring, but ignite created the keys in keyring-test."
-        if [[ -z "$keyring_passfile" ]]; then
-            echo "   INIT FAILED: migrating them needs a passphrase.  Re-run with"
-            echo "     --keyring-passfile <file>   (first line is the passphrase for the new keyring)"
-            echo "   Nothing is lost: the keys are in $QADENAHOME/keyring-test and the chain is built."
-            exit 1
-        fi
-        # NO --qadenad HERE, DELIBERATELY.  install.sh has just run, so $QADENAHOME/bin/qadenad
-        # exists and migrate_keyring.sh's own default finds it.  An earlier version ran before
-        # install.sh and passed `which qadena_v3d` instead -- which assumed ignite's output name
-        # was on PATH, an assumption that holds in the build environment and nowhere else.
-        if ! "$qadenabuild/testscripts/migrate_keyring.sh" --dir "$QADENAHOME" \
-                --passfile "$keyring_passfile"; then
-            echo "   INIT FAILED: could not migrate the node keyring to 'file'."
-            echo "   keyring-test is untouched; the node would not be able to initialise its enclave."
-            exit 1
-        fi
-        # ONLY NOW.  migrate_keyring.sh verifies every address before returning 0, and deliberately
-        # does not delete the source itself -- that judgement belongs to whoever knows the keys are
-        # no longer needed elsewhere.  Here they are not: this home is the only holder.
-        rm -rf "$QADENAHOME/keyring-test"
-        echo "migrated the node keyring to 'file' and removed the unencrypted keyring-test"
-    fi
+
 
     $qadenabuildscripts/install.sh --scripts
     if [ $? -ne 0 ] ; then
@@ -878,3 +849,35 @@ if [ $? -ne 0 ] ; then
 fi
 
     
+
+# ---------------------------------------------------------------------------------------
+# MIGRATE THE NODE KEYRING.  Last, so it runs on BOTH paths -- the --skip-build branch and the
+# full build -- and only once every install has put a qadenad in place.  Nothing left above
+# needs keyring-test.  ignite creates the keys in keyring-test whatever client.toml says, so a
+# config asking for `file` is not self-fulfilling: without this the node comes up with an
+# unencrypted keyring, or with a client.toml and a keyring that disagree.
+_kb=$(grep -aE '^keyring-backend' "$QADENAHOME/config/client.toml" 2>/dev/null | cut -d'"' -f2)
+if [[ "$_kb" == "file" ]] && ls "$QADENAHOME"/keyring-test/*.info > /dev/null 2>&1; then
+    echo "client.toml asks for the 'file' keyring, but ignite created the keys in keyring-test."
+    if [[ -z "$keyring_passfile" ]]; then
+        echo "   INIT FAILED: migrating them needs a passphrase.  Re-run with"
+        echo "     --keyring-passfile <file>   (first line is the passphrase for the new keyring)"
+        echo "   Nothing is lost: the keys are in $QADENAHOME/keyring-test and the chain is built."
+        exit 1
+    fi
+    # NO --qadenad HERE, DELIBERATELY.  install.sh has just run, so $QADENAHOME/bin/qadenad
+    # exists and migrate_keyring.sh's own default finds it.  An earlier version ran before
+    # install.sh and passed `which qadena_v3d` instead -- which assumed ignite's output name
+    # was on PATH, an assumption that holds in the build environment and nowhere else.
+    if ! "$qadenabuild/testscripts/migrate_keyring.sh" --dir "$QADENAHOME" \
+            --passfile "$keyring_passfile"; then
+        echo "   INIT FAILED: could not migrate the node keyring to 'file'."
+        echo "   keyring-test is untouched; the node would not be able to initialise its enclave."
+        exit 1
+    fi
+    # ONLY NOW.  migrate_keyring.sh verifies every address before returning 0, and deliberately
+    # does not delete the source itself -- that judgement belongs to whoever knows the keys are
+    # no longer needed elsewhere.  Here they are not: this home is the only holder.
+    rm -rf "$QADENAHOME/keyring-test"
+    echo "migrated the node keyring to 'file' and removed the unencrypted keyring-test"
+fi

@@ -771,6 +771,19 @@ else
 		exit 1
 	fi
 
+	# On the `file` backend, drop an empty keyring-test.  qadenad recreates the directory whenever
+	# something reads that backend, and an empty one next to the real keyring reads as a second,
+	# unencrypted copy.  Removed only when it holds no keys.
+	if [[ "$NODE_KB" == "file" ]] && [[ -d "$QADENAHOME/keyring-test" ]]; then
+		if ! ls "$QADENAHOME"/keyring-test/*.info > /dev/null 2>&1; then
+			rm -rf "$QADENAHOME/keyring-test"
+			echo "removed the empty keyring-test (this node uses keyring-file)"
+		else
+			echo "WARNING: $QADENAHOME/keyring-test still holds keys but this node uses keyring-file."
+			echo "  Left in place -- check what is in it before removing it."
+		fi
+	fi
+
 	echo ""
 
 fi
