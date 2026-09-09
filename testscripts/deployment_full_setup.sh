@@ -168,8 +168,7 @@ banner() {
     print -r -- "==================================================================="
 }
 
-# WHERE IT DIED, AND HOW TO CARRY ON.  A bring-up is long and a failure two thirds through used to
-# mean re-reading this file to work out which stage that was.
+# Names the stage that failed and the --from that resumes there.
 _CURRENT="startup"
 _NO_RESUME_HINT=0
 _on_exit() {

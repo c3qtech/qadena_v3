@@ -5,12 +5,9 @@ set -e
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
-# THE SCRIPT'S OWN DIRECTORY, CAPTURED BEFORE setup_env.sh IS SOURCED.  That file does
-# SCRIPT_DIR="${0:A:h}" at its own top level, and zsh keeps $0 pointing at the sourced file --
-# so every SCRIPT_DIR use AFTER the source resolves against scripts/, not this directory.
-# sec_veritas_before_step_1.sh has warned about this for three scripts already; the profile
-# source below is the fourth, and it failed silently everywhere ../foundation_scripts still
-# happened to resolve.  $_DEPLOY_HERE is never assigned by anything else.
+# This script's own directory, captured BEFORE setup_env.sh is sourced: that file sets
+# SCRIPT_DIR="${0:A:h}" at its own top level, so afterwards SCRIPT_DIR points at scripts/.
+# $_DEPLOY_HERE is not assigned anywhere else.
 _DEPLOY_HERE="${0:A:h}"
 
 # CAPTURE BEFORE SOURCING, AND DEFAULT TO `file`.

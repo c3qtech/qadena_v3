@@ -227,14 +227,10 @@ if [[ -n "$KEYRING_PASSFILE" ]]; then
     REM_KP="\$HOME/.qadena-join-keyring-pass"
     # Feeds the passphrase to EVERY prompt the command raises -- qadenad asks once per key operation
     # and three times for some, so a fixed count is wrong.
-    # NOT `yes "$pass"`: /usr/bin/yes takes the passphrase as an ARGUMENT, so it shows in `ps` on
-    # the fleet node to any user who looks.  Here only the FILENAME reaches the process table.
-    #
-    # AND NOT zsh's repeat/print either, which is what this used to be.  These strings are handed to
-    # ssh, and ssh runs the remote user's LOGIN SHELL -- bash on the fleet -- so the node answered
-    #     bash: line 1: repeat: command not found
-    # and the key was never minted.  The two starts below are wrapped in `zsh -c` and can use zsh
-    # builtins; this one cannot, so it stays POSIX.  `cat` in a loop is portable to both.
+    # POSIX, and not `yes "$pass"`.  These strings are handed to ssh, which runs the remote user's
+    # login shell -- bash on the fleet -- so zsh builtins are unavailable here; the two starts below
+    # are wrapped in `zsh -c` and may use them.  `yes` would take the passphrase as an argument and
+    # put it in `ps`; only the filename reaches the process table this way.
     NKFEED="for _ in \$(seq 64); do cat $REM_KP; done | "
     # Passed to add_full_node.sh so the JOINER is built on the same backend as the primary.  Without
     # it that script forces client.toml back to "test" and mints the node key there, producing a

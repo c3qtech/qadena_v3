@@ -30,12 +30,9 @@
 # operates on the ENCRYPTED coordinator keyring; only an explicit caller choice says otherwise.
 _kb_caller="${QADENA_KEYRING_BACKEND:-}"
 SCRIPT_DIR="${0:A:h}"
-# THE SCRIPT'S OWN DIRECTORY, CAPTURED BEFORE setup_env.sh IS SOURCED.  That file does
-# SCRIPT_DIR="${0:A:h}" at its own top level, and zsh keeps $0 pointing at the sourced file --
-# so every SCRIPT_DIR use AFTER the source resolves against scripts/, not this directory.
-# sec_veritas_before_step_1.sh has warned about this for three scripts already; the profile
-# source below is the fourth, and it failed silently everywhere ../foundation_scripts still
-# happened to resolve.  $_DEPLOY_HERE is never assigned by anything else.
+# This script's own directory, captured BEFORE setup_env.sh is sourced: that file sets
+# SCRIPT_DIR="${0:A:h}" at its own top level, so afterwards SCRIPT_DIR points at scripts/.
+# $_DEPLOY_HERE is not assigned anywhere else.
 _DEPLOY_HERE="${0:A:h}"
 
 # The name to PRINT in usage.  A per-deployment wrapper execs this file, so a hard-coded
@@ -64,9 +61,8 @@ COORD_HOME=""
 BACKEND="${_kb_caller:-file}"
 KEYRING_PASSFILE=""
 
-# THE LEGACY ENV OVERRIDES ARE SCOPED TO VERITAS -- see the same note in
-# sec_veritas_after_step_1.sh.  setup_veritas.sh exports these; letting them reach an ekycph or enf
-# run would grant that deployment's pool against VERITAS's sponsor accounts, silently.
+# The VERITAS_* overrides apply only to the deployment they are named for; every other
+# deployment takes its names from the profile.
 if [ "$DEPLOY_NAME" = "veritas" ]; then
     foundation_users="${VERITAS_FOUNDATION_USERS:-$DEPLOY_USERS}"
     foundation_appsvr="${VERITAS_FOUNDATION_APPSVR:-$DEPLOY_APPSVR}"
@@ -159,10 +155,8 @@ if [ "$BACKEND" = "file" ]; then
     if [ -n "$KEYRING_PASSFILE" ]; then
         KRPASS=$(head -1 "$KEYRING_PASSFILE")
     elif [ -n "${QADENA_KEYRING_PASS:-}" ]; then
-        # ALREADY UNLOCKED BY THE CALLER.  The devnet runners export QADENA_KEYRING_PASS once, for
-        # every child, after reading the node's client.toml -- so prompting here would stop an
-        # unattended run dead for a passphrase the process already holds.  A prompt with no
-        # terminal looks exactly like a hang, which is how this was found.
+        # Already unlocked by the caller: the devnet runners export QADENA_KEYRING_PASS for every
+        # child, so prompting here would stall an unattended run for a passphrase already held.
         KRPASS="$QADENA_KEYRING_PASS"
     else
         printf "Coordinator keyring passphrase (%s, hidden): " "$COORD_HOME" >&2
@@ -257,15 +251,9 @@ grant_and_wait() {   # grant_and_wait <label> <wallet> <tx args...>
     local out hash code
     out=$(qk "$@" --from "$foundation_users" --node "$NODE" --yes --output json \
           --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment 2>&1) || {
-        # ALREADY GRANTED IS NOT A FAILURE.  x/feegrant and x/authz hold at most ONE grant per
-        # (granter, grantee) pair, so re-running this step against a pool it already authorised
-        # comes back "fee allowance already exists" / "authorization already exists" and every
-        # wallet was counted INCOMPLETE -- reporting "authorised 0 wallet(s); 3 incomplete" and a
-        # partial-coverage warning for a pool that is, in fact, completely authorised.
-        #
-        # The grant that exists is the one this step would have made: same granter, same grantee,
-        # same allowance, and sec_veritas_verify.sh checks all of that independently.  Treat it as
-        # done rather than revoking a working grant to write an identical one.
+        # Already granted is not a failure: x/feegrant and x/authz hold at most one grant per
+        # (granter, grantee), so a re-run against an authorised pool reports "already exists".
+        # sec_veritas_verify.sh checks the grant's contents independently.
         case "$out" in
             *"already exists"*)
                 echo "  $label for $w already granted -- leaving it"; return 0 ;;

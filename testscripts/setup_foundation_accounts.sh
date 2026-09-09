@@ -5,11 +5,9 @@
 #   ./testscripts/setup_foundation_accounts.sh
 #   ./testscripts/setup_foundation_accounts.sh --amount 2000000qdn
 #
-# WHY THIS IS ITS OWN SCRIPT.  foundation-appsvr and foundation-users are the granters for every
-# sponsored deployment on the devnet -- veritas, ekycph and enf all draw on them.  They used to be
-# created inline by setup_veritas.sh, which made the other two harnesses depend on a full VERITAS
-# bring-up (30 wallets, two governance proposals) just to get two keys and a bank send.  They are
-# two keys and a bank send; this does exactly that and nothing else.
+# foundation-appsvr and foundation-users are the granters for every sponsored deployment on the
+# devnet -- veritas, ekycph and enf all draw on them.  Two keys and a bank send, owned in one
+# place so no deployment depends on another having run.
 #
 # SHARED ON PURPOSE.  In production each programme gets its own pair -- see
 # foundation_scripts/deployment_profile.sh -- because the keyring has no namespaces and the buckets
@@ -78,9 +76,8 @@ for f in "$foundation_appsvr" "$foundation_users"; do
     else
         echo "recovering $f from its fixed mnemonic"
         if [ "$f" = "$foundation_users" ]; then mn="$foundationusersmnemonic"; else mn="$foundationappsvrmnemonic"; fi
-        # --algo eth_secp256k1 MATTERS: a standard secp256k1 key derives a DIFFERENT address from
-        # the same mnemonic, so getting this wrong silently produces accounts that are not the ones
-        # baked into the dev env files.
+        # --algo eth_secp256k1: a standard secp256k1 key derives a different address from the
+        # same mnemonic, and these addresses are baked into the dev env files.
         #
         # TWO THINGS DOWN ONE PIPE, IN THIS ORDER.  `keys add --recover` reads the MNEMONIC from
         # stdin first and, under backend=file, the new keyring passphrase after it.  qadenad_alias

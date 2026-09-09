@@ -421,17 +421,11 @@ for _p in "appsvr:$FA" "users:$FU"; do
         ok "foundation-$_n can still pay ($(python3 -c "v=int('${_b:-0}');print(f'{v//10**18:,}')") QDN)"
     fi
 done
-# THE CHAIN'S OWN WALLET INCENTIVES ARE NOT "A SECOND FUNDING SOURCE".
-#
-# x/qadena pays create_wallet_transparent_incentive on every wallet and
-# create_ephemeral_wallet_transparent_incentive on every ephemeral, out of the incentive pool.  On a
-# launch chain both are ZERO, so this check is unchanged there and still fails on any balance at
-# all.  On a devnet they are 500 and 50 QDN, so EVERY wallet legitimately holds tokens and this
-# reported a broken deployment for one working exactly as configured -- measured on qadena_4828-1,
-# 2026-09-09, where all 12 wallets held precisely their incentive and nothing else.
-#
-# The threshold is the ENTITLEMENT, not zero: a wallet holding more than the chain would have paid
-# it still trips the check, which is the case the check exists for.
+# The chain's own wallet incentives are not a second funding source.  x/qadena pays
+# create_wallet_transparent_incentive on every wallet and the ephemeral equivalent on every
+# ephemeral.  Both are zero on a launch chain, so the check is unchanged there; on a devnet they
+# are 500 and 50 QDN.  The threshold is the entitlement, not zero -- a wallet holding more than
+# the chain would have paid it still trips the check.
 _inc=$(qq query qadena params --output json 2>/dev/null | sed -n '/^{/,$p' \
        | jq -r '.params.create_wallet_transparent_incentive.amount // "0"' 2>/dev/null)
 _inc_eph=$(qq query qadena params --output json 2>/dev/null | sed -n '/^{/,$p' \

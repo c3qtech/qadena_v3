@@ -32,12 +32,9 @@
 # operates on the ENCRYPTED coordinator keyring; only an explicit caller choice says otherwise.
 _kb_caller="${QADENA_KEYRING_BACKEND:-}"
 SCRIPT_DIR="${0:A:h}"
-# THE SCRIPT'S OWN DIRECTORY, CAPTURED BEFORE setup_env.sh IS SOURCED.  That file does
-# SCRIPT_DIR="${0:A:h}" at its own top level, and zsh keeps $0 pointing at the sourced file --
-# so every SCRIPT_DIR use AFTER the source resolves against scripts/, not this directory.
-# sec_veritas_before_step_1.sh has warned about this for three scripts already; the profile
-# source below is the fourth, and it failed silently everywhere ../foundation_scripts still
-# happened to resolve.  $_DEPLOY_HERE is never assigned by anything else.
+# This script's own directory, captured BEFORE setup_env.sh is sourced: that file sets
+# SCRIPT_DIR="${0:A:h}" at its own top level, so afterwards SCRIPT_DIR points at scripts/.
+# $_DEPLOY_HERE is not assigned anywhere else.
 _DEPLOY_HERE="${0:A:h}"
 
 # The name to PRINT in usage.  A per-deployment wrapper execs this file, so a hard-coded
@@ -69,11 +66,8 @@ COORD_HOME=""
 # near launch custody.  Pass --keyring-backend test explicitly for a devnet.
 BACKEND="${_kb_caller:-file}"
 KEYRING_PASSFILE=""
-# THE LEGACY ENV OVERRIDE IS SCOPED TO VERITAS.  testscripts/setup_veritas.sh exports
-# VERITAS_FOUNDATION_APPSVR, and honouring it for every deployment would mean an ekycph run started
-# from a shell that had sourced the veritas harness would silently grant against VERITAS's sponsor
-# account -- funding the wrong programme out of the wrong allocation, with no error anywhere.  It
-# applies only to the deployment it is named for; everything else uses the profile.
+# VERITAS_FOUNDATION_APPSVR applies only to the deployment it is named for; every other
+# deployment takes the name from its profile.
 if [ "$DEPLOY_NAME" = "veritas" ]; then
     foundation_appsvr="${VERITAS_FOUNDATION_APPSVR:-$DEPLOY_APPSVR}"
 else
@@ -147,10 +141,8 @@ if [ "$BACKEND" = "file" ]; then
     if [ -n "$KEYRING_PASSFILE" ]; then
         KRPASS=$(head -1 "$KEYRING_PASSFILE")
     elif [ -n "${QADENA_KEYRING_PASS:-}" ]; then
-        # ALREADY UNLOCKED BY THE CALLER.  The devnet runners export QADENA_KEYRING_PASS once, for
-        # every child, after reading the node's client.toml -- so prompting here would stop an
-        # unattended run dead for a passphrase the process already holds.  A prompt with no
-        # terminal looks exactly like a hang, which is how this was found.
+        # Already unlocked by the caller: the devnet runners export QADENA_KEYRING_PASS for every
+        # child, so prompting here would stall an unattended run for a passphrase already held.
         KRPASS="$QADENA_KEYRING_PASS"
     else
         printf "Coordinator keyring passphrase (%s, hidden): " "$COORD_HOME" >&2

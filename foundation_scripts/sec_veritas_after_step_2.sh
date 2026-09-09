@@ -24,9 +24,8 @@ HERE="${0:A:h}"
 # reading.  The wrapper exports QADENA_PROG; direct callers get the real name.
 PROG="${QADENA_PROG:-sec_veritas_after_step_2.sh}"
 
-# SCAN EVERY ARGUMENT, NOT JUST $1.  The per-deployment wrappers (ekycph_after_step_2.sh and
-# friends) prepend "--deployment <name>", so --help arrives as $3 and a ${1:-} test silently fell
-# through to the approve stage -- which then asked for proposal ids that a --help run has none of.
+# Scan every argument: the per-deployment wrappers prepend "--deployment <name>", so --help does
+# not arrive as $1.
 _want_help=0
 for _a in "$@"; do [[ "$_a" == "--help" || "$_a" == "-h" ]] && _want_help=1; done
 

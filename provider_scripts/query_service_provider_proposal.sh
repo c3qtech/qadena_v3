@@ -67,11 +67,7 @@ while true; do
         echo "Proposal $proposal_id is $stat"
         break
     fi
-    # A TERMINAL STATUS NEVER BECOMES PASSED.  This loop waited for PASSED and treated every other
-    # status as "not yet", so a REJECTED or FAILED proposal span forever -- printing the full
-    # proposal, votes and deposits every 3 seconds.  Measured on qadena_4828-1 2026-09-09: a
-    # duplicate service-provider proposal executed, failed, and the harness hung until killed,
-    # 2,600 log lines later, with the real cause four screens up.
+    # A terminal status never becomes PASSED, so waiting on one polls forever.
     case "$stat" in
         PROPOSAL_STATUS_REJECTED|PROPOSAL_STATUS_FAILED)
             echo "Proposal $proposal_id is $stat -- it will never reach $proposal_status."

@@ -56,13 +56,9 @@ fi
 ADVERTISE_IP_ADDRESS=""
 PIONEER=""
 
-# THE JOINER'S KEYRING BACKEND.
-#
-# This script used to FORCE client.toml back to "test" and create the node key there, whatever the
-# primary was built with.  Once config.yml asks for keyring-backend: file that silently produced a
-# MIXED fleet -- an encrypted primary and an unencrypted joiner holding the same kind of key -- and
-# nothing anywhere said so.  --keyring-passfile switches this whole script to `file`; without it the
-# behaviour is exactly what it always was.
+# THE JOINER'S KEYRING BACKEND.  --keyring-passfile switches this script to `file`, matching a
+# primary built that way; without it everything below uses `test` as before.  The two must agree,
+# or the fleet ends up with an encrypted primary and an unencrypted joiner.
 KEYRING_PASSFILE=""
 NODE_KB="test"
 STOP_FOR_FUNDING=""

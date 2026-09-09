@@ -5,18 +5,9 @@ set -e
 # get script dir
 SCRIPT_DIR="${0:A:h}"
 
-# NO KEYRING BACKEND IS SET HERE, DELIBERATELY.
-#
-# This used to force `test`, because the harness is unattended and cannot answer a passphrase
-# prompt.  That was right while every chain was built with an unencrypted keyring.  config.yml now
-# asks for keyring-backend: file, and init.sh migrates the keys there and deletes keyring-test -- so
-# on a freshly built chain `treasury` and the pioneer are ENCRYPTED, and forcing `test` made every
-# funding step fail with "key not found".
-#
-# Setting it here at all -- even with := -- pre-empts the answer: scripts/setup_env.sh reads the
-# node's own client.toml, and a value already in the environment stops it looking.  So leave it
-# unset and let that detection run.  An explicit export by the caller still wins, which is how
-# deployment_full_setup.sh supplies the passphrase alongside it.
+# The keyring backend is left unset here.  scripts/setup_env.sh reads it from the node's
+# client.toml; a value already in the environment stops it looking.  An explicit export by the
+# caller wins.
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
@@ -36,9 +27,8 @@ if qadenad_alias keys show treasury > /dev/null 2>&1; then
     echo "treasury key already exists"
 else
     echo "treasury key not found, adding it now"
-    # MNEMONIC FIRST, THEN THE PASSPHRASE, down one pipe: `keys add --recover` reads them in that
-    # order and qadenad_alias would replace stdin with its own passphrase feed, so the mnemonic
-    # would never arrive.  _raw feeds nothing, leaving the ordering to the call site.
+    # `keys add --recover` reads the mnemonic from stdin, then the passphrase.  _raw feeds
+    # nothing, so the call site owns that ordering; qadenad_alias would replace stdin.
     { echo "$config_yml_treasurymnemonic"
       [ -z "${QADENA_KEYRING_PASS:-}" ] || { echo "$QADENA_KEYRING_PASS"; echo "$QADENA_KEYRING_PASS"; }
     } | qadenad_alias_raw keys add treasury --recover
@@ -54,21 +44,14 @@ createwalletsponsoramount="100000qdn"
 # the most expensive operation (~5.9e19 aqdn against ~3.2e14 for a document signature).
 foundationamount="2000000qdn"
 
-# THE SAME TWO DEVNET FOUNDATION ACCOUNTS setup_veritas.sh uses, ON PURPOSE.
+# The two devnet foundation accounts, shared with setup_veritas.sh and setup_enf.sh.  authz and
+# feegrant are keyed on (granter, grantee), so deployments sharing a granter do not collide.
+# In production each programme has its own pair -- see foundation_scripts/deployment_profile.sh.
 #
-# In production each programme gets its own pair -- foundation_scripts/deployment_profile.sh maps
-# ekycph to foundation-ekycph-appsvr/-users -- because the keyring has no namespaces and bucket 10
-# funds more than one programme.  On the devnet there is ONE foundation, one keyring and one chain,
-# and all three harnesses (veritas, ekycph, enf) run against it in sequence.  Sharing the pair here
-# means no new mnemonics have to be invented and committed to a public repo, and it costs nothing:
-# authz and feegrant are keyed on (granter, grantee), so three deployments granting from one
-# granter to three disjoint sets of grantees do not overwrite each other.
-#
-# The addresses are therefore the ones already baked into the dev env files:
 #   foundation-users  qadena1j75rmpk86n2ln27p9c42qa2qkw4zy4zkgrzpjm
 #   foundation-appsvr qadena13vvrf5879hfgrv3krucpkpgmph549gnzv923vq
-# setup_veritas.sh holds their fixed mnemonics and recovers them; this harness only uses them, so
-# run that one first on a fresh chain, or pass --fund-mode banksend.
+#
+# testscripts/setup_foundation_accounts.sh creates and funds them.
 foundation_appsvr="foundation-appsvr"
 foundation_users="foundation-users"
 
@@ -145,47 +128,27 @@ echo "-------------------------"
 $qadenatestscripts/gov_stake_from_treasury.sh $pioneer 10000000qdn
 
 
-# --deployment IS PASSED ONLY IN SPONSORED MODE, and that is deliberate.
-#
-# It gives ekycph its own admin key (ekycph-admin) and its own state directory (~/sec-ekycph) out of
-# foundation_scripts/deployment_profile.sh.  Both are REQUIRED here and not merely tidy: sponsored
-# mode is the only mode that creates an admin key, and without --deployment step_1 would name it
-# sec-veritas-admin -- the same key setup_veritas.sh creates, in the same keyring, on the same
-# devnet.  The second harness to run would silently adopt the first one's admin identity.
-#
-# banksend keeps EXACTLY its previous invocation, down to the shared ~/sec-veritas state directory.
-# It creates no admin key so it cannot collide, it is the legacy path, and a working legacy path is
-# worth more than consistency with a mode it does not use.
-# A TYPO MUST NOT MEAN "SPONSORED".  Every branch below is `if banksend ... else sponsored`, so
-# --fund-mode banksned would run the sponsored path -- creating an admin key and a sponsor pool for
-# an operator who asked for the opposite.  Checked once, here, before anything is written.
+# --deployment is passed only in sponsored mode, which is the only mode that creates an admin key.
+# It selects ekycph-admin and ~/sec-ekycph from foundation_scripts/deployment_profile.sh; without it
+# step_1 names the admin sec-veritas-admin, which setup_veritas.sh also uses.
+# banksend creates no admin key and keeps its original invocation.
+# Validated here, before anything is written: every branch below tests for banksend and treats
+# anything else as sponsored, so an unrecognised value must not reach them.
 case "$fund_mode" in
     foundation-sponsored|banksend) ;;
     *) echo "unknown --fund-mode '$fund_mode' (foundation-sponsored | banksend)"; exit 1 ;;
 esac
 
-# THE SPONSOR ACCOUNTS MUST EXIST *BEFORE* step_1, NOT AFTER.
-#
-# step_1 in sponsored mode requires the two foundation sponsor ADDRESSES (--appsvr/--users): it
-# writes them into variables.json and derives every pre-grant from them, so it refuses to start
-# without them.  This block used to sit AFTER the step_1 call -- the order setup_veritas.sh still
-# had -- which meant a sponsored run died on
-#
-#     sponsored mode needs the foundation sponsor's ADDRESS
-#
-# before anything was created.  testscripts/veritas_full_setup.sh never hit it because the fleet
-# path resolves the addresses from the multisig prepare stage and passes them explicitly.
+# The sponsor accounts are funded before step_1, which needs their addresses: sponsored mode
+# writes them into variables.json and derives every pre-grant from them.
 step1_extra=()
 step23_extra=()
 if [ "$fund_mode" != "banksend" ]; then
     echo "-------------------------"
     echo "Toll-free: funding two foundation accounts, no $treasuryname"
     echo "-------------------------"
-    # ONE SCRIPT OWNS THESE TWO ACCOUNTS.  It recovers them from their fixed dev mnemonics and tops
-    # up the funding, idempotently, so calling it here costs one bank send per account on a re-run.
-    # Doing it this way rather than requiring setup_veritas.sh to have run first matters: ekycph
-    # does not otherwise depend on VERITAS in any way, and making a 30-wallet bring-up a
-    # prerequisite for two keys and a transfer is a prerequisite nobody would guess.
+    # setup_foundation_accounts.sh owns these two accounts: recovers them from their fixed dev
+    # mnemonics and tops up the funding.  Idempotent.
     $qadenatestscripts/setup_foundation_accounts.sh \
         --appsvr "$foundation_appsvr" --users "$foundation_users" --amount "$foundationamount"
 
@@ -241,16 +204,9 @@ if [ "$fund_mode" = "banksend" ]; then
 fi
 
 # ---------------------------------------------------------------------------------------------
-# THE FOUNDATION'S FIRST ACTION -- between step_1 and step_2, and it cannot be skipped.
-#
-# In sponsored mode every wallet step_2 creates is paid for by a FEE GRANT the foundation issued
-# against it in advance.  Without this, create-wallet fails with
-#
-#     rpc error: ... fee-grant not found: not found
-#
-# which reads like a chain problem and is in fact a missing step.  step_1 emits the pre-grant block
-# for exactly this; on a real deployment a human carries it to QFI, and here the harness plays both
-# roles.  --foundation-appsvr overrides the profile's production name with the shared devnet one.
+# The foundation's first action, between step_1 and step_2.  In sponsored mode every wallet step_2
+# creates is paid for by a fee grant issued against it in advance; without this, create-wallet
+# fails with "fee-grant not found".  --foundation-appsvr names the shared devnet account.
 if [ "$fund_mode" != "banksend" ]; then
     echo "-------------------------"
     echo "FOUNDATION: delegate grant authority and pre-grant every wallet"
@@ -269,15 +225,10 @@ $veritasscripts/step_2.sh "${step23_extra[@]}"
 ekycphidentityproposal_id=$(cat $qadenaproviderscripts/proposals/ekycphidentitysrvprv.proposal_id)
 ekycphdsvsproposal_id=$(cat $qadenaproviderscripts/proposals/ekycphdsvssrvprv.proposal_id)
 
-# DO NOT VOTE ON A PROPOSAL THAT REGISTERS SOMETHING ALREADY REGISTERED.
-#
-# setup_provider_base.sh submits a provider proposal every run, so a SECOND run of this harness
-# against a chain where the providers already exist produces a duplicate.  It passes the vote and
-# then FAILS on execution -- "what it registers already exists" -- and the wait below used to spin
-# on it forever.  Measured on qadena_4828-1, 2026-09-09: a re-run of a green deployment.
-#
-# The chain is the authority, not the .proposal_id file: that file is overwritten every run and
-# says nothing about whether the provider is registered.
+# Skip the deposit and vote when the provider is already registered.  setup_provider_base.sh
+# submits a proposal every run, and one that re-registers an existing provider passes the vote and
+# fails on execution.  The chain is the authority here, not the .proposal_id file, which is
+# overwritten every run and says nothing about registration.
 _registered() {
     qadenad_alias query qadena list-interval-public-key-id --output json 2>/dev/null \
         | sed -n '/^{/,$p' \
@@ -298,23 +249,13 @@ done
 $veritasscripts/step_3.sh "${step23_extra[@]}"
 
 # ---------------------------------------------------------------------------------------------
-# STEP 4 -- the FOUNDATION's final action.
-#
-# In foundation_scripts/ekycph_after_step_3.sh rather than inlined, because in a real deployment
-# this is NOT ekycph's to run: every grant it issues is signed by the foundation, and authz cannot
-# be sub-delegated, so ekycph could not do it even with the step_1 authorisation.  This harness
-# calls it because it plays both roles and holds every key in one keyring -- which is exactly why
-# it cannot tell the difference and the split has to be enforced by where the code lives.
-#
-# --foundation-users/-appsvr override the profile's production names with the shared devnet pair.
+# Step 4, the foundation's final action.  It lives in foundation_scripts/ekycph_after_step_3.sh
+# because every grant it issues is signed by the foundation and authz cannot be sub-delegated.
+# --foundation-users/-appsvr name the shared devnet pair.
 if [ "$fund_mode" != "banksend" ]; then
-    # --pool-addresses, NOT --count.  With --count this DERIVES the pool wallet names and resolves
-    # each in the coordinator keyring, which on a devnet defaults to the NODE's home -- but the
-    # deployment's keys live in ~/sec-ekycph.  Every lookup missed and it reported
-    #     SKIPPED ekycph-create-wallet-sponsor -- not resolvable in ~/qadena
-    #     authorised 0 wallet(s); 3 incomplete
-    # while exiting 0, so only the verifier caught it.  step_3 already wrote the ADDRESSES; passing
-    # them needs no keyring at all.
+    # --pool-addresses, not --count: --count derives the pool names and resolves them in the
+    # coordinator keyring, which on a devnet is the node's home, not ~/sec-ekycph.  step_3 already
+    # wrote the addresses, and passing them needs no keyring.
     _pool="${VERITAS_SEC_HOME:-$HOME/sec-ekycph}/pool_addresses.json"
     [ -r "$_pool" ] || { echo "FAILED: no $_pool -- step_3 did not complete"; exit 1; }
     $qadenafoundationscripts/ekycph_after_step_3.sh --pool-addresses "$_pool" \

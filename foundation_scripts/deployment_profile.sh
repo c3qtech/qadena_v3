@@ -7,29 +7,20 @@
 #   foundation_scripts/deployment_profile.sh --show ekycph   # print one, for eyeballing
 #   foundation_scripts/deployment_profile.sh --list
 #
-# WHY THIS EXISTS.  The foundation's sponsored/multisig layer was written for SEC VERITAS and named
-# for it throughout: `foundation-veritas-appsvr`, `veritas-sponsors.json`, `sec-veritas-admin`.
-# sec_veritas_before_step_1.sh already said what was coming --
-#
-#     "Bucket 10's notes list 'SEC PH VERITAS 60M; future MOUs; OTC swap reserve' -- so the
-#      foundation will sponsor more than one programme out of the same bucket, and a bare
-#      `foundation-appsvr` would collide the moment the second one starts.  The keyring has no
-#      namespaces: a name is unique per keyring and nothing warns on reuse."
-#
-# -- and ekycph and enf are that second and third programme.  Every one of those names has to vary
-# together or a run silently reads one deployment's state while writing another's.  THE COLLISION IS
-# SILENT IN BOTH DIRECTIONS: an `--appsvr` that resolves to the wrong key funds the wrong programme,
-# and a `veritas-pool.json` left from an earlier run verifies green against a pool that was never
-# created.  So the mapping lives here, once, rather than in a flag each caller has to remember.
+# WHY THIS EXISTS.  The foundation sponsors more than one programme out of the same bucket, and
+# the keyring has no namespaces -- a name is unique per keyring and nothing warns on reuse.  Every
+# name a deployment owns has to vary together: an --appsvr resolving to another programme's key
+# funds the wrong programme, and a pool file left from an earlier run verifies green against a pool
+# that was never created.  Both succeed without an error, so the mapping lives here rather than in
+# a flag each caller has to remember.
 #
 # ADDING A DEPLOYMENT.  Either add a case below, or -- without touching this file -- drop
 # <name>.env into $QADENA_DEPLOYMENT_DIR (default ~/launch/deployments) setting any DEPLOY_* var.
 # The file is sourced AFTER the built-in case, so it overrides rather than replaces, and a
 # deployment that is merely a rename of another needs two lines.
 #
-# WHAT IS DELIBERATELY *NOT* HERE: mnemonics, addresses, amounts.  This maps names to names.  An
-# address belongs to a chain and a mnemonic belongs in a sealed file; putting either in a profile
-# that gets copied between machines is how they leak.
+# NOT HERE: mnemonics, addresses, amounts.  This maps names to names.  An address belongs to a
+# chain and a mnemonic belongs in a sealed file.
 
 # ---------------------------------------------------------------------------------------------
 # THE PROFILE
@@ -103,11 +94,9 @@ deployment_profile_load() {
         DEPLOY_DSVS_PRV="ekycphdsvssrvprv"
         DEPLOY_DSVS="ekycphdsvs"
         DEPLOY_SEC_HOME="$HOME/sec-ekycph"
-        # 01 Adoption Programs.  DECIDED 2026-09-09: eKYC PH is an adoption programme, not a
-        # public-sector one -- bucket 10 stays earmarked for SEC PH VERITAS and future MOUs.
-        # NOTE THE DIFFERENT THRESHOLD: adoption is a 3of5 multisig where pubsec is 5of7, so the
-        # ceremonies here need three signatures, not five, and --fund-members names adoption's
-        # members.  Sizing the gas for the wrong threshold is the usual way this bites.
+        # 01 Adoption Programs.  Bucket 10 stays earmarked for SEC PH VERITAS and future MOUs.
+        # Adoption is a 3of5 multisig where pubsec is 5of7, so the ceremonies here need three
+        # signatures and --fund-members names adoption's members.
         DEPLOY_FUND_BUCKET="adoption"
         DEPLOY_PREFIX="ekycph"
         # Bucket 01 is 3-of-5 -- five members, not seven.  Handing the ceremony pubsec's list here
@@ -124,11 +113,7 @@ deployment_profile_load() {
         DEPLOY_DSVS_PRV="enfdsvssrvprv"
         DEPLOY_DSVS="enfdsvs"
         DEPLOY_SEC_HOME="$HOME/sec-enf"
-        # 01 Adoption Programs.  DECIDED 2026-09-09: ENF is an adoption programme, not a
-        # public-sector one -- bucket 10 stays earmarked for SEC PH VERITAS and future MOUs.
-        # NOTE THE DIFFERENT THRESHOLD: adoption is a 3of5 multisig where pubsec is 5of7, so the
-        # ceremonies here need three signatures, not five, and --fund-members names adoption's
-        # members.  Sizing the gas for the wrong threshold is the usual way this bites.
+        # 01 Adoption Programs, as for ekycph: 3of5, so --fund-members names adoption's members.
         DEPLOY_FUND_BUCKET="adoption"
         DEPLOY_PREFIX="enf"
         DEPLOY_FUND_MEMBERS="adoption-m1,adoption-m2,adoption-m3,adoption-m4,adoption-m5"

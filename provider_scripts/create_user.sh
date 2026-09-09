@@ -186,10 +186,8 @@ eph_ready() {
             echo "  its local keys are missing -- recovering the family from the mnemonic"
             for _spec in "${_heal[@]}"; do
                 _kn="${_spec%%:*}"; _rest="${_spec#*:}"; _ka="${_rest%%:*}"; _kx="${_rest##*:}"
-                # _raw, NOT qadenad_alias.  When QADENA_KEYRING_PASS is set the wrapper REPLACES
-                # stdin with its own passphrase feed, so the mnemonic this pipe supplies never
-                # arrives and --recover fails -- silently, because of the `|| true`.  Latent until
-                # the node keyring moved to `file` and something finally exported that variable.
+                # _raw, not qadenad_alias: when QADENA_KEYRING_PASS is set the wrapper replaces
+                # stdin with its own passphrase feed, and the mnemonic would never arrive.
                 { print -r -- "$usermnemonic"
                   [ -z "${QADENA_KEYRING_PASS:-}" ] || repeat 8 print -r -- "$QADENA_KEYRING_PASS"
                 } | qadenad_alias_raw keys add "$_kn" --recover --account "$_ka" --index "$_kx" > /dev/null 2>&1 || true
@@ -221,10 +219,8 @@ eph_ready() {
             echo "  its local keys are missing -- recovering both from the mnemonic"
             for _spec in "$username:0" "$username-credential:1"; do
                 _kn="${_spec%%:*}"; _ka="${_spec##*:}"
-                # _raw, NOT qadenad_alias.  When QADENA_KEYRING_PASS is set the wrapper REPLACES
-                # stdin with its own passphrase feed, so the mnemonic this pipe supplies never
-                # arrives and --recover fails -- silently, because of the `|| true`.  Latent until
-                # the node keyring moved to `file` and something finally exported that variable.
+                # _raw, not qadenad_alias: when QADENA_KEYRING_PASS is set the wrapper replaces
+                # stdin with its own passphrase feed, and the mnemonic would never arrive.
                 { print -r -- "$usermnemonic"
                   [ -z "${QADENA_KEYRING_PASS:-}" ] || repeat 8 print -r -- "$QADENA_KEYRING_PASS"
                 } | qadenad_alias_raw keys add "$_kn" --recover --account "$_ka" > /dev/null 2>&1 || true

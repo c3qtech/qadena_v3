@@ -7,15 +7,10 @@
 #   testscripts/fleet_site_profile.sh --show staging
 #   testscripts/fleet_site_profile.sh --list
 #
-# WHY THIS EXISTS.  testscripts/veritas_full_setup.sh and veritas_full_setup_sec_staging.sh were 514
-# and 520 lines and differed in TEN VALUES -- the two hosts, the passphrase file, the launch
-# directory, the state directory suffix, the env file name, whether joiners become validators, the
-# two advertised addresses, and one exported flag.  Everything else was a copy.
-#
-# Copies drift, and these two had already drifted in the direction that matters: the staging file
-# was missing the --keyring-passfile argument the M1/M2 one passes to the fleet bring-up, and the
-# compose.yml check that catches a wrong --env-file.  Neither absence was deliberate; staging was
-# simply the copy nobody updated.  A site is data, so it lives here as data.
+# WHY THIS EXISTS.  The M1/M2 and staging fleet drivers differed in ten values -- the two hosts,
+# the passphrase file, the launch directory, the state-directory suffix, the env file name, whether
+# joiners bond, the two advertised addresses and one exported flag -- and were otherwise identical.
+# A site is data, so it lives here as data rather than as a second copy of the driver.
 #
 # SITE IS NOT DEPLOYMENT, AND THEY LIVE APART ON PURPOSE.  A site is a set of machines and
 # therefore a CHAIN; a deployment is a programme running on one

@@ -39,6 +39,10 @@ _kb_caller="${QADENA_KEYRING_BACKEND:-}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh" > /dev/null 2>&1 || true
 SCRIPT_DIR="${0:A:h}"
 
+# THE BINARY, WHICH IS NOT ALWAYS AT $qadenabin YET.  buildscripts/init.sh calls this right after
+# `ignite chain init`, and install.sh -- which puts qadenad in ~/qadena/bin -- runs 200 lines later.
+# At that point the built binary is `qadena_v3d` on PATH, which init.sh itself uses a few lines on.
+# --qadenad lets the caller say so; the default is for a normal, post-install run.
 QBIN="${qadenabin:-$HOME/qadena/bin}/qadenad"
 HOME_DIR="${QADENAHOME:-$HOME/qadena}"
 DIR=""
@@ -55,6 +59,8 @@ usage() {
     print -r -- "  --from <backend>   source backend (default test)"
     print -r -- "  --to <backend>     target backend (default file)"
     print -r -- "  --passfile <file>  first line is the TARGET keyring passphrase; prompted if omitted"
+    print -r -- "  --qadenad <path>   the binary to use.  Default \$qadenabin/qadenad, which does not"
+    print -r -- "                     exist yet during init.sh -- pass the built one there."
     print -r -- "  --only a,b,c       migrate just these keys (default: all in the source)"
     print -r -- "  --dry-run          list what would move, touch nothing"
     print -r -- ""
@@ -69,6 +75,7 @@ while [[ $# -gt 0 ]]; do
         --from)     FROM="$2"; shift 2 ;;
         --to)       TO="$2"; shift 2 ;;
         --passfile) PASSFILE="$2"; shift 2 ;;
+        --qadenad)  QBIN="$2"; shift 2 ;;
         --only)     ONLY="$2"; shift 2 ;;
         --dry-run)  DRY=1; shift ;;
         --help|-h)  usage; exit 0 ;;
@@ -99,8 +106,28 @@ trap cleanup EXIT INT TERM
 print -r -- "migrating $DIR: keyring-$FROM -> keyring-$TO"
 
 # The name list comes from the SOURCE, so this cannot miss a key someone added by hand.
+# THE BINARY MUST EXIST BEFORE ITS OUTPUT MEANS ANYTHING.  Without this check a missing qadenad
+# made `keys list` fail, 2>/dev/null swallowed "No such file or directory", and the empty result was
+# reported as "no keys found in keyring-test" -- against a keyring that was full.  The message named
+# the wrong thing entirely and sent the search to the keyring instead of the PATH.
+[[ -x "$QBIN" ]] || {
+    print -u2 "no qadenad at $QBIN"
+    print -u2 "  Nothing can be read from the keyring without it.  Pass --qadenad <path> if the"
+    print -u2 "  binary is not installed yet -- during init.sh the built one is \`which qadena_v3d\`."
+    exit 1
+}
+_list_err=$(src keys list --output json 2>&1 >/dev/null)
 _names=$(src keys list --output json 2>/dev/null | jq -r '.[].name' 2>/dev/null || true)
-[[ -n "$_names" ]] || { print -u2 "no keys found in keyring-$FROM"; exit 1 }
+[[ -n "$_names" ]] || {
+    print -u2 "no keys found in keyring-$FROM"
+    # SHOW WHAT qadenad ACTUALLY SAID.  An empty list and a failed command are indistinguishable
+    # from the caller's side, and they have completely different causes.
+    [[ -n "$_list_err" ]] && print -u2 "  qadenad said: $(print -r -- "$_list_err" | tail -2)"
+    print -u2 "  looked in: $DIR/keyring-$FROM  (using $QBIN)"
+    ls "$DIR/keyring-$FROM"/*.info > /dev/null 2>&1 \
+        && print -u2 "  NOTE: that directory DOES contain .info files, so this is a read failure,"
+    exit 1
+}
 if [[ -n "$ONLY" ]]; then
     _want=(${(s:,:)ONLY})
     _filtered=""

@@ -554,19 +554,17 @@ def cmd_enclave_test_fleet():
     lc = (lc.replace("TODO_ENCLAVE_UNIQUE_ID", "test-unique-id")
             .replace("TODO_ENCLAVE_SIGNER_ID", "test-signer-id")
             .replace("TODO_ENCLAVE_PRODUCT_ID", "test-product-id"))
-    marker = ("      # !! TEST-FLEET VALUES !!  These are the placeholders config/config.yml uses;\n"
-              "      # buildscripts/build_enclave.sh rewrites uniqueID and signerID in the GENERATED\n"
-              "      # genesis.json with the ids the debug build produced.  They are correct for a\n"
-              "      # debug fleet (M1-M4 have no SGX) and MUST NOT reach mainnet: a real launch\n"
-              "      # needs the MRENCLAVE of the exact SGX build, read with\n"
-              "      #     qadenad query qadena enclave-measurement\n"
-              "      enclaveIdentityList:")
-    lc = lc.replace("      enclaveIdentityList:", marker, 1)
-    LAUNCH.write_text(lc)
+    # Substitutes the enclave ids only.  The TEST-FLEET warning is authored content in
+    # config/launch-config.yml, not something this writes.
+    #
+    # Write only on a change: the fleet drivers re-render the launch instance when this file is
+    # newer, so an unconditional write would re-render every run.
+    if lc != LAUNCH.read_text():
+        LAUNCH.write_text(lc)
     print("  uniqueID  test-unique-id   (build_enclave.sh rewrites this)")
     print("  signerID  test-signer-id   (build_enclave.sh rewrites this)")
     print("  productID test-product-id  (not rewritten -- assign a real one for mainnet)")
-    print("\n  written, marked TEST-FLEET ONLY in launch-config.yml")
+    print("\n  enclave ids set to test values in launch-config.yml")
     return 0
 
 
