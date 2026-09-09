@@ -103,6 +103,11 @@ FUNDER="treasury"
 # rendered instance instead; see the note above the joiner loop for what that costs.
 MAINNET_SRC=""
 MNEMONIC_FILE=""
+# Node keyring passphrase, LOCAL path.  Forwarded to 1st_node_bringup.sh, which copies it to
+# the primary for init.sh and removes it afterwards.  Needed once the config asks for
+# keyring-backend: file; without it that build stops rather than shipping a node whose
+# client.toml and keys disagree.
+KEYRING_PASSFILE=""
 ADVERTISE_P=""
 ADVERTISE_J=""
 # Passed through to nth_node_bringup.sh.  Empty means "use its defaults", which are DEVNET-sized.
@@ -269,6 +274,7 @@ while [[ $# -gt 0 ]]; do
         --fund-qdn)      FUND_QDN_ARG="$2"; shift 2 ;;
         --stake)         STAKE_ARG="$2"; shift 2 ;;
         --pioneer-mnemonic-file) MNEMONIC_FILE="$2"; shift 2 ;;
+        --keyring-passfile) KEYRING_PASSFILE="$2"; shift 2 ;;
         # WHAT EACH NODE TELLS PEERS TO DIAL.  Both default to the ssh host, which is wrong behind
         # NAT and across networks -- see nth_node_bringup.sh.  --advertise-ip-address reaches
         # init.sh on the primary; --joiner-advertise-ip-address reaches add_full_node.sh on each
@@ -336,6 +342,9 @@ while [[ $# -gt 0 ]]; do
             print "                      a flake at stage C should not cost it.  --from D or later"
             print "                      SKIPS THE REGRESSION and says so; stepping over that guard"
             print "                      should be a deliberate act, never a quiet one."
+            print "  --keyring-passfile <file>  node keyring passphrase, LOCAL path.  Copied to the"
+            print "                      primary for init.sh and removed after.  Required once the"
+            print "                      config asks for keyring-backend: file."
             print "  --mainnet-source <file> / --pioneer-mnemonic-file <file>"
             print "                      build a LAUNCH chain instead of the devnet.  Two funding"
             print "                      modes work here:"
@@ -598,6 +607,9 @@ stage "A0. preflight every host BEFORE anything is stopped or moved"
 mainnet_args=()
 [[ -n "$MAINNET_SRC" ]]   && mainnet_args+=(--mainnet-source "$MAINNET_SRC")
 [[ -n "$MNEMONIC_FILE" ]] && mainnet_args+=(--pioneer-mnemonic-file "$MNEMONIC_FILE")
+# NOT gated on --mainnet-source: the devnet config.yml is exactly what carries
+# `client: keyring-backend: file` on this branch, so a plain devnet build needs it too.
+[[ -n "$KEYRING_PASSFILE" ]] && mainnet_args+=(--keyring-passfile "$KEYRING_PASSFILE")
 
 # ARRAYS, NOT ${VAR:+...}.  zsh does not word-split an unquoted parameter expansion, so
 # `${ADVERTISE_P:+--advertise-ip-address "$ADVERTISE_P"}` would arrive as ONE argument and be
@@ -939,9 +951,14 @@ fi
     [[ -n "$STAKE_ARG" ]]    && amount_args+=(--stake "$STAKE_ARG")
     info "joining $j as $pioneer by $SYNC_KIND (through phase 8: join, bond, agree)"
     print "$j joined by: $SYNC_KIND (as $pioneer)" >> "$RUN_DIR/fleet.txt"
+    # The joiner needs the same passphrase as the primary: init.sh migrated the primary's keyring
+    # to `file`, add_full_node.sh builds the joiner's the same way, and both nodes' first start has
+    # to unlock one to register an enclave.  An array, not ${VAR:+...} -- zsh does not word-split an
+    # unquoted expansion, so that form arrives as a single unrecognised argument.
+    kp_arg=(); [[ -n "$KEYRING_PASSFILE" ]] && kp_arg=(--keyring-passfile "$KEYRING_PASSFILE")
     "$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" "${adv_j[@]}" \
         --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" "${sponsor_arg[@]}" "${amount_args[@]}" \
-        "${conv[@]}" --from 1 --until 8 \
+        "${kp_arg[@]}" "${conv[@]}" --from 1 --until 8 \
         2>&1 | tee "$RUN_DIR/stage-G-join-${j##*@}.log"
     [[ ${pipestatus[1]} -eq 0 ]] || fail "join failed for $j; nth_node_bringup is phase-resumable (--from N). See $RUN_DIR/stage-G-join-${j##*@}.log"
     JOINED+=("$j")

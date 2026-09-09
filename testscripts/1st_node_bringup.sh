@@ -98,6 +98,9 @@ phase() { print ""; print "=====================================================
 # neither belongs in the repo (the instance is gitignored, the mnemonic is key material).
 MAINNET_SRC=""
 MNEMONIC_FILE=""
+# The node keyring's passphrase, LOCAL path.  Required once config.yml asks for
+# keyring-backend: file -- see the copy below and buildscripts/init.sh.
+KEYRING_PASSFILE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -116,6 +119,7 @@ while [[ $# -gt 0 ]]; do
         --advertise-ip-address) ADVERTISE="$2"; shift 2 ;;
         --mainnet-source)       MAINNET_SRC="$2"; shift 2 ;;
         --pioneer-mnemonic-file) MNEMONIC_FILE="$2"; shift 2 ;;
+        --keyring-passfile) KEYRING_PASSFILE="$2"; shift 2 ;;
         --package-out) PKG_OUT="$2"; shift 2 ;;
         --force)     FORCE=1; shift ;;
         --from)      FROM="$2"; shift 2 ;;
@@ -173,6 +177,12 @@ while [[ $# -gt 0 ]]; do
             print "  --mainnet-source <file>  build a LAUNCH chain from this rendered instance"
             print "                instead of the devnet's config/config.yml.  LOCAL path; it is"
             print "                copied to the primary.  Needs --pioneer-mnemonic-file too."
+            print "  --keyring-passfile <file>  the node keyring's passphrase, LOCAL path; copied"
+            print "                to the primary 600 and removed after the build.  REQUIRED when"
+            print "                config.yml asks for keyring-backend: file -- ignite creates the"
+            print "                keys in keyring-test regardless, so init.sh migrates them and"
+            print "                stops without this rather than shipping a node whose client.toml"
+            print "                and keys disagree."
             print "  --pioneer-mnemonic-file <file>  the genesis validator's mnemonic, LOCAL path."
             print "                Required with --mainnet-source: ignite mints the validator key"
             print "                from it, and without one it mints a key whose mnemonic is"
@@ -570,6 +580,34 @@ if run_phase 4; then
     # Copied to the primary rather than referenced from the repo: the instance is gitignored (a
     # --build-reproducible run's `git clean -fd` would delete it) and the mnemonic is key
     # material that must never live in a checkout.  Both land in the login user's home.
+    # THE KEYRING PASSPHRASE, SHIPPED THE SAME WAY THE MNEMONIC IS.
+    #
+    # init.sh runs ON THE PRIMARY over ssh, so a local --keyring-passfile is not visible to it.  The
+    # file is copied to $HOME on the primary at 600 and REMOVED after the build, whether it
+    # succeeded or not -- the same shape as --pioneer-mnemonic-file above, and for the same reason:
+    # this is custody material and must not outlive the run.
+    #
+    # THE PATH IS PASSED, NOT THE CONTENTS.  The mnemonic above goes as --pioneer-mnemonic
+    # "$(cat ...)", which puts it in `ps` on the primary; init.sh takes --keyring-passfile as a FILE
+    # precisely so the passphrase never reaches the process table.  Do not "simplify" this to
+    # --keyring-pass "$(cat ...)".
+    keyring_flag=""
+    rem_kp=""
+    if [[ -n "$KEYRING_PASSFILE" ]]; then
+        [[ -f "$KEYRING_PASSFILE" ]] || fail "--keyring-passfile $KEYRING_PASSFILE does not exist"
+        rem_kp="\$HOME/.qadena-init-keyring-pass"
+        scp -q "$KEYRING_PASSFILE" "$PRIMARY:.qadena-init-keyring-pass" \
+            || fail "cannot copy the keyring passphrase to $PRIMARY"
+        ssh "$PRIMARY" "chmod 600 .qadena-init-keyring-pass" 2>/dev/null
+        keyring_flag=" --keyring-passfile $rem_kp"
+        # REMOVED ON ANY EXIT, including a failed build or a Ctrl-C.  A promise in a comment is not
+        # a deletion; without this the node keyring's passphrase sits in $HOME on the primary
+        # indefinitely, next to the keyring it opens.  The mnemonic copied just above has exactly
+        # this problem today and is left alone here only because changing it is a separate fix.
+        _kp_cleanup() { ssh -o ConnectTimeout=10 "$PRIMARY" 'rm -f .qadena-init-keyring-pass' 2>/dev/null || true }
+        trap _kp_cleanup EXIT INT TERM
+    fi
+
     mainnet_flag=""
     if [[ -n "$MAINNET_SRC" ]]; then
         [[ -f "$MAINNET_SRC" ]] || fail "--mainnet-source $MAINNET_SRC does not exist"
@@ -601,7 +639,7 @@ if run_phase 4; then
 
     rsh_user "$PRIMARY" "rm -f $RUNLOG"
     ssh -o ConnectTimeout=10 "$PRIMARY" \
-        "cd $REPO && nohup zsh -lc '$BUILD_PATH ./buildscripts/init.sh --advertise-ip-address $ADVERTISE$sgx_flag$mainnet_flag' > $RUNLOG 2>&1 &" \
+        "cd $REPO && nohup zsh -lc '$BUILD_PATH ./buildscripts/init.sh --advertise-ip-address $ADVERTISE$sgx_flag$mainnet_flag$keyring_flag' > $RUNLOG 2>&1 &" \
         || fail "could not launch init.sh on $PRIMARY"
 
     info "waiting for init.sh to finish (log: $PRIMARY:$RUNLOG)"
@@ -651,10 +689,33 @@ if run_phase 6; then
     rsh_user "$PRIMARY" "test -L $NODE_HOME/cosmovisor/current" \
         || fail "$PRIMARY has no cosmovisor/current after init -- init.sh should have created it"
     rsh_user "$PRIMARY" "rm -f $RUNLOG.start"
-    # trap 4 again, mirrored: SGX must start WITH sudo, debug must not.
-    ssh -o ConnectTimeout=10 "$PRIMARY" \
-        "nohup ${SUDO}$NODE_HOME/scripts/start_qadena.sh > $RUNLOG.start 2>&1 &" \
-        || fail "could not launch start_qadena.sh on $PRIMARY"
+    # THE FIRST START NEEDS THE KEYRING PASSPHRASE, EXACTLY ONCE IN THE NODE'S LIFE.
+    #
+    # With an encrypted keyring the enclave's self-start reads `pioneer1` to broadcast its
+    # registration.  Nothing answers the prompt on an unattended start, so the node produces blocks
+    # normally while logging
+    #     init-enclave dispatch failed (will retry in 25 blocks): no key named "pioneer1"
+    # forever -- a node that looks healthy, syncs, serves RPC, and has no enclave.  The height check
+    # below passes in that state, which is why this cannot be left to be noticed later.
+    #
+    # `yes` rather than a fixed number of lines: the dispatch fires at an unpredictable height, and
+    # the prompt count is not knowable from here (claim-credential alone asks three times).  After
+    # GetJarRegulator finds the registration the keyring is never read again -- doneForGood -- so
+    # this matters only on the first start; every later restart needs nothing.
+    #
+    # SGX starts under sudo.  That is safe only because the fleet's sudo is NOPASSWD: if it ever
+    # prompts, it would consume the keyring passphrase as the sudo password and fail both.
+    if [[ -n "$rem_kp" ]]; then
+        info "feeding the keyring passphrase to the first start (enclave init)"
+        ssh -o ConnectTimeout=10 "$PRIMARY" \
+            "nohup zsh -c 'repeat 64 print -r -- \"\$(cat $rem_kp)\" | ${SUDO}$NODE_HOME/scripts/start_qadena.sh' > $RUNLOG.start 2>&1 &" \
+            || fail "could not launch start_qadena.sh on $PRIMARY"
+    else
+        # trap 4 again, mirrored: SGX must start WITH sudo, debug must not.
+        ssh -o ConnectTimeout=10 "$PRIMARY" \
+            "nohup ${SUDO}$NODE_HOME/scripts/start_qadena.sh > $RUNLOG.start 2>&1 &" \
+            || fail "could not launch start_qadena.sh on $PRIMARY"
+    fi
 
     info "waiting for the RPC to answer and the height to advance"
     h0=""; ok=0
@@ -669,6 +730,37 @@ if run_phase 6; then
         rsh_user "$PRIMARY" "tail -20 $RUNLOG.start" | while read -r l; do info "$l"; done
         fail "the node did not produce blocks; see $PRIMARY:$RUNLOG.start and $NODE_HOME/logs"
     }
+
+    # BLOCKS ARE NOT ENOUGH -- ASSERT THE ENCLAVE ACTUALLY REGISTERED.
+    #
+    # A node whose enclave never initialised produces blocks, answers RPC and advances height, so
+    # every check above passes.  The only visible difference is a line in the log every 25 blocks
+    # and an empty intervalPublicKeyID for the pioneer -- and the bring-up would hand that node to
+    # step_1, which fails much later with "Couldn't get jar for pioneer".
+    #
+    # Gated on $rem_kp: this is the failure the encrypted keyring introduces, and adding a new gate
+    # to the long-standing `test` path is a separate change with its own risk of surfacing
+    # unrelated flakiness.
+    if [[ -n "$rem_kp" ]]; then
+        info "waiting for the enclave to register (encrypted keyring: the first start must unlock it)"
+        _reg=""
+        for i in {1..40}; do
+            _reg=$(ssh -o ConnectTimeout=10 "$PRIMARY" \
+                "$NODE_HOME/bin/qadenad query qadena list-interval-public-key-id --output json 2>/dev/null \
+                 | sed -n '/^{/,\$p' | jq -r '(.intervalPublicKeyID // [])[] | select(.nodeType==\"pioneer\") | .pubKID' 2>/dev/null | head -1" \
+                2>/dev/null | tr -d '\r')
+            [[ -n "$_reg" ]] && break
+            sleep 15
+        done
+        [[ -n "$_reg" ]] || {
+            rsh_user "$PRIMARY" "grep -a 'init-enclave' $NODE_HOME/logs/*.log 2>/dev/null | tail -5" \
+                | while read -r l; do info "$l"; done
+            fail "the enclave never registered on $PRIMARY.  The node is producing blocks but has no
+     enclave, which fails later as \"Couldn't get jar for pioneer\".  Most likely the keyring
+     passphrase in --keyring-passfile does not open $NODE_HOME's keyring."
+        }
+        info "enclave registered: $_reg"
+    fi
 fi
 
 # ---------------------------------------------------------------------------------------------

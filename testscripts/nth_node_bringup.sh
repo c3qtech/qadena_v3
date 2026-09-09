@@ -97,6 +97,23 @@ SPONSOR_GRANTER="treasury"
 # matters here because coins sent to an unidentified address CANNOT be sent back (AML code 1159).
 CONVERT=0
 PIONEER_NAME="pioneer2"
+
+# THE NODE KEYRING'S PASSPHRASE, and what it implies for every remote qadenad call below.
+#
+# When config.yml asks for keyring-backend: file, init.sh migrates the keys out of keyring-test and
+# DELETES it -- so the seven `--keyring-backend $NKB` call sites in this script stop finding any key
+# at all ("key not found"), and the joiner's first start has no way to answer the enclave's prompt.
+# Both are silent in different ways: the first looks like a missing key, the second like a node that
+# runs fine but never registers an enclave.
+#
+# $NKB is the backend every key-touching call uses; $NKFEED prefixes those calls with the
+# passphrase.  With no --keyring-passfile both stay exactly as they were, so the `test` path is
+# untouched.
+KEYRING_PASSFILE=""
+NKB="test"
+NKFEED=""
+REM_KP=""
+AFN_KP_ARG=""
 STATE_SYNC=0
 SEED2=""
 
@@ -112,6 +129,7 @@ while [[ $# -gt 0 ]]; do
         # when you ssh to the same address peers use.  Behind NAT (a cloud VM: public ssh address,
         # private interface) or across networks it is wrong, and a joiner that advertises an
         # unreachable address peers in one direction only -- which presents as an intermittent fleet.
+        --keyring-passfile) KEYRING_PASSFILE="$2"; shift 2 ;;
         --advertise-ip-address)  ADVERTISE_J_OVERRIDE="$2"; shift 2 ;;
         --quiesce) QUIESCE=1; shift ;;
         --quiesce-immediate) QUIESCE=1; QUIESCE_NOW=1; shift ;;
@@ -201,7 +219,47 @@ done
 [[ "$UNTIL" == <-> ]] || fail "--until takes a phase number, got \"$UNTIL\""
 [[ "$FROM" -le "$UNTIL" ]] || fail "--from $FROM is after --until $UNTIL, so nothing would run"
 [[ -n "$PRIMARY" ]] || fail "--primary is required"
+# RESOLVED ONCE, AFTER PARSING.  Deriving this before --keyring-passfile is read is the ordering bug
+# that split a deployment across two directories in step_1; do it here or not at all.
+if [[ -n "$KEYRING_PASSFILE" ]]; then
+    [[ -r "$KEYRING_PASSFILE" ]] || { print -u2 "cannot read --keyring-passfile $KEYRING_PASSFILE"; exit 1 }
+    NKB="file"
+    REM_KP="\$HOME/.qadena-join-keyring-pass"
+    # Feeds the passphrase to EVERY prompt the command raises -- qadenad asks once per key operation
+    # and three times for some, so a fixed count is wrong.
+    # BUILTINS, NOT `yes`: /usr/bin/yes takes the passphrase as an argument, which puts it in `ps`
+    # on the fleet node for any user to read.  `repeat`/`print` are zsh builtins, so only the
+    # FILENAME appears there.  setup_env.sh's qadenad_alias makes the same choice for the same reason.
+    NKFEED="repeat 64 print -r -- \"\$(cat $REM_KP)\" | "
+    # Passed to add_full_node.sh so the JOINER is built on the same backend as the primary.  Without
+    # it that script forces client.toml back to "test" and mints the node key there, producing a
+    # fleet with an encrypted primary and an unencrypted joiner and no warning anywhere.
+    AFN_KP_ARG=" --keyring-passfile $REM_KP"
+fi
+
 [[ -n "$JOINER" ]]  || fail "--joiner is required"
+
+# THE PASSPHRASE HAS TO BE ON THE JOINER, not just here: every qadenad call below runs THERE, over
+# ssh.  600, and removed on any exit -- it opens the keyring it sits next to.
+# BOTH HOSTS, NOT JUST THE JOINER.  This script signs and reads keys on the PRIMARY too (funding
+# the joiner, resolving the sponsor's address), and init.sh migrated the primary's keyring to `file`
+# as well -- so a feed that only exists on the joiner makes every primary call cat a missing file.
+# Same filename on both, so $NKFEED is one string.
+if [[ -n "$KEYRING_PASSFILE" ]]; then
+    for _h in "$JOINER" "$PRIMARY"; do
+        [[ -n "$_h" ]] || continue
+        scp -q "$KEYRING_PASSFILE" "$_h:.qadena-join-keyring-pass" \
+            || fail "cannot copy the keyring passphrase to $_h"
+        ssh -o ConnectTimeout=10 "$_h" "chmod 600 .qadena-join-keyring-pass" 2>/dev/null
+    done
+    _jkp_cleanup() {
+        for _h in "$JOINER" "$PRIMARY"; do
+            [[ -n "$_h" ]] || continue
+            ssh -o ConnectTimeout=10 "$_h" 'rm -f .qadena-join-keyring-pass' 2>/dev/null || true
+        done
+    }
+    trap _jkp_cleanup EXIT INT TERM
+fi
 
 # rsh <host> <command...> -- run as root on a node, through a LOGIN zsh so PATH and the
 # qadenad_alias definition in setup_env.sh are both present (trap 8).
@@ -381,7 +439,7 @@ info "joiner  $JOINER: $(sgx_desc "$JOINER")"
 # sending anything else either strands QDN on the node or leaves its balance poll waiting.
 ensure_self_bond() {
     local jaddr floor _bal
-    jaddr=$(ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+    jaddr=$(ssh "$JOINER" "${NKFEED}${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend $NKB 2>/dev/null" | tr -d '\r')
     [[ -n "$jaddr" ]] || fail "cannot resolve $PIONEER_NAME's address on $JOINER to fund its self-bond"
     floor=$(ssh "$JOINER" "dasel -f \$HOME/qadena/config/config.yml 'validators.first().app.min-self-delegation' 2>/dev/null" | tr -d '\r"')
     [[ "$floor" == <-> ]] \
@@ -607,7 +665,7 @@ if ssh "$JOINER" 'test -f ~/qadena/config/genesis.json' 2>/dev/null; then
        join with the misleading 'Failed to copy genesis file' (it is setPioneerID.sh that failed).
            ssh $JOINER '~/qadena/scripts/stop_qadena.sh
                cd ~/qadena/config && rm -f *.toml *.1 genesis.json node_key.json priv_validator_key.json
-               cd ~/qadena && rm -rf data keyring-test enclave_config enclave_data enclave_secrets'
+               cd ~/qadena && rm -rf data keyring-test keyring-file enclave_config enclave_data enclave_secrets'
        Or, simplest and safest: pass an unused --pioneer name, and let phase 3 do the wipe."
     fi
     info "joiner's genesis matches the primary's"
@@ -754,7 +812,7 @@ phase "3. mint the joiner's pioneer key"
 # add_full_node.sh --stop-for-funding breaks it: it mints the key, prints the address and exits,
 # leaving the key on disk for the [c] resume branch that already existed.  Minting is therefore part
 # of getting funded, and phase 4 goes back to being purely the join.
-addr=$(ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+addr=$(ssh "$JOINER" "${NKFEED}${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend $NKB 2>/dev/null" | tr -d '\r')
 if [[ ! "$addr" =~ ^qadena1 ]]; then
     info "no $PIONEER_NAME key yet -- minting it with --stop-for-funding"
     # ANSWERED BY FLAG, NOT BY A FEEDER.  add_full_node.sh takes --yes/--on-existing/--funded
@@ -770,12 +828,12 @@ if [[ ! "$addr" =~ ^qadena1 ]]; then
   --pioneer $PIONEER_NAME \
   --advertise-ip-address $ADVERTISE_J \
   --genesis-pioneer-first-ip-address $ADVERTISE_P$SECOND_IP_ARG$TRUST_OFFSET_ARG \
-  --yes --on-existing s --stop-for-funding' > /tmp/tnb_join.log 2>&1 & echo started" > /dev/null
+  --yes --on-existing s --stop-for-funding$AFN_KP_ARG' > /tmp/tnb_join.log 2>&1 & echo started" > /dev/null
     for i in {1..60}; do
         ssh "$JOINER" 'grep -aq "stopping for funding, as requested" /tmp/tnb_join.log' 2>/dev/null && break
         sleep 5
     done
-    addr=$(ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+    addr=$(ssh "$JOINER" "${NKFEED}${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend $NKB 2>/dev/null" | tr -d '\r')
     if [[ ! "$addr" =~ ^qadena1 ]]; then
         info "the key was not minted.  Last log lines:"
         ssh "$JOINER" 'tail -20 /tmp/tnb_join.log' 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^/      /'
@@ -814,7 +872,7 @@ phase "4. fund the joiner"
     # which defeats the phase-resumability this script exists to offer, and bites exactly when
     # something failed mid-run and you want to pick up where it stopped.
     if [[ -z "${addr:-}" ]]; then
-        addr=$(ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+        addr=$(ssh "$JOINER" "${NKFEED}${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend $NKB 2>/dev/null" | tr -d '\r')
         [[ "$addr" == qadena1* ]] \
             || fail "phase 4: $PIONEER_NAME has no key on $JOINER.  Run phase 3 first (it mints one)."
     fi
@@ -831,7 +889,7 @@ phase "4. fund the joiner"
         if [[ "$SPONSOR_GRANTER" == qadena1* ]]; then
             gaddr="$SPONSOR_GRANTER"
         else
-            gaddr=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena keys show $SPONSOR_GRANTER -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+            gaddr=$(ssh "$PRIMARY" "${NKFEED}${SUDO_P}~/qadena/bin/qadenad --home ~/qadena keys show $SPONSOR_GRANTER -a --keyring-backend $NKB 2>/dev/null" | tr -d '\r')
         fi
         [[ -n "$gaddr" ]] || fail "granter '$SPONSOR_GRANTER' is not in the primary's keyring"
         existing=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena query feegrant grants-by-grantee $addr --output json 2>/dev/null | jq -r '.allowances[0].granter // \"\"'" | tr -d '\r')
@@ -899,7 +957,7 @@ print(format(max(bf * 2, Decimal('0.025')), 'f'))
 " 2>/dev/null)
         [[ -n "$gas_price" ]] || fail "could not read the chain's base fee to price the funding transfer"
         info "base fee ${base_fee:-?}aqdn -- funding at ${gas_price}aqdn"
-        fund_out=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena tx bank send $FUNDER $addr ${amt}aqdn --keyring-backend test --chain-id $chainid --gas auto --gas-adjustment 1.5 --gas-prices ${gas_price}aqdn --yes --output json" 2>&1) \
+        fund_out=$(ssh "$PRIMARY" "${NKFEED}${SUDO_P}~/qadena/bin/qadenad --home ~/qadena tx bank send $FUNDER $addr ${amt}aqdn --keyring-backend $NKB --chain-id $chainid --gas auto --gas-adjustment 1.5 --gas-prices ${gas_price}aqdn --yes --output json" 2>&1) \
             || fail "funding transfer failed to broadcast: $(print -r -- "$fund_out" | tail -3)"
         fund_code=$(print -r -- "$fund_out" | sed -n 's/.*"code":\([0-9]*\).*/\1/p' | head -1)
         if [[ -n "$fund_code" && "$fund_code" != "0" ]]; then
@@ -995,7 +1053,7 @@ if (( SPONSORED )); then
         if [[ "$SPONSOR_GRANTER" == qadena1* ]]; then
             gaddr="$SPONSOR_GRANTER"
         else
-            gaddr=$(ssh "$PRIMARY" "${SUDO_P}~/qadena/bin/qadenad --home ~/qadena keys show $SPONSOR_GRANTER -a --keyring-backend test 2>/dev/null" | tr -d '\r')
+            gaddr=$(ssh "$PRIMARY" "${NKFEED}${SUDO_P}~/qadena/bin/qadenad --home ~/qadena keys show $SPONSOR_GRANTER -a --keyring-backend $NKB 2>/dev/null" | tr -d '\r')
         fi
     fi
     [[ -n "${gaddr:-}" ]] || fail "--foundation-sponsored: cannot resolve granter '$SPONSOR_GRANTER' on the primary"
@@ -1012,7 +1070,7 @@ ssh "$JOINER" "rm -f /tmp/tnb_join.log; ${SUDO_J}nohup setsid zsh -c '~/qadena/s
   --pioneer $PIONEER_NAME \
   --advertise-ip-address $ADVERTISE_J \
   --genesis-pioneer-first-ip-address $ADVERTISE_P$SECOND_IP_ARG$TRUST_OFFSET_ARG$SPONSOR_ARG \
-  --yes --on-existing c --funded --no-start-node' > /tmp/tnb_join.log 2>&1 & echo started" > /dev/null
+  --yes --on-existing c --funded --no-start-node$AFN_KP_ARG' > /tmp/tnb_join.log 2>&1 & echo started" > /dev/null
 
 # SURFACE THE ADDRESS AND THE STAGE HERE, rather than leaving them in a log on the other machine.
 # add_full_node.sh prints the pioneer address once and then polls silently for the balance; anyone
@@ -1072,8 +1130,17 @@ phase "6. start the joiner and catch up"
 JOINER_LOG_OFFSET=$(ssh -n "$JOINER" "wc -c < $JOINER_HOME/qadena/logs/qadena.log 2>/dev/null || echo 0" | tr -d '\r ')
 : ${JOINER_LOG_OFFSET:=0}
 
+# THE ENCLAVE PROMPT NEEDS AN ANSWER ON THE FIRST START, and `< /dev/null` is exactly an EOF.
+# With an encrypted keyring the joiner then syncs, serves RPC and advances height with NO enclave,
+# logging `no key named "..."` every 25 blocks -- healthy by every check this script makes.  Fed
+# only when a passfile was given, so the `test` path keeps its original redirect.
+if [[ -n "$NKFEED" ]]; then
+    ssh -n "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && repeat 64 print -r -- \"\$(cat $REM_KP)\" | ./start_qadena.sh' > /dev/null 2>&1" \
+        || fail "start_qadena.sh returned non-zero on $JOINER"
+else
 ssh -n "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./start_qadena.sh' > /dev/null 2>&1 < /dev/null" \
     || fail "start_qadena.sh returned non-zero on $JOINER"
+fi
 info "start_qadena.sh returned (it backgrounds run.sh and exits; the node comes up behind it)"
 
 # jlog <n> -- the last n lines of the joiner's node log, ANSI stripped, indented.  Every failure
@@ -1369,7 +1436,7 @@ if (( STATE_SYNC )); then
     fi
 fi
 
-ssh "$JOINER" "${SUDO_J}~/qadena/bin/qadenad --home ~/qadena enclave height" 2>/dev/null | sed 's/^/  /'
+ssh "$JOINER" "${NKFEED}${SUDO_J}~/qadena/bin/qadenad --home ~/qadena enclave height" 2>/dev/null | sed 's/^/  /'
 fi
 
 # ---------------------------------------------------------------------------- 7. validator

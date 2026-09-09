@@ -303,10 +303,15 @@ if (( REBUILD )); then
     _adv=()
     [[ -n "$ADVERTISE_P" ]] && _adv+=(--advertise-ip-address "$ADVERTISE_P")
     [[ -n "$ADVERTISE_J" ]] && _adv+=(--joiner-advertise-ip-address "$ADVERTISE_J")
+    # ONE PASSPHRASE FOR THE WHOLE RUN.  $PASSFILE already unlocks the coordinator keyring and
+    # SEC's; passing it here makes it the NODE keyring's too, once config.yml asks for
+    # keyring-backend: file.  Same file, so they cannot drift -- and a fleet whose nodes need a
+    # different passphrase from the operator running the bring-up is a fleet nobody can restart.
     ./testscripts/fleet_bringup_with_tests.sh \
         --primary "$PRIMARY" --joiner "$JOINER" --block-sync "${_sgx[@]}" "${_jv[@]}" "${_adv[@]}" \
         --mainnet-source        "$LAUNCH_DIR/fleet-launch-config.yml" \
         --pioneer-mnemonic-file "$_pm" \
+        --keyring-passfile      "$PASSFILE" \
         --funder qfi-pioneer1 --fund-qdn 10100 --stake 10000
     rm -f "$_pm"
 fi

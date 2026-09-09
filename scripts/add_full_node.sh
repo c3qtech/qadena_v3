@@ -55,6 +55,16 @@ fi
 
 ADVERTISE_IP_ADDRESS=""
 PIONEER=""
+
+# THE JOINER'S KEYRING BACKEND.
+#
+# This script used to FORCE client.toml back to "test" and create the node key there, whatever the
+# primary was built with.  Once config.yml asks for keyring-backend: file that silently produced a
+# MIXED fleet -- an encrypted primary and an unencrypted joiner holding the same kind of key -- and
+# nothing anywhere said so.  --keyring-passfile switches this whole script to `file`; without it the
+# behaviour is exactly what it always was.
+KEYRING_PASSFILE=""
+NODE_KB="test"
 STOP_FOR_FUNDING=""
 TEST_NET=""
 GENESIS_PIONEER_FIRST_IP_ADDRESS=""
@@ -88,6 +98,15 @@ start_node=-1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --keyring-passfile)
+      if [[ -n "$2" && "$2" != --* ]]; then
+        KEYRING_PASSFILE="$2"
+        shift 2
+      else
+        echo "Error: --keyring-passfile requires an argument"
+        exit 1
+      fi
+      ;;
     --advertise-ip-address)
       if [[ -n "$2" && "$2" != --* ]]; then
         ADVERTISE_IP_ADDRESS="$2"
@@ -250,6 +269,26 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# RESOLVED AFTER PARSING, never before -- the flag that changes it is read above.
+if [[ -n "$KEYRING_PASSFILE" ]]; then
+  if [[ ! -r "$KEYRING_PASSFILE" ]]; then
+    echo "Error: cannot read --keyring-passfile $KEYRING_PASSFILE"
+    exit 1
+  fi
+  NODE_KB="file"
+  # NOT a hand-rolled pipe: qadenad_alias already feeds the passphrase, as many times as the
+  # command asks, using zsh BUILTINS so it never becomes an argv entry visible in `ps`.  Exporting
+  # these two is the whole integration.
+  export QADENA_KEYRING_BACKEND="$NODE_KB"
+  QADENA_KEYRING_PASS=$(head -1 "$KEYRING_PASSFILE")
+  export QADENA_KEYRING_PASS
+  if [[ -z "$QADENA_KEYRING_PASS" ]]; then
+    echo "Error: --keyring-passfile $KEYRING_PASSFILE is empty"
+    exit 1
+  fi
+fi
+
 
 if [[ $PIONEER == "" || $PIONEER == "--help" || $GENESIS_PIONEER_FIRST_IP_ADDRESS == "" ]] ; then
     echo "Args: add_full_node.sh --pioneer <pioneer> --advertise-ip-address <advertise-ip-address> --genesis-pioneer-first-ip-address <genesis-pioneer-first-ip-address> [optional: --genesis-pioneer-second-ip-address <genesis-pioneer-second-ip-address>]"
@@ -473,6 +512,9 @@ else
 	rm -f $QADENAHOME/config/priv_validator_key.json
 	rm -rf $QADENAHOME/data
 	rm -rf $QADENAHOME/keyring-test
+	# keyring-file too, or a re-join reuses the previous run's ENCRYPTED keyring while the rest of
+	# the home is fresh -- a mismatch that surfaces as "key not found" much later.
+	rm -rf $QADENAHOME/keyring-file
 	rm -rf $QADENAHOME/enclave_config
 	rm -rf $QADENAHOME/enclave_data
 	# enclave_secrets holds the SS interval shares and privK cache.  It is deleted IN LOCKSTEP
@@ -572,7 +614,7 @@ else
 
 	echo "Fixing up client.toml"
 
-	new_keyring_backend="test"
+	new_keyring_backend="$NODE_KB"
 	dasel put -v "$new_keyring_backend" '.keyring-backend' -f $QADENAHOME/config/client.toml
 	new_chain_id=`jq -r '.result.genesis.chain_id' $QADENAHOME/config/genesis.json.1`
 	echo "new_chain_id $new_chain_id"
@@ -726,7 +768,7 @@ else
 
 	echo "$PIONEER does not already exist (the name can be used), that's good."
 
-	qadenad_alias keys add $PIONEER --keyring-backend test
+	qadenad_alias keys add $PIONEER --keyring-backend "$NODE_KB"
 
 	if [[ $? != 0 ]] ; then
 		echo "Failed to add keys for $PIONEER"
