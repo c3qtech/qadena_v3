@@ -55,6 +55,7 @@ COUNT="${VERITAS_COUNT:-2}"
 PIONEER="${QADENA_PIONEER:-pioneer1}"
 FUND_MODE="foundation-sponsored"
 ALLOW_BUILD=0
+KEYRING_PASSFILE="$HOME/fleet-launch-password"
 ENV_FILE=""
 EXTRA=()
 
@@ -70,6 +71,9 @@ usage() {
     print -r -- "  --pioneer <name>     genesis validator, default $PIONEER"
     print -r -- "  --fund-mode <m>      foundation-sponsored (default) | banksend"
     print -r -- "  --env-file <path>    FULL path to the app-server env file for the app stage"
+    print -r -- "  --keyring-passfile <f>  the NODE keyring's passphrase.  Required once the chain"
+    print -r -- "                       is built with keyring-backend: file -- detected from the"
+    print -r -- "                       node's client.toml, so you are told rather than guessing."
     print -r -- "  --allow-build        REQUIRED to run the build stage.  Without it, --from build"
     print -r -- "                       refuses: the build re-inits the chain and destroys every"
     print -r -- "                       wallet, credential and grant on it."
@@ -87,6 +91,7 @@ while [[ $# -gt 0 ]]; do
         --pioneer)     PIONEER="$2"; shift 2 ;;
         --fund-mode)   FUND_MODE="$2"; shift 2 ;;
         --env-file)    ENV_FILE="$2"; shift 2 ;;
+        --keyring-passfile) KEYRING_PASSFILE="$2"; shift 2 ;;
         --allow-build) ALLOW_BUILD=1; shift ;;
         --)            shift; EXTRA=("$@"); break ;;
         --help|-h)     usage 0 ;;
@@ -108,8 +113,36 @@ deployment_profile_load "$DEPLOYMENT" || exit 1
 SETUP="$REPO/testscripts/setup_${DEPLOYMENT}.sh"
 [[ -x "$SETUP" ]] || { print -u2 -- "no harness at $SETUP"; exit 1 }
 
-# The devnet harnesses are unattended and cannot answer a passphrase prompt.
-export QADENA_KEYRING_BACKEND=test
+# WHICH BACKEND THE NODE'S OWN KEYRING USES -- READ FROM THE NODE, NOT ASSUMED.
+#
+# `treasury` and the pioneer live in the NODE keyring, and every funding step here goes through
+# them.  config.yml now asks for keyring-backend: file, and init.sh migrates the keys there and
+# deletes keyring-test -- so the old unconditional `export QADENA_KEYRING_BACKEND=test` pointed
+# every one of those lookups at a keyring that no longer exists, and they failed with "key not
+# found": a message that says nothing about keyrings at all.
+#
+# Detected rather than flagged, because the answer is a property of the chain that is already
+# built.  An operator cannot be expected to remember which way a given devnet went.
+_node_kb=$(grep -aE '^keyring-backend' "${QADENAHOME:-$HOME/qadena}/config/client.toml" 2>/dev/null            | cut -d'"' -f2)
+: ${_node_kb:=test}
+export QADENA_KEYRING_BACKEND="$_node_kb"
+
+if [[ "$_node_kb" == "file" ]]; then
+    # The passphrase reaches every child through setup_env.sh's qadenad_alias, which feeds it with
+    # zsh builtins so it never lands in `ps`.  Exported once here rather than passed as a flag to
+    # each of the eight scripts below.
+    [[ -n "$KEYRING_PASSFILE" ]] || {
+        print -u2 -- ""
+        print -u2 -- "This chain's node keyring is ENCRYPTED (client.toml says keyring-backend = file),"
+        print -u2 -- "so every treasury and pioneer operation below needs its passphrase."
+        print -u2 -- "    $_SELF --keyring-passfile <file> ..."
+        exit 1
+    }
+    [[ -r "$KEYRING_PASSFILE" ]] || { print -u2 -- "cannot read $KEYRING_PASSFILE"; exit 1 }
+    QADENA_KEYRING_PASS=$(head -1 "$KEYRING_PASSFILE")
+    [[ -n "$QADENA_KEYRING_PASS" ]] || { print -u2 -- "$KEYRING_PASSFILE is empty"; exit 1 }
+    export QADENA_KEYRING_PASS
+fi
 export QADENA_NODE="$NODE"
 
 # --------------------------------------------------------------------------------------------
@@ -180,7 +213,12 @@ if _want build; then
     fi
     banner "0. BUILD and re-init the chain"
     "$REPO/buildscripts/build.sh"
-    "$REPO/buildscripts/init.sh"
+    # init.sh REFUSES to build when the config asks for `file` and it is given no passphrase --
+    # ignite puts the keys in keyring-test whatever client.toml says, so it migrates them and
+    # removes the unencrypted copy rather than shipping a node whose config and keys disagree.
+    _init_args=()
+    [[ -n "$KEYRING_PASSFILE" ]] && _init_args=(--keyring-passfile "$KEYRING_PASSFILE")
+    "$REPO/buildscripts/init.sh" "${_init_args[@]}"
 fi
 
 # --------------------------------------------------------------------------------------------
@@ -193,7 +231,18 @@ if _want chain; then
     if curl -s --max-time 3 "${NODE/tcp:/http:}/status" > /dev/null 2>&1; then
         print -r -- "  chain already answering on $NODE"
     else
-        "$REPO/scripts/start_qadena.sh" > /dev/null 2>&1 &
+        # THE FIRST START MUST ANSWER THE ENCLAVE'S PROMPT, once in the node's life.  Without it
+        # the node produces blocks, answers RPC and advances height while logging
+        # `no key named "pioneer1"` every 25 blocks -- healthy by every check below, and with no
+        # enclave.  repeat/print are builtins, so the passphrase never reaches `ps`; `yes "$pass"`
+        # would put it there.  After GetJarRegulator finds the registration the keyring is never
+        # read again, so later restarts need nothing.
+        if [[ -n "${QADENA_KEYRING_PASS:-}" ]]; then
+            { repeat 64 print -r -- "$QADENA_KEYRING_PASS" } 2>/dev/null \
+                | "$REPO/scripts/start_qadena.sh" > /dev/null 2>&1 &
+        else
+            "$REPO/scripts/start_qadena.sh" > /dev/null 2>&1 &
+        fi
         print -r -- "  started; waiting for blocks"
     fi
     _n=0
@@ -281,7 +330,14 @@ if _want app; then
     else
         [[ -r "$ENV_FILE" ]] || { print -u2 "cannot read $ENV_FILE"; exit 1 }
         _stack="${ENV_FILE:h}"
-        "$REPO/testscripts/patch_env_file.sh" --env-file "$ENV_FILE" --deployment "$DEPLOY_NAME" \
+        # --armor-passfile IS NOT OPTIONAL when there is one.  extract_ephem_keys exports through
+        # qadenad_alias, which supplies the KEYRING passphrase to the armor prompt too -- so the
+        # blobs are armored with it and the app-server's ARMOR_PASS_PHRASE has to match.  Patching
+        # the keys and leaving the old passphrase gives an app that starts, fails to import every
+        # key, and exits 1 in a restart loop reporting an EMPTY reason.
+        _pe_args=(--env-file "$ENV_FILE" --deployment "$DEPLOY_NAME")
+        [[ -n "$KEYRING_PASSFILE" ]] && _pe_args+=(--armor-passfile "$KEYRING_PASSFILE")
+        "$REPO/testscripts/patch_env_file.sh" "${_pe_args[@]}" \
             || { print -u2 "could not patch $ENV_FILE"; exit 1 }
         # `docker compose restart` does NOT re-read env_file; `up -d` does.  A restart here looked
         # like it worked and left the old values in the container.

@@ -246,6 +246,37 @@ _onchain=$(wallet_on_chain "$_paddr") || {
 }
 if [ -n "$_onchain" ]; then
     echo "$providername wallet already exists ON CHAIN -- skipping create-wallet"
+    # SELF-HEAL THE LOCAL KEY.  create-wallet is what writes it, so skipping create-wallet on a
+    # wallet that already exists leaves a keyring with no key for it -- and the very next line,
+    # `keys show $providername --address`, fails with
+    #     is not a valid name or address: decoding bech32 failed: invalid separator index -1
+    # because qadenad falls back to parsing the NAME as an address.  That message names neither
+    # the keyring nor the missing key.
+    #
+    # It happens whenever the chain outlives the keyring: a deleted key, a wiped ~/sec-<name>, or
+    # a deployment moved from keyring-test to keyring-file.  The mnemonic is right here and the
+    # derivation is deterministic, so recovering costs nothing and cannot produce a different
+    # address.  create_user.sh has done this for user wallets since 2026-09-07.
+    if ! qadenad_alias keys show "$providername" --address > /dev/null 2>&1; then
+        echo "  no local key for $providername -- recovering it from the mnemonic"
+        { echo "$providermnemonic"
+          [ -z "${QADENA_KEYRING_PASS:-}" ] || { echo "$QADENA_KEYRING_PASS"; echo "$QADENA_KEYRING_PASS"; }
+        # --account 0 is the TRANSACTION wallet, the same derivation create_user.sh recovers with
+        # and the one provider_address() computes.  A hand-built --hd-path would be a second place
+        # to get the coin type wrong; the address check below would catch it, but not before
+        # writing a key.
+        } | qadenad_alias_raw keys add "$providername" --recover --account 0 > /dev/null 2>&1 \
+          || { echo "  FAILED to recover $providername from its mnemonic"; exit 1; }
+        _rec=$(qadenad_alias keys show "$providername" --address 2>/dev/null)
+        if [ "$_rec" != "$_paddr" ]; then
+            echo "  RECOVERED THE WRONG ADDRESS for $providername:"
+            echo "    on chain: $_paddr"
+            echo "    recovered: ${_rec:-<none>}"
+            echo "  Refusing to continue -- this key would sign as somebody else."
+            exit 1
+        fi
+        echo "  recovered $providername -> $_rec"
+    fi
 else
     if qadenad_alias keys show $providername --address > /dev/null 2>&1; then
         # The local key is a corpse from a failed broadcast.  create-wallet's CreatePublicKey
@@ -300,6 +331,30 @@ if [ $count -gt 0 ]; then
         fi
         if [ -n "$_eph_onchain" ]; then
             echo "$providername-eph$i already exists ON CHAIN -- skipping create-wallet"
+            # SAME SELF-HEAL AS THE MAIN WALLET ABOVE.  Skipping create-wallet skips the only thing
+            # that writes the local key, so `keys show $providername-eph$i` a few lines down fails
+            # with "decoding bech32 failed" -- qadenad parsing the NAME as an address.
+            #
+            # --index $i is the EPHEMERAL index: the wallet is account 0 at address index i, which
+            # is what provider_address() derives and what --eph-account-index creates.  The address
+            # is checked against the chain's before the key is used.
+            if [ -z "$_eph_addr" ]; then
+                echo "  no local key for $providername-eph$i -- recovering it from the mnemonic"
+                { echo "$providermnemonic"
+                  [ -z "${QADENA_KEYRING_PASS:-}" ] || { echo "$QADENA_KEYRING_PASS"; echo "$QADENA_KEYRING_PASS"; }
+                } | qadenad_alias_raw keys add "$providername-eph$i" --recover --account 0 --index "$i" > /dev/null 2>&1 \
+                  || { echo "  FAILED to recover $providername-eph$i from its mnemonic"; exit 1; }
+                _erec=$(qadenad_alias keys show "$providername-eph$i" --address 2>/dev/null)
+                _ewant=$(provider_address "$providermnemonic" "$i")
+                if [ "$_erec" != "$_ewant" ]; then
+                    echo "  RECOVERED THE WRONG ADDRESS for $providername-eph$i:"
+                    echo "    expected:  $_ewant"
+                    echo "    recovered: ${_erec:-<none>}"
+                    echo "  Refusing to continue -- this key would sign as somebody else."
+                    exit 1
+                fi
+                echo "  recovered $providername-eph$i -> $_erec"
+            fi
         else
             if [ -n "$_eph_addr" ]; then
                 echo "$providername-eph$i has a local key but NO wallet on chain -- removing and retrying"

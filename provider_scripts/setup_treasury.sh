@@ -57,7 +57,7 @@ name="$treasury_name"
 # somebody else's key of the same name would be far worse than stopping.
 if qadenad_alias keys show "$name" > /dev/null 2>&1; then
     existing_addr=$(qadenad_alias keys show "$name" --address)
-    expected_addr=$(echo "$treasury_mnemonic" | qadenad_alias keys add "$name" --recover --dry-run --output json 2>/dev/null | jq -r '.address // empty')
+    expected_addr=$({ echo "$treasury_mnemonic"; [ -z "${QADENA_KEYRING_PASS:-}" ] || { echo "$QADENA_KEYRING_PASS"; echo "$QADENA_KEYRING_PASS"; } } | qadenad_alias_raw keys add "$name" --recover --dry-run --output json 2>/dev/null | jq -r '.address // empty')
     if [ -n "$expected_addr" ] && [ "$existing_addr" != "$expected_addr" ]; then
         echo "FAILED: key '$name' already exists but is NOT the one this mnemonic derives"
         echo "  in keyring: $existing_addr"
@@ -67,7 +67,7 @@ if qadenad_alias keys show "$name" > /dev/null 2>&1; then
     fi
     echo "$name key already exists ($existing_addr) -- skipping keys add"
 else
-    echo "$treasury_mnemonic" | qadenad_alias keys add "$name" --recover
+    { echo "$treasury_mnemonic"; [ -z "${QADENA_KEYRING_PASS:-}" ] || { echo "$QADENA_KEYRING_PASS"; echo "$QADENA_KEYRING_PASS"; } } | qadenad_alias_raw keys add "$name" --recover
 fi
 
 qadena_addr=$(qadenad_alias keys show $name --address)

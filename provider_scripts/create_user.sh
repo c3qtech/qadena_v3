@@ -163,6 +163,41 @@ eph_ready() {
     fi
     if [ -n "$_u_onchain" ] && [ "$_fam_missing" -eq 0 ] && [ "$_sig_ok" -eq 1 ]; then
         echo "$username is fully set up ON CHAIN -- skipping create_user (resume)"
+        # FULLY SET UP ON CHAIN STILL NEEDS THE LOCAL KEYS.  This exited 0 without them, and the
+        # caller's very next `keys show $username` failed with
+        #     is not a valid name or address: decoding bech32 failed
+        # -- qadenad parsing the NAME as an address, naming neither the keyring nor the key.
+        #
+        # The self-heal below the skip already handles this for a half-created wallet; the
+        # fully-created one needs it too, and hits it whenever the chain outlives the keyring: a
+        # wiped ~/sec-<name>, or a deployment moved from keyring-test to keyring-file.  Both keys
+        # are pure functions of the mnemonic, so recovering cannot produce a different address.
+        # THE WHOLE FAMILY, NOT JUST THE TWO MAIN KEYS.  The pool's ephemerals sign as much as the
+        # main wallet does, and the caller reads every one of their addresses back, so recovering
+        # two of eight just moves the same bech32 error one line down.  Ephemeral i is account 0 /
+        # account 1 at address INDEX i -- the same derivation --eph-account-index creates.
+        _heal=("$username:0:0" "$username-credential:1:0")
+        if [ -n "${eph_count:-}" ]; then
+            for _hi in $(seq 1 $eph_count); do
+                _heal+=("$username-eph$_hi:0:$_hi" "$username-eph$_hi-credential:1:$_hi")
+            done
+        fi
+        if ! qadenad_alias keys show "$username" --address > /dev/null 2>&1; then
+            echo "  its local keys are missing -- recovering the family from the mnemonic"
+            for _spec in "${_heal[@]}"; do
+                _kn="${_spec%%:*}"; _rest="${_spec#*:}"; _ka="${_rest%%:*}"; _kx="${_rest##*:}"
+                # _raw, NOT qadenad_alias.  When QADENA_KEYRING_PASS is set the wrapper REPLACES
+                # stdin with its own passphrase feed, so the mnemonic this pipe supplies never
+                # arrives and --recover fails -- silently, because of the `|| true`.  Latent until
+                # the node keyring moved to `file` and something finally exported that variable.
+                { print -r -- "$usermnemonic"
+                  [ -z "${QADENA_KEYRING_PASS:-}" ] || repeat 8 print -r -- "$QADENA_KEYRING_PASS"
+                } | qadenad_alias_raw keys add "$_kn" --recover --account "$_ka" --index "$_kx" > /dev/null 2>&1 || true
+                qadenad_alias keys show "$_kn" --address > /dev/null 2>&1 \
+                    && echo "    recovered $_kn" \
+                    || { echo "    FAILED to recover $_kn -- cannot continue"; exit 1; }
+            done
+        fi
         exit 0
     fi
     if [ -n "$_u_onchain" ] && [ "$_fam_missing" -eq 0 ]; then
@@ -186,8 +221,13 @@ eph_ready() {
             echo "  its local keys are missing -- recovering both from the mnemonic"
             for _spec in "$username:0" "$username-credential:1"; do
                 _kn="${_spec%%:*}"; _ka="${_spec##*:}"
-                { print -r -- "$usermnemonic"; repeat 8 print -r -- "${QADENA_KEYRING_PASS:-}" } \
-                  | qadenad_alias keys add "$_kn" --recover --account "$_ka" > /dev/null 2>&1 || true
+                # _raw, NOT qadenad_alias.  When QADENA_KEYRING_PASS is set the wrapper REPLACES
+                # stdin with its own passphrase feed, so the mnemonic this pipe supplies never
+                # arrives and --recover fails -- silently, because of the `|| true`.  Latent until
+                # the node keyring moved to `file` and something finally exported that variable.
+                { print -r -- "$usermnemonic"
+                  [ -z "${QADENA_KEYRING_PASS:-}" ] || repeat 8 print -r -- "$QADENA_KEYRING_PASS"
+                } | qadenad_alias_raw keys add "$_kn" --recover --account "$_ka" > /dev/null 2>&1 || true
                 qadenad_alias keys show "$_kn" --address > /dev/null 2>&1 \
                     && echo "    recovered $_kn" \
                     || { echo "    FAILED to recover $_kn -- cannot continue"; exit 1; }

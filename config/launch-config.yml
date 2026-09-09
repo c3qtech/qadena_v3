@@ -199,6 +199,28 @@ validators:
     # that happens to share the id, accept them.
     client:
       chain-id: "qadena_482-1"
+      # THE NODE'S OWN KEYRING BACKEND.  ignite writes client.toml from this block; without this
+      # key it defaults to "test" -- an UNENCRYPTED keyring holding the pioneer key the enclave
+      # loads.  On a LAUNCH chain that key is the genesis validator's, so an unencrypted keyring
+      # makes read access to the node's home into signing authority for the chain.
+      #
+      # WHAT ACTUALLY DEPENDS ON IT, measured:
+      #   cmd/qadenad/cmd/enclave_selfstart.go:147 reads this keyring ONCE, at first enclave
+      #     initialization.  Every later block returns early at enclave_init_dispatch.go:145
+      #     ("GetJarRegulator found -- nothing to do, ever again").
+      #   cmd/qadenad_enclave/enclave_external_address.go:221 does NOT read it: the enclave builds
+      #     its own in-memory keyring (enclave.go:10658).
+      #
+      # So the passphrase is wanted while the chain is being INITIALIZED -- which is attended --
+      # and not on ordinary restarts.  That is what makes `file` workable here at all.
+      #
+      # IT IS NOT ENOUGH ON ITS OWN.  ignite creates the keys in keyring-test whatever this says,
+      # so buildscripts/init.sh migrates them and removes the unencrypted copy -- and REFUSES to
+      # build without --keyring-passfile rather than ship a node whose client.toml and keys
+      # disagree.  The fleet threads that passphrase down from veritas_full_setup.sh --passfile
+      # through fleet_bringup_with_tests -> 1st_node_bringup/nth_node_bringup -> init.sh and
+      # add_full_node.sh.  Changing this without that chain intact fails the build.
+      keyring-backend: "file"
     config:
       # THE MONIKER IS THE PIONEER ID.  Not cosmetic, and not free-form: the node looks its
       # own signing key up BY MONIKER when it initialises the enclave --

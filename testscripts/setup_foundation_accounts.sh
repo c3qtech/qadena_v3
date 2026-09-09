@@ -81,7 +81,17 @@ for f in "$foundation_appsvr" "$foundation_users"; do
         # --algo eth_secp256k1 MATTERS: a standard secp256k1 key derives a DIFFERENT address from
         # the same mnemonic, so getting this wrong silently produces accounts that are not the ones
         # baked into the dev env files.
-        echo "$mn" | qadenad_alias keys add "$f" --recover --algo eth_secp256k1 > /dev/null 2>&1 \
+        #
+        # TWO THINGS DOWN ONE PIPE, IN THIS ORDER.  `keys add --recover` reads the MNEMONIC from
+        # stdin first and, under backend=file, the new keyring passphrase after it.  qadenad_alias
+        # would replace stdin entirely with its own passphrase feed -- so the mnemonic never
+        # arrived and this failed with "could not recover", blaming the mnemonic.  _raw does not
+        # feed anything, which is what lets the call site own the ordering.  Same shape as
+        # veritas_scripts/step_1.sh; putting the passphrase first makes qadenad report "invalid
+        # mnemonic" and blame the wrong input.
+        { echo "$mn"
+          [ -z "${QADENA_KEYRING_PASS:-}" ] || { echo "$QADENA_KEYRING_PASS"; echo "$QADENA_KEYRING_PASS"; }
+        } | qadenad_alias_raw keys add "$f" --recover --algo eth_secp256k1 > /dev/null 2>&1 \
             || { echo "FAILED: could not recover $f"; exit 1; }
     fi
     echo "  $f  $(qadenad_alias keys show "$f" -a)"

@@ -68,11 +68,27 @@ export qadenabin="$QADENAHOME/bin"
 # wrapper that appends it unconditionally breaks every read -- and breaks them QUIETLY, because
 # call sites pipe stderr to /dev/null and read an empty result as a legitimate answer.
 #
-# DEFAULT STAYS `test`, DELIBERATELY.  36 files under testscripts/ depend on it, and an unattended
-# fleet run cannot type a passphrase.  A REAL deployment -- SEC's steps on their own machine, with
-# keys that matter -- should export QADENA_KEYRING_BACKEND=file, which is the whole point of this
-# being a variable.  The foundation_scripts/ already default to `file` on their own.
-: ${QADENA_KEYRING_BACKEND:=test}
+# THE DEFAULT IS READ FROM THE NODE, NOT ASSUMED.
+#
+# It was the constant `test`, because 36 files under testscripts/ depend on it and an unattended
+# fleet run cannot type a passphrase.  That held while every chain was built with an unencrypted
+# keyring.  config/config.yml and config/launch-config.yml now ask for keyring-backend: file, and
+# buildscripts/init.sh migrates the keys there and DELETES keyring-test -- so on a freshly built
+# chain the old default names a keyring that does not exist, and every lookup of `treasury` or the
+# pioneer fails with "key not found": a message that mentions no keyring at all.
+#
+# client.toml is the node's own answer to this question and is written at init, so read it.  The
+# fallback stays `test` for a chain built before this, and an explicit export still wins over both
+# -- which is what SEC's steps and the foundation_scripts rely on.
+#
+# NOTE this is the NODE's keyring.  A deployment with its own $QADENA_KEYRING_DIR (SEC's steps,
+# ~/sec-<name>/keyring) is a separate keyring that happens to be read with the same backend name;
+# set QADENA_KEYRING_BACKEND explicitly if it must differ.
+if [ -z "${QADENA_KEYRING_BACKEND:-}" ]; then
+    QADENA_KEYRING_BACKEND=$(grep -aE '^keyring-backend' \
+        "${QADENAHOME:-$HOME/qadena}/config/client.toml" 2>/dev/null | cut -d'"' -f2)
+    : ${QADENA_KEYRING_BACKEND:=test}
+fi
 # THE SAME BINARY WITHOUT THE PASSPHRASE WRAPPER, for the handful of calls that must control
 # their own stdin -- `keys add --recover`, which needs the mnemonic first and the passphrase after.
 # WHERE THE KEYS LIVE, SEPARATELY FROM WHERE THE NODE LIVES.

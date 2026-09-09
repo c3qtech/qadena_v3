@@ -158,6 +158,12 @@ KRPASS=""
 if [ "$BACKEND" = "file" ]; then
     if [ -n "$KEYRING_PASSFILE" ]; then
         KRPASS=$(head -1 "$KEYRING_PASSFILE")
+    elif [ -n "${QADENA_KEYRING_PASS:-}" ]; then
+        # ALREADY UNLOCKED BY THE CALLER.  The devnet runners export QADENA_KEYRING_PASS once, for
+        # every child, after reading the node's client.toml -- so prompting here would stop an
+        # unattended run dead for a passphrase the process already holds.  A prompt with no
+        # terminal looks exactly like a hang, which is how this was found.
+        KRPASS="$QADENA_KEYRING_PASS"
     else
         printf "Coordinator keyring passphrase (%s, hidden): " "$COORD_HOME" >&2
         read -s KRPASS; echo "" >&2
@@ -251,6 +257,19 @@ grant_and_wait() {   # grant_and_wait <label> <wallet> <tx args...>
     local out hash code
     out=$(qk "$@" --from "$foundation_users" --node "$NODE" --yes --output json \
           --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment 2>&1) || {
+        # ALREADY GRANTED IS NOT A FAILURE.  x/feegrant and x/authz hold at most ONE grant per
+        # (granter, grantee) pair, so re-running this step against a pool it already authorised
+        # comes back "fee allowance already exists" / "authorization already exists" and every
+        # wallet was counted INCOMPLETE -- reporting "authorised 0 wallet(s); 3 incomplete" and a
+        # partial-coverage warning for a pool that is, in fact, completely authorised.
+        #
+        # The grant that exists is the one this step would have made: same granter, same grantee,
+        # same allowance, and sec_veritas_verify.sh checks all of that independently.  Treat it as
+        # done rather than revoking a working grant to write an identical one.
+        case "$out" in
+            *"already exists"*)
+                echo "  $label for $w already granted -- leaving it"; return 0 ;;
+        esac
         echo "  WARNING: $label for $w did not broadcast: $(echo "$out" | tail -1)"; return 1; }
     hash=$(echo "$out" | grep '^{' | tail -1 | jq -r '.txhash // ""' 2>/dev/null)
     [ -n "$hash" ] || { echo "  WARNING: $label for $w produced no txhash"; return 1; }

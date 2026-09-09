@@ -33,7 +33,7 @@ REPO="${SCRIPT_DIR:h}"
 
 NODE="${QADENA_NODE:-}"
 NODE_EXPLICIT=0
-PASSFILE="$HOME/.sec-veritas-password"
+PASSFILE="$HOME/fleet-launch-password"
 LAUNCH_DIR="$HOME/fleet-launch"
 CHAIN_ID="qadena_4824-1"
 # SGX=0 BUILDS A DEBUG ENCLAVE, and that has to be said explicitly rather than left to inference.

@@ -5,12 +5,18 @@ set -e
 # get script dir
 SCRIPT_DIR="${0:A:h}"
 
-# UNATTENDED, SO 'test' IS DELIBERATE.  The SEC steps default to `file` -- an encrypted keyring --
-# because on a real deployment those keys ARE the provider identity.  This harness cannot answer a
-# passphrase prompt, so it opts out explicitly rather than relying on a permissive default.
-# setup_veritas.sh has said this since it was written; enf/ekycph inherited the old default
-# silently and would have started prompting when it changed.
-export QADENA_KEYRING_BACKEND=test
+# NO KEYRING BACKEND IS SET HERE, DELIBERATELY.
+#
+# This used to force `test`, because the harness is unattended and cannot answer a passphrase
+# prompt.  That was right while every chain was built with an unencrypted keyring.  config.yml now
+# asks for keyring-backend: file, and init.sh migrates the keys there and deletes keyring-test -- so
+# on a freshly built chain `treasury` and the pioneer are ENCRYPTED, and forcing `test` made every
+# funding step fail with "key not found".
+#
+# Setting it here at all -- even with := -- pre-empts the answer: scripts/setup_env.sh reads the
+# node's own client.toml, and a value already in the environment stops it looking.  So leave it
+# unset and let that detection run.  An explicit export by the caller still wins, which is how
+# deployment_full_setup.sh supplies the passphrase alongside it.
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
@@ -30,7 +36,12 @@ if qadenad_alias keys show treasury > /dev/null 2>&1; then
     echo "treasury key already exists"
 else
     echo "treasury key not found, adding it now"
-    echo $config_yml_treasurymnemonic | qadenad_alias keys add treasury --recover
+    # MNEMONIC FIRST, THEN THE PASSPHRASE, down one pipe: `keys add --recover` reads them in that
+    # order and qadenad_alias would replace stdin with its own passphrase feed, so the mnemonic
+    # would never arrive.  _raw feeds nothing, leaving the ordering to the call site.
+    { echo "$config_yml_treasurymnemonic"
+      [ -z "${QADENA_KEYRING_PASS:-}" ] || { echo "$QADENA_KEYRING_PASS"; echo "$QADENA_KEYRING_PASS"; }
+    } | qadenad_alias_raw keys add treasury --recover
 fi
 
 

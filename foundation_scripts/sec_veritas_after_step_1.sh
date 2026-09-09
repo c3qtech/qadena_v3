@@ -146,6 +146,12 @@ KRPASS=""
 if [ "$BACKEND" = "file" ]; then
     if [ -n "$KEYRING_PASSFILE" ]; then
         KRPASS=$(head -1 "$KEYRING_PASSFILE")
+    elif [ -n "${QADENA_KEYRING_PASS:-}" ]; then
+        # ALREADY UNLOCKED BY THE CALLER.  The devnet runners export QADENA_KEYRING_PASS once, for
+        # every child, after reading the node's client.toml -- so prompting here would stop an
+        # unattended run dead for a passphrase the process already holds.  A prompt with no
+        # terminal looks exactly like a hang, which is how this was found.
+        KRPASS="$QADENA_KEYRING_PASS"
     else
         printf "Coordinator keyring passphrase (%s, hidden): " "$COORD_HOME" >&2
         read -s KRPASS; echo "" >&2
