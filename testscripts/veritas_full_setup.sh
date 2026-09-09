@@ -35,13 +35,13 @@ REPO="${SCRIPT_DIR:h}"
 # default below comes from one or the other -- the ordering bug that split a deployment across two
 # directories in step_1 is the same shape as deriving these after parsing.
 #
-#   --site        the machines, and therefore the chain: local (M1/M2) or staging (Azure/AWS).
+#   --site        the machines, and therefore the chain: M1-M2 or staging (Azure/AWS).
 #                 Replaces veritas_full_setup_sec_staging.sh, which was this file with ten values
 #                 changed and two later fixes missing.
 #   --deployment  the programme: veritas, ekycph, enf.  Selects the sponsor keys, the admin key,
 #                 the service-provider names, the allocation bucket that funds it and the members
 #                 who sign for that bucket.
-SITE="${SITE:-local}"
+SITE="${SITE:-M1-M2}"
 DEPLOYMENT="${DEPLOYMENT:-veritas}"
 _i=1
 while (( _i <= $# )); do
@@ -76,9 +76,9 @@ SGX=0
 # therefore a single point of failure for the chain.
 JOINER_VALIDATOR="$SITE_JOINER_VALIDATOR"
 COORD_HOME="$LAUNCH_DIR/coord"
-# THE DEPLOYMENT'S HOME, SUFFIXED BY THE SITE.  ~/sec-ekycph on the local fleet, ~/sec-ekycph-staging
+# THE DEPLOYMENT'S HOME, SUFFIXED BY THE SITE.  ~/sec-ekycph on M1/M2, ~/sec-ekycph-staging
 # on staging.  The suffix is not cosmetic: the rebuild stage DELETES this directory, and staging
-# once shared ~/sec-veritas with the local fleet and wiped its keys and mnemonics.
+# once shared ~/sec-veritas with the M1/M2 fleet and wiped its keys and mnemonics.
 SEC_HOME="${VERITAS_SEC_HOME:-$DEPLOY_SEC_HOME$SITE_HOME_SUFFIX}"
 COUNT=3
 FROM="bootstrap"

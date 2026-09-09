@@ -181,16 +181,16 @@ Two things about the sponsored path on a devnet:
 One command, the same shape as VERITAS's:
 
 ```sh
-./testscripts/ekycph_full_setup.sh --site local   --rebuild-chain --count 30
+./testscripts/ekycph_full_setup.sh --site M1-M2   --rebuild-chain --count 30
 ./testscripts/enf_full_setup.sh    --site staging --from prepare
-./testscripts/veritas_full_setup.sh --site local  --from prepare      # unchanged
+./testscripts/veritas_full_setup.sh --site M1-M2 --from prepare      # unchanged
 ```
 
 All three are the same implementation, selected on two independent axes:
 
 | axis | what it picks | values |
 |---|---|---|
-| `--site` | the machines, and therefore the chain: hosts, passphrase file, launch dir, advertised addresses, whether joiners bond | `local` (M1/M2), `staging` (Azure + AWS) |
+| `--site` | the machines, and therefore the chain: hosts, passphrase file, launch dir, advertised addresses, whether joiners bond | `M1-M2`, `staging` (Azure + AWS) |
 | `--deployment` | the programme: sponsor keys, admin key, providers, allocation bucket, signing members | `veritas`, `ekycph`, `enf` |
 
 They are independent because several deployments share one chain — that is the point of a launch

@@ -3,7 +3,7 @@
 # THE FLEET SITE PROFILE -- which machines a bring-up runs against, and the handful of values that
 # vary with them.
 #
-#   source testscripts/fleet_site_profile.sh        # uses $SITE, default local
+#   source testscripts/fleet_site_profile.sh        # uses $SITE, default M1-M2
 #   testscripts/fleet_site_profile.sh --show staging
 #   testscripts/fleet_site_profile.sh --list
 #
@@ -13,7 +13,7 @@
 # two advertised addresses, and one exported flag.  Everything else was a copy.
 #
 # Copies drift, and these two had already drifted in the direction that matters: the staging file
-# was missing the --keyring-passfile argument the local one passes to the fleet bring-up, and the
+# was missing the --keyring-passfile argument the M1/M2 one passes to the fleet bring-up, and the
 # compose.yml check that catches a wrong --env-file.  Neither absence was deliberate; staging was
 # simply the copy nobody updated.  A site is data, so it lives here as data.
 #
@@ -49,8 +49,10 @@ fleet_site_profile_load() {
     SITE_ENV_FILE_NAME=""; SITE_JOINER_VALIDATOR=""; SITE_ALLOW_UNVERIFIED_AGREEMENT=0
 
     case "$_s" in
-    local)
+    M1-M2|m1-m2)
         # The Parallels fleet on this machine.  M1 is the primary and the only builder; M2 joins.
+        # NAMED FOR THE MACHINES, not "local": every site is local to somebody, and the fleet is
+        # referred to as M1/M2 everywhere else.  Lowercase is accepted so the capitals are optional.
         SITE_PRIMARY="alvillarica@10.211.55.5"
         SITE_JOINER="alvillarica@10.211.55.6"
         SITE_PASSFILE="$HOME/fleet-launch-password"
@@ -76,7 +78,7 @@ fleet_site_profile_load() {
         # advertising that would produce a peer nobody can dial and a chain that never gossips.
         SITE_ADVERTISE_P="20.212.178.16"
         SITE_ADVERTISE_J="dev-nlb-97f5978861fac526.elb.ap-southeast-1.amazonaws.com"
-        # A SEPARATE STATE DIRECTORY.  Staging shared ~/sec-veritas with the local fleet, and the
+        # A SEPARATE STATE DIRECTORY.  Staging shared ~/sec-veritas with the M1/M2 fleet, and the
         # rebuild stage DELETES it -- so a staging run wiped the local deployment's keys and
         # mnemonics before it had even reached its own chain (2026-09-07).  Two sites, two homes.
         SITE_HOME_SUFFIX="-staging"
@@ -113,7 +115,7 @@ fleet_site_profile_load() {
     return 0
 }
 
-fleet_site_profile_list() { print -r -- "local staging" }
+fleet_site_profile_list() { print -r -- "M1-M2 staging" }
 
 fleet_site_profile_print() {
     local _v
