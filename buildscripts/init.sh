@@ -30,6 +30,8 @@ nodeparamsfile="$qadenaconfig/node_params.json"
 ADVERTISE_IP_ADDRESS=""
 mainnet_source=""
 mainnet_vault=""
+# Empty means "not given" -- checked before the keyring migration below, which needs it.
+keyring_passfile=""
 pioneer_mnemonic=""
 vault_passphrase=""
 build_sgx_flag=""
@@ -137,6 +139,19 @@ while [[ $# -gt 0 ]]; do
     #
     # Also strictly better than --pioneer-mnemonic "<words>": nothing reaches the process table,
     # and no plaintext mnemonic is ever written to disk.
+    --keyring-passfile)
+      if [[ -n "$2" && "$2" != --* ]]; then
+        keyring_passfile="$2"
+        if [[ ! -r "$keyring_passfile" ]]; then
+          echo "Error: --keyring-passfile $keyring_passfile is not readable"
+          exit 1
+        fi
+        shift 2
+      else
+        echo "Error: --keyring-passfile requires a path"
+        exit 1
+      fi
+      ;;
     --pioneer-mnemonic-enc)
       if [[ -n "$2" && "$2" != --* ]]; then
         pioneer_mnemonic_enc="$2"
@@ -201,6 +216,12 @@ while [[ $# -gt 0 ]]; do
       echo "            foundation_scripts/fill_launch_config.py --apply.  Also SKIPS the setPubKAndPubKID key"
       echo "            splicing, which is devnet-only (it exports a private key), and instead"
       echo "            asserts the genesis carries no unresolved placeholder."
+      echo "  --keyring-passfile <file>"
+      echo "            first line is the passphrase for the node's keyring.  REQUIRED when the"
+      echo "            config asks for keyring-backend: file -- ignite creates the keys in"
+      echo "            keyring-test regardless, so they are migrated and the unencrypted copy"
+      echo "            removed.  Without it the build stops rather than shipping a node whose"
+      echo "            client.toml and keys disagree."
       echo "  --pioneer-mnemonic-enc <file>"
       echo "            open a SEALED mnemonic (mnemonic.sh seal / derive_launch_keys.sh) and"
       echo "            prompt for its passphrase here.  Preferred over --pioneer-mnemonic: the"
@@ -523,6 +544,40 @@ fi
 echo "Initializing chain"
 if ignite chain init --home $QADENAHOME ; then
     echo "Built chain, creating the cosmovisor layout"
+
+    # PUT THE KEYS WHERE client.toml SAYS THEY ARE.
+    #
+    # ignite honours `client.keyring-backend` when it WRITES client.toml, but creates the config's
+    # accounts in keyring-test regardless (measured with ignite v29.10.1-dev, 2026-09-09).  A build
+    # configured for `file` therefore ships a node whose client says one thing and whose keys are
+    # in another: it produces blocks, but enclave_selfstart.go cannot find the pioneer key by
+    # moniker, so init-enclave retries every 25 blocks and the enclave never registers.
+    #
+    # The migration is export/import per key with the address verified after each one -- see
+    # testscripts/migrate_keyring.sh -- and keyring-test is removed only once every key has
+    # round-tripped.  Leaving it would keep an UNENCRYPTED copy of exactly the keys the `file`
+    # backend was chosen to protect.
+    _kb=$(grep -aE '^keyring-backend' "$QADENAHOME/config/client.toml" 2>/dev/null | cut -d'"' -f2)
+    if [[ "$_kb" == "file" ]] && ls "$QADENAHOME"/keyring-test/*.info > /dev/null 2>&1; then
+        echo "client.toml asks for the 'file' keyring, but ignite created the keys in keyring-test."
+        if [[ -z "$keyring_passfile" ]]; then
+            echo "   INIT FAILED: migrating them needs a passphrase.  Re-run with"
+            echo "     --keyring-passfile <file>   (first line is the passphrase for the new keyring)"
+            echo "   Nothing is lost: the keys are in $QADENAHOME/keyring-test and the chain is built."
+            exit 1
+        fi
+        if ! "$qadenabuild/testscripts/migrate_keyring.sh" --dir "$QADENAHOME" \
+                --passfile "$keyring_passfile"; then
+            echo "   INIT FAILED: could not migrate the node keyring to 'file'."
+            echo "   keyring-test is untouched; the node would not be able to initialise its enclave."
+            exit 1
+        fi
+        # ONLY NOW.  migrate_keyring.sh verifies every address before returning 0, and deliberately
+        # does not delete the source itself -- that judgement belongs to whoever knows the keys are
+        # no longer needed elsewhere.  Here they are not: this home is the only holder.
+        rm -rf "$QADENAHOME/keyring-test"
+        echo "migrated the node keyring to 'file' and removed the unencrypted keyring-test"
+    fi
 
     # A NODE IS BORN MANAGED.  There is no flat layout and no conversion step: the home is
     # created in its final shape here, so nothing downstream has to ask whether this node "is"

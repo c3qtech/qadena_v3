@@ -146,6 +146,19 @@ validators:
       
   client:
     chain-id: "qadena_4828-1"
+    # THE NODE'S OWN KEYRING BACKEND.  ignite writes client.toml from this block; without this key
+    # it defaults to "test" -- an UNENCRYPTED keyring holding the pioneer key the enclave loads.
+    #
+    # WHAT ACTUALLY DEPENDS ON IT, measured:
+    #   cmd/qadenad/cmd/enclave_selfstart.go:147 reads this keyring ONCE, at first enclave
+    #     initialization.  Every later block returns early at enclave_init_dispatch.go:145
+    #     ("GetJarRegulator found -- nothing to do, ever again").
+    #   cmd/qadenad_enclave/enclave_external_address.go:221 does NOT read it: the enclave builds
+    #     its own in-memory keyring (enclave.go:10658).
+    #
+    # So the passphrase is wanted while the chain is being INITIALIZED, which is attended, and not
+    # on ordinary restarts.  That is what makes `file` plausible here at all.
+    keyring-backend: "file"
 build:
   main: cmd/qadenad
 
