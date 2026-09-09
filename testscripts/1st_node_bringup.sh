@@ -794,6 +794,25 @@ if run_phase 6; then
         ssh -o ConnectTimeout=10 "$PRIMARY" \
             "nohup ${SUDO}$NODE_HOME/scripts/start_qadena.sh > $RUNLOG.start 2>&1 &" \
             || fail "could not launch start_qadena.sh on $PRIMARY"
+
+        # WAIT FOR IT TO COME BACK.  This phase stops the node and starts it again, so returning as
+        # soon as start_qadena.sh is launched hands the caller a node that is still starting -- and
+        # fleet_bringup_with_tests checks the RPC immediately, failing with "the RPC did not
+        # answer" on a node that was seconds away from answering.
+        info "waiting for the node to come back under systemd"
+        _back=0
+        for i in {1..40}; do
+            sleep 10
+            _h=$(ssh -o ConnectTimeout=10 "$PRIMARY" \
+                'curl -s --max-time 5 localhost:26657/status 2>/dev/null | jq -r ".result.sync_info.latest_block_height // empty"' \
+                2>/dev/null | tr -d '\r')
+            [[ -n "$_h" ]] && { info "node is back under systemd at height $_h"; _back=1; break }
+        done
+        (( _back )) || {
+            rsh_user "$PRIMARY" "tail -20 $RUNLOG.start" | while read -r l; do info "$l"; done
+            fail "the node did not come back after being handed to systemd.  It registered its
+     enclave, so the chain is fine -- this is the restart.  See $PRIMARY:$RUNLOG.start."
+        }
     fi
 
     # The enclave's registration was proven above, before systemd took over, so nothing is
