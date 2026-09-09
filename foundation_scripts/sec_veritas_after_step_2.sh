@@ -19,16 +19,26 @@
 # signs the grants -- before anything is created.
 
 HERE="${0:A:h}"
+# The name to PRINT in usage.  A per-deployment wrapper execs this file, so a hard-coded
+# "sec_veritas_*.sh" told an ekycph operator to run a script whose --help they were not
+# reading.  The wrapper exports QADENA_PROG; direct callers get the real name.
+PROG="${QADENA_PROG:-sec_veritas_after_step_2.sh}"
 
-case "${1:-}" in
-    --help|-h)
-        print "Usage: sec_veritas_after_step_2.sh <proposal-id>... [options]"
+# SCAN EVERY ARGUMENT, NOT JUST $1.  The per-deployment wrappers (ekycph_after_step_2.sh and
+# friends) prepend "--deployment <name>", so --help arrives as $3 and a ${1:-} test silently fell
+# through to the approve stage -- which then asked for proposal ids that a --help run has none of.
+_want_help=0
+for _a in "$@"; do [[ "$_a" == "--help" || "$_a" == "-h" ]] && _want_help=1; done
+
+case "$_want_help" in
+    1)
+        print "Usage: $PROG <proposal-id>... [options]"
         print ""
         print "  Deposits and votes YES on each proposal id that SEC's step_2 printed."
         print "  Every option of sec_veritas_before_step_1.sh applies -- --members,"
         print "  --coord-home, --keyring-backend, --keyring-passfile, --print-ceremony, --via-ssh."
         print ""
-        print "  sec_veritas_after_step_2.sh 12 13 --coord-home ~/launch/coord \\\\"
+        print "  $PROG 12 13 --coord-home ~/launch/coord \\\\"
         print "      --members foundation-m1,foundation-m2,foundation-m3"
         print ""
         print "  Then watch both to PASSED before SEC runs step_3:"

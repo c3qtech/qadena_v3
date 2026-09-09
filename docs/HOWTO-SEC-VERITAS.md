@@ -11,6 +11,13 @@ other's keys — that separation is the point of the whole structure.
 > everything by fee grant. There is no SEC treasury, no transfer to wait for, and your admin key
 > holds **exactly zero, permanently**. That is the design working, not a state to fix.
 
+> **Running a deployment other than VERITAS?** The same three commands, each with
+> `--deployment <name>` (`ekycph`, `enf`, …). That one flag picks the admin key, both service
+> providers, the DSVS signer, the create-wallet sponsor and the state directory together — see
+> [HOWTO-SPONSOR-DEPLOYMENT.md](HOWTO-SPONSOR-DEPLOYMENT.md). **Pass the same value to all three
+> steps:** steps 2 and 3 read the `variables.json` step 1 wrote, and the flag is what decides which
+> directory that is.
+
 ---
 
 ## The three commands

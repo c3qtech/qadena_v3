@@ -39,10 +39,14 @@
 # the members are on separate machines, use --print-ceremony and hand each one their command.
 #
 #   sec_veritas_before_step_1.sh --stage prepare  --members foundation-m1,foundation-m2,foundation-m3 \
-#                      --pubsec-members pubsec-m1,pubsec-m2,pubsec-m3
+#                      --fund-members pubsec-m1,pubsec-m2,pubsec-m3
 #   sec_veritas_before_step_1.sh --stage approve 12 13 --members foundation-m1,foundation-m2,foundation-m3
 
 HERE="${0:A:h}"
+# The name to PRINT in usage.  A per-deployment wrapper execs this file, so a hard-coded
+# "sec_veritas_*.sh" told an ekycph operator to run a script whose --help they were not
+# reading.  The wrapper exports QADENA_PROG; direct callers get the real name.
+PROG="${QADENA_PROG:-sec_veritas_before_step_1.sh}"
 # CAPTURE BEFORE SOURCING.  setup_env.sh defaults QADENA_KEYRING_BACKEND to `test` for the
 # harness, and every script here sources it first -- so a later ${QADENA_KEYRING_BACKEND:-file}
 # always saw "test" and the intended file default was dead code.  Foundation tooling operates on
@@ -57,15 +61,30 @@ MSIG="$SCRIPT_DIR/../scripts/multisig_sign.sh"
 
 set -e
 
+# --deployment IS PRE-SCANNED, BEFORE THE MAIN PARSE LOOP.  Two reasons, both learned the hard way.
+# usage() prints the profile's key names as the defaults, and --help is handled inside that loop, so
+# a profile resolved after it would document veritas's names for an ekycph run.  And step_1.sh was
+# broken for a week by deriving a path from $VERITAS_SEC_HOME at the top while --sec-home was parsed
+# 120 lines later: every run wrote half its state into the default directory.  Resolve first,
+# override in the loop.
+DEPLOYMENT="${DEPLOYMENT:-veritas}"
+_dep_i=1
+while (( _dep_i <= $# )); do
+    [[ "${@[$_dep_i]}" == "--deployment" ]] && DEPLOYMENT="${@[$((_dep_i+1))]:?--deployment needs a name}"
+    _dep_i=$(( _dep_i + 1 ))
+done
+source "$SCRIPT_DIR/deployment_profile.sh"
+deployment_profile_load "$DEPLOYMENT" || exit 1
+
 STAGE="prepare"
-FUND_BUCKET="pubsec"          # 10 Public Sector Programs -- allocations.csv earmarks it
-STAKE_BUCKET="foundation"     # 03 Foundation Treasury -- the only bucket with stakes=yes
+FUND_BUCKET="$DEPLOY_FUND_BUCKET"    # allocations.csv bucket 10 for veritas; see the profile
+STAKE_BUCKET="$DEPLOY_STAKE_BUCKET"  # 03 Foundation Treasury -- the only bucket with stakes=yes
 # NAMED FOR THE DEPLOYMENT, NOT JUST THE ROLE.  Bucket 10's notes list "SEC PH VERITAS 60M;
 # future MOUs; OTC swap reserve" -- so the foundation will sponsor more than one programme out of
 # the same bucket, and a bare `foundation-appsvr` would collide the moment the second one starts.
 # The keyring has no namespaces: a name is unique per keyring and nothing warns on reuse.
-APPSVR="foundation-veritas-appsvr"
-USERS="foundation-veritas-users"
+APPSVR="$DEPLOY_APPSVR"
+USERS="$DEPLOY_USERS"
 # 100,000 QDN PER SPONSOR ACCOUNT -- THE MAINNET FIGURE, DECIDED 2026-09-05.
 #
 # testscripts/setup_veritas.sh uses 2,000,000 for these same two accounts, and its reasoning is
@@ -82,7 +101,7 @@ AMOUNT="100000"               # qdn, per sponsor account
 STAKE=""                      # qdn; empty = compute what expedited voting needs
 VALIDATOR=""
 MEMBERS=""
-PUBSEC_MEMBERS=""
+FUND_MEMBERS=""
 MNEMONICS_DIR=""
 COORD_HOME=""
 KEYRING_PASSFILE=""
@@ -105,14 +124,21 @@ TXLOG=()
 
 usage() {
     print "Usage:"
-    print "  sec_veritas_before_step_1.sh --stage prepare  [options]      # BEFORE SEC's step_1"
-    print "  sec_veritas_before_step_1.sh --stage approve <proposal-id>... [options]"
+    print "  $PROG --stage prepare  [options]      # BEFORE SEC's step_1"
+    print "  $PROG --stage approve <proposal-id>... [options]"
     print ""
     print "  --members <m1,m2,..>        members of the STAKE bucket ($STAKE_BUCKET) that sign."
     print "                              Omit to be prompted."
-    print "  --pubsec-members <m1,..>    members of the FUND bucket ($FUND_BUCKET).  Defaults to"
+    print "  --fund-members <m1,..>      members of the FUND bucket ($FUND_BUCKET).  Defaults to"
     print "                              --members if the same people hold both."
-    print "  --fund-bucket <name>        default $FUND_BUCKET   (allocations.csv bucket 10)"
+    print "  --deployment <name>         which programme this is: $(deployment_profile_list)."
+    print "                              Default $DEPLOY_NAME.  Selects the sponsor key names and"
+    print "                              the sponsors/pregrant/pool filenames -- everything below"
+    print "                              defaults from it."
+    print "  --fund-bucket <name>        default $FUND_BUCKET  (allocations.csv: pubsec is bucket"
+    print "                              10 Public Sector Programs, adoption is 01 Adoption"
+    print "                              Programs -- and they have DIFFERENT thresholds, 5of7"
+    print "                              against 3of5)"
     print "  --stake-bucket <name>       default $STAKE_BUCKET  (allocations.csv bucket 03)"
     print "  --amount <qdn>              per sponsor account, default $AMOUNT"
     print "  --stake <qdn>               override the computed expedited-voting stake"
@@ -139,8 +165,14 @@ usage() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --stage)           STAGE="$2"; shift 2 ;;
+        --deployment)      shift 2 ;;   # pre-scanned above; consumed here so it is not "unknown"
         --members)         MEMBERS="$2"; shift 2 ;;
-        --pubsec-members)  PUBSEC_MEMBERS="$2"; shift 2 ;;
+        # --fund-members is the name; --pubsec-members is the original and still works.  The flag
+        # was named for the bucket back when pubsec was the only one that funded a deployment;
+        # ekycph and enf draw on 01 Adoption Programs, so the bucket-specific name is now wrong for
+        # two of the three profiles.
+        --fund-members)    FUND_MEMBERS="$2"; shift 2 ;;
+        --pubsec-members)  FUND_MEMBERS="$2"; shift 2 ;;
         --fund-bucket)     FUND_BUCKET="$2"; shift 2 ;;
         --stake-bucket)    STAKE_BUCKET="$2"; shift 2 ;;
         --amount)          AMOUNT="$2"; shift 2 ;;
@@ -162,8 +194,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n "$PUBSEC_MEMBERS" ]] || PUBSEC_MEMBERS="$MEMBERS"
-: ${WORKDIR:="${TMPDIR:-/tmp}/veritas-sponsor.$$"}
+[[ -n "$FUND_MEMBERS" ]] || FUND_MEMBERS="$MEMBERS"
+: ${WORKDIR:="${TMPDIR:-/tmp}/$DEPLOY_WORKDIR_TAG.$$"}
 mkdir -p "$WORKDIR"; chmod 700 "$WORKDIR"
 
 # THE BUCKET KEYS ARE NOT IN THE NODE'S KEYRING, AND MUST NOT BE.  derive_launch_keys.sh mints
@@ -421,13 +453,40 @@ largest_validator() {
 case "$STAGE" in
 prepare)
     print "==========================================================="
-    print "FOUNDATION -> VERITAS sponsorship, PREPARE (before step_1)"
+    print "FOUNDATION -> ${(U)DEPLOY_NAME} sponsorship, PREPARE (before step_1)"
     print "==========================================================="
     print "  chain        : $CHAIN"
-    print "  fund bucket  : $FUND_BUCKET     (allocations.csv 10 Public Sector Programs)"
+    print "  deployment   : $DEPLOY_NAME"
+    # The bucket's CSV row, resolved rather than asserted -- this line claimed "10 Public Sector
+    # Programs" for whatever --fund-bucket happened to be, which is wrong for every adoption-funded
+    # deployment and is the one line an operator reads to confirm they are spending the right money.
+    case "$FUND_BUCKET" in
+        pubsec)     _fb_desc="allocations.csv 10 Public Sector Programs, 5of7" ;;
+        adoption)   _fb_desc="allocations.csv 01 Adoption Programs, 3of5" ;;
+        grants)     _fb_desc="allocations.csv 04 Builder & Partner Grants" ;;
+        foundation) _fb_desc="allocations.csv 03 Foundation Treasury" ;;
+        *)          _fb_desc="allocations.csv bucket not recognised by this script" ;;
+    esac
+    print "  fund bucket  : $FUND_BUCKET     ($_fb_desc)"
     print "  stake bucket : $STAKE_BUCKET  (allocations.csv 03 Foundation Treasury)"
     print "  keyring      : $COORD_HOME  (backend $BACKEND)"
     print "  workdir      : $WORKDIR"
+
+    # SAY IT OUT LOUD WHEN THE BUCKET IS A GUESS.  allocations.csv is human-owned (never edited by
+    # tooling) and it earmarks bucket 10 for "SEC PH VERITAS 60M; future MOUs" -- it does not name
+    # ekycph or enf.  Defaulting them to pubsec is a placeholder so the tooling runs, NOT a decision
+    # that they are public-sector programmes; bucket 04 Builder & Partner Grants may well be right.
+    # This spends real tokens out of a real allocation, so the operator is told before, not after.
+    if (( ${DEPLOY_FUND_BUCKET_ASSUMED:-0} )) && [[ "$FUND_BUCKET" == "$DEPLOY_FUND_BUCKET" ]]; then
+        print ""
+        print "  !! FUND BUCKET NOT EARMARKED FOR '$DEPLOY_NAME'"
+        print "     allocations.csv bucket 10 names SEC PH VERITAS; it does not name $DEPLOY_NAME."
+        print "     '$FUND_BUCKET' is this profile's placeholder, not a decision.  Confirm which"
+        print "     allocation funds $DEPLOY_NAME and pass --fund-bucket, or pin it once in"
+        print "     ${QADENA_DEPLOYMENT_DIR:-$HOME/launch/deployments}/$DEPLOY_NAME.env"
+        print "     (DEPLOY_FUND_BUCKET=... ; DEPLOY_FUND_BUCKET_ASSUMED=0) to stop this notice."
+        print ""
+    fi
 
     for b in "$FUND_BUCKET" "$STAKE_BUCKET"; do
         addr_of "$b" > /dev/null || {
@@ -510,7 +569,7 @@ prepare)
     print ""
     step "funding the sponsors from $FUND_BUCKET"
     print -r -- "--- 2. funding ${AMOUNT}qdn each from $FUND_BUCKET"
-    PUBSEC_MEMBERS=$(ask_members "$FUND_BUCKET" "$PUBSEC_MEMBERS")
+    FUND_MEMBERS=$(ask_members "$FUND_BUCKET" "$FUND_MEMBERS")
     # ALREADY-FUNDED ACCOUNTS ARE SKIPPED, AND THAT IS WHAT MAKES THIS RESUMABLE.
     #
     # A ceremony is many steps and any of them can fail late -- a broadcast that reports failure
@@ -539,7 +598,7 @@ prepare)
         u="$WORKDIR/fund-$acct.json"
         # The GAS is fixed HERE, at build time, and must already cover signatures that do not
         # exist yet -- see the note on msig().  pubsec is 5-of-7 on the fleet.
-        _SIGNERS=$(_count_members "$PUBSEC_MEMBERS")
+        _SIGNERS=$(_count_members "$FUND_MEMBERS")
         msig build-send --from "$FUND_BUCKET" --to "$(addr_of $acct)" \
                 --amount "${AMOUNT}qdn" --chain-id "$CHAIN" "${ssh_args[@]}" --out "$u" > /dev/null \
             || { print -u2 "  build failed for $acct"; exit 1 }
@@ -558,7 +617,7 @@ prepare)
         # Adding an offset here double-counts it: the shares get sequence+1 when the account is
         # already at sequence, and `combine` fails with "unable to verify single signer signature"
         # -- after every member has signed.  Measured 2026-09-05.
-        run_ceremony "fund $acct" "$u" "$FUND_BUCKET" "$PUBSEC_MEMBERS"
+        run_ceremony "fund $acct" "$u" "$FUND_BUCKET" "$FUND_MEMBERS"
     done
 
     # ---- 3. stake for expedited voting power ----------------------------------------------
@@ -645,7 +704,7 @@ prepare)
     # every later step made an operator retype them from scrollback -- and retyping a stale pair
     # from an earlier deployment reads as a green run against the wrong accounts.  Written beside
     # the keyring that holds the keys, so the record travels with them.
-    _STATE="$COORD_HOME/veritas-sponsors.json"
+    _STATE="$COORD_HOME/$DEPLOY_STATE_FILE"
     # THE NODE IS PART OF THE RECORD.  Without it, a later --coord-home run defaults to
     # localhost, and every check fails against a chain that is merely absent -- which reads as a
     # broken deployment rather than a wrong endpoint (measured 2026-09-06).
@@ -692,7 +751,7 @@ prepare)
     print "  chain-id          $CHAIN"
     printf "  %-26s %s\n" "$APPSVR" "$(addr_of $APPSVR)"
     printf "  %-26s %s\n" "$USERS"  "$(addr_of $USERS)"
-    print "  (also recorded in $COORD_HOME/veritas-sponsors.json -- later steps read it"
+    print "  (also recorded in $COORD_HOME/$DEPLOY_STATE_FILE -- later steps read it"
     print "   from there, so you never need to retype these.)"
     print "==================================================================="
     ;;

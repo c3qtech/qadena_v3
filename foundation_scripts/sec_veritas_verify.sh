@@ -41,17 +41,32 @@
 # Exit 0 only when every check passes; the summary names each failure.
 
 HERE="${0:A:h}"
+# The name to PRINT in usage.  A per-deployment wrapper execs this file, so a hard-coded
+# "sec_veritas_*.sh" told an ekycph operator to run a script whose --help they were not
+# reading.  The wrapper exports QADENA_PROG; direct callers get the real name.
+PROG="${QADENA_PROG:-sec_veritas_verify.sh}"
 source "$HERE/../scripts/setup_env.sh" > /dev/null 2>&1 || true
 SCRIPT_DIR="$HERE"
 
 QBIN="${qadenabin:-$HOME/qadena/bin}/qadenad"
 NODE_HOME="${QADENAHOME:-$HOME/qadena}"
 NODE="${QADENA_NODE:-tcp://localhost:26657}"
+# Pre-scanned before the parse loop -- see sec_veritas_before_step_1.sh for why.
+DEPLOYMENT="${DEPLOYMENT:-veritas}"
+_dep_i=1
+while (( _dep_i <= $# )); do
+    [[ "${@[$_dep_i]}" == "--deployment" ]] && DEPLOYMENT="${@[$((_dep_i+1))]:?--deployment needs a name}"
+    _dep_i=$(( _dep_i + 1 ))
+done
+source "$SCRIPT_DIR/deployment_profile.sh"
+deployment_profile_load "$DEPLOYMENT" || exit 1
+
 PREGRANT="" POOL="" FA="" FU="" SA=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --pregrant)  PREGRANT="$2"; shift 2 ;;
+        --deployment) shift 2 ;;   # pre-scanned above; consumed so it is not "unknown"
         --pool)      POOL="$2"; shift 2 ;;
         --appsvr)    FA="$2"; shift 2 ;;
         --users)     FU="$2"; shift 2 ;;
@@ -59,17 +74,20 @@ while [[ $# -gt 0 ]]; do
         --coord-home) COORD_HOME="$2"; shift 2 ;;
         --node)      NODE="$2"; shift 2 ;;
         --help|-h)
-            print "Usage: sec_veritas_verify.sh [--coord-home <dir> | --appsvr <addr> --users <addr>] [options]"
+            print "Usage: $PROG [--coord-home <dir> | --appsvr <addr> --users <addr>] [options]"
             print ""
             print "Verifies a VERITAS bring-up against the chain.  READ-ONLY: no keyring, no"
             print "passphrase, no transactions.  Exit 0 only if every check passes."
             print ""
             print "The sponsor addresses -- one of:"
-            print "  --coord-home <dir>    read them from <dir>/veritas-sponsors.json, written by"
+            print "  --coord-home <dir>    read them from <dir>/$DEPLOY_STATE_FILE, written by"
             print "                        sec_veritas_before_step_1.sh --stage prepare.  The"
             print "                        foundation needs nothing else."
-            print "  --appsvr <addr>       the foundation-veritas-appsvr account"
-            print "  --users <addr>        the foundation-veritas-users account"
+            print "  --deployment <name>   which programme: $(deployment_profile_list).  Default"
+            print "                        $DEPLOY_NAME.  Selects which sponsors/pregrant/pool files"
+            print "                        --coord-home reads."
+            print "  --appsvr <addr>       the $DEPLOY_APPSVR account"
+            print "  --users <addr>        the $DEPLOY_USERS account"
             print ""
             print "Optional -- the EXPECTED sets, as SEC's paste blocks:"
             print "  --pregrant <file>     step_1's block (admin + every wallet address)"
@@ -83,10 +101,10 @@ while [[ $# -gt 0 ]]; do
             print "  --node <rpc>          default \$QADENA_NODE or tcp://localhost:26657"
             print ""
             print "  # foundation, nothing typed:"
-            print "  sec_veritas_verify.sh --coord-home ~/launch/coord"
+            print "  $PROG --coord-home ~/launch/coord"
             print ""
             print "  # SEC, with the expected sets:"
-            print "  sec_veritas_verify.sh --pregrant ~/sec-veritas/pregrant_addresses.json \\"
+            print "  $PROG --pregrant ~/sec-veritas/pregrant_addresses.json \\"
             print "      --pool ~/sec-veritas/pool_addresses.json \\"
             print "      --appsvr \$(jq -r .appsvraddr ~/sec-veritas/variables.json) \\"
             print "      --users  \$(jq -r .usersaddr  ~/sec-veritas/variables.json)"
@@ -107,7 +125,7 @@ qq() { "$QBIN" --home "$NODE_HOME" "$@" --node "$NODE"; }
 # coordinator keyring; read them from there so the addresses in play are the ones that RUN
 # actually used, not a pair remembered from an earlier deployment's scrollback.
 if [[ -z "$FA" || -z "$FU" ]]; then
-    _st="${COORD_HOME:-$HOME/launch/coord}/veritas-sponsors.json"
+    _st="${COORD_HOME:-$HOME/launch/coord}/$DEPLOY_STATE_FILE"
     if [[ -r "$_st" ]]; then
         [[ -n "$FA" ]] || FA=$(jq -r '.appsvr // empty' "$_st")
         [[ -n "$FU" ]] || FU=$(jq -r '.users  // empty' "$_st")
@@ -122,7 +140,7 @@ if [[ -z "$FA" || -z "$FU" ]]; then
 fi
 [[ -n "$FA" && -n "$FU" ]] || {
     print -u2 "need the two sponsor addresses.  Either:"
-    print -u2 "    --coord-home <dir>   read them from <dir>/veritas-sponsors.json (written by"
+    print -u2 "    --coord-home <dir>   read them from <dir>/$DEPLOY_STATE_FILE (written by"
     print -u2 "                         sec_veritas_before_step_1.sh --stage prepare), or"
     print -u2 "    --appsvr <addr> --users <addr>"
     print -u2 "  --pregrant/--pool are optional; with them the expected wallet set is checked too."
@@ -131,8 +149,8 @@ fi
 # The expected sets, if the foundation retained them (after_step_1/after_step_3 copy the blocks
 # they signed into the coordinator home).  Explicit flags win.
 if [[ -n "${COORD_HOME:-}" ]]; then
-    [[ -n "$PREGRANT" ]] || { [[ -r "$COORD_HOME/veritas-pregrant.json" ]] && PREGRANT="$COORD_HOME/veritas-pregrant.json" }
-    [[ -n "$POOL"     ]] || { [[ -r "$COORD_HOME/veritas-pool.json"     ]] && POOL="$COORD_HOME/veritas-pool.json" }
+    [[ -n "$PREGRANT" ]] || { [[ -r "$COORD_HOME/$DEPLOY_PREGRANT_FILE" ]] && PREGRANT="$COORD_HOME/$DEPLOY_PREGRANT_FILE" }
+    [[ -n "$POOL"     ]] || { [[ -r "$COORD_HOME/$DEPLOY_POOL_FILE"     ]] && POOL="$COORD_HOME/$DEPLOY_POOL_FILE" }
 fi
 if [[ -r "$PREGRANT" ]]; then
     [[ -n "$SA" ]] || SA=$(jq -r '.sec_admin // empty' "$PREGRANT")
@@ -403,19 +421,48 @@ for _p in "appsvr:$FA" "users:$FU"; do
         ok "foundation-$_n can still pay ($(python3 -c "v=int('${_b:-0}');print(f'{v//10**18:,}')") QDN)"
     fi
 done
+# THE CHAIN'S OWN WALLET INCENTIVES ARE NOT "A SECOND FUNDING SOURCE".
+#
+# x/qadena pays create_wallet_transparent_incentive on every wallet and
+# create_ephemeral_wallet_transparent_incentive on every ephemeral, out of the incentive pool.  On a
+# launch chain both are ZERO, so this check is unchanged there and still fails on any balance at
+# all.  On a devnet they are 500 and 50 QDN, so EVERY wallet legitimately holds tokens and this
+# reported a broken deployment for one working exactly as configured -- measured on qadena_4828-1,
+# 2026-09-09, where all 12 wallets held precisely their incentive and nothing else.
+#
+# The threshold is the ENTITLEMENT, not zero: a wallet holding more than the chain would have paid
+# it still trips the check, which is the case the check exists for.
+_inc=$(qq query qadena params --output json 2>/dev/null | sed -n '/^{/,$p' \
+       | jq -r '.params.create_wallet_transparent_incentive.amount // "0"' 2>/dev/null)
+_inc_eph=$(qq query qadena params --output json 2>/dev/null | sed -n '/^{/,$p' \
+       | jq -r '.params.create_ephemeral_wallet_transparent_incentive.amount // "0"' 2>/dev/null)
+_inc="${_inc:-0}"; _inc_eph="${_inc_eph:-0}"
+# Deliberately the LARGER of the two, not per-wallet-type: the expected set does not record which
+# addresses are ephemeral, and erring by one incentive tier is the right way to err -- a wallet
+# funded from somewhere else holds far more than one tier's difference.
+_allow_aqdn=$(python3 -c "print(max(int('$_inc'), int('$_inc_eph')) * 10**18)")
+if [[ "$_inc" != "0" || "$_inc_eph" != "0" ]]; then
+    print "  note  chain pays wallet incentives ($_inc / $_inc_eph QDN) -- allowed below"
+fi
+
 _funded=0 _first_funded=""
 while read -r _ad; do
     [[ -n "$_ad" ]] || continue
     _b=$(qq query bank balances "$_ad" --output json 2>/dev/null | jq -r '(.balances[]?|select(.denom=="aqdn")|.amount) // "0"')
-    if [[ "${_b:-0}" != "0" ]]; then
+    if [[ "${_b:-0}" != "0" ]] \
+       && python3 -c "import sys; sys.exit(0 if int('${_b:-0}') > int('$_allow_aqdn') else 1)"; then
         _funded=$(( _funded + 1 ))
         [[ -n "$_first_funded" ]] || _first_funded="$_ad ($(python3 -c "v=int('${_b:-0}');print(f'{v/10**18:,.6f}')") QDN)"
     fi
 done < <(print -r -- "$_wallets")
 if [[ $_funded -eq 0 ]]; then
-    ok "no operational wallet holds tokens -- fee grants are the only funding source"
+    if [[ "$_inc" != "0" || "$_inc_eph" != "0" ]]; then
+        ok "no operational wallet holds more than its wallet incentive -- fee grants fund the rest"
+    else
+        ok "no operational wallet holds tokens -- fee grants are the only funding source"
+    fi
 else
-    bad "$_funded operational wallet(s) hold TOKENS -- a second funding source masks missing grants"
+    bad "$_funded operational wallet(s) hold MORE THAN their wallet incentive -- a second funding source masks missing grants"
     print "        first: $_first_funded"
 fi
 
@@ -488,7 +535,7 @@ fi
 # by-owner query that does not exist today.  Said here rather than discovered later.
 _credmiss=""
 _credlist=$(qq query qadena list-credential --output json 2>/dev/null | sed -n '/^{/,$p' || true)
-for _un in sec-create-wallet-sponsor secdsvs; do
+for _un in "$DEPLOY_SPONSOR_BASE" "$DEPLOY_DSVS"; do
     _uw=$(jq -r --arg n "$_un" '(.wallets // [])[] | select(.name==$n) | .address' "$PREGRANT" 2>/dev/null | head -1)
     [[ -n "$_uw" ]] || continue
     _n=$(print -r -- "$_credlist" | jq -r --arg w "$_uw" '[(.credential // [])[] | select(.walletID==$w)] | length' 2>/dev/null)
@@ -540,14 +587,14 @@ fi
 # never reached it.  Nothing else asserted here would have noticed.
 _sig_addr=""
 if [[ -r "$PREGRANT" ]]; then
-    _sig_addr=$(jq -r '(.wallets // [])[] | select(.name=="secdsvs") | .address' "$PREGRANT" 2>/dev/null | head -1)
+    _sig_addr=$(jq -r --arg n "$DEPLOY_DSVS" '(.wallets // [])[] | select(.name==$n) | .address' "$PREGRANT" 2>/dev/null | head -1)
 fi
 if [[ -z "$_sig_addr" ]]; then
-    print "  skip  SEC signatory (no secdsvs address in the pregrant file)"
+    print "  skip  signatory (no $DEPLOY_DSVS address in the pregrant file)"
 elif qq query dsvs show-authorized-signatory "$_sig_addr" > /dev/null 2>&1; then
-    ok "secdsvs has an authorized signatory registered (SEC can counter-sign)"
+    ok "$DEPLOY_DSVS has an authorized signatory registered (it can counter-sign)"
 else
-    bad "NO authorized signatory registered for secdsvs -- SEC cannot counter-sign any document"
+    bad "NO authorized signatory registered for $DEPLOY_DSVS -- it cannot counter-sign any document"
     print "        the wallets and credentials exist; the registration does not.  Re-run the"
     print "        register-authorized-signatory step, or step_3 for that user."
 fi

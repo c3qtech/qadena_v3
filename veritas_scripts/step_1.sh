@@ -4,6 +4,14 @@ set -e
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
+# THE SCRIPT'S OWN DIRECTORY, CAPTURED BEFORE setup_env.sh IS SOURCED.  That file does
+# SCRIPT_DIR="${0:A:h}" at its own top level, and zsh keeps $0 pointing at the sourced file --
+# so every SCRIPT_DIR use AFTER the source resolves against scripts/, not this directory.
+# sec_veritas_before_step_1.sh has warned about this for three scripts already; the profile
+# source below is the fourth, and it failed silently everywhere ../foundation_scripts still
+# happened to resolve.  $_DEPLOY_HERE is never assigned by anything else.
+_DEPLOY_HERE="${0:A:h}"
+
 # CAPTURE BEFORE SOURCING, AND DEFAULT TO `file`.
 #
 # setup_env.sh sets QADENA_KEYRING_BACKEND=test for the devnet harness, and this script sources
@@ -21,6 +29,19 @@ _kb_caller="${QADENA_KEYRING_BACKEND:-}"
 
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
+
+# WHICH DEPLOYMENT THIS IS.  Pre-scanned before anything is defaulted, because $VERITAS_SEC_HOME is
+# read a few lines below and QADENA_KEYRING_DIR is derived from it -- the exact ordering bug that
+# split a deployment across two directories in September.  --deployment picks the whole name set at
+# once (admin key, providers, DSVS, sponsor base, sec-home); the individual flags below still win.
+DEPLOYMENT="${DEPLOYMENT:-veritas}"
+_dep_i=1
+while (( _dep_i <= $# )); do
+    [[ "${@[$_dep_i]}" == "--deployment" ]] && DEPLOYMENT="${@[$((_dep_i+1))]:?--deployment needs a name}"
+    _dep_i=$(( _dep_i + 1 ))
+done
+source "$_DEPLOY_HERE/../foundation_scripts/deployment_profile.sh"
+deployment_profile_load "$DEPLOYMENT" || exit 1
 export QADENA_KEYRING_BACKEND="${_kb_caller:-file}"
 
 # THE KEYRING IS THE NODE'S, AND SO IS ITS BACKEND.  These steps do not choose one.
@@ -61,7 +82,7 @@ treasurymnemonic=$(qadenad_alias keys mnemonic)
 # 700 on the directory and 600 on the file are the only protection mnemonics.json has.  It is the
 # one artifact here whose loss is unrecoverable and whose disclosure is total: back it up off this
 # machine, and delete it when the deployment is established.
-: ${VERITAS_SEC_HOME:="$HOME/sec-veritas"}
+: ${VERITAS_SEC_HOME:="$DEPLOY_SEC_HOME"}
 
 # SEC'S KEYS LIVE WITH SEC'S FILES.
 #
@@ -85,7 +106,7 @@ treasurymnemonic=$(qadenad_alias keys mnemonic)
 export QADENA_KEYRING_DIR="$VERITAS_SEC_HOME/keyring"
 
 
-treasuryname="sec-treasury"
+treasuryname="$DEPLOY_TREASURY"
 
 # THE ADMIN KEY, AND WHY IT HOLDS NOTHING.
 #
@@ -108,12 +129,12 @@ treasuryname="sec-treasury"
 # granter for everything SEC does.
 appsvraddr=""
 usersaddr=""
-adminname="sec-veritas-admin"
+adminname="$DEPLOY_ADMIN"
 adminmnemonic=""      # filled by `keys add --output json` below, or by --adminmnemonic
-identityprovidername="secidentitysrvprv"
-dsvsprovidername="secdsvssrvprv"
-createwalletsponsorname="sec-create-wallet-sponsor"
-dsvsname="secdsvs"
+identityprovidername="$DEPLOY_IDENTITY_PRV"
+dsvsprovidername="$DEPLOY_DSVS_PRV"
+createwalletsponsorname="$DEPLOY_SPONSOR_BASE"
+dsvsname="$DEPLOY_DSVS"
 signermnemonic=$(qadenad_alias keys mnemonic)
 createwalletsponsormnemonic=$(qadenad_alias keys mnemonic)
 identityprovidermnemonic=$(qadenad_alias keys mnemonic)
@@ -159,8 +180,12 @@ _usage() {
     echo "  --keyring-passfile <file>  first line is the keyring passphrase.  REQUIRED for an"
     echo "                       unattended run: the default backend is 'file', which otherwise"
     echo "                       prompts, and a prompt with no terminal looks like a hang."
+    echo "  --deployment <name>  which programme: $(deployment_profile_list).  Default"
+    echo "                       $DEPLOY_NAME.  Sets the admin key, both providers, the DSVS"
+    echo "                       signer, the create-wallet sponsor and --sec-home in one go;"
+    echo "                       the individual flags still override it."
     echo "  --sec-home <dir>     where variables.json / mnemonics.json / pool_addresses.json live."
-    echo "                       Default \$VERITAS_SEC_HOME or ~/sec-veritas."
+    echo "                       Default \$VERITAS_SEC_HOME or $DEPLOY_SEC_HOME."
     echo "  --pioneer <name>     derived from the chain when omitted; pass it only if the chain"
     echo "                       has several pioneers."
     echo ""
@@ -199,6 +224,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --sec-home)
             VERITAS_SEC_HOME="$2"
+            shift 2
+            ;;
+        --deployment)
+            # Pre-scanned at the top; consumed here so it is not "unknown option".
             shift 2
             ;;
         --adminname)
@@ -319,14 +348,14 @@ mkdir -p "$QADENA_KEYRING_DIR" 2>/dev/null; chmod 700 "$QADENA_KEYRING_DIR" 2>/d
 # so: the admin key was created and its address printed, and the failure surfaced two steps later
 # as "key with address <sponsor> not found" while signing as the foundation.  The ordering is
 # fixed, but a directory left behind by an earlier run still looks like a working deployment.
-if [[ "$VERITAS_SEC_HOME" != "$HOME/sec-veritas" ]] \
-   && ls "$HOME/sec-veritas"/keyring/keyring-*/*.info > /dev/null 2>&1; then
+if [[ "$VERITAS_SEC_HOME" != "$DEPLOY_SEC_HOME" ]] \
+   && ls "$DEPLOY_SEC_HOME"/keyring/keyring-*/*.info > /dev/null 2>&1; then
     echo ""
-    echo "NOTE: $HOME/sec-veritas also holds keys, and this run uses $VERITAS_SEC_HOME."
+    echo "NOTE: $DEPLOY_SEC_HOME also holds keys, and this run uses $VERITAS_SEC_HOME."
     echo "  A version of step_1 before 2026-09-08 wrote keys to the default home while writing"
     echo "  mnemonics to --sec-home, splitting a deployment across both.  If this run cannot find"
     echo "  a key it expects, look there:"
-    echo "      ls $HOME/sec-veritas/keyring/keyring-file/"
+    echo "      ls $DEPLOY_SEC_HOME/keyring/keyring-file/"
     echo "  and either move them across or start clean.  Nothing is read from there automatically."
     echo ""
 fi
@@ -578,12 +607,59 @@ fi
 # that seals "successfully" and never decrypts.  The verification below is what catches that.
 _MDIR="$VERITAS_SEC_HOME/mnemonics"
 mkdir -p "$_MDIR"; chmod 700 "$_MDIR"
+# THE `test` BACKEND IS THE ESCAPE HATCH THIS MESSAGE ALREADY NAMED.  The refusal below checked
+# only QADENA_KEYRING_PASS while telling the operator that QADENA_KEYRING_BACKEND=test was a way
+# out -- so on a devnet, where setup_env.sh deliberately leaves the passphrase unset because the
+# keyring is unencrypted, step_1 died right after creating the admin key and printing the pre-grant
+# block.  Every devnet harness (setup_veritas/ekycph/enf) hit it in sponsored mode.
+#
+# Sealing is SKIPPED rather than done unprotected, because on `test` there is nothing to protect
+# against: the keyring holding these very keys is itself plaintext, so a sealed mnemonics directory
+# beside it would be security theatre -- and a passphrase invented here would be one nobody could
+# reproduce at recovery time.  It is said out loud, every run, so this can never be mistaken for a
+# deployment whose mnemonics are safe.
 if [ -z "${QADENA_KEYRING_PASS:-}" ]; then
-    echo "REFUSING to write mnemonics: no keyring passphrase in this run, so they could only be"
-    echo "  stored in the clear.  Re-run with --keyring-passfile <file>, or export"
-    echo "  QADENA_KEYRING_BACKEND=test for a throwaway devnet."
-    exit 1
+    if [ "${QADENA_KEYRING_BACKEND:-}" = "test" ]; then
+        echo ""
+        echo "NOT SEALING MNEMONICS: this is a 'test' keyring -- unencrypted by design."
+        echo "  The keys these mnemonics derive are already stored in the clear in"
+        echo "  $QADENA_KEYRING_DIR/keyring-test, so sealing the mnemonics beside them would"
+        echo "  protect nothing.  THROWAWAY DEVNET ONLY -- never point this at a real deployment."
+        echo ""
+        # STEPS 2 AND 3 STILL NEED THEM.  They read the mnemonics back to recreate the provider and
+        # DSVS keys, so skipping sealing without writing anything just moves the failure one step
+        # later -- "no mnemonic 'identityprovidermnemonic' in ..." -- after step_1 has already put
+        # keys on the chain.  On `test` the original plaintext mnemonics.json is the right artifact:
+        # 600 in a 700 directory, beside a keyring that is itself unencrypted.
+        _mjson="$VERITAS_SEC_HOME/mnemonics.json"
+        umask 077
+        jq -n --arg treasurymnemonic "$treasurymnemonic" \
+              --arg adminmnemonic "$adminmnemonic" \
+              --arg signermnemonic "$signermnemonic" \
+              --arg createwalletsponsormnemonic "$createwalletsponsormnemonic" \
+              --arg identityprovidermnemonic "$identityprovidermnemonic" \
+              --arg dsvsprovidermnemonic "$dsvsprovidermnemonic" \
+              '{treasurymnemonic:$treasurymnemonic, adminmnemonic:$adminmnemonic,
+                signermnemonic:$signermnemonic,
+                createwalletsponsormnemonic:$createwalletsponsormnemonic,
+                identityprovidermnemonic:$identityprovidermnemonic,
+                dsvsprovidermnemonic:$dsvsprovidermnemonic}
+               | with_entries(select(.value != ""))' > "$_mjson" \
+            || { echo "FAILED to write $_mjson -- the keys exist but would be UNRECOVERABLE."; exit 1; }
+        chmod 600 "$_mjson"
+        echo "wrote $(jq -r 'keys|length' "$_mjson") mnemonic(s) IN THE CLEAR to $_mjson"
+        echo "  (steps 2 and 3 read them from there.  On a real deployment they are sealed"
+        echo "   instead -- see veritas_scripts/seal_sec_mnemonics.sh.)"
+        echo ""
+        _sealed=0
+    else
+        echo "REFUSING to write mnemonics: no keyring passphrase in this run, so they could only be"
+        echo "  stored in the clear.  Re-run with --keyring-passfile <file>, or export"
+        echo "  QADENA_KEYRING_BACKEND=test for a throwaway devnet."
+        exit 1
+    fi
 fi
+if [ -n "${QADENA_KEYRING_PASS:-}" ]; then
 _sealed=0
 for _spec in "treasurymnemonic:$treasurymnemonic" "adminmnemonic:$adminmnemonic" \
              "signermnemonic:$signermnemonic" "createwalletsponsormnemonic:$createwalletsponsormnemonic" \
@@ -610,5 +686,6 @@ for _spec in "treasurymnemonic:$treasurymnemonic" "adminmnemonic:$adminmnemonic"
     _sealed=$(( _sealed + 1 ))
 done
 echo "$_sealed mnemonic(s) sealed and verified in $_MDIR -- no plaintext was written"
+fi   # end of the "we have a passphrase, so seal" branch
 
 

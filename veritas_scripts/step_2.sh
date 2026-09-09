@@ -5,6 +5,14 @@ set -e
 
 # get script dir
 SCRIPT_DIR="${0:A:h}"
+# THE SCRIPT'S OWN DIRECTORY, CAPTURED BEFORE setup_env.sh IS SOURCED.  That file does
+# SCRIPT_DIR="${0:A:h}" at its own top level, and zsh keeps $0 pointing at the sourced file --
+# so every SCRIPT_DIR use AFTER the source resolves against scripts/, not this directory.
+# sec_veritas_before_step_1.sh has warned about this for three scripts already; the profile
+# source below is the fourth, and it failed silently everywhere ../foundation_scripts still
+# happened to resolve.  $_DEPLOY_HERE is never assigned by anything else.
+_DEPLOY_HERE="${0:A:h}"
+
 # CAPTURE BEFORE SOURCING, AND DEFAULT TO `file`.
 #
 # setup_env.sh sets QADENA_KEYRING_BACKEND=test for the devnet harness, and this script sources
@@ -22,6 +30,19 @@ _kb_caller="${QADENA_KEYRING_BACKEND:-}"
 
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
+
+# WHICH DEPLOYMENT THIS IS -- pre-scanned, because $VERITAS_SEC_HOME is defaulted from it below and
+# QADENA_KEYRING_DIR is derived from that.  Must match the --deployment step_1 ran with: these read
+# the variables.json step_1 wrote, and reading the wrong home is how a run reports a clean chain
+# while operating on another deployment's keys.
+DEPLOYMENT="${DEPLOYMENT:-veritas}"
+_dep_i=1
+while (( _dep_i <= $# )); do
+    [[ "${@[$_dep_i]}" == "--deployment" ]] && DEPLOYMENT="${@[$((_dep_i+1))]:?--deployment needs a name}"
+    _dep_i=$(( _dep_i + 1 ))
+done
+source "$_DEPLOY_HERE/../foundation_scripts/deployment_profile.sh"
+deployment_profile_load "$DEPLOYMENT" || exit 1
 export QADENA_KEYRING_BACKEND="${_kb_caller:-file}"
 
 # Minimal argument handling: the chain's location is a per-run fact and belongs on the command
@@ -32,8 +53,10 @@ while [ $# -gt 0 ]; do
         --node) export QADENA_NODE="$2"; shift 2 ;;
         --keyring-passfile) export QADENA_KEYRING_PASSFILE="$2"; shift 2 ;;
         --sec-home) export VERITAS_SEC_HOME="$2"; shift 2 ;;
+        --deployment) shift 2 ;;   # pre-scanned at the top; consumed so it is not "unknown"
         *) echo "unknown option: $1"
-           echo "usage: $0 [--node <rpc>] [--sec-home <dir>] [--keyring-passfile <file>]"
+           echo "usage: $0 [--deployment <name>] [--node <rpc>] [--sec-home <dir>] [--keyring-passfile <file>]"
+           echo "  --deployment  $(deployment_profile_list); default $DEPLOY_NAME.  MUST match step_1's."
            exit 1 ;;
     esac
 done
@@ -77,7 +100,7 @@ qadena_keyring_unlock
 # 700 on the directory and 600 on the file are the only protection mnemonics.json has.  It is the
 # one artifact here whose loss is unrecoverable and whose disclosure is total: back it up off this
 # machine, and delete it when the deployment is established.
-: ${VERITAS_SEC_HOME:="$HOME/sec-veritas"}
+: ${VERITAS_SEC_HOME:="$DEPLOY_SEC_HOME"}
 
 # SEC'S KEYS LIVE WITH SEC'S FILES.
 #
@@ -103,14 +126,14 @@ mkdir -p "$QADENA_KEYRING_DIR" 2>/dev/null; chmod 700 "$QADENA_KEYRING_DIR" 2>/d
 # so: the admin key was created and its address printed, and the failure surfaced two steps later
 # as "key with address <sponsor> not found" while signing as the foundation.  The ordering is
 # fixed, but a directory left behind by an earlier run still looks like a working deployment.
-if [[ "$VERITAS_SEC_HOME" != "$HOME/sec-veritas" ]] \
-   && ls "$HOME/sec-veritas"/keyring/keyring-*/*.info > /dev/null 2>&1; then
+if [[ "$VERITAS_SEC_HOME" != "$DEPLOY_SEC_HOME" ]] \
+   && ls "$DEPLOY_SEC_HOME"/keyring/keyring-*/*.info > /dev/null 2>&1; then
     echo ""
-    echo "NOTE: $HOME/sec-veritas also holds keys, and this run uses $VERITAS_SEC_HOME."
+    echo "NOTE: $DEPLOY_SEC_HOME also holds keys, and this run uses $VERITAS_SEC_HOME."
     echo "  A version of step_1 before 2026-09-08 wrote keys to the default home while writing"
     echo "  mnemonics to --sec-home, splitting a deployment across both.  If this run cannot find"
     echo "  a key it expects, look there:"
-    echo "      ls $HOME/sec-veritas/keyring/keyring-file/"
+    echo "      ls $DEPLOY_SEC_HOME/keyring/keyring-file/"
     echo "  and either move them across or start clean.  Nothing is read from there automatically."
     echo ""
 fi
@@ -173,7 +196,7 @@ echo "dsvsprovidermnemonic: <redacted, $(print -r -- "$dsvsprovidermnemonic" | w
 : ${VERITAS_FOUNDATION_APPSVR:=foundation-veritas-appsvr}
 feegrant_args=()
 if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
-    echo "toll-free: $VERITAS_FOUNDATION_APPSVR sponsors and grants; sec-treasury is not used"
+    echo "toll-free: $VERITAS_FOUNDATION_APPSVR sponsors and grants; $treasuryname is not used"
     # RESOLVE THE SPONSOR TO AN ADDRESS, HERE, ONCE -- SEC's keyring does not hold it.
     #
     # The foundation account lives in QFI's coordinator keyring; after the keyring split SEC's box

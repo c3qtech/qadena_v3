@@ -32,9 +32,32 @@
 # operates on the ENCRYPTED coordinator keyring; only an explicit caller choice says otherwise.
 _kb_caller="${QADENA_KEYRING_BACKEND:-}"
 SCRIPT_DIR="${0:A:h}"
+# THE SCRIPT'S OWN DIRECTORY, CAPTURED BEFORE setup_env.sh IS SOURCED.  That file does
+# SCRIPT_DIR="${0:A:h}" at its own top level, and zsh keeps $0 pointing at the sourced file --
+# so every SCRIPT_DIR use AFTER the source resolves against scripts/, not this directory.
+# sec_veritas_before_step_1.sh has warned about this for three scripts already; the profile
+# source below is the fourth, and it failed silently everywhere ../foundation_scripts still
+# happened to resolve.  $_DEPLOY_HERE is never assigned by anything else.
+_DEPLOY_HERE="${0:A:h}"
+
+# The name to PRINT in usage.  A per-deployment wrapper execs this file, so a hard-coded
+# "sec_veritas_*.sh" told an ekycph operator to run a script whose --help they were not
+# reading.  The wrapper exports QADENA_PROG; direct callers get the real name.
+PROG="${QADENA_PROG:-sec_veritas_after_step_1.sh}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
+
+# Pre-scanned before the parse loop, so --deployment governs the defaults below and the usage text.
+# See sec_veritas_before_step_1.sh for why this is not read inside the loop.
+DEPLOYMENT="${DEPLOYMENT:-veritas}"
+_dep_i=1
+while (( _dep_i <= $# )); do
+    [[ "${@[$_dep_i]}" == "--deployment" ]] && DEPLOYMENT="${@[$((_dep_i+1))]:?--deployment needs a name}"
+    _dep_i=$(( _dep_i + 1 ))
+done
+source "$_DEPLOY_HERE/deployment_profile.sh"
+deployment_profile_load "$DEPLOYMENT" || exit 1
 
 sec_admin=""
 PREGRANT=""
@@ -46,12 +69,22 @@ COORD_HOME=""
 # near launch custody.  Pass --keyring-backend test explicitly for a devnet.
 BACKEND="${_kb_caller:-file}"
 KEYRING_PASSFILE=""
-foundation_appsvr="${VERITAS_FOUNDATION_APPSVR:-foundation-veritas-appsvr}"
+# THE LEGACY ENV OVERRIDE IS SCOPED TO VERITAS.  testscripts/setup_veritas.sh exports
+# VERITAS_FOUNDATION_APPSVR, and honouring it for every deployment would mean an ekycph run started
+# from a shell that had sourced the veritas harness would silently grant against VERITAS's sponsor
+# account -- funding the wrong programme out of the wrong allocation, with no error anywhere.  It
+# applies only to the deployment it is named for; everything else uses the profile.
+if [ "$DEPLOY_NAME" = "veritas" ]; then
+    foundation_appsvr="${VERITAS_FOUNDATION_APPSVR:-$DEPLOY_APPSVR}"
+else
+    foundation_appsvr="$DEPLOY_APPSVR"
+fi
 expiration=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --sec-admin)         sec_admin="$2"; shift 2 ;;
+        --deployment)        shift 2 ;;   # pre-scanned above; consumed so it is not "unknown"
         --foundation-appsvr) foundation_appsvr="$2"; shift 2 ;;
         --expiration)        expiration="$2"; shift 2 ;;
         --pregrant)          PREGRANT="$2"; shift 2 ;;
@@ -60,7 +93,11 @@ while [[ $# -gt 0 ]]; do
         --keyring-backend)   BACKEND="$2"; shift 2 ;;
         --keyring-passfile)  KEYRING_PASSFILE="$2"; shift 2 ;;
         --help)
-            echo "Usage: $0 --sec-admin <address> [options]"
+            echo "Usage: $PROG --sec-admin <address> [options]"
+            echo ""
+            echo "  deployment: $DEPLOY_NAME  (--deployment $(deployment_profile_list))"
+            echo "  appsvr    : $DEPLOY_APPSVR"
+            echo "  users     : $DEPLOY_USERS"
             echo ""
             echo "  --pregrant <file>        the paste block step_1 emitted: the admin address plus"
             echo "                           EVERY wallet the bring-up will create (4 families x"
@@ -290,9 +327,9 @@ if [ -n "$PREGRANT" ]; then
     # wallet that was never granted at all.  The foundation authorised these -- it should be able
     # to check its own work without asking SEC for the file back.
     if [ -n "$COORD_HOME" ] && [ -d "$COORD_HOME" ]; then
-        cp "$PREGRANT" "$COORD_HOME/veritas-pregrant.json" 2>/dev/null \
-            && chmod 600 "$COORD_HOME/veritas-pregrant.json" 2>/dev/null \
-            && echo "retained the expected wallet set in $COORD_HOME/veritas-pregrant.json"
+        cp "$PREGRANT" "$COORD_HOME/$DEPLOY_PREGRANT_FILE" 2>/dev/null \
+            && chmod 600 "$COORD_HOME/$DEPLOY_PREGRANT_FILE" 2>/dev/null \
+            && echo "retained the expected wallet set in $COORD_HOME/$DEPLOY_PREGRANT_FILE"
     fi
     if [ "$failed" -gt 0 ]; then
         echo ""

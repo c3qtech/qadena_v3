@@ -14,6 +14,13 @@ runbook covering both would obscure it.
 > key exists.** Every bucket is an N-of-M multisig whose members are on separate machines by design,
 > so each foundation spend below is a ceremony, not a transaction.
 
+> **Sponsoring something other than VERITAS?** See
+> [HOWTO-SPONSOR-DEPLOYMENT.md](HOWTO-SPONSOR-DEPLOYMENT.md). Every script here takes
+> `--deployment <name>`, and ekycph and ENF have their own entry points
+> (`foundation_scripts/ekycph_*.sh`, `enf_*.sh`) that pass it for you. The procedure below is the
+> procedure for all of them — that page covers only what differs, and the naming collisions the flag
+> exists to prevent.
+
 ---
 
 ## Who does what, and in what order

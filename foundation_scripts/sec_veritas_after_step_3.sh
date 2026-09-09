@@ -30,6 +30,18 @@
 # operates on the ENCRYPTED coordinator keyring; only an explicit caller choice says otherwise.
 _kb_caller="${QADENA_KEYRING_BACKEND:-}"
 SCRIPT_DIR="${0:A:h}"
+# THE SCRIPT'S OWN DIRECTORY, CAPTURED BEFORE setup_env.sh IS SOURCED.  That file does
+# SCRIPT_DIR="${0:A:h}" at its own top level, and zsh keeps $0 pointing at the sourced file --
+# so every SCRIPT_DIR use AFTER the source resolves against scripts/, not this directory.
+# sec_veritas_before_step_1.sh has warned about this for three scripts already; the profile
+# source below is the fourth, and it failed silently everywhere ../foundation_scripts still
+# happened to resolve.  $_DEPLOY_HERE is never assigned by anything else.
+_DEPLOY_HERE="${0:A:h}"
+
+# The name to PRINT in usage.  A per-deployment wrapper execs this file, so a hard-coded
+# "sec_veritas_*.sh" told an ekycph operator to run a script whose --help they were not
+# reading.  The wrapper exports QADENA_PROG; direct callers get the real name.
+PROG="${QADENA_PROG:-sec_veritas_after_step_3.sh}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
@@ -37,19 +49,39 @@ set -e
 # FILE, NOT test.  The foundation accounts live in the COORDINATOR keyring that
 # derive_launch_keys.sh / sec_veritas_before_step_1.sh created -- encrypted, and never the node's, which
 # init.sh does `rm -rf` on.  An unencrypted default has no business near launch custody.
+# Pre-scanned before the parse loop -- see sec_veritas_before_step_1.sh for why.
+DEPLOYMENT="${DEPLOYMENT:-veritas}"
+_dep_i=1
+while (( _dep_i <= $# )); do
+    [[ "${@[$_dep_i]}" == "--deployment" ]] && DEPLOYMENT="${@[$((_dep_i+1))]:?--deployment needs a name}"
+    _dep_i=$(( _dep_i + 1 ))
+done
+source "$_DEPLOY_HERE/deployment_profile.sh"
+deployment_profile_load "$DEPLOYMENT" || exit 1
+
 POOL_FILE=""
 COORD_HOME=""
 BACKEND="${_kb_caller:-file}"
 KEYRING_PASSFILE=""
 
-foundation_users="${VERITAS_FOUNDATION_USERS:-foundation-veritas-users}"
-foundation_appsvr="${VERITAS_FOUNDATION_APPSVR:-foundation-veritas-appsvr}"
-sponsor_base="${VERITAS_SPONSOR_BASE:-sec-create-wallet-sponsor}"
+# THE LEGACY ENV OVERRIDES ARE SCOPED TO VERITAS -- see the same note in
+# sec_veritas_after_step_1.sh.  setup_veritas.sh exports these; letting them reach an ekycph or enf
+# run would grant that deployment's pool against VERITAS's sponsor accounts, silently.
+if [ "$DEPLOY_NAME" = "veritas" ]; then
+    foundation_users="${VERITAS_FOUNDATION_USERS:-$DEPLOY_USERS}"
+    foundation_appsvr="${VERITAS_FOUNDATION_APPSVR:-$DEPLOY_APPSVR}"
+    sponsor_base="${VERITAS_SPONSOR_BASE:-$DEPLOY_SPONSOR_BASE}"
+else
+    foundation_users="$DEPLOY_USERS"
+    foundation_appsvr="$DEPLOY_APPSVR"
+    sponsor_base="$DEPLOY_SPONSOR_BASE"
+fi
 count=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --pool-addresses)    POOL_FILE="$2"; shift 2 ;;
+        --deployment)        shift 2 ;;   # pre-scanned above; consumed so it is not "unknown"
         --node)              NODE="$2"; export QADENA_NODE="$2"; shift 2 ;;
         --coord-home)        COORD_HOME="$2"; shift 2 ;;
         --keyring-backend)   BACKEND="$2"; shift 2 ;;
@@ -59,7 +91,11 @@ while [[ $# -gt 0 ]]; do
         --sponsor-base)      sponsor_base="$2"; shift 2 ;;
         --count)             count="$2"; shift 2 ;;
         --help)
-            echo "Usage: $0 [options]"
+            echo "Usage: $PROG [options]"
+            echo ""
+            echo "  deployment: $DEPLOY_NAME  (--deployment $(deployment_profile_list))"
+            echo "  appsvr    : $DEPLOY_APPSVR"
+            echo "  users     : $DEPLOY_USERS"
             echo ""
             echo "  Authorises the app-server's sponsor pool: TWO transactions per wallet"
             echo "  (authz MsgGrantAllowance + feegrant MsgExec), so a pool of N sends 2*(N+1)."
@@ -259,9 +295,9 @@ echo "authorised $authorised wallet(s); $incomplete incomplete"
 
 # RETAIN WHAT WE AUTHORISED -- see the same note in sec_veritas_after_step_1.sh.
 if [ -n "$POOL_FILE" ] && [ -n "$COORD_HOME" ] && [ -d "$COORD_HOME" ]; then
-    cp "$POOL_FILE" "$COORD_HOME/veritas-pool.json" 2>/dev/null \
-        && chmod 600 "$COORD_HOME/veritas-pool.json" 2>/dev/null \
-        && echo "retained the expected pool in $COORD_HOME/veritas-pool.json"
+    cp "$POOL_FILE" "$COORD_HOME/$DEPLOY_POOL_FILE" 2>/dev/null \
+        && chmod 600 "$COORD_HOME/$DEPLOY_POOL_FILE" 2>/dev/null \
+        && echo "retained the expected pool in $COORD_HOME/$DEPLOY_POOL_FILE"
 fi
 if [ "$incomplete" -gt 0 ]; then
     echo ""

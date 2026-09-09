@@ -989,6 +989,12 @@ genesis:
       # debug fleet (M1-M4 have no SGX) and MUST NOT reach mainnet: a real launch
       # needs the MRENCLAVE of the exact SGX build, read with
       #     qadenad query qadena enclave-measurement
+      # !! TEST-FLEET VALUES !!  These are the placeholders config/config.yml uses;
+      # buildscripts/build_enclave.sh rewrites uniqueID and signerID in the GENERATED
+      # genesis.json with the ids the debug build produced.  They are correct for a
+      # debug fleet (M1-M4 have no SGX) and MUST NOT reach mainnet: a real launch
+      # needs the MRENCLAVE of the exact SGX build, read with
+      #     qadenad query qadena enclave-measurement
       enclaveIdentityList:
         - uniqueID: "test-unique-id"
           signerID: "test-signer-id"
