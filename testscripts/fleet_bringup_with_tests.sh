@@ -933,9 +933,13 @@ fi
         fi
         info "joining $j as $pioneer by $SYNC_KIND, SPONSORED by $SPONSOR_GRANTER (ceremony runs here)"
         print "$j joined by: $SYNC_KIND (as $pioneer, sponsored by $SPONSOR_GRANTER)" >> "$RUN_DIR/fleet.txt"
+        # The same two the unsponsored path passes: the keyring passphrase (the joiner's node
+        # start needs it once client.toml asks for `file`) and the self-bond amount, whose default
+        # is a devnet figure.  Sponsorship covers fees; the bond is still a transfer.
         sjargs=(--primary "$PRIMARY" --joiner "$j" --pioneer "$pioneer"
                 --granter "$SPONSOR_GRANTER" "${sync_arg[@]}" "${seed2_arg[@]}"
-                "${conv[@]}")
+                "${kp_arg[@]}" "${conv[@]}")
+        [[ -n "$STAKE_ARG" ]] && sjargs+=(--stake "$STAKE_ARG")
         "$SCRIPT_DIR/nth_node_sponsored_join.sh" "${sjargs[@]}" \
             2>&1 | tee "$RUN_DIR/stage-G-join-${j##*@}.log"
         [[ ${pipestatus[1]} -eq 0 ]] || fail "sponsored join failed for $j -- see $RUN_DIR/stage-G-join-${j##*@}.log

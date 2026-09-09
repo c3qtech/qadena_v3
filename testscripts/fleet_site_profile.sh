@@ -42,6 +42,7 @@ fleet_site_profile_load() {
     SITE_PRIMARY=""; SITE_JOINER=""; SITE_PASSFILE=""; SITE_LAUNCH_DIR=""
     SITE_ADVERTISE_P=""; SITE_ADVERTISE_J=""; SITE_HOME_SUFFIX=""
     SITE_ENV_FILE_NAME=""; SITE_JOINER_VALIDATOR=""; SITE_ALLOW_UNVERIFIED_AGREEMENT=0
+    SITE_NODE_GRANTER=""
 
     case "$_s" in
     M1-M2|m1-m2)
@@ -61,6 +62,15 @@ fleet_site_profile_load() {
         # Bond the joiner: on a two-node fleet that is what gives the chain a second validator, and
         # without it the primary is the only vote.
         SITE_JOINER_VALIDATOR=1
+        # WHO PAYS THE NODES' FEES.  A node's fee grant is a property of the CHAIN, not of any one
+        # deployment -- several deployments share these machines -- so it belongs to the site.
+        # nodeops is allocations.csv bucket 12, Node Operations, and it is a 3of5 multisig in the
+        # coordinator keyring, so each join runs a ceremony.
+        #
+        # This covers FEES only.  A validator's self-bond is delivered as a TRANSFER by
+        # ensure_self_bond: staked principal is the node's own, it is what gets bonded and what
+        # slashing burns, so it cannot be a fee grant.
+        SITE_NODE_GRANTER="nodeops"
         ;;
     staging)
         # Azure primary, AWS joiner.  Two clouds, so nothing is on one network.
@@ -85,6 +95,7 @@ fleet_site_profile_load() {
         # load balancer rather than the peer.  The check cannot verify that and refusing on it would
         # block every staging run; see the note in fleet_bringup_with_tests.sh.
         SITE_ALLOW_UNVERIFIED_AGREEMENT=1
+        SITE_NODE_GRANTER="nodeops"
         ;;
     *)
         ;;
@@ -107,6 +118,7 @@ fleet_site_profile_load() {
     fi
     : ${SITE_JOINER_VALIDATOR:=1}
     : ${SITE_ENV_FILE_NAME:=env-sponsored-test}
+    : ${SITE_NODE_GRANTER:=nodeops}
     return 0
 }
 
@@ -115,7 +127,7 @@ fleet_site_profile_list() { print -r -- "M1-M2 staging" }
 fleet_site_profile_print() {
     local _v
     for _v in NAME PRIMARY JOINER PASSFILE LAUNCH_DIR ADVERTISE_P ADVERTISE_J \
-              HOME_SUFFIX ENV_FILE_NAME JOINER_VALIDATOR ALLOW_UNVERIFIED_AGREEMENT; do
+              HOME_SUFFIX ENV_FILE_NAME JOINER_VALIDATOR ALLOW_UNVERIFIED_AGREEMENT NODE_GRANTER; do
         print -r -- "SITE_$_v=${(P)${:-SITE_$_v}}"
     done
 }

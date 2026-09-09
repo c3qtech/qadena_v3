@@ -47,6 +47,9 @@ HOME_DIR="${QADENAHOME:-$HOME/qadena}"
 # nothing else; passing a literal --block-sync makes it exit with "unknown option".  Held as an
 # ARRAY so the empty case forwards nothing at all.
 PRIMARY="" JOINER="" PIONEER="" GRANTER="" CONVERT=0 EXTRA=() SYNC_ARG=()
+# Forwarded to nth_node_bringup: the node keyring's passphrase, needed once client.toml asks for
+# `file`, and the self-bond amount, whose default is a devnet figure a launch funder does not hold.
+KEYRING_PASSFILE="" STAKE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --primary) PRIMARY="$2"; shift 2 ;;
@@ -56,6 +59,8 @@ while [[ $# -gt 0 ]]; do
         --block-sync) SYNC_ARG=(); shift ;;
         --state-sync) SYNC_ARG=(--state-sync); shift ;;
         --convert-to-validator) CONVERT=1; shift ;;
+        --keyring-passfile) KEYRING_PASSFILE="$2"; shift 2 ;;
+        --stake) STAKE="$2"; shift 2 ;;
         --seed2) EXTRA+=(--seed2 "$2"); shift 2 ;;
         -h|--help) sed -n '3,32p' "$0"; exit 0 ;;
         *) print -u2 "unknown option: $1"; exit 1 ;;
@@ -85,13 +90,21 @@ print "  chain $CHAIN via $PRIMARY"
 nthargs=(--primary "$PRIMARY" --joiner "$JOINER" --pioneer "$PIONEER"
          --foundation-sponsored "$GADDR" "${SYNC_ARG[@]}" "${EXTRA[@]}")
 (( CONVERT )) && nthargs+=(--convert-to-validator)
+[[ -n "$KEYRING_PASSFILE" ]] && nthargs+=(--keyring-passfile "$KEYRING_PASSFILE")
+[[ -n "$STAKE" ]] && nthargs+=(--stake "$STAKE")
 
 # ---------------------------------------------------------------- 1. mint the key, then stop
 print ""
 print "=== phases 1-3: mint $PIONEER and stop for the ceremony ==="
 "$HERE/nth_node_bringup.sh" "${nthargs[@]}" --from 1 --until 3 || exit 1
 
-JADDR=$(ssh -o ConnectTimeout=15 "$JOINER" "bash -lc '\$HOME/qadena/bin/qadenad --home \$HOME/qadena --keyring-backend test keys show $PIONEER -a'" 2>/dev/null | tr -d '\r')
+# NO PINNED BACKEND.  The joiner's client.toml decides, and on a `file` node the key is not in
+# keyring-test at all.  The passphrase is fed when one was given; qadenad ignores extra stdin.
+if [[ -n "$KEYRING_PASSFILE" ]]; then
+    JADDR=$(ssh -o ConnectTimeout=15 "$JOINER" "bash -lc 'for _ in \$(seq 8); do cat .qadena-join-keyring-pass 2>/dev/null; done | \$HOME/qadena/bin/qadenad --home \$HOME/qadena keys show $PIONEER -a'" 2>/dev/null | tr -d '\r')
+else
+    JADDR=$(ssh -o ConnectTimeout=15 "$JOINER" "bash -lc '\$HOME/qadena/bin/qadenad --home \$HOME/qadena --keyring-backend test keys show $PIONEER -a'" 2>/dev/null | tr -d '\r')
+fi
 [[ "$JADDR" == qadena1* ]] || { print -u2 "could not read $PIONEER's address from $JOINER"; exit 1 }
 print "  joiner address: $JADDR"
 
