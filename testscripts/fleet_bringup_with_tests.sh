@@ -926,6 +926,9 @@ fi
     #
     # testscripts/nth_node_sponsored_join.sh drives --until 3 / ceremony / --from 5 and is explicit
     # about being test-only.  Production is scripts/sponsor_join_node.sh.
+    # DEFINED BEFORE THE BRANCH, because both arms use it.  Set inside the unsponsored arm only, it
+    # was unset when the sponsored arm ran and the join died on "kp_arg[@]: parameter not set".
+    kp_arg=(); [[ -n "$KEYRING_PASSFILE" ]] && kp_arg=(--keyring-passfile "$KEYRING_PASSFILE")
     if [[ -n "$MAINNET_SRC" ]] && (( SPONSORED )); then
         if [[ ! -x "$SCRIPT_DIR/nth_node_sponsored_join.sh" ]]; then
             fail "--mainnet-source with --foundation-sponsored needs testscripts/nth_node_sponsored_join.sh
@@ -963,7 +966,6 @@ fi
     # to `file`, add_full_node.sh builds the joiner's the same way, and both nodes' first start has
     # to unlock one to register an enclave.  An array, not ${VAR:+...} -- zsh does not word-split an
     # unquoted expansion, so that form arrives as a single unrecognised argument.
-    kp_arg=(); [[ -n "$KEYRING_PASSFILE" ]] && kp_arg=(--keyring-passfile "$KEYRING_PASSFILE")
     "$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" "${adv_j[@]}" \
         --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" "${sponsor_arg[@]}" "${amount_args[@]}" \
         "${kp_arg[@]}" "${conv[@]}" --from 1 --until 8 \
