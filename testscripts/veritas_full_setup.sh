@@ -61,6 +61,12 @@ NODE_EXPLICIT=0
 PASSFILE="$SITE_PASSFILE"
 LAUNCH_DIR="$SITE_LAUNCH_DIR"
 CHAIN_ID="qadena_4824-1"
+# WHICH COMMIT THE FLEET BUILDS.  Empty means "leave the primary's checkout where it is", which is
+# what 1st_node_bringup does by default -- so a run with no --ref builds whatever M1 happens to
+# have, NOT what is in front of you.  That is how a bring-up died on
+#     Unknown option: --keyring-passfile
+# with the flag present and committed here and absent on the node.  Name the branch to be sure.
+REF=""
 # SGX=0 BUILDS A DEBUG ENCLAVE, and that has to be said explicitly rather than left to inference.
 # build.sh's default is "ego installed means SGX", so a host with ego and NO /dev/sgx* devices --
 # traxion-vm-01 is exactly that -- produces a signed enclave it cannot load unless --no-sgx is
@@ -113,6 +119,9 @@ usage() {
     print -r -- "  --coord-home <dir>  foundation keyring (default ~/fleet-launch/coord)"
     print -r -- "  --sec-home <dir>    the deployment's directory (default $SEC_HOME)"
     print -r -- "  --from <stage>      resume: bootstrap|prepare|step1|delegate|step2|approve|step3|pool|verify|app"
+    print -r -- "  --ref <git-ref>     branch or commit the FLEET builds.  Default: leave the"
+    print -r -- "                      primary's checkout alone -- which builds whatever is on it,"
+    print -r -- "                      not what is here.  Must be pushed to origin first."
     print -r -- "  --rebuild-chain     PURGE both fleet nodes and rebuild the chain first."
     print -r -- "                      Destroys every wallet and credential on them."
     print -r -- "  --advertise-ip-address <ip>         what the PRIMARY tells peers to dial"
@@ -145,6 +154,7 @@ while [[ $# -gt 0 ]]; do
         --coord-home)    COORD_HOME="$2"; shift 2 ;;
         --sec-home)      SEC_HOME="$2"; shift 2 ;;
         --from)          FROM="$2"; shift 2 ;;
+        --ref)           REF="$2"; shift 2 ;;
         --site)          shift 2 ;;   # pre-scanned above
         --deployment)    shift 2 ;;   # pre-scanned above
         --rebuild-chain) REBUILD=1; shift ;;
@@ -344,8 +354,9 @@ if (( REBUILD )); then
     # SEC's; passing it here makes it the NODE keyring's too, once config.yml asks for
     # keyring-backend: file.  Same file, so they cannot drift -- and a fleet whose nodes need a
     # different passphrase from the operator running the bring-up is a fleet nobody can restart.
+    _ref=(); [[ -n "$REF" ]] && _ref=(--ref "$REF")
     ./testscripts/fleet_bringup_with_tests.sh \
-        --primary "$PRIMARY" --joiner "$JOINER" --block-sync "${_sgx[@]}" "${_jv[@]}" "${_adv[@]}" \
+        --primary "$PRIMARY" --joiner "$JOINER" --block-sync "${_sgx[@]}" "${_jv[@]}" "${_adv[@]}" "${_ref[@]}" \
         --mainnet-source        "$LAUNCH_DIR/fleet-launch-config.yml" \
         --pioneer-mnemonic-file "$_pm" \
         --keyring-passfile      "$PASSFILE" \
