@@ -123,7 +123,9 @@ SETUP="$REPO/testscripts/setup_${DEPLOYMENT}.sh"
 #
 # Detected rather than flagged, because the answer is a property of the chain that is already
 # built.  An operator cannot be expected to remember which way a given devnet went.
-_node_kb=$(grep -aE '^keyring-backend' "${QADENAHOME:-$HOME/qadena}/config/client.toml" 2>/dev/null            | cut -d'"' -f2)
+# Both quote styles -- ignite writes "file", dasel (add_full_node.sh) writes 'file'.
+_node_kb=$(sed -nE "s/^keyring-backend[[:space:]]*=[[:space:]]*['\"]?([^'\"]*)['\"]?.*/\\1/p" \
+           "${QADENAHOME:-$HOME/qadena}/config/client.toml" 2>/dev/null | head -1)
 : ${_node_kb:=test}
 export QADENA_KEYRING_BACKEND="$_node_kb"
 

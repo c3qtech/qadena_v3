@@ -51,6 +51,10 @@ TO="file"
 PASSFILE=""
 ONLY=""
 DRY=0
+# Off by default: for a manual migration of a live deployment the source is the only other copy of
+# every key, and the mnemonics may be sealed elsewhere or nowhere.  buildscripts/init.sh passes it,
+# because there the home was created moments ago and nothing else holds those keys.
+DELETE_SRC=0
 
 usage() {
     print -r -- "Usage: migrate_keyring.sh --dir <keyring-dir> [options]"
@@ -63,6 +67,8 @@ usage() {
     print -r -- "                     exist yet during init.sh -- pass the built one there."
     print -r -- "  --only a,b,c       migrate just these keys (default: all in the source)"
     print -r -- "  --dry-run          list what would move, touch nothing"
+    print -r -- "  --delete-source    remove keyring-<from> after EVERY key has migrated and had"
+    print -r -- "                     its address verified.  Off by default."
     print -r -- ""
     print -r -- "  Nothing is deleted.  Every key is verified by address after import;"
     print -r -- "  one mismatch stops the run.  Multisig keys are skipped -- recreate"
@@ -78,6 +84,7 @@ while [[ $# -gt 0 ]]; do
         --qadenad)  QBIN="$2"; shift 2 ;;
         --only)     ONLY="$2"; shift 2 ;;
         --dry-run)  DRY=1; shift ;;
+        --delete-source) DELETE_SRC=1; shift ;;
         --help|-h)  usage; exit 0 ;;
         *) print -u2 -- "unknown option: $1"; usage >&2; exit 1 ;;
     esac
@@ -239,9 +246,16 @@ if (( _failed > 0 )); then
     print -u2 -- "SOME KEYS DID NOT MOVE.  keyring-$FROM is unchanged and remains the working one."
     exit 1
 fi
-print -r -- "keyring-$FROM was NOT deleted, deliberately.  Confirm the deployment works against"
-print -r -- "keyring-$TO first -- run a step, or read an address back -- and only then:"
-print -r -- "    rm -rf $DIR/keyring-$FROM"
+if (( DELETE_SRC )); then
+    # Only here: every key above migrated and had its address checked against the source, and a
+    # single mismatch exits before this point.
+    rm -rf "$DIR/keyring-$FROM"
+    print -r -- "removed $DIR/keyring-$FROM (--delete-source)"
+else
+    print -r -- "keyring-$FROM was NOT deleted, deliberately.  Confirm the deployment works against"
+    print -r -- "keyring-$TO first -- run a step, or read an address back -- and only then:"
+    print -r -- "    rm -rf $DIR/keyring-$FROM"
+fi
 print -r -- ""
 print -r -- "From now on the steps use keyring-$TO by default; export QADENA_KEYRING_BACKEND=$FROM"
 print -r -- "only for an unattended harness run that cannot answer a passphrase prompt."

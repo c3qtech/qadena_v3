@@ -856,7 +856,9 @@ fi
 # needs keyring-test.  ignite creates the keys in keyring-test whatever client.toml says, so a
 # config asking for `file` is not self-fulfilling: without this the node comes up with an
 # unencrypted keyring, or with a client.toml and a keyring that disagree.
-_kb=$(grep -aE '^keyring-backend' "$QADENAHOME/config/client.toml" 2>/dev/null | cut -d'"' -f2)
+# Both quote styles -- ignite writes "file", dasel writes 'file'.
+_kb=$(sed -nE "s/^keyring-backend[[:space:]]*=[[:space:]]*['\"]?([^'\"]*)['\"]?.*/\\1/p" \
+      "$QADENAHOME/config/client.toml" 2>/dev/null | head -1)
 if [[ "$_kb" == "file" ]] && ls "$QADENAHOME"/keyring-test/*.info > /dev/null 2>&1; then
     echo "client.toml asks for the 'file' keyring, but ignite created the keys in keyring-test."
     if [[ -z "$keyring_passfile" ]]; then
@@ -870,14 +872,10 @@ if [[ "$_kb" == "file" ]] && ls "$QADENAHOME"/keyring-test/*.info > /dev/null 2>
     # install.sh and passed `which qadena_v3d` instead -- which assumed ignite's output name
     # was on PATH, an assumption that holds in the build environment and nowhere else.
     if ! "$qadenabuild/testscripts/migrate_keyring.sh" --dir "$QADENAHOME" \
-            --passfile "$keyring_passfile"; then
+            --delete-source --passfile "$keyring_passfile"; then
         echo "   INIT FAILED: could not migrate the node keyring to 'file'."
         echo "   keyring-test is untouched; the node would not be able to initialise its enclave."
         exit 1
     fi
-    # ONLY NOW.  migrate_keyring.sh verifies every address before returning 0, and deliberately
-    # does not delete the source itself -- that judgement belongs to whoever knows the keys are
-    # no longer needed elsewhere.  Here they are not: this home is the only holder.
-    rm -rf "$QADENAHOME/keyring-test"
     echo "migrated the node keyring to 'file' and removed the unencrypted keyring-test"
 fi

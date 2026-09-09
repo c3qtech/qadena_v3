@@ -85,8 +85,10 @@ export qadenabin="$QADENAHOME/bin"
 # ~/sec-<name>/keyring) is a separate keyring that happens to be read with the same backend name;
 # set QADENA_KEYRING_BACKEND explicitly if it must differ.
 if [ -z "${QADENA_KEYRING_BACKEND:-}" ]; then
-    QADENA_KEYRING_BACKEND=$(grep -aE '^keyring-backend' \
-        "${QADENAHOME:-$HOME/qadena}/config/client.toml" 2>/dev/null | cut -d'"' -f2)
+    # Both quote styles: ignite writes keyring-backend = "file", dasel (add_full_node.sh) writes
+    # it single-quoted, so a cut on '"' returns the whole line for a joiner.
+    QADENA_KEYRING_BACKEND=$(sed -nE "s/^keyring-backend[[:space:]]*=[[:space:]]*['\"]?([^'\"]*)['\"]?.*/\\1/p" \
+        "${QADENAHOME:-$HOME/qadena}/config/client.toml" 2>/dev/null | head -1)
     : ${QADENA_KEYRING_BACKEND:=test}
 fi
 # THE SAME BINARY WITHOUT THE PASSPHRASE WRAPPER, for the handful of calls that must control
