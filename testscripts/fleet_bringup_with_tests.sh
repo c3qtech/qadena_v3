@@ -108,6 +108,10 @@ MNEMONIC_FILE=""
 # keyring-backend: file; without it that build stops rather than shipping a node whose
 # client.toml and keys disagree.
 KEYRING_PASSFILE=""
+# Bond each joiner unless --no-convert-joiners says otherwise.  Only that flag ever assigned this,
+# so without a default `(( CONVERT_JOINERS ))` errors under set -u, the && chain is skipped, and the
+# joiner silently stays a full node -- the opposite of the default.
+CONVERT_JOINERS=1
 ADVERTISE_P=""
 ADVERTISE_J=""
 # Passed through to nth_node_bringup.sh.  Empty means "use its defaults", which are DEVNET-sized.

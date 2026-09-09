@@ -698,17 +698,20 @@ if run_phase 6; then
     # forever -- a node that looks healthy, syncs, serves RPC, and has no enclave.  The height check
     # below passes in that state, which is why this cannot be left to be noticed later.
     #
-    # `yes` rather than a fixed number of lines: the dispatch fires at an unpredictable height, and
-    # the prompt count is not knowable from here (claim-credential alone asks three times).  After
-    # GetJarRegulator finds the registration the keyring is never read again -- doneForGood -- so
-    # this matters only on the first start; every later restart needs nothing.
+    # THE FEED MUST NOT END.  The enclave's first dispatch fires off BeginBlock, tens of blocks
+    # after start -- so a fixed number of lines is written, the pipe reaches EOF, and the prompt
+    # minutes later gets nothing.  This loops until the node exits and the write takes SIGPIPE.
+    #
+    # The passphrase is read ONCE into a shell variable: the file is removed when this script
+    # exits, and re-reading it per iteration would feed empty lines from then on.  A variable in a
+    # shell's memory is not argv and not the environment, so it stays out of `ps`.
     #
     # SGX starts under sudo.  That is safe only because the fleet's sudo is NOPASSWD: if it ever
     # prompts, it would consume the keyring passphrase as the sudo password and fail both.
     if [[ -n "$rem_kp" ]]; then
         info "feeding the keyring passphrase to the first start (enclave init)"
         ssh -o ConnectTimeout=10 "$PRIMARY" \
-            "nohup zsh -c 'repeat 64 print -r -- \"\$(cat $rem_kp)\" | ${SUDO}$NODE_HOME/scripts/start_qadena.sh' > $RUNLOG.start 2>&1 &" \
+            "nohup zsh -c '_p=\$(cat $rem_kp); while :; do print -r -- \"\$_p\"; done | ${SUDO}$NODE_HOME/scripts/start_qadena.sh' > $RUNLOG.start 2>&1 &" \
             || fail "could not launch start_qadena.sh on $PRIMARY"
     else
         # trap 4 again, mirrored: SGX must start WITH sudo, debug must not.
@@ -731,35 +734,39 @@ if run_phase 6; then
         fail "the node did not produce blocks; see $PRIMARY:$RUNLOG.start and $NODE_HOME/logs"
     }
 
-    # BLOCKS ARE NOT ENOUGH -- ASSERT THE ENCLAVE ACTUALLY REGISTERED.
+    # BLOCKS ARE NOT ENOUGH -- ASSERT THE ENCLAVE ACTUALLY INITIALISED.
     #
     # A node whose enclave never initialised produces blocks, answers RPC and advances height, so
-    # every check above passes.  The only visible difference is a line in the log every 25 blocks
-    # and an empty intervalPublicKeyID for the pioneer -- and the bring-up would hand that node to
-    # step_1, which fails much later with "Couldn't get jar for pioneer".
+    # every check above passes.  The first bank send then dies inside the enclave with
+    #     panic in ScanBankSend: ... is not a valid AES key (0 bytes)
+    # because the bootstrap that generates SealedTableSharedSecret returns early when it cannot
+    # read the node key, leaving that secret empty.
     #
-    # Gated on $rem_kp: this is the failure the encrypted keyring introduces, and adding a new gate
-    # to the long-standing `test` path is a separate change with its own risk of surfacing
-    # unrelated flakiness.
+    # CHECK THE LOG, NOT THE intervalPublicKeyID TABLE.  A launch genesis already carries a pioneer
+    # row, so querying for one passes before the enclave has done anything -- which is exactly what
+    # an earlier version of this check did, reporting success against a chain whose enclave was
+    # retrying every 25 blocks.
     if [[ -n "$rem_kp" ]]; then
-        info "waiting for the enclave to register (encrypted keyring: the first start must unlock it)"
-        _reg=""
+        info "waiting for the enclave to initialise (encrypted keyring: the first start must unlock it)"
+        _ok=0
         for i in {1..40}; do
-            _reg=$(ssh -o ConnectTimeout=10 "$PRIMARY" \
-                "$NODE_HOME/bin/qadenad query qadena list-interval-public-key-id --output json 2>/dev/null \
-                 | sed -n '/^{/,\$p' | jq -r '(.intervalPublicKeyID // [])[] | select(.nodeType==\"pioneer\") | .pubKID' 2>/dev/null | head -1" \
-                2>/dev/null | tr -d '\r')
-            [[ -n "$_reg" ]] && break
+            _tail=$(ssh -o ConnectTimeout=10 "$PRIMARY" \
+                "grep -ah 'init-enclave' $NODE_HOME/logs/*.log 2>/dev/null | tail -30" 2>/dev/null)
+            if print -r -- "$_tail" | grep -q 'has now broadcast its registration'; then
+                info "enclave initialised (broadcast its registration)"; _ok=1; break
+            fi
+            if print -r -- "$_tail" | grep -q 'reports it is already initialized'; then
+                info "enclave already initialised"; _ok=1; break
+            fi
             sleep 15
         done
-        [[ -n "$_reg" ]] || {
-            rsh_user "$PRIMARY" "grep -a 'init-enclave' $NODE_HOME/logs/*.log 2>/dev/null | tail -5" \
-                | while read -r l; do info "$l"; done
-            fail "the enclave never registered on $PRIMARY.  The node is producing blocks but has no
-     enclave, which fails later as \"Couldn't get jar for pioneer\".  Most likely the keyring
-     passphrase in --keyring-passfile does not open $NODE_HOME's keyring."
+        (( _ok )) || {
+            print -r -- "$_tail" | tail -6 | while read -r l; do info "$l"; done
+            fail "the enclave never initialised on $PRIMARY.  The node produces blocks but has no
+     enclave, and the first bank send will panic in ScanBankSend with a 0-byte key.  The usual
+     cause is the node keyring passphrase: check that --keyring-passfile opens
+     $NODE_HOME/keyring-file."
         }
-        info "enclave registered: $_reg"
     fi
 fi
 

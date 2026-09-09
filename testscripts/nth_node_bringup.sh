@@ -1131,12 +1131,12 @@ phase "6. start the joiner and catch up"
 JOINER_LOG_OFFSET=$(ssh -n "$JOINER" "wc -c < $JOINER_HOME/qadena/logs/qadena.log 2>/dev/null || echo 0" | tr -d '\r ')
 : ${JOINER_LOG_OFFSET:=0}
 
-# THE ENCLAVE PROMPT NEEDS AN ANSWER ON THE FIRST START, and `< /dev/null` is exactly an EOF.
-# With an encrypted keyring the joiner then syncs, serves RPC and advances height with NO enclave,
-# logging `no key named "..."` every 25 blocks -- healthy by every check this script makes.  Fed
-# only when a passfile was given, so the `test` path keeps its original redirect.
+# The enclave's first dispatch fires off BeginBlock, tens of blocks after start, so the feed must
+# stay open until then -- a fixed number of lines reaches EOF long before the prompt.  The
+# passphrase is read once into a variable so it survives the passfile being removed, and stays out
+# of argv.  Fed only when a passfile was given; the `test` path keeps its original redirect.
 if [[ -n "$NKFEED" ]]; then
-    ssh -n "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && repeat 64 print -r -- \"\$(cat $REM_KP)\" | ./start_qadena.sh' > /dev/null 2>&1" \
+    ssh -n "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && _p=\$(cat $REM_KP); while :; do print -r -- \"\$_p\"; done | ./start_qadena.sh' > /dev/null 2>&1" \
         || fail "start_qadena.sh returned non-zero on $JOINER"
 else
 ssh -n "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./start_qadena.sh' > /dev/null 2>&1 < /dev/null" \
