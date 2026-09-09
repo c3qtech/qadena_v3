@@ -1135,7 +1135,36 @@ JOINER_LOG_OFFSET=$(ssh -n "$JOINER" "wc -c < $JOINER_HOME/qadena/logs/qadena.lo
 # stay open until then -- a fixed number of lines reaches EOF long before the prompt.  The
 # passphrase is read once into a variable so it survives the passfile being removed, and stays out
 # of argv.  Fed only when a passfile was given; the `test` path keeps its original redirect.
-if [[ -n "$NKFEED" ]]; then
+# WHETHER systemd SUPERVISES THIS JOINER, checked rather than assumed -- hosts differ, and on this
+# fleet the primary has a qadena.service while the joiner has none.  A systemd unit's stdin is
+# /dev/null, so a passphrase piped into start_qadena.sh reaches the wrapper and never the node.
+#
+# A joiner does not normally need the passphrase at all: its enclave finds the JarRegulator the
+# genesis node already wrote, reports "already initialized", and never reads the keyring.  This is
+# insurance for the case where it does, and for a host that supervises differently.
+_sysd_j=0
+ssh -o ConnectTimeout=10 "$JOINER" \
+    'systemctl list-unit-files qadena.service 2>/dev/null | grep -q qadena.service' 2>/dev/null && _sysd_j=1
+
+if [[ -n "$NKFEED" ]] && (( _sysd_j )); then
+    info "joiner is systemd-supervised: first start OUTSIDE it, with the passphrase"
+    ssh -n "$JOINER" "${SUDO_J}$JOINER_HOME/qadena/scripts/stop_qadena.sh > /dev/null 2>&1" || true
+    ssh -n "$JOINER" "${SUDO_J}nohup zsh -c 'cd $JOINER_HOME/qadena/scripts && _p=\$(cat $REM_KP); while :; do print -r -- \"\$_p\"; done | ./run.sh' > /dev/null 2>&1 &" \
+        || fail "could not launch run.sh on $JOINER"
+    # Wait for it to answer, then hand over; nothing after this needs the passphrase.
+    _jn=0
+    for i in {1..24}; do
+        sleep 10
+        ssh -o ConnectTimeout=10 "$JOINER" 'curl -s --max-time 5 localhost:26657/status >/dev/null 2>&1' 2>/dev/null \
+            && { _jn=1; break }
+    done
+    (( _jn )) || fail "the joiner never answered its RPC after the unsupervised start"
+    info "handing the joiner to systemd"
+    ssh -n "$JOINER" "${SUDO_J}$JOINER_HOME/qadena/scripts/stop_qadena.sh > /dev/null 2>&1" || true
+    ssh -n "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./start_qadena.sh' > /dev/null 2>&1 < /dev/null" \
+        || fail "start_qadena.sh returned non-zero on $JOINER"
+elif [[ -n "$NKFEED" ]]; then
+    # No systemd here, so start_qadena.sh's child inherits this pipe.
     ssh -n "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && _p=\$(cat $REM_KP); while :; do print -r -- \"\$_p\"; done | ./start_qadena.sh' > /dev/null 2>&1" \
         || fail "start_qadena.sh returned non-zero on $JOINER"
 else

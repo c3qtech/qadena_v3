@@ -698,18 +698,38 @@ if run_phase 6; then
     # forever -- a node that looks healthy, syncs, serves RPC, and has no enclave.  The height check
     # below passes in that state, which is why this cannot be left to be noticed later.
     #
-    # THE FEED MUST NOT END.  The enclave's first dispatch fires off BeginBlock, tens of blocks
-    # after start -- so a fixed number of lines is written, the pipe reaches EOF, and the prompt
-    # minutes later gets nothing.  This loops until the node exits and the write takes SIGPIPE.
+    # THE PASSPHRASE CANNOT REACH A SYSTEMD SERVICE.
     #
-    # The passphrase is read ONCE into a shell variable: the file is removed when this script
-    # exits, and re-reading it per iteration would feed empty lines from then on.  A variable in a
-    # shell's memory is not argv and not the environment, so it stays out of `ps`.
+    # start_qadena.sh runs `systemctl start qadena` where a unit exists, and that unit has no
+    # StandardInput, so the node's stdin is /dev/null.  Piping a passphrase into start_qadena.sh
+    # feeds the wrapper, which calls systemctl and exits -- qadenad never sees a byte of it.  On a
+    # host with no systemd the pipe reaches run.sh directly, which is why this works untended there
+    # and never on the fleet.
     #
-    # SGX starts under sudo.  That is safe only because the fleet's sudo is NOPASSWD: if it ever
-    # prompts, it would consume the keyring passphrase as the sudo password and fail both.
-    if [[ -n "$rem_kp" ]]; then
-        info "feeding the keyring passphrase to the first start (enclave init)"
+    # THE PASSPHRASE IS ONLY EVER NEEDED ONCE.  enclave_selfstart reads the keyring at the FIRST
+    # init and never again -- every later block returns early once GetJarRegulator finds the row.
+    # So run the node by hand, with the feed, just long enough to register; then stop it and hand
+    # the node to systemd, which needs no passphrase for the rest of its life.
+    # ONLY WHERE systemd ACTUALLY SUPERVISES.  Hosts differ: this fleet's primary has a
+    # qadena.service and its joiner has none, so neither can be assumed.  Without a unit, the pipe
+    # reaches run.sh and the ordinary start is enough -- doing the dance anyway would restart the
+    # node twice for nothing.
+    _sysd=0
+    ssh -o ConnectTimeout=10 "$PRIMARY" \
+        'systemctl list-unit-files qadena.service 2>/dev/null | grep -q qadena.service' 2>/dev/null && _sysd=1
+
+    if [[ -n "$rem_kp" ]] && (( _sysd )); then
+        info "primary is systemd-supervised: first start OUTSIDE it, with the passphrase"
+        rsh_user "$PRIMARY" "$NODE_HOME/scripts/stop_qadena.sh > /dev/null 2>&1" || true
+        ssh -o ConnectTimeout=10 "$PRIMARY" \
+            "nohup zsh -c '_p=\$(cat $rem_kp); while :; do print -r -- \"\$_p\"; done | ${SUDO}$NODE_HOME/scripts/run.sh' > $RUNLOG.start 2>&1 &" \
+            || fail "could not launch run.sh on $PRIMARY"
+
+
+    elif [[ -n "$rem_kp" ]]; then
+        # No systemd here, so start_qadena.sh's own child inherits this pipe and the passphrase
+        # reaches the node.  The feed must not end before the enclave's first dispatch.
+        info "feeding the keyring passphrase to the first start (no systemd on this host)"
         ssh -o ConnectTimeout=10 "$PRIMARY" \
             "nohup zsh -c '_p=\$(cat $rem_kp); while :; do print -r -- \"\$_p\"; done | ${SUDO}$NODE_HOME/scripts/start_qadena.sh' > $RUNLOG.start 2>&1 &" \
             || fail "could not launch start_qadena.sh on $PRIMARY"
@@ -734,40 +754,50 @@ if run_phase 6; then
         fail "the node did not produce blocks; see $PRIMARY:$RUNLOG.start and $NODE_HOME/logs"
     }
 
-    # BLOCKS ARE NOT ENOUGH -- ASSERT THE ENCLAVE ACTUALLY INITIALISED.
+    # ASK THE CHAIN, NOT THE LOG.  JarRegulator is what the dispatch itself checks, genesis
+    # leaves the list EMPTY, and only the enclave can fill it -- the row carries an attestation
+    # report.  So a non-empty list is proof, and it cannot pass vacuously the way a query for
+    # the pioneer's intervalPublicKeyID does: genesis already carries one of those.
     #
-    # A node whose enclave never initialised produces blocks, answers RPC and advances height, so
-    # every check above passes.  The first bank send then dies inside the enclave with
-    #     panic in ScanBankSend: ... is not a valid AES key (0 bytes)
-    # because the bootstrap that generates SealedTableSharedSecret returns early when it cannot
-    # read the node key, leaving that secret empty.
-    #
-    # CHECK THE LOG, NOT THE intervalPublicKeyID TABLE.  A launch genesis already carries a pioneer
-    # row, so querying for one passes before the enclave has done anything -- which is exactly what
-    # an earlier version of this check did, reporting success against a chain whose enclave was
-    # retrying every 25 blocks.
+    # The log is not a reliable signal here.  A successful dispatch has three possible
+    # phrasings and has been observed writing none of them, so a run that waited for a line sat
+    # there while the row it wanted was already on chain.
+    # Gated on the encrypted-keyring path.  The check is valid for any run -- the enclave must
+    # register whatever the backend -- but adding a new hard gate to the long-standing `test`
+    # path risks failing a bring-up on something unrelated to this change.
     if [[ -n "$rem_kp" ]]; then
-        info "waiting for the enclave to initialise (encrypted keyring: the first start must unlock it)"
-        _ok=0
-        for i in {1..40}; do
-            _tail=$(ssh -o ConnectTimeout=10 "$PRIMARY" \
-                "grep -ah 'init-enclave' $NODE_HOME/logs/*.log 2>/dev/null | tail -30" 2>/dev/null)
-            if print -r -- "$_tail" | grep -q 'has now broadcast its registration'; then
-                info "enclave initialised (broadcast its registration)"; _ok=1; break
-            fi
-            if print -r -- "$_tail" | grep -q 'reports it is already initialized'; then
-                info "enclave already initialised"; _ok=1; break
-            fi
-            sleep 15
-        done
-        (( _ok )) || {
-            print -r -- "$_tail" | tail -6 | while read -r l; do info "$l"; done
-            fail "the enclave never initialised on $PRIMARY.  The node produces blocks but has no
-     enclave, and the first bank send will panic in ScanBankSend with a 0-byte key.  The usual
-     cause is the node keyring passphrase: check that --keyring-passfile opens
-     $NODE_HOME/keyring-file."
-        }
+    info "waiting for the enclave to register (this is the only moment the passphrase is used)"
+    _reg=0
+    for i in {1..40}; do
+        sleep 15
+        _n=$(ssh -o ConnectTimeout=10 "$PRIMARY" \
+            "$NODE_HOME/bin/qadenad query qadena list-jar-regulator --output json 2>/dev/null \
+             | sed -n '/^{/,\$p' | jq -r '(.jarRegulator // []) | length' 2>/dev/null" 2>/dev/null | tr -d '\r')
+        [[ "${_n:-0}" -gt 0 ]] && { info "enclave registered (JarRegulator row on chain)"; _reg=1; break }
+    done
+    (( _reg )) || {
+        ssh -o ConnectTimeout=10 "$PRIMARY" \
+            "grep -ah 'init-enclave' $NODE_HOME/logs/*.log 2>/dev/null | tail -4" 2>/dev/null \
+            | while read -r l; do info "$l"; done
+        fail "the enclave did not register on $PRIMARY: list-jar-regulator is still empty.
+ Without that row the node produces blocks with no enclave, and the first bank send panics in
+ ScanBankSend with a 0-byte key.  Check that --keyring-passfile opens $NODE_HOME/keyring-file."
+    }
     fi
+
+    # HAND IT TO SYSTEMD, once registration is done and the passphrase is no longer needed.  Only
+    # where a unit exists and we started the node ourselves outside it.
+    if [[ -n "$rem_kp" ]] && (( _sysd )); then
+        info "handing the node to systemd (no passphrase needed from here on)"
+        rsh_user "$PRIMARY" "$NODE_HOME/scripts/stop_qadena.sh > /dev/null 2>&1" || true
+        rsh_user "$PRIMARY" "rm -f $RUNLOG.start"
+        ssh -o ConnectTimeout=10 "$PRIMARY" \
+            "nohup ${SUDO}$NODE_HOME/scripts/start_qadena.sh > $RUNLOG.start 2>&1 &" \
+            || fail "could not launch start_qadena.sh on $PRIMARY"
+    fi
+
+    # The enclave's registration was proven above, before systemd took over, so nothing is
+    # re-checked here.
 fi
 
 # ---------------------------------------------------------------------------------------------
