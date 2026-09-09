@@ -8,7 +8,7 @@
 # one had: it was missing the --keyring-passfile argument the original passes to the fleet bring-up,
 # and the compose.yml check that catches a wrong --env-file.  Neither absence was a decision.
 #
-# The ten values are now foundation_scripts/fleet_site_profile.sh's `staging` profile -- the two
+# The ten values are now testscripts/fleet_site_profile.sh's `staging` profile -- the two
 # hosts, the passphrase file, the launch directory, the ~/sec-*-staging suffix that keeps a rebuild
 # here from wiping the local fleet's keys, the env file name, the advertised addresses, full-nodes-
 # not-validators, and the unverified-peer-agreement flag the NLB requires.

@@ -3,9 +3,9 @@
 # THE FLEET SITE PROFILE -- which machines a bring-up runs against, and the handful of values that
 # vary with them.
 #
-#   source foundation_scripts/fleet_site_profile.sh        # uses $SITE, default local
-#   foundation_scripts/fleet_site_profile.sh --show staging
-#   foundation_scripts/fleet_site_profile.sh --list
+#   source testscripts/fleet_site_profile.sh        # uses $SITE, default local
+#   testscripts/fleet_site_profile.sh --show staging
+#   testscripts/fleet_site_profile.sh --list
 #
 # WHY THIS EXISTS.  testscripts/veritas_full_setup.sh and veritas_full_setup_sec_staging.sh were 514
 # and 520 lines and differed in TEN VALUES -- the two hosts, the passphrase file, the launch
@@ -17,8 +17,12 @@
 # compose.yml check that catches a wrong --env-file.  Neither absence was deliberate; staging was
 # simply the copy nobody updated.  A site is data, so it lives here as data.
 #
-# SITE IS NOT DEPLOYMENT.  A site is a set of machines and therefore a CHAIN; a deployment is a
-# programme running on one (see deployment_profile.sh).  Several deployments share one site -- that
+# SITE IS NOT DEPLOYMENT, AND THEY LIVE APART ON PURPOSE.  A site is a set of machines and
+# therefore a CHAIN; a deployment is a programme running on one
+# (foundation_scripts/deployment_profile.sh).  That one is shared vocabulary -- 26 files across
+# foundation_scripts/, veritas_scripts/ and testscripts/ read it.  This one is read by the two
+# fleet drivers here and holds dev-machine ssh addresses, which have no business sitting next to
+# derive_launch_keys.sh and mnemonic.sh.  Several deployments share one site -- that
 # is the whole point of the launch chain -- so the two are chosen independently:
 #
 #     veritas_full_setup.sh --site staging --deployment ekycph

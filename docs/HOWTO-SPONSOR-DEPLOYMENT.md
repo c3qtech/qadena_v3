@@ -212,7 +212,7 @@ VERITAS's seven member names to an adoption ceremony would name keys that are in
 not in that bucket's multisig.
 
 Add a site the same way you add a deployment — drop `<name>.env` into `~/launch/sites/` setting
-`SITE_PRIMARY`, `SITE_JOINER` and the rest; see `foundation_scripts/fleet_site_profile.sh`.
+`SITE_PRIMARY`, `SITE_JOINER` and the rest; see `testscripts/fleet_site_profile.sh`.
 
 ---
 

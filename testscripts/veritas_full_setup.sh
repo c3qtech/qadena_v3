@@ -51,7 +51,7 @@ while (( _i <= $# )); do
     esac
     _i=$(( _i + 1 ))
 done
-source "$SCRIPT_DIR/../foundation_scripts/fleet_site_profile.sh"
+source "$SCRIPT_DIR/fleet_site_profile.sh"
 fleet_site_profile_load "$SITE" || exit 1
 source "$SCRIPT_DIR/../foundation_scripts/deployment_profile.sh"
 deployment_profile_load "$DEPLOYMENT" || exit 1
