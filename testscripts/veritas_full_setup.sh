@@ -221,7 +221,21 @@ _on_exit() {
     print -u2 -- "==========================================================================="
     print -u2 -- "FAILED in stage: $_CURRENT   (exit $rc)"
     print -u2 -- "  resume from here once fixed:"
-    print -u2 -- "      $_SELF --passfile $PASSFILE --node $NODE --count $COUNT --from $_CURRENT"
+    # ONLY SUGGEST A COMMAND THAT RUNS.  `rebuild` is not in STAGES -- it is a standalone block
+    # guarded by --rebuild-chain -- so a failure there printed "--from rebuild", which the very
+    # next run rejects with "unknown --from stage 'rebuild'".  A resume hint that does not resume
+    # is worse than none: it is read as the answer and costs a cycle to disprove.
+    if (( $(_stage_index "$_CURRENT") > 0 )); then
+        print -u2 -- "      $_SELF --passfile $PASSFILE --node $NODE --count $COUNT --from $_CURRENT"
+    else
+        print -u2 -- "      $_SELF --passfile $PASSFILE --node $NODE --count $COUNT \\"
+        print -u2 -- "          --rebuild-chain --ref <branch>"
+        print -u2 -- "  NOTE: '$_CURRENT' is not a resumable stage -- it is the --rebuild-chain block,"
+        print -u2 -- "  which runs before them and PURGES BOTH NODES again.  If the primary built and"
+        print -u2 -- "  only the joiner failed, resume the join instead, without rebuilding:"
+        print -u2 -- "      testscripts/nth_node_bringup.sh --primary $PRIMARY --joiner $JOINER \\"
+        print -u2 -- "          --pioneer <name> --from 3 --keyring-passfile $PASSFILE"
+    fi
     print -u2 -- "==========================================================================="
     return $rc
 }
@@ -245,7 +259,23 @@ if _want bootstrap; then
     # keyring by accident.
     _need_keys=0; _need_cfg=0
     [[ -d "$LAUNCH_DIR/coord" ]] && ls "$LAUNCH_DIR"/mnemonics/*.mnemonic.enc > /dev/null 2>&1 || _need_keys=1
-    [[ -r "$LAUNCH_DIR/fleet-launch-config.yml" ]] || _need_cfg=1
+    # RE-RENDER WHEN THE SOURCE HAS MOVED, not only when the rendered file is absent.
+    #
+    # This tested for existence alone, so a launch config rendered before a change to
+    # config/launch-config.yml was reused forever.  That is not a stale comment -- it is how a fleet
+    # got built with an UNENCRYPTED node keyring after keyring-backend: "file" was added to the
+    # source: the rendered instance predated it, the primary came up with keyring-test, and nothing
+    # said so.  Genesis is built from the rendered file, so a stale one is a wrong chain.
+    #
+    # Mtime, not content: the rendered file is a transformation of the source (addresses, enclave
+    # ids), so it is never equal to it and only "newer than" is meaningful.
+    if [[ ! -r "$LAUNCH_DIR/fleet-launch-config.yml" ]]; then
+        _need_cfg=1
+    elif [[ config/launch-config.yml -nt "$LAUNCH_DIR/fleet-launch-config.yml" ]]; then
+        _need_cfg=1
+        print -r -- "  config/launch-config.yml is NEWER than the rendered instance -- re-rendering"
+        print -r -- "    (a rendered config older than its source builds the previous chain's genesis)"
+    fi
 
     if (( _need_keys || _need_cfg )); then
         banner "0. BOOTSTRAP the foundation directory ($LAUNCH_DIR)"
