@@ -31,10 +31,35 @@ set -u
 SCRIPT_DIR="${0:A:h}"
 REPO="${SCRIPT_DIR:h}"
 
+# WHICH FLEET, AND WHICH PROGRAMME ON IT.  Pre-scanned before anything is defaulted, because every
+# default below comes from one or the other -- the ordering bug that split a deployment across two
+# directories in step_1 is the same shape as deriving these after parsing.
+#
+#   --site        the machines, and therefore the chain: local (M1/M2) or staging (Azure/AWS).
+#                 Replaces veritas_full_setup_sec_staging.sh, which was this file with ten values
+#                 changed and two later fixes missing.
+#   --deployment  the programme: veritas, ekycph, enf.  Selects the sponsor keys, the admin key,
+#                 the service-provider names, the allocation bucket that funds it and the members
+#                 who sign for that bucket.
+SITE="${SITE:-local}"
+DEPLOYMENT="${DEPLOYMENT:-veritas}"
+_i=1
+while (( _i <= $# )); do
+    case "${@[$_i]}" in
+        --site)       SITE="${@[$((_i+1))]:?--site needs a name}" ;;
+        --deployment) DEPLOYMENT="${@[$((_i+1))]:?--deployment needs a name}" ;;
+    esac
+    _i=$(( _i + 1 ))
+done
+source "$SCRIPT_DIR/../foundation_scripts/fleet_site_profile.sh"
+fleet_site_profile_load "$SITE" || exit 1
+source "$SCRIPT_DIR/../foundation_scripts/deployment_profile.sh"
+deployment_profile_load "$DEPLOYMENT" || exit 1
+
 NODE="${QADENA_NODE:-}"
 NODE_EXPLICIT=0
-PASSFILE="$HOME/fleet-launch-password"
-LAUNCH_DIR="$HOME/fleet-launch"
+PASSFILE="$SITE_PASSFILE"
+LAUNCH_DIR="$SITE_LAUNCH_DIR"
 CHAIN_ID="qadena_4824-1"
 # SGX=0 BUILDS A DEBUG ENCLAVE, and that has to be said explicitly rather than left to inference.
 # build.sh's default is "ego installed means SGX", so a host with ego and NO /dev/sgx* devices --
@@ -49,25 +74,35 @@ SGX=0
 # what several suites need (an audit with one validator heals nothing).  0 leaves them as full
 # nodes: they sync and serve RPC but never bond, which makes the PRIMARY the only validator and
 # therefore a single point of failure for the chain.
-JOINER_VALIDATOR=1
+JOINER_VALIDATOR="$SITE_JOINER_VALIDATOR"
 COORD_HOME="$LAUNCH_DIR/coord"
-SEC_HOME="${VERITAS_SEC_HOME:-$HOME/sec-veritas}"
+# THE DEPLOYMENT'S HOME, SUFFIXED BY THE SITE.  ~/sec-ekycph on the local fleet, ~/sec-ekycph-staging
+# on staging.  The suffix is not cosmetic: the rebuild stage DELETES this directory, and staging
+# once shared ~/sec-veritas with the local fleet and wiped its keys and mnemonics.
+SEC_HOME="${VERITAS_SEC_HOME:-$DEPLOY_SEC_HOME$SITE_HOME_SUFFIX}"
 COUNT=3
 FROM="bootstrap"
 REBUILD=0
 # ONE PATH, NOT A DIRECTORY PLUS A NAME -- see the staging script for why.
-ENV_FILE="$HOME/test/follow-the-money/stacks/veritas/env-sponsored-test"
-PREFIX="sec"
-PRIMARY="alvillarica@10.211.55.5"
-JOINER="alvillarica@10.211.55.6"
+# The stack is named for the DEPLOYMENT, the env file within it for the SITE.
+ENV_FILE="$HOME/test/follow-the-money/stacks/$DEPLOY_NAME/$SITE_ENV_FILE_NAME"
+PREFIX="$DEPLOY_PREFIX"
+PRIMARY="$SITE_PRIMARY"
+JOINER="$SITE_JOINER"
 SKIP_APP=0
-ADVERTISE_P=""
-ADVERTISE_J=""
+ADVERTISE_P="$SITE_ADVERTISE_P"
+ADVERTISE_J="$SITE_ADVERTISE_J"
 
 usage() {
     print -r -- "Usage: veritas_full_setup.sh [options]"
     print -r -- ""
-    print -r -- "  --passfile <file>   keyring passphrase, first line.  Default ~/.sec-veritas-password."
+    print -r -- "  --site <name>       which fleet: $(fleet_site_profile_list).  Default $SITE_NAME."
+    print -r -- "                      Selects the hosts, the passphrase file, the launch dir, the"
+    print -r -- "                      advertised addresses and whether joiners bond."
+    print -r -- "  --deployment <name> which programme: $(deployment_profile_list).  Default"
+    print -r -- "                      $DEPLOY_NAME.  Selects the sponsor keys, the admin key, the"
+    print -r -- "                      providers, the allocation bucket and its signing members."
+    print -r -- "  --passfile <file>   keyring passphrase, first line.  Default $PASSFILE."
     print -r -- "                      The keyrings default"
     print -r -- "                      to the encrypted 'file' backend and a prompt with no terminal"
     print -r -- "                      looks exactly like a hang."
@@ -76,7 +111,7 @@ usage() {
     print -r -- "                      tcp://localhost:26657 when there is no --primary."
     print -r -- "  --count <n>         ephemeral wallets per user (default 3; 30 for a real run)"
     print -r -- "  --coord-home <dir>  foundation keyring (default ~/fleet-launch/coord)"
-    print -r -- "  --sec-home <dir>    SEC's directory (default ~/sec-veritas)"
+    print -r -- "  --sec-home <dir>    the deployment's directory (default $SEC_HOME)"
     print -r -- "  --from <stage>      resume: bootstrap|prepare|step1|delegate|step2|approve|step3|pool|verify|app"
     print -r -- "  --rebuild-chain     PURGE both fleet nodes and rebuild the chain first."
     print -r -- "                      Destroys every wallet and credential on them."
@@ -110,6 +145,8 @@ while [[ $# -gt 0 ]]; do
         --coord-home)    COORD_HOME="$2"; shift 2 ;;
         --sec-home)      SEC_HOME="$2"; shift 2 ;;
         --from)          FROM="$2"; shift 2 ;;
+        --site)          shift 2 ;;   # pre-scanned above
+        --deployment)    shift 2 ;;   # pre-scanned above
         --rebuild-chain) REBUILD=1; shift ;;
         --skip-app)      SKIP_APP=1; shift ;;
         --launch-dir)    LAUNCH_DIR="$2"; shift 2 ;;
@@ -249,8 +286,8 @@ if (( REBUILD )); then
         _existing=$(jq -r '.appsvraddr // empty' "$SEC_HOME/variables.json" 2>/dev/null || true)
         _keys=$(ls "$SEC_HOME"/keyring/keyring-*/*.info 2>/dev/null | wc -l | tr -d ' ')
         print -r -- "  about to DELETE $SEC_HOME ($_keys key(s)${_existing:+, sponsor ${_existing:0:16}...})"
-        if [[ -n "$_existing" && -r "$COORD_HOME/veritas-sponsors.json" ]]; then
-            _target=$(jq -r '.appsvr // empty' "$COORD_HOME/veritas-sponsors.json" 2>/dev/null || true)
+        if [[ -n "$_existing" && -r "$COORD_HOME/$DEPLOY_STATE_FILE" ]]; then
+            _target=$(jq -r '.appsvr // empty' "$COORD_HOME/$DEPLOY_STATE_FILE" 2>/dev/null || true)
             if [[ -n "$_target" && "$_existing" != "$_target" ]]; then
                 print -u2 "REFUSING: $SEC_HOME belongs to a DIFFERENT deployment."
                 print -u2 "  its sponsor:   $_existing"
@@ -322,14 +359,14 @@ if _want prepare; then
     banner "1. FOUNDATION: fund and stake the two sponsors"
     # pubsec is 5-of-7 on this fleet and foundation is 3-of-5; the member lists are a local naming
     # convention, not something the chain knows, so they have to be named.
-    foundation_scripts/sec_veritas_before_step_1.sh --stage prepare \
+    foundation_scripts/sec_veritas_before_step_1.sh --deployment "$DEPLOY_NAME" --stage prepare \
         --coord-home "$COORD_HOME" --keyring-passfile "$PASSFILE" \
         --mnemonics-dir "$LAUNCH_DIR/mnemonics" --node "$NODE" \
-        --pubsec-members pubsec-m1,pubsec-m2,pubsec-m3,pubsec-m4,pubsec-m5,pubsec-m6,pubsec-m7 \
-        --members foundation-m1,foundation-m2,foundation-m3
+        --fund-members "$DEPLOY_FUND_MEMBERS" \
+        --members "$DEPLOY_STAKE_MEMBERS"
 fi
 
-_sponsors="$COORD_HOME/veritas-sponsors.json"
+_sponsors="$COORD_HOME/$DEPLOY_STATE_FILE"
 [[ -r "$_sponsors" ]] || { print -u2 "no $_sponsors -- run the prepare stage first"; exit 1 }
 APPSVR=$(jq -r '.appsvr' "$_sponsors")
 USERS=$(jq -r '.users'  "$_sponsors")
@@ -338,7 +375,7 @@ USERS=$(jq -r '.users'  "$_sponsors")
 if _want step1; then
     _CURRENT="step1"
     banner "2. SEC: mint keys, derive every wallet address, emit the pre-grant block"
-    veritas_scripts/step_1.sh --count "$COUNT" \
+    veritas_scripts/step_1.sh --deployment "$DEPLOY_NAME" --count "$COUNT" \
         --appsvr "$APPSVR" --users "$USERS" \
         --node "$NODE" --sec-home "$SEC_HOME" --keyring-passfile "$PASSFILE"
 fi
@@ -350,7 +387,7 @@ PREGRANT="$SEC_HOME/pregrant_addresses.json"
 if _want delegate; then
     _CURRENT="delegate"
     banner "3. FOUNDATION: delegate the three authorities, pre-grant every wallet"
-    foundation_scripts/sec_veritas_after_step_1.sh --pregrant "$PREGRANT" \
+    foundation_scripts/sec_veritas_after_step_1.sh --deployment "$DEPLOY_NAME" --pregrant "$PREGRANT" \
         --coord-home "$COORD_HOME" --keyring-passfile "$PASSFILE" --node "$NODE"
 fi
 
@@ -358,14 +395,14 @@ fi
 if _want step2; then
     _CURRENT="step2"
     banner "4. SEC: create the service providers, submit their proposals"
-    veritas_scripts/step_2.sh --node "$NODE" --sec-home "$SEC_HOME" --keyring-passfile "$PASSFILE"
+    veritas_scripts/step_2.sh --deployment "$DEPLOY_NAME" --node "$NODE" --sec-home "$SEC_HOME" --keyring-passfile "$PASSFILE"
 fi
 
 # THE IDS COME FROM THE FILES step_2 WROTE, and it overwrites them every run -- so read them HERE,
 # immediately after, rather than trusting a value carried from an earlier invocation.
 _pdir="$REPO/provider_scripts/proposals"
-IDENTITY_PID=$(cat "$_pdir/secidentitysrvprv.proposal_id" 2>/dev/null || true)
-DSVS_PID=$(cat "$_pdir/secdsvssrvprv.proposal_id" 2>/dev/null || true)
+IDENTITY_PID=$(cat "$_pdir/$DEPLOY_IDENTITY_PRV.proposal_id" 2>/dev/null || true)
+DSVS_PID=$(cat "$_pdir/$DEPLOY_DSVS_PRV.proposal_id" 2>/dev/null || true)
 
 # --------------------------------------------------------------------------------------------
 if _want approve; then
@@ -374,9 +411,9 @@ if _want approve; then
     # after_step_2 verifies each id IS a service-provider proposal and skips ones already decided,
     # so a re-run costs nothing and cannot deposit on somebody else's proposal.
     if [[ -n "$IDENTITY_PID" && -n "$DSVS_PID" ]]; then
-        foundation_scripts/sec_veritas_after_step_2.sh "$IDENTITY_PID" "$DSVS_PID" \
+        foundation_scripts/sec_veritas_after_step_2.sh --deployment "$DEPLOY_NAME" "$IDENTITY_PID" "$DSVS_PID" \
             --coord-home "$COORD_HOME" --keyring-passfile "$PASSFILE" --node "$NODE" \
-            --members foundation-m1,foundation-m2,foundation-m3
+            --members "$DEPLOY_STAKE_MEMBERS"
     else
         print -r -- "  no proposal ids on file -- assuming the providers are already registered"
     fi
@@ -385,7 +422,7 @@ if _want approve; then
     # A vote is not a result: the provider is registered when the proposal EXECUTES, and step_3
     # creates wallets that need the providers to exist.  Poll the registration itself rather than
     # the proposal, because a re-run's proposal id may be a duplicate that will never pass.
-    for _p in secidentitysrvprv secdsvssrvprv; do
+    for _p in "$DEPLOY_IDENTITY_PRV" "$DEPLOY_DSVS_PRV"; do
         _n=0
         while (( _n < 60 )); do
             _id=$("$HOME/qadena/bin/qadenad" --home "${QADENAHOME:-$HOME/qadena}" \
@@ -402,7 +439,7 @@ fi
 if _want step3; then
     _CURRENT="step3"
     banner "6. SEC: create the sponsor pool and the DSVS user, claim credentials"
-    veritas_scripts/step_3.sh --node "$NODE" --sec-home "$SEC_HOME" --keyring-passfile "$PASSFILE"
+    veritas_scripts/step_3.sh --deployment "$DEPLOY_NAME" --node "$NODE" --sec-home "$SEC_HOME" --keyring-passfile "$PASSFILE"
 fi
 
 POOL="$SEC_HOME/pool_addresses.json"
@@ -412,7 +449,7 @@ if _want pool; then
     _CURRENT="pool"
     banner "7. FOUNDATION: authorise the sponsor pool"
     [[ -r "$POOL" ]] || { print -u2 "no $POOL -- step_3 did not complete"; exit 1 }
-    foundation_scripts/sec_veritas_after_step_3.sh --pool-addresses "$POOL" \
+    foundation_scripts/sec_veritas_after_step_3.sh --deployment "$DEPLOY_NAME" --pool-addresses "$POOL" \
         --coord-home "$COORD_HOME" --keyring-passfile "$PASSFILE" --node "$NODE"
 fi
 
@@ -433,7 +470,7 @@ if _want verify; then
     # `${POOL:+--pool "$POOL"}` reaches the script as ONE argument -- "--pool /path" -- and it
     # answers "unknown option: --pool /path", which reads like a missing flag rather than a
     # quoting bug.  Measured 2026-09-07 at the end of a full bring-up.
-    _vargs=(--coord-home "$COORD_HOME" --node "$NODE" --pregrant "$PREGRANT")
+    _vargs=(--deployment "$DEPLOY_NAME" --coord-home "$COORD_HOME" --node "$NODE" --pregrant "$PREGRANT")
     [[ -r "$POOL" ]] && _vargs+=(--pool "$POOL")
     foundation_scripts/sec_veritas_verify.sh "${_vargs[@]}"
 fi
@@ -510,5 +547,5 @@ print -r -- "  foundation-appsvr $APPSVR"
 print -r -- "  foundation-users  $USERS"
 print -r -- ""
 print -r -- "  app logs:   make -C $STACK logs-api"
-print -r -- "  re-verify:  foundation_scripts/sec_veritas_verify.sh --coord-home $COORD_HOME --node $NODE"
+print -r -- "  re-verify:  foundation_scripts/sec_veritas_verify.sh --deployment $DEPLOY_NAME --coord-home $COORD_HOME --node $NODE"
 print -r -- "==========================================================================="

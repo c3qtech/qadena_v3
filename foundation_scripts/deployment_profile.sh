@@ -65,6 +65,8 @@ deployment_profile_load() {
 
     DEPLOY_NAME="$_d"
     DEPLOY_STAKE_BUCKET="foundation"   # 03 Foundation Treasury -- the only bucket with stakes=yes
+    # Bucket 03 is 3-of-5 and provides voting power for EVERY deployment, so this does not vary.
+    DEPLOY_STAKE_MEMBERS="foundation-m1,foundation-m2,foundation-m3"
 
     case "$_d" in
     veritas)
@@ -84,6 +86,12 @@ deployment_profile_load() {
         # 10 Public Sector Programs.  allocations.csv earmarks it: "SEC PH VERITAS 60M; future
         # MOUs" and, on the same row, "funds foundation-appsvr/foundation-users sponsors".
         DEPLOY_FUND_BUCKET="pubsec"
+        # The .base64 filename stem step_3 writes -- sec-create-wallet-sponsor-names.base64 etc.
+        # NOT the env VARIABLE prefix, which stays SEC_ for every deployment (gen_key_env_vars.sh).
+        DEPLOY_PREFIX="sec"
+        # Bucket 10 is 5-of-7; naming all seven lets the ceremony pick.  derive_launch_keys.sh
+        # mints them as <bucket>-m1..mN, so these are a convention, not something the chain knows.
+        DEPLOY_FUND_MEMBERS="pubsec-m1,pubsec-m2,pubsec-m3,pubsec-m4,pubsec-m5,pubsec-m6,pubsec-m7"
         ;;
     ekycph)
         DEPLOY_APPSVR="foundation-ekycph-appsvr"
@@ -101,6 +109,10 @@ deployment_profile_load() {
         # ceremonies here need three signatures, not five, and --fund-members names adoption's
         # members.  Sizing the gas for the wrong threshold is the usual way this bites.
         DEPLOY_FUND_BUCKET="adoption"
+        DEPLOY_PREFIX="ekycph"
+        # Bucket 01 is 3-of-5 -- five members, not seven.  Handing the ceremony pubsec's list here
+        # would name keys that are in the keyring but not in this bucket's multisig.
+        DEPLOY_FUND_MEMBERS="adoption-m1,adoption-m2,adoption-m3,adoption-m4,adoption-m5"
         ;;
     enf)
         DEPLOY_APPSVR="foundation-enf-appsvr"
@@ -118,6 +130,8 @@ deployment_profile_load() {
         # ceremonies here need three signatures, not five, and --fund-members names adoption's
         # members.  Sizing the gas for the wrong threshold is the usual way this bites.
         DEPLOY_FUND_BUCKET="adoption"
+        DEPLOY_PREFIX="enf"
+        DEPLOY_FUND_MEMBERS="adoption-m1,adoption-m2,adoption-m3,adoption-m4,adoption-m5"
         ;;
     *)
         # An unknown name is NOT an error if a profile file defines it -- that is the documented
@@ -163,8 +177,8 @@ deployment_profile_list() { print -r -- "veritas ekycph enf" }
 # eval it rather than duplicating the name table.
 deployment_profile_print() {
     local _v
-    for _v in NAME APPSVR USERS ADMIN SPONSOR_BASE TREASURY IDENTITY_PRV DSVS_PRV DSVS \
-              SEC_HOME FUND_BUCKET STAKE_BUCKET STATE_FILE PREGRANT_FILE POOL_FILE; do
+    for _v in NAME PREFIX APPSVR USERS ADMIN SPONSOR_BASE TREASURY IDENTITY_PRV DSVS_PRV DSVS \
+              SEC_HOME FUND_BUCKET FUND_MEMBERS STAKE_BUCKET STAKE_MEMBERS STATE_FILE PREGRANT_FILE POOL_FILE; do
         print -r -- "DEPLOY_$_v=${(P)${:-DEPLOY_$_v}}"
     done
 }

@@ -176,10 +176,51 @@ Two things about the sponsored path on a devnet:
 
 ---
 
+## Bringing a deployment up on a launch fleet
+
+One command, the same shape as VERITAS's:
+
+```sh
+./testscripts/ekycph_full_setup.sh --site local   --rebuild-chain --count 30
+./testscripts/enf_full_setup.sh    --site staging --from prepare
+./testscripts/veritas_full_setup.sh --site local  --from prepare      # unchanged
+```
+
+All three are the same implementation, selected on two independent axes:
+
+| axis | what it picks | values |
+|---|---|---|
+| `--site` | the machines, and therefore the chain: hosts, passphrase file, launch dir, advertised addresses, whether joiners bond | `local` (M1/M2), `staging` (Azure + AWS) |
+| `--deployment` | the programme: sponsor keys, admin key, providers, allocation bucket, signing members | `veritas`, `ekycph`, `enf` |
+
+They are independent because several deployments share one chain — that is the point of a launch
+fleet. `veritas_full_setup_sec_staging.sh` is now a wrapper for `--site staging`; it used to be a
+520-line copy, and it had already drifted (missing the `--keyring-passfile` argument and the
+`compose.yml` check).
+
+The ten stages are the ceremony sequence, and `--from` resumes at any of them:
+
+```
+bootstrap  prepare  step1  delegate  step2  approve  step3  pool  verify  app
+           ^^^^^^^           ^^^^^^^          ^^^^^^^        ^^^^
+           the foundation's four multisig actions, between SEC's three steps
+```
+
+**The ceremony differs by bucket, and that is why the profile carries the members.** ekycph and enf
+fund from bucket 01, a **3-of-5** multisig; VERITAS funds from bucket 10, **5-of-7**. Passing
+VERITAS's seven member names to an adoption ceremony would name keys that are in the keyring but
+not in that bucket's multisig.
+
+Add a site the same way you add a deployment — drop `<name>.env` into `~/launch/sites/` setting
+`SITE_PRIMARY`, `SITE_JOINER` and the rest; see `foundation_scripts/fleet_site_profile.sh`.
+
+---
+
 ## Running the whole thing on a devnet
 
-`testscripts/ekycph_full_setup.sh` and `enf_full_setup.sh` do the entire bring-up end to end, in
-stages, against a local devnet. They are the devnet counterpart of
+`testscripts/ekycph_devnet_setup.sh` and `enf_devnet_setup.sh` do the entire bring-up end to end,
+in stages, against a local devnet.  **They are not the launch path** -- they fund by
+`tx bank send --from treasury`, a key no launch chain has. They are the devnet counterpart of
 `testscripts/veritas_full_setup.sh` (which targets a launch fleet and does every foundation spend as
 a multisig ceremony); the stage names line up on purpose.
 
@@ -195,9 +236,9 @@ a multisig ceremony); the stage names line up on purpose.
 **To skip the build**, which is the usual case, start at a later stage:
 
 ```sh
-./testscripts/ekycph_full_setup.sh --from setup              # node already running, run to the end
-./testscripts/enf_full_setup.sh --from base --until verify   # everything but the app-server
-./testscripts/enf_full_setup.sh --from setup -- --no-contracts   # pass-through after --
+./testscripts/ekycph_devnet_setup.sh --from setup            # node already running, run to the end
+./testscripts/enf_devnet_setup.sh --from base --until verify # everything but the app-server
+./testscripts/enf_devnet_setup.sh --from setup -- --no-contracts # pass-through after --
 ```
 
 `--from` defaults to `build`, and the build stage **refuses to run without `--allow-build`** — it
