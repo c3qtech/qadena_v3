@@ -1167,7 +1167,12 @@ phase "6. start the joiner and catch up"
 # attempt, including the failed ones.  Grepping the whole file would report those as this run's
 # errors.  (1st_node_bringup has no such problem: init.sh does `rm -rf $QADENAHOME`, logs included.)
 # Anchor to a byte offset taken before the node starts, and read only forward from here.
-JOINER_LOG_OFFSET=$(ssh -n "$JOINER" "wc -c < $JOINER_HOME/qadena/logs/qadena.log 2>/dev/null || echo 0" | tr -d '\r ')
+# `wc -c < file` FAILS IN THE SHELL, NOT IN wc, when the file is absent -- so 2>/dev/null on wc
+# does not suppress it and the remote bash prints
+#     bash: line 1: .../qadena/logs/qadena.log: No such file or directory
+# mid-bringup.  The || echo 0 still gives the right answer, so this was only ever noise -- but it
+# reads as a failure, which on a first join (no logs yet) is exactly when it appears.
+JOINER_LOG_OFFSET=$(ssh -n "$JOINER" "[ -f $JOINER_HOME/qadena/logs/qadena.log ] && wc -c < $JOINER_HOME/qadena/logs/qadena.log || echo 0" 2>/dev/null | tr -d '\r ')
 : ${JOINER_LOG_OFFSET:=0}
 
 # The enclave's first dispatch fires off BeginBlock, tens of blocks after start, so the feed must
@@ -1188,7 +1193,7 @@ ssh -o ConnectTimeout=10 "$JOINER" \
 if [[ -n "$NKFEED" ]] && (( _sysd_j )); then
     info "joiner is systemd-supervised: first start OUTSIDE it, with the passphrase"
     ssh -n "$JOINER" "${SUDO_J}$JOINER_HOME/qadena/scripts/stop_qadena.sh > /dev/null 2>&1" || true
-    ssh -n "$JOINER" "${SUDO_J}nohup zsh -c 'cd $JOINER_HOME/qadena/scripts && _p=\$(cat $REM_KP); while :; do print -r -- \"\$_p\"; done | ./run.sh' > /dev/null 2>&1 &" \
+    ssh -n "$JOINER" "${SUDO_J}nohup zsh -c 'cd $JOINER_HOME/qadena/scripts && _p=\$(cat $REM_KP); _end=\$((SECONDS+1200)); while (( SECONDS < _end )); do print -r -- \"\$_p\"; done | ./run.sh' > /dev/null 2>&1 &" \
         || fail "could not launch run.sh on $JOINER"
     # Wait for it to answer, then hand over; nothing after this needs the passphrase.
     _jn=0
@@ -1204,9 +1209,28 @@ if [[ -n "$NKFEED" ]] && (( _sysd_j )); then
     ssh -n "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./start_qadena.sh' > /dev/null 2>&1 < /dev/null" \
         || fail "start_qadena.sh returned non-zero on $JOINER"
 elif [[ -n "$NKFEED" ]]; then
-    # No systemd here, so start_qadena.sh's child inherits this pipe.
-    ssh -n "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && _p=\$(cat $REM_KP); while :; do print -r -- \"\$_p\"; done | ./start_qadena.sh' > /dev/null 2>&1" \
-        || fail "start_qadena.sh returned non-zero on $JOINER"
+    # BOUNDED AND BACKGROUNDED.  The feeder gets no SIGPIPE when start_qadena.sh exits, because
+    # run.sh -- which it backgrounds -- inherited the pipe's read end and holds it for the life of
+    # the node.  So the writer would run forever, holding the passphrase, and a synchronous ssh
+    # would never return.  `timeout 1200` outlives the enclave's first dispatch (tens of blocks)
+    # and then cleans itself up.
+    #
+    # BACKGROUNDED, because the feeder never ends.  `while :; do print ...; done` only dies when
+    # its reader closes the pipe, and run.sh keeps that pipe open for the life of the node -- so a
+    # SYNCHRONOUS ssh here never returns.  The node starts and syncs perfectly while this script
+    # blocks forever on a command that cannot finish; the primary's equivalent is backgrounded for
+    # exactly this reason.
+    info "starting the joiner with the passphrase feed (no systemd on this host)"
+    ssh -n "$JOINER" "${SUDO_J}nohup zsh -lc 'cd $JOINER_HOME/qadena/scripts && _p=\$(cat $REM_KP); _end=\$((SECONDS+1200)); while (( SECONDS < _end )); do print -r -- \"\$_p\"; done | ./start_qadena.sh' > /dev/null 2>&1 &" \
+        || fail "could not launch start_qadena.sh on $JOINER"
+    _jn2=0
+    for i in {1..30}; do
+        sleep 10
+        ssh -o ConnectTimeout=10 "$JOINER" 'curl -s --max-time 5 localhost:26657/status >/dev/null 2>&1' 2>/dev/null \
+            && { _jn2=1; info "joiner RPC answering"; break }
+        (( i % 3 == 0 )) && info "  waiting for the joiner's RPC ($((i*10))s of 300s)"
+    done
+    (( _jn2 )) || fail "the joiner did not answer its RPC after starting with the passphrase feed"
 else
 ssh -n "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./start_qadena.sh' > /dev/null 2>&1 < /dev/null" \
     || fail "start_qadena.sh returned non-zero on $JOINER"

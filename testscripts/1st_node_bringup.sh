@@ -722,7 +722,7 @@ if run_phase 6; then
         info "primary is systemd-supervised: first start OUTSIDE it, with the passphrase"
         rsh_user "$PRIMARY" "$NODE_HOME/scripts/stop_qadena.sh > /dev/null 2>&1" || true
         ssh -o ConnectTimeout=10 "$PRIMARY" \
-            "nohup zsh -c '_p=\$(cat $rem_kp); while :; do print -r -- \"\$_p\"; done | ${SUDO}$NODE_HOME/scripts/run.sh' > $RUNLOG.start 2>&1 &" \
+            "nohup zsh -c '_p=\$(cat $rem_kp); _end=\$((SECONDS+1200)); while (( SECONDS < _end )); do print -r -- \"\$_p\"; done | ${SUDO}$NODE_HOME/scripts/run.sh' > $RUNLOG.start 2>&1 &" \
             || fail "could not launch run.sh on $PRIMARY"
 
 
@@ -731,7 +731,7 @@ if run_phase 6; then
         # reaches the node.  The feed must not end before the enclave's first dispatch.
         info "feeding the keyring passphrase to the first start (no systemd on this host)"
         ssh -o ConnectTimeout=10 "$PRIMARY" \
-            "nohup zsh -c '_p=\$(cat $rem_kp); while :; do print -r -- \"\$_p\"; done | ${SUDO}$NODE_HOME/scripts/start_qadena.sh' > $RUNLOG.start 2>&1 &" \
+            "nohup zsh -c '_p=\$(cat $rem_kp); _end=\$((SECONDS+1200)); while (( SECONDS < _end )); do print -r -- \"\$_p\"; done | ${SUDO}$NODE_HOME/scripts/start_qadena.sh' > $RUNLOG.start 2>&1 &" \
             || fail "could not launch start_qadena.sh on $PRIMARY"
     else
         # trap 4 again, mirrored: SGX must start WITH sudo, debug must not.
