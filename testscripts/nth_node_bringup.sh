@@ -760,13 +760,18 @@ if [[ $QUIESCE -eq 1 ]]; then
         # and crashed when the primary was already idle, which is the normal state before a join.
         n=$(ssh "$PRIMARY" 'pgrep -cf "[r]egression.sh" 2>/dev/null; true' | tr -d '\r' | head -1)
         [[ "${n:-0}" -eq 0 ]] && break
+        # This waits up to an HOUR.  Silence for that long is indistinguishable from a hang, so say
+        # every two minutes that it is still running and how long is left.
+        (( i % 4 == 0 )) && info "  regression still running ($n process(es)); waited $((i/2))m of 60m"
         sleep 30
     done
     fi
     [[ "${n:-0}" -eq 0 ]] || fail "regression still running after an hour; stop it before joining"
 
     for i in {1..40}; do
-        PH=$(height "$PRIMARY"); [[ -n "$PH" ]] && break; sleep 15
+        PH=$(height "$PRIMARY"); [[ -n "$PH" ]] && break
+        (( i % 4 == 0 )) && info "  waiting for the primary's RPC after regression ($((i*15))s of 600s)"
+        sleep 15
     done
     [[ -n "$PH" ]] || fail "primary RPC did not come back after regression"
     info "primary quiescent and producing at $PH"
@@ -832,6 +837,7 @@ if [[ ! "$addr" =~ ^qadena1 ]]; then
   --yes --on-existing s --stop-for-funding$AFN_KP_ARG' > /tmp/tnb_join.log 2>&1 & echo started" > /dev/null
     for i in {1..60}; do
         ssh "$JOINER" 'grep -aq "stopping for funding, as requested" /tmp/tnb_join.log' 2>/dev/null && break
+        (( i % 6 == 0 )) && info "  still minting $PIONEER_NAME on the joiner ($((i*5))s)"
         sleep 5
     done
     addr=$(ssh "$JOINER" "${NKFEED}${SUDO_J}~/qadena/bin/qadenad --home ~/qadena keys show $PIONEER_NAME -a --keyring-backend $NKB 2>/dev/null" | tr -d '\r')
@@ -1080,11 +1086,41 @@ ssh "$JOINER" "rm -f /tmp/tnb_join.log; ${SUDO_J}nohup setsid zsh -c '~/qadena/s
 # be told the wrong thing.  (This phase does clear it, at the rm -f above; the trap is reading it
 # from outside.)
 announced=0
+# SAY WHAT THE JOINER IS DOING.  This waited ten minutes printing nothing between the one
+# announcement and the verdict, so a failure thirty seconds in looked like a hang at the last thing
+# printed -- which was the funding poll, three steps before where it actually died.
+#
+# Three changes: fail FAST on the errors that are terminal, echo the joiner's own last line every
+# 30s so there is visible movement, and show the tail on timeout rather than naming a file.
+_last_seen=""
 for i in {1..60}; do
     if ssh "$JOINER" 'grep -aq "SyncEnclave SUCCEEDED" /tmp/tnb_join.log' 2>/dev/null; then
         info "SyncEnclave SUCCEEDED -- params are on the joiner"
         break
     fi
+
+    # TERMINAL FAILURES.  add_full_node.sh has already given up by the time these appear; waiting
+    # out the remaining minutes only delays the message and buries it further up the scrollback.
+    _err=$(ssh "$JOINER" "grep -aE 'Failed to synchronize my enclave|Couldn.t find a fee grant|Couldn.t convert from bech32|FAILED:' /tmp/tnb_join.log 2>/dev/null | tail -3" 2>/dev/null)
+    if [[ -n "$_err" ]]; then
+        print -r -- "$_err" | while read -r l; do info "  joiner: $l"; done
+        ssh "$JOINER" 'tail -12 /tmp/tnb_join.log' 2>/dev/null | while read -r l; do info "    $l"; done
+        fail "sync-enclave failed on $JOINER -- see the lines above and /tmp/tnb_join.log there."
+    fi
+
+    # PROGRESS, every 30s.  The joiner's own last meaningful line, so a long step is visibly a long
+    # step rather than a hang.
+    if (( i % 3 == 0 )); then
+        _now=$(ssh "$JOINER" "grep -avE '^\s*$' /tmp/tnb_join.log 2>/dev/null | tail -1" 2>/dev/null \
+               | sed -E 's/\x1b\[[0-9;]*m//g' | cut -c1-100)
+        if [[ -n "$_now" && "$_now" != "$_last_seen" ]]; then
+            info "  joiner: $_now"
+            _last_seen="$_now"
+        else
+            info "  still waiting for SyncEnclave ($((i*10))s)"
+        fi
+    fi
+
     if (( ! announced )) && ssh "$JOINER" 'grep -aq "attempt to detect" /tmp/tnb_join.log' 2>/dev/null; then
         pa=$(ssh "$JOINER" "grep -a 'PIONEER ADDRESS' /tmp/tnb_join.log | tail -1 | awk '{print \$NF}'" 2>/dev/null | tr -d '\r')
         info "at the funding poll for ${PIONEER_NAME}${pa:+ = $pa}"
@@ -1094,8 +1130,11 @@ for i in {1..60}; do
     fi
     sleep 10
 done
-ssh "$JOINER" 'grep -aq "SyncEnclave SUCCEEDED" /tmp/tnb_join.log' 2>/dev/null \
-    || fail "sync-enclave did not succeed; see /tmp/tnb_join.log on $JOINER"
+if ! ssh "$JOINER" 'grep -aq "SyncEnclave SUCCEEDED" /tmp/tnb_join.log' 2>/dev/null; then
+    ssh "$JOINER" 'tail -15 /tmp/tnb_join.log' 2>/dev/null | while read -r l; do info "    $l"; done
+    fail "sync-enclave did not succeed within 10 minutes on $JOINER.  Its last lines are above;
+     the full log is /tmp/tnb_join.log there."
+fi
 
 # Params must be on disk BEFORE the node executes a block -- that is the whole reason a block-sync
 # joiner works at all.
@@ -1157,6 +1196,7 @@ if [[ -n "$NKFEED" ]] && (( _sysd_j )); then
         sleep 10
         ssh -o ConnectTimeout=10 "$JOINER" 'curl -s --max-time 5 localhost:26657/status >/dev/null 2>&1' 2>/dev/null \
             && { _jn=1; break }
+        (( i % 3 == 0 )) && info "  waiting for the joiner's RPC ($((i*10))s of 240s)"
     done
     (( _jn )) || fail "the joiner never answered its RPC after the unsupervised start"
     info "handing the joiner to systemd"
@@ -1187,6 +1227,7 @@ jlog() {
 for i in {1..30}; do
     np=$(ssh "$JOINER" 'pgrep -c qadenad 2>/dev/null; true' | tr -d '\r' | head -1)
     [[ "${np:-0}" -ge 1 ]] && break
+    (( i % 10 == 0 )) && info "  waiting for a qadenad process on the joiner ($((i*2))s of 60s)"
     sleep 2
 done
 if [[ "${np:-0}" -lt 1 ]]; then

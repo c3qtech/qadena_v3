@@ -137,7 +137,13 @@ qadenad_alias() {
     fi
     [ -n "${QADENA_CHAIN_ID:-}" ] && case "${1:-}" in tx) _net+=(--chain-id "$QADENA_CHAIN_ID") ;; esac
     case "${1:-}" in
-        keys|tx)
+        # `enclave` BELONGS HERE.  Its subcommands call flags.AddTxFlagsToCmd (so they accept
+        # --keyring-backend) and GetAddressByName (so they READ A KEY and prompt for the
+        # passphrase).  Left in the default branch they got neither, and under backend=file
+        # sync-enclave answered three prompts with EOF and failed with
+        #     Couldn't convert from bech32 format <pioneer>
+        # -- qadenad falling back to parsing the name as an address, naming no keyring at all.
+        keys|tx|enclave)
             # THE PASSPHRASE ONLY.  NO `cat`, DELIBERATELY.
             #
             # An earlier version forwarded the caller's stdin here so that
