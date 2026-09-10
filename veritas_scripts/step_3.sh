@@ -113,7 +113,22 @@ qadena_keyring_unlock
 # The app-server itself never needs the dropped messages (verified against its code, 2026-09-06),
 # so nothing broke in steady state -- but any re-run, repair or partial recovery would hit the
 # narrowed set with no diagnosis.  The union costs nothing and removes the dependency.
-VERITAS_APPSVR_MSGS="/qadena.dsvs.MsgCreateDocument,/qadena.dsvs.MsgRemoveDocument,/qadena.dsvs.MsgSignDocument,/qadena.dsvs.MsgRegisterAuthorizedSignatory,/qadena.qadena.MsgCreateCredential,/qadena.qadena.MsgRemoveCredential,/qadena.qadena.MsgClaimCredential,/qadena.qadena.MsgUpdateCredential,/qadena.qadena.MsgClaimUpdatedCredential,/qadena.qadena.MsgProtectPrivateKey,/qadena.qadena.MsgSignRecoverPrivateKey,/qadena.qadena.MsgAddPublicKey,/qadena.qadena.MsgCreateWallet,/qadena.nameservice.MsgBindCredential,/qadena.nameservice.MsgUnbindCredential,/cosmos.feegrant.v1beta1.MsgGrantAllowance,/cosmos.feegrant.v1beta1.MsgRevokeAllowance"
+# FROM THE PROFILE.  This was a literal here and an identical literal in provider_scripts/setup_provider_base.sh; ENF needs one type
+# the others do not (MsgExecuteContract), so the list is per-deployment now.  See
+# foundation_scripts/deployment_profile.sh.
+VERITAS_APPSVR_MSGS="$DEPLOY_APPSVR_MSGS"
+
+# FAIL LOUD ON AN EMPTY SET.  The value is EXPORTED by the profile and this script is a CHILD
+# process -- setup_prerequisites.sh calls it too, and does not load a profile.  An empty
+# allow-list is not a no-op: the grant is issued and permits NOTHING, so every wallet it covers
+# looks funded and cannot transact, with the first symptom arriving far from here.
+if [ -z "$VERITAS_APPSVR_MSGS" ]; then
+    echo "FAILED: no DEPLOY_APPSVR_MSGS in the environment -- the caller did not load a"
+    echo "  deployment profile, and granting an empty allow-list would produce wallets that"
+    echo "  cannot transact.  Source foundation_scripts/deployment_profile.sh first."
+    exit 1
+fi
+
 
 # fund_wallet <address> -- give this wallet the means to transact, however this deployment does it.
 fund_wallet() {
@@ -256,7 +271,7 @@ if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
             sponsor_addr=$(qadenad_alias keys show "$VERITAS_FOUNDATION_APPSVR" --address 2>/dev/null | tr -d '\r')
             [ -n "$sponsor_addr" ] || {
                 echo "cannot resolve '$VERITAS_FOUNDATION_APPSVR' -- not an address, and not in this keyring."
-                echo "On a SEC machine export the ADDRESS QFI handed over:"
+                echo "On the $DEPLOY_DISPLAY machine export the ADDRESS QFI handed over:"
                 echo "    export VERITAS_FOUNDATION_APPSVR=qadena1..."
                 exit 1
             } ;;
@@ -284,7 +299,7 @@ if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
             _adm_addr=$(qadenad_alias keys show "$_adm" --address 2>/dev/null || true)
             if [ -z "$_adm_addr" ]; then
                 echo "WARNING: '$_adm' is recorded but NOT in this keyring -- cannot use the delegation."
-                echo "  Signing will fall back to the foundation's own key, which a SEC box does not have."
+                echo "  Signing will fall back to the foundation's own key, which the $DEPLOY_DISPLAY box does not have."
                 echo "  Is VERITAS_SEC_HOME ($VERITAS_SEC_HOME) the home step_1 wrote?"
             else
                 _gr=$(qadenad_alias query authz grants "$sponsor_addr" "$_adm_addr" --output json 2>&1 || true)
@@ -300,7 +315,7 @@ if [ "$VERITAS_FUND_MODE" = "foundation-sponsored" ]; then
                 else
                     echo "WARNING: '$_adm' ($_adm_addr) holds NO authz from $sponsor_addr."
                     echo "  Has the foundation run sec_veritas_after_step_1.sh against THIS chain?"
-                    echo "  Signing will fall back to the foundation's own key, which a SEC box does not have."
+                    echo "  Signing will fall back to the foundation's own key, which the $DEPLOY_DISPLAY box does not have."
                 fi
             fi
         fi

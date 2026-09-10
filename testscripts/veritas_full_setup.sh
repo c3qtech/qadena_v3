@@ -431,7 +431,7 @@ USERS=$(jq -r '.users'  "$_sponsors")
 # --------------------------------------------------------------------------------------------
 if _want step1; then
     _CURRENT="step1"
-    banner "2. SEC: mint keys, derive every wallet address, emit the pre-grant block"
+    banner "2. $DEPLOY_DISPLAY: mint keys, derive every wallet address, emit the pre-grant block"
     veritas_scripts/step_1.sh --deployment "$DEPLOY_NAME" --count "$COUNT" \
         --appsvr "$APPSVR" --users "$USERS" \
         --node "$NODE" --sec-home "$SEC_HOME" --keyring-passfile "$PASSFILE"
@@ -451,7 +451,7 @@ fi
 # --------------------------------------------------------------------------------------------
 if _want step2; then
     _CURRENT="step2"
-    banner "4. SEC: create the service providers, submit their proposals"
+    banner "4. $DEPLOY_DISPLAY: create the service providers, submit their proposals"
     veritas_scripts/step_2.sh --deployment "$DEPLOY_NAME" --node "$NODE" --sec-home "$SEC_HOME" --keyring-passfile "$PASSFILE"
 fi
 
@@ -495,7 +495,7 @@ fi
 # --------------------------------------------------------------------------------------------
 if _want step3; then
     _CURRENT="step3"
-    banner "6. SEC: create the sponsor pool and the DSVS user, claim credentials"
+    banner "6. $DEPLOY_DISPLAY: create the sponsor pool and the DSVS user, claim credentials"
     veritas_scripts/step_3.sh --deployment "$DEPLOY_NAME" --node "$NODE" --sec-home "$SEC_HOME" --keyring-passfile "$PASSFILE"
 fi
 

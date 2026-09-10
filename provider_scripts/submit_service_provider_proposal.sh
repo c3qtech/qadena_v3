@@ -144,7 +144,7 @@ echo "-------------------------"
 
 # deposit into the proposal
 if [ "${VERITAS_FUND_MODE:-}" = "foundation-sponsored" ]; then
-    echo "sponsored mode: no SEC-side deposit -- QFI deposits in sec_veritas_after_step_2.sh"
+    echo "sponsored mode: no ${DEPLOY_DISPLAY:-SEC}-side deposit -- QFI deposits in sec_veritas_after_step_2.sh"
     result='{"code":0,"txhash":""}'
 else
 result=$(qadenad_alias tx gov deposit $proposal_id 100000qdn --from $treasury -y --output json --gas-prices $minimum_gas_prices --gas auto --gas-adjustment $gas_adjustment)

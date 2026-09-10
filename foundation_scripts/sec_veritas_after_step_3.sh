@@ -93,24 +93,26 @@ while [[ $# -gt 0 ]]; do
             echo "  appsvr    : $DEPLOY_APPSVR"
             echo "  users     : $DEPLOY_USERS"
             echo ""
-            echo "  Authorises the app-server's sponsor pool: TWO transactions per wallet"
-            echo "  (authz MsgGrantAllowance + feegrant MsgExec), so a pool of N sends 2*(N+1)."
+            echo "  Authorises the app-server's sponsor pool: THREE transactions per wallet"
+            echo "  (authz MsgGrantAllowance, authz MsgRevokeAllowance, feegrant MsgExec),"
+            echo "  so a pool of N sends 3*(N+1).  Revoke is needed because widening an"
+            echo "  allowance is revoke-then-grant -- see the note at the grant loop."
             echo ""
             echo "  --foundation-users <k>   granting account, default $foundation_users"
             echo "  --foundation-appsvr <k>  default $foundation_appsvr"
-            echo "  --pool-addresses <file>  pool_addresses.json from SEC's step_3.  PREFERRED:"
-            echo "                           the foundation does not hold SEC's wallet keys, so"
+            echo "  --pool-addresses <file>  pool_addresses.json from $DEPLOY_DISPLAY's step_3.  PREFERRED:"
+            echo "                           the foundation does not hold $DEPLOY_DISPLAY's wallet keys, so"
             echo "                           resolving names from a local keyring only works in a"
             echo "                           harness.  The file is CHECKED before anything is sent."
             echo "  --sponsor-base <name>    pool base name; -eph1..-ephN are derived from it"
-            echo "  --count <n>              ephemeral wallets in the pool; match SEC's step_1"
+            echo "  --count <n>              ephemeral wallets in the pool; match $DEPLOY_DISPLAY's step_1"
             echo "  --coord-home <dir>       keyring holding the foundation accounts --"
             echo "  --node <rpc>                the chain RPC; the chain-id is derived from it"
             echo "                           derive_launch_keys.sh --home.  Not the node's."
             echo "  --keyring-backend <b>    default $BACKEND (encrypted); 'test' for a devnet"
             echo "  --keyring-passfile <f>   read the keyring passphrase from a file"
             echo ""
-            echo "  Pool members may be given as ADDRESSES.  In a real deployment they are SEC's"
+            echo "  Pool members may be given as ADDRESSES.  In a real deployment they are $DEPLOY_DISPLAY's"
             echo "  wallets and the foundation does not hold their keys -- names that cannot be"
             echo "  resolved are skipped and counted in the coverage warning."
             exit 0 ;;
@@ -137,7 +139,7 @@ if [ -z "$count" ] && [ -z "$POOL_FILE" ]; then
     # number must come from somewhere real or the run must stop.
     [ -n "$count" ] && [ "$count" != "null" ] || {
         echo "cannot determine the pool size."
-        echo "Pass --pool-addresses <file> (SEC's step_3 block -- its wallet list IS the count),"
+        echo "Pass --pool-addresses <file> ($DEPLOY_DISPLAY's step_3 block -- its wallet list IS the count),"
         echo "or --count <n> if you are authorising names you resolve locally."
         exit 1
     }
@@ -274,13 +276,13 @@ for i in $(seq 0 "$count"); do
         w="${POOL_NAMES[$((i+1))]}"; w_addr="${POOL_ADDRS[$((i+1))]}"
     else
     if [ "$i" -eq 0 ]; then w="$sponsor_base"; else w="$sponsor_base-eph$i"; fi
-    # THESE ARE SEC'S WALLETS, NOT THE FOUNDATION'S -- AND THAT IS A GAP.
+    # NAME RESOLUTION -- THE FALLBACK, NOT THE PATH.
     #
-    # step_3.sh creates the sponsor pool on SEC's machine, in SEC's keyring.  This script runs on
-    # the FOUNDATION's machine, which has no reason to hold those keys and in a real deployment
-    # will not.  The devnet harness only gets away with it because it holds every key in one
-    # keyring.  The proper fix is for SEC to hand over the pool ADDRESSES and for this to take a
-    # --pool-addresses <file>; until then a name that cannot be resolved is skipped, and the
+    # step_3.sh creates the sponsor pool in the DEPLOYMENT's keyring; this script runs on the
+    # FOUNDATION's machine, which in a real deployment does not hold those keys.  --pool-addresses
+    # is the answer and is what the fleet driver passes (veritas_full_setup.sh, `pool` stage), so
+    # this branch runs only for the single-keyring devnet harness that calls it without one.
+    # Kept because that harness is real; a name that cannot be resolved is skipped, and the
     # coverage warning at the end is what tells you it happened.
     case "$w" in
         qadena1*) w_addr="$w" ;;
@@ -291,6 +293,24 @@ for i in $(seq 0 "$count"); do
     ok=1
     grant_and_wait "authz" "$w" tx authz grant "$w_addr" generic \
         --msg-type /cosmos.feegrant.v1beta1.MsgGrantAllowance || ok=0
+    # REVOKE AUTHORITY TOO -- the same fix sec_veritas_after_step_1.sh:210 made for the ADMIN key
+    # on 2026-09-06, never applied here.  GenericAuthorization is one message type per grant, and
+    # widening an allowance is revoke-then-grant, because a grantee holds at most ONE allowance
+    # per granter.  The POOL is what the app-server signs with, not the admin key.
+    #
+    # Invisible on a FRESH wallet: the revoke fails with ErrNoAuthorizationFound, the app-server
+    # fire-and-forgets it ("no prior allowance to revoke"), and the grant succeeds because there
+    # was nothing to displace.  So first-time onboarding passes and looks correct.  It breaks
+    # wherever an allowance ALREADY exists, which is exactly two places we have built:
+    #   - the NARROW pre-grant in after_step_1 ({MsgAddPublicKey, MsgCreateWallet}) covering an
+    #     address the app-server later creates -- the widen dies on "fee allowance already
+    #     exists" and the wallet silently keeps two messages;
+    #   - re-granting any existing wallet, which is the whole purpose of the app-server's
+    #     /wallet/feegrant endpoints.
+    # Reported by the follow-the-money app-server session 2026-09-11 (handlers/fee_grant.go and
+    # handlers/qadena_wallet.go both wrap BOTH messages in MsgExec signed by a pool wallet).
+    grant_and_wait "authz (revoke)" "$w" tx authz grant "$w_addr" generic \
+        --msg-type /cosmos.feegrant.v1beta1.MsgRevokeAllowance || ok=0
     grant_and_wait "feegrant" "$w" tx feegrant grant "$fu_addr" "$w_addr" \
         --allowed-messages /cosmos.authz.v1beta1.MsgExec || ok=0
     if [ "$ok" -eq 1 ]; then authorised=$((authorised+1)); echo "  authorised $w"
@@ -313,11 +333,11 @@ if [ "$incomplete" -gt 0 ]; then
 fi
 echo ""
 echo "-------------------------"
-echo "Send the following to SEC, for the app-server configuration"
+echo "Send the following to $DEPLOY_DISPLAY, for the app-server configuration"
 echo "-------------------------"
 echo "    QADENA_FOUNDATION_USERS_ADDRESS=$fu_addr"
 echo "    QADENA_FOUNDATION_APPSVR_ADDRESS=$fa_addr"
 echo ""
-echo "Neither SEC's citizen sponsors nor its own operational wallets hold tokens -- they hold fee"
+echo "Neither $DEPLOY_DISPLAY's citizen sponsors nor its own operational wallets hold tokens -- they hold fee"
 echo "grants from these two accounts. A grant is only used when the transaction NAMES it, so without"
 echo "both settings the app-server fails with \"spendable balance 0aqdn\" rather than degrading."

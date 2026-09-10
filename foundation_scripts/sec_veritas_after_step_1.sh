@@ -96,8 +96,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --pregrant <file>        the paste block step_1 emitted: the admin address plus"
             echo "                           EVERY wallet the bring-up will create (4 families x"
             echo "                           count+1).  Each gets a narrow fee allowance signed here,"
-            echo "                           so no SEC step ever needs a foundation key."
-            echo "  --sec-admin <address>    SEC's ADMIN address -- the key that will sign"
+            echo "                           so no $DEPLOY_DISPLAY step ever needs a foundation key."
+            echo "  --sec-admin <address>    $DEPLOY_DISPLAY's ADMIN address -- the key that will sign"
             echo "                           authz MsgExec, and that holds ZERO tokens by design."
             echo "                           step_1.sh prints it.  NOT the sec-treasury address."
             echo "  --foundation-appsvr <k>  the granting account, default $foundation_appsvr"
@@ -119,7 +119,7 @@ if [ -z "$sec_admin" ] && [ -n "$PREGRANT" ] && [ -r "$PREGRANT" ]; then
 fi
 [ -n "$sec_admin" ] || {
     echo "--sec-admin is required."
-    echo "It is SEC's ADMIN address -- the zero-balance key that signs authz MsgExec, which"
+    echo "It is $DEPLOY_DISPLAY's ADMIN address -- the zero-balance key that signs authz MsgExec, which"
     echo "step_1.sh prints.  It is NOT sec-treasury: steps 2 and 3 do not use that account."
     exit 1; }
 case "$sec_admin" in
@@ -199,9 +199,9 @@ send_and_wait() {   # send_and_wait <label> <tx args...>
 }
 
 echo "-------------------------"
-echo "Authorising SEC to issue fee grants as $foundation_appsvr"
+echo "Authorising $DEPLOY_DISPLAY to issue fee grants as $foundation_appsvr"
 echo "-------------------------"
-echo "SEC admin address: $sec_admin"
+echo "$DEPLOY_DISPLAY admin address: $sec_admin"
 echo "expires:           $(date -r "$expiration" 2>/dev/null || echo "$expiration")"
 
 send_and_wait "authz (MsgGrantAllowance)" tx authz grant "$sec_admin" generic \
@@ -239,7 +239,7 @@ fi
 
 echo ""
 echo "==================================================================="
-echo "TELL SEC TO RUN, exactly:"
+echo "TELL $DEPLOY_DISPLAY TO RUN, exactly:"
 echo ""
 echo "    veritas_scripts/step_2.sh${QADENA_NODE:+ --node $QADENA_NODE}"
 echo ""

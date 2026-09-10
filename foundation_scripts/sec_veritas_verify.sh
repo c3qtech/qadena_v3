@@ -89,7 +89,7 @@ while [[ $# -gt 0 ]]; do
             print "  --appsvr <addr>       the $DEPLOY_APPSVR account"
             print "  --users <addr>        the $DEPLOY_USERS account"
             print ""
-            print "Optional -- the EXPECTED sets, as SEC's paste blocks:"
+            print "Optional -- the EXPECTED sets, as $DEPLOY_DISPLAY's paste blocks:"
             print "  --pregrant <file>     step_1's block (admin + every wallet address)"
             print "  --pool <file>         step_3's block (the sponsor pool)"
             print "  Without these the wallet and pool sets are read from the chain, which verifies"
@@ -247,10 +247,13 @@ qq query authz grants "$FA" "$SA" --output json 2>/dev/null \
 # The expected set is READ FROM step_3.sh, not restated here.  A second copy is a second thing to
 # forget: the last time this list changed it had to change in two places, and a verifier holding
 # a stale third copy would fail every wallet while the deployment was correct.
-_expect_msgs=$(grep -h '^VERITAS_APPSVR_MSGS=' "$SCRIPT_DIR/../veritas_scripts/step_3.sh" 2>/dev/null \
-                 | sed 's/^VERITAS_APPSVR_MSGS="//; s/"$//' | tr ',' '\n' | sort -u)
+# FROM THE PROFILE, which is now the single copy -- and which is also what step_3.sh and
+# setup_provider_base.sh grant from, so this cannot check a set nobody issues.  Grepping step_3.sh
+# was right when the literal lived there; it would silently check VERITAS's 17 types against ENF's
+# 18 now, passing a deployment whose contract writes are unfunded.
+_expect_msgs=$(print -r -- "$DEPLOY_APPSVR_MSGS" | tr ',' '\n' | sed '/^$/d' | sort -u)
 if [[ -z "$_expect_msgs" ]]; then
-    bad "cannot read VERITAS_APPSVR_MSGS from veritas_scripts/step_3.sh -- wallet check skipped"
+    bad "profile gave no DEPLOY_APPSVR_MSGS for $DEPLOY_NAME -- wallet check skipped"
 else
 if [[ -r "$PREGRANT" ]]; then
     _wallets=$(jq -r '.wallets[].address' "$PREGRANT")
@@ -349,20 +352,27 @@ if [[ -n "$_pool_list" ]]; then
         _ptot=$(( _ptot + 1 ))
         # `.grants` is NULL, not [], when a grantee has none -- iterating it makes jq spew
         # "Cannot iterate over null" onto the operator's screen mid-report.  `// []` first.
-        _a1=$(qq query authz grants "$FU" "$_ad" --output json 2>/dev/null \
-                | jq -r '[(.grants // [])[].authorization.value.msg] | index("/cosmos.feegrant.v1beta1.MsgGrantAllowance") // empty')
+        # BOTH feegrant message types, not just Grant.  Widening an allowance is
+        # revoke-then-grant, so a pool wallet holding only MsgGrantAllowance can onboard a FRESH
+        # citizen (nothing to revoke) and silently fails to widen an existing one -- which is
+        # every wallet covered by after_step_1's narrow pre-grant.  Checking only Grant passed
+        # that pool as complete; after_step_3 issues both since 2026-09-11.
+        _pa=$(qq query authz grants "$FU" "$_ad" --output json 2>/dev/null \
+                | jq -r '[(.grants // [])[].authorization.value.msg] // []')
+        _a1=$(print -r -- "$_pa" | jq -r 'index("/cosmos.feegrant.v1beta1.MsgGrantAllowance") // empty')
+        _a2=$(print -r -- "$_pa" | jq -r 'index("/cosmos.feegrant.v1beta1.MsgRevokeAllowance") // empty')
         _pf=$(qq query feegrant grant "$FU" "$_ad" --output json 2>/dev/null \
                 | jq -r '.allowance.allowance.value.allowed_messages // [] | join(",")')
-        { [[ -n "$_a1" ]] && [[ "$_pf" == *MsgExec* ]]; } || _pmiss=$(( _pmiss + 1 ))
+        { [[ -n "$_a1" ]] && [[ -n "$_a2" ]] && [[ "$_pf" == *MsgExec* ]]; } || _pmiss=$(( _pmiss + 1 ))
     done < <(print -r -- "$_pool_list")
     if [[ $_pmiss -eq 0 ]]; then
-        ok "pool: all $_ptot wallets hold BOTH the authz and the MsgExec feegrant from users"
+        ok "pool: all $_ptot wallets hold BOTH authz types and the MsgExec feegrant from users"
     elif [[ $_pmiss -eq $_ptot ]]; then
         # ALL missing is a different situation from SOME missing: it means the step simply has not
         # run yet.  Reported as an unfinished deployment, not as damage.
         bad "pool: none of the $_ptot wallets are authorised -- has sec_veritas_after_step_3.sh been run?"
     else
-        bad "pool: $_pmiss of $_ptot wallets missing a half -- onboarding will fail for SOME citizens"
+        bad "pool: $_pmiss of $_ptot wallets missing authz (grant/revoke) or the MsgExec feegrant"
     fi
 else
     bad "pool: none of the wallets are authorised -- has sec_veritas_after_step_3.sh been run?"
@@ -539,7 +549,7 @@ if [[ -z "$_credmiss" ]]; then
     ok "both user wallets own claimed credentials"
 else
     bad "NO claimed credentials for:$_credmiss"
-    print "        the wallets exist but nothing is bound to them -- SEC cannot register a"
+    print "        the wallets exist but nothing is bound to them -- $DEPLOY_DISPLAY cannot register a"
     print "        signatory (qadena 1118) and the app cannot present a credential."
 fi
 

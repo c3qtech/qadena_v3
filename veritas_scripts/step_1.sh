@@ -169,7 +169,7 @@ count="${VERITAS_COUNT:-}"
 _usage() {
     echo "Usage: veritas_scripts/step_1.sh --count <n> --appsvr <addr> [--users <addr>] [options]"
     echo ""
-    echo "SEC's first step: creates this deployment's keys, writes \$VERITAS_SEC_HOME/variables.json"
+    echo "$DEPLOY_DISPLAY's first step: creates this deployment's keys, writes \$VERITAS_SEC_HOME/variables.json"
     echo "and mnemonics.json, and prints the ADMIN ADDRESS plus the PRE-GRANT BLOCK for QFI."
     echo ""
     echo "Required:"
@@ -195,7 +195,7 @@ _usage() {
     echo "                       has several pioneers."
     echo ""
     echo "Rarely needed:"
-    echo "  --fund-mode banksend         restore the retired model where SEC holds a funded"
+    echo "  --fund-mode banksend         restore the retired model where $DEPLOY_DISPLAY holds a funded"
     echo "                               treasury.  You almost certainly do not want it."
     echo "  --<name>name / --<name>mnemonic    override a key's name, or supply an existing"
     echo "                               mnemonic instead of generating one.  Applies to: admin,"
@@ -498,7 +498,7 @@ if [ "$VERITAS_FUND_MODE" = "banksend" ]; then
     echo "When QFI grants the necessary amount to $treasuryname, run:  $veritasscripts/step_2.sh"
 else
     echo "-------------------------"
-    echo "Setting up $adminname  (sponsored -- no SEC treasury)"
+    echo "Setting up $adminname  (sponsored -- no $DEPLOY_DISPLAY treasury)"
     echo "-------------------------"
     if qadenad_alias keys show "$adminname" > /dev/null 2>&1; then
         echo "$adminname already exists -- keeping it"

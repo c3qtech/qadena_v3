@@ -26,6 +26,11 @@
 # THE PROFILE
 # ---------------------------------------------------------------------------------------------
 # DEPLOY_NAME           the short name; every artefact filename is built from it
+# DEPLOY_DISPLAY        how the deployment is NAMED IN PROSE -- the operator the run is talking
+#                       about ("SEC", "ekyc.ph", "Qadena ENF").  The scripts were written for one
+#                       deployment and say "SEC" throughout; every one of those is really "whoever
+#                       runs the non-foundation half", so it varies with the profile.  Not a key
+#                       name and never used to resolve anything -- output only.
 # DEPLOY_APPSVR         foundation key funding the deployment's OWN operational wallets
 # DEPLOY_USERS          foundation key funding CITIZEN wallets (granted at runtime via authz)
 # DEPLOY_ADMIN          the deployment's admin key -- receives the authz delegation in after_step_1
@@ -67,6 +72,17 @@ deployment_profile_load() {
     local _d="${1:-${DEPLOYMENT:-veritas}}"
 
     DEPLOY_NAME="$_d"
+    DEPLOY_DISPLAY=""
+
+    # THE APPSVR FEE-GRANT ALLOW-LIST.  An AllowedMsgAllowance pays gas ONLY for the message types
+    # named in it, and the chain rejects the WHOLE tx when one is missing -- so a type absent here
+    # is not a degraded feature, it is a deployment that comes up looking healthy and fails on
+    # first use.  Lived as a literal in BOTH veritas_scripts/step_3.sh and
+    # provider_scripts/setup_provider_base.sh, with sec_veritas_verify.sh grepping only the first
+    # of the two for the set it enforces -- so the two copies could drift and the verifier would
+    # still pass.  One copy now; the extras below are what actually varies.
+    DEPLOY_APPSVR_MSGS="/qadena.dsvs.MsgCreateDocument,/qadena.dsvs.MsgRemoveDocument,/qadena.dsvs.MsgSignDocument,/qadena.dsvs.MsgRegisterAuthorizedSignatory,/qadena.qadena.MsgCreateCredential,/qadena.qadena.MsgRemoveCredential,/qadena.qadena.MsgClaimCredential,/qadena.qadena.MsgUpdateCredential,/qadena.qadena.MsgClaimUpdatedCredential,/qadena.qadena.MsgProtectPrivateKey,/qadena.qadena.MsgSignRecoverPrivateKey,/qadena.qadena.MsgAddPublicKey,/qadena.qadena.MsgCreateWallet,/qadena.nameservice.MsgBindCredential,/qadena.nameservice.MsgUnbindCredential,/cosmos.feegrant.v1beta1.MsgGrantAllowance,/cosmos.feegrant.v1beta1.MsgRevokeAllowance"
+    DEPLOY_APPSVR_MSGS_EXTRA=""
     DEPLOY_STAKE_BUCKET="foundation"   # 03 Foundation Treasury -- the only bucket with stakes=yes
     # Bucket 03 is 3-of-5 and provides voting power for EVERY deployment, so this does not vary.
     DEPLOY_STAKE_MEMBERS="foundation-m1,foundation-m2,foundation-m3"
@@ -86,6 +102,7 @@ deployment_profile_load() {
         DEPLOY_DSVS_PRV="secdsvssrvprv"
         DEPLOY_DSVS="secdsvs"
         DEPLOY_SEC_HOME="$HOME/sec-veritas"
+        DEPLOY_DISPLAY="SEC"
         # step_1.sh's historical hardcoded values -- keep them, so a veritas run before and after
         # this block moved into the profile mints the SAME credential ids.
         DEPLOY_FIRSTNAME="SEC"
@@ -113,6 +130,7 @@ deployment_profile_load() {
         DEPLOY_DSVS_PRV="ekycphdsvssrvprv"
         DEPLOY_DSVS="ekycphdsvs"
         DEPLOY_SEC_HOME="$HOME/ekyc-ph"
+        DEPLOY_DISPLAY="ekyc.ph"
         DEPLOY_FIRSTNAME="EKYCPH"
         DEPLOY_BIRTHDATE="2025-Jan-01"
         DEPLOY_EMAIL="no-reply@ekyc.ph"
@@ -137,6 +155,16 @@ deployment_profile_load() {
         DEPLOY_DSVS_PRV="enfdsvssrvprv"
         DEPLOY_DSVS="enfdsvs"
         DEPLOY_SEC_HOME="$HOME/qadena-enf"
+        DEPLOY_DISPLAY="Qadena ENF"
+        # THE ELECTRONIC NOTARIAL BOOK.  ENF is the only deployment that drives a CosmWasm
+        # contract: create_entry / register_enp / update_enp, plus every CND anchor write, all
+        # signed by the ENF wallet pool.  Reported by the follow-the-money app-server session
+        # 2026-09-11 (api/helpers/qadena_util.go PrepareENFClientContext).  Without it ENF passes
+        # bring-up and dies on the first notarization.
+        # NOT MsgStoreCode / MsgInstantiateContract: the operator deploys the contract with
+        # qadenad and hands the address to POST /v1/enf/setup_enf, so those belong to the
+        # bring-up account, never to a sponsored wallet.
+        DEPLOY_APPSVR_MSGS_EXTRA="/cosmwasm.wasm.v1.MsgExecuteContract"
         DEPLOY_FIRSTNAME="ENF"
         DEPLOY_BIRTHDATE="2025-Jan-01"
         # NOT ekycph's +6320000000.  Both scripts carried that same number, so deploying ekycph and
@@ -181,6 +209,16 @@ deployment_profile_load() {
     # the previous run's output; if a profile could set them independently of the name, two
     # deployments could be made to share one -- which is the exact silent-collision this file
     # exists to prevent.
+    : ${DEPLOY_DISPLAY:="$DEPLOY_NAME"}
+    # EXPORTED, unlike the rest: the provider scripts run as CHILD PROCESSES of step_3 and print
+    # the operator's name in their own messages.  They take no --deployment of their own, so the
+    # environment is the only way the name reaches them.
+    export DEPLOY_DISPLAY
+
+    [[ -n "$DEPLOY_APPSVR_MSGS_EXTRA" ]] \
+        && DEPLOY_APPSVR_MSGS="$DEPLOY_APPSVR_MSGS,$DEPLOY_APPSVR_MSGS_EXTRA"
+    export DEPLOY_APPSVR_MSGS
+
     DEPLOY_STATE_FILE="$DEPLOY_NAME-sponsors.json"
     DEPLOY_PREGRANT_FILE="$DEPLOY_NAME-pregrant.json"
     DEPLOY_POOL_FILE="$DEPLOY_NAME-pool.json"
@@ -195,7 +233,7 @@ deployment_profile_list() { print -r -- "veritas ekycph enf" }
 # eval it rather than duplicating the name table.
 deployment_profile_print() {
     local _v
-    for _v in NAME PREFIX APPSVR USERS ADMIN SPONSOR_BASE TREASURY IDENTITY_PRV DSVS_PRV DSVS \
+    for _v in NAME DISPLAY PREFIX APPSVR_MSGS APPSVR USERS ADMIN SPONSOR_BASE TREASURY IDENTITY_PRV DSVS_PRV DSVS \
               SEC_HOME FUND_BUCKET FUND_MEMBERS STAKE_BUCKET STAKE_MEMBERS \
               FIRSTNAME BIRTHDATE EMAIL PHONE AVALUE STATE_FILE PREGRANT_FILE POOL_FILE; do
         print -r -- "DEPLOY_$_v=${(P)${:-DEPLOY_$_v}}"

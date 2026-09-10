@@ -24,6 +24,15 @@ HERE="${0:A:h}"
 # reading.  The wrapper exports QADENA_PROG; direct callers get the real name.
 PROG="${QADENA_PROG:-sec_veritas_after_step_2.sh}"
 
+# THE PROFILE, for $DEPLOY_DISPLAY in the usage text below.  Same argument scan as step_1.sh:
+# the wrappers prepend "--deployment <name>", so it is not $1 here either.
+DEPLOYMENT="${DEPLOYMENT:-veritas}"
+for _i in {1..$#}; do
+    [[ "${@[$_i]}" == "--deployment" ]] && DEPLOYMENT="${@[$((_i+1))]:?--deployment needs a name}"
+done
+source "$HERE/deployment_profile.sh"
+deployment_profile_load "$DEPLOYMENT" || exit 1
+
 # Scan every argument: the per-deployment wrappers prepend "--deployment <name>", so --help does
 # not arrive as $1.
 _want_help=0
@@ -33,14 +42,14 @@ case "$_want_help" in
     1)
         print "Usage: $PROG <proposal-id>... [options]"
         print ""
-        print "  Deposits and votes YES on each proposal id that SEC's step_2 printed."
+        print "  Deposits and votes YES on each proposal id that $DEPLOY_DISPLAY's step_2 printed."
         print "  Every option of sec_veritas_before_step_1.sh applies -- --members,"
         print "  --coord-home, --keyring-backend, --keyring-passfile, --print-ceremony, --via-ssh."
         print ""
         print "  $PROG 12 13 --coord-home ~/launch/coord \\\\"
         print "      --members foundation-m1,foundation-m2,foundation-m3"
         print ""
-        print "  Then watch both to PASSED before SEC runs step_3:"
+        print "  Then watch both to PASSED before $DEPLOY_DISPLAY runs step_3:"
         print "      provider_scripts/query_service_provider_proposal.sh <id> --wait${QADENA_NODE:+ --node $QADENA_NODE}"
         exit 0 ;;
 esac
