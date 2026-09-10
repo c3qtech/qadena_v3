@@ -136,14 +136,25 @@ qadenad_alias() {
         esac
     fi
     [ -n "${QADENA_CHAIN_ID:-}" ] && case "${1:-}" in tx) _net+=(--chain-id "$QADENA_CHAIN_ID") ;; esac
-    case "${1:-}" in
-        # `enclave` BELONGS HERE.  Its subcommands call flags.AddTxFlagsToCmd (so they accept
-        # --keyring-backend) and GetAddressByName (so they READ A KEY and prompt for the
-        # passphrase).  Left in the default branch they got neither, and under backend=file
-        # sync-enclave answered three prompts with EOF and failed with
-        #     Couldn't convert from bech32 format <pioneer>
-        # -- qadenad falling back to parsing the name as an address, naming no keyring at all.
-        keys|tx|enclave)
+    # Which branch this call belongs in.  `enclave` splits on its SUBCOMMAND, so it is resolved
+    # once here rather than duplicating the case below.
+    local _kind="${1:-}"
+    [[ "$_kind" == "enclave" ]] && case "${2:-}" in
+        sync-enclave|init-enclave) _kind="tx" ;;
+    esac
+
+    case "$_kind" in
+        # ONLY THE ENCLAVE SUBCOMMANDS THAT SIGN.  sync-enclave and init-enclave call
+        # flags.AddTxFlagsToCmd (so they accept --keyring-backend) and GetAddressByName (so they
+        # read a key and prompt for the passphrase).  Without that, sync-enclave answered three
+        # prompts with EOF and failed with "Couldn't convert from bech32 format <pioneer>".
+        #
+        # The REST of `enclave` does not take tx flags: check-enclave rejects --keyring-backend
+        # outright with "unknown flag", and it is the readiness probe add_full_node.sh polls 90
+        # times -- so matching all of `enclave` made every one of those polls fail and the join
+        # gave up with "Could not run the qadenad_enclave" against an enclave that was running
+        # and answering.
+        keys|tx)
             # THE PASSPHRASE ONLY.  NO `cat`, DELIBERATELY.
             #
             # An earlier version forwarded the caller's stdin here so that

@@ -1101,7 +1101,7 @@ for i in {1..60}; do
 
     # TERMINAL FAILURES.  add_full_node.sh has already given up by the time these appear; waiting
     # out the remaining minutes only delays the message and buries it further up the scrollback.
-    _err=$(ssh "$JOINER" "grep -aE 'Failed to synchronize my enclave|Couldn.t find a fee grant|Couldn.t convert from bech32|FAILED:' /tmp/tnb_join.log 2>/dev/null | tail -3" 2>/dev/null)
+    _err=$(ssh "$JOINER" "grep -aE 'Failed to synchronize my enclave|Couldn.t find a fee grant|Couldn.t convert from bech32|Could not run the qadenad_enclave|FAILED:' /tmp/tnb_join.log 2>/dev/null | tail -3" 2>/dev/null)
     if [[ -n "$_err" ]]; then
         print -r -- "$_err" | while read -r l; do info "  joiner: $l"; done
         ssh "$JOINER" 'tail -12 /tmp/tnb_join.log' 2>/dev/null | while read -r l; do info "    $l"; done
