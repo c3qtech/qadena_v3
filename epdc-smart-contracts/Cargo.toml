@@ -1,0 +1,47 @@
+[package]
+name = "epdc_register"
+version = "0.1.0"
+authors = ["Al Villarica <alvillarica@gmail.com>"]
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 3
+debug = false
+rpath = false
+lto = true
+debug-assertions = false
+codegen-units = 1
+panic = 'abort'
+incremental = false
+overflow-checks = true
+
+[features]
+# use library feature to disable all instantiate/execute/query exports
+library = []
+
+[package.metadata.scripts]
+optimize = """docker run --rm -v "$(pwd)":/code \
+  --mount type=volume,source="$(basename "$(pwd)")_cache",target=/target \
+  --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
+  cosmwasm/optimizer:0.16.0
+"""
+
+[dependencies]
+cosmwasm-schema = "1.5.7"
+cosmwasm-std = { version = "1.5.7", features = [
+  "cosmwasm_1_4",
+] }
+cw-storage-plus = "1.2.0"
+cw2 = "1.1.0"
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+schemars = "0.8.16"
+serde = { version = "1.0.197", default-features = false, features = ["derive"] }
+thiserror = { version = "1.0.58" }
+
+[dev-dependencies]
+cw-multi-test = "0.20.1"
+k256 = { version = "0.13", features = ["ecdsa"] }
+sha2 = "0.10"
