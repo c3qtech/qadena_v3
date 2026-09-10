@@ -97,7 +97,18 @@ fi
 
 echo "PIONEER $PIONEER"
 
-PIONEERADDRESS=`qadenad_alias keys show $PIONEER -a --keyring-backend test`
+# NO PINNED BACKEND.  This key lives in whichever keyring the node was built with, and on a node
+# using keyring-backend: file it is not in keyring-test at all -- `keys show` then returns EMPTY and
+# every use of $PIONEERADDRESS below degrades silently: bc reports "(standard_in) 1: syntax error"
+# on an empty balance, and the funding hint prints `tx bank send treasury  10000qdn` with no
+# recipient.  qadenad_alias resolves the backend from the node's client.toml.
+PIONEERADDRESS=`qadenad_alias keys show $PIONEER -a`
+if [ -z "$PIONEERADDRESS" ]; then
+    echo "FAILED: could not read $PIONEER's address from the keyring."
+    echo "  Nothing below can work without it.  If this node uses keyring-backend: file, the"
+    echo "  caller must export QADENA_KEYRING_PASS -- see scripts/setup_env.sh."
+    exit 1
+fi
 
 # THE FLOOR COMES FROM config.yml, ALREADY IN aqdn.
 #

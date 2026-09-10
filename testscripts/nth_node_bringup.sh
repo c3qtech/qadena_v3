@@ -1565,7 +1565,13 @@ fi
 # wait_addressable timeout on a node that could never propose a block, and the real message
 # ("Couldn't find balance") scrolled past five lines earlier.  Same trap fleet_bringup_with_tests.sh
 # documents in run_scheduled.  Observed 2026-08-31 on pioneer2.
-ssh "$JOINER" "${SUDO_J}zsh -lc 'cd $JOINER_HOME/qadena/scripts && ./convert_to_validator.sh --validator-stake $VALIDATOR_STAKE$SPONSOR_CV_ARG'" 2>&1 | tail -5 | sed 's/^/  /'
+# EXPORT THE PASSPHRASE FOR THE REMOTE SCRIPT.  convert_to_validator.sh reads the pioneer key and
+# signs create-validator, so on a node using keyring-backend: file it needs QADENA_KEYRING_PASS --
+# scripts/setup_env.sh's qadenad_alias feeds it per call.  Assigned inside the remote shell, not
+# passed as an argument, so it never reaches `ps` on the joiner.
+_cv_pass=""
+[[ -n "$REM_KP" ]] && _cv_pass="export QADENA_KEYRING_PASS=\$(cat $REM_KP); "
+ssh "$JOINER" "${SUDO_J}zsh -lc '${_cv_pass}cd $JOINER_HOME/qadena/scripts && ./convert_to_validator.sh --validator-stake $VALIDATOR_STAKE$SPONSOR_CV_ARG'" 2>&1 | tail -5 | sed 's/^/  /'
 (( ${pipestatus[1]} == 0 )) || fail "phase 6: convert_to_validator.sh failed on $JOINER -- see the lines above. The node is NOT a validator, so it will never propose a block and never become addressable."
 sleep 20
 
