@@ -127,10 +127,27 @@ print ""
 print "=== phases 1-3: mint $PIONEER and stop for the ceremony ==="
 "$HERE/nth_node_bringup.sh" "${nthargs[@]}" --from 1 --until 3 || exit 1
 
+# ITS OWN COPY OF THE PASSPHRASE, not another script's.  This used to read
+# .qadena-join-keyring-pass, which nth_node_bringup.sh stages AND removes on exit -- and it has
+# already exited (--until 3) by the time we get here, so the file was always gone and the lookup
+# reported "could not read <pioneer>'s address" for a key that was present.
+#
+# Staged under a name of ours, 600, and removed on any exit.
+REM_SJ_KP=""
+if [[ -n "$KEYRING_PASSFILE" ]]; then
+    [[ -r "$KEYRING_PASSFILE" ]] || { print -u2 "cannot read --keyring-passfile $KEYRING_PASSFILE"; exit 1 }
+    REM_SJ_KP=".qadena-sponsored-join-pass"
+    scp -q "$KEYRING_PASSFILE" "$JOINER:$REM_SJ_KP" \
+        || { print -u2 "cannot copy the keyring passphrase to $JOINER"; exit 1 }
+    ssh -o ConnectTimeout=10 "$JOINER" "chmod 600 $REM_SJ_KP" 2>/dev/null
+    _sj_cleanup() { ssh -o ConnectTimeout=10 "$JOINER" "rm -f $REM_SJ_KP" 2>/dev/null || true }
+    trap _sj_cleanup EXIT INT TERM
+fi
+
 # NO PINNED BACKEND.  The joiner's client.toml decides, and on a `file` node the key is not in
 # keyring-test at all.  The passphrase is fed when one was given; qadenad ignores extra stdin.
-if [[ -n "$KEYRING_PASSFILE" ]]; then
-    JADDR=$(ssh -o ConnectTimeout=15 "$JOINER" "bash -lc 'for _ in \$(seq 8); do cat .qadena-join-keyring-pass 2>/dev/null; done | \$HOME/qadena/bin/qadenad --home \$HOME/qadena keys show $PIONEER -a'" 2>/dev/null | tr -d '\r')
+if [[ -n "$REM_SJ_KP" ]]; then
+    JADDR=$(ssh -o ConnectTimeout=15 "$JOINER" "bash -lc 'for _ in \$(seq 8); do cat $REM_SJ_KP 2>/dev/null; done | \$HOME/qadena/bin/qadenad --home \$HOME/qadena keys show $PIONEER -a'" 2>/dev/null | tr -d '\r')
 else
     JADDR=$(ssh -o ConnectTimeout=15 "$JOINER" "bash -lc '\$HOME/qadena/bin/qadenad --home \$HOME/qadena --keyring-backend test keys show $PIONEER -a'" 2>/dev/null | tr -d '\r')
 fi
@@ -151,6 +168,9 @@ print "=== sponsorship: $GRANTER signs on THIS workstation (TEST FLEET ONLY) ===
 bond_arg=()
 if (( CONVERT )); then
     FLOOR=$(ssh -o ConnectTimeout=15 "$JOINER" "dasel -f \$HOME/qadena/config/config.yml 'validators.first().app.min-self-delegation'" 2>/dev/null | tr -d '\r"')
+    # dasel PRINTS THE VALUE QUOTED when the YAML holds it as a string, and the numeric glob below
+    # rejects "10000000000000000000000" for the quotes alone.  Strip them before testing.
+    FLOOR="${FLOOR//\"/}"
     [[ "$FLOOR" == <-> ]] || { print -u2 "could not read min-self-delegation from $JOINER (got '$FLOOR')"; exit 1 }
     print "  self-bond: ${FLOOR}aqdn (min-self-delegation, exact)"
     bond_arg=(--self-bond "${FLOOR}aqdn")
