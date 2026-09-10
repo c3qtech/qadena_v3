@@ -144,11 +144,19 @@ pioneer="${QADENA_PIONEER:-}"
 provideramount="100000qdn"
 signeramount="100000qdn"
 createwalletsponsoramount="100000qdn"
-email="no-reply@sec.gov.ph"
-avalue="200"
-firstname="SEC"
-birthdate="1936-Oct-26"
-phone="+63282504521"
+# THE DEPLOYMENT'S IDENTITY, FROM THE PROFILE -- NOT HARDCODED SEC VALUES.
+#
+# These were literal SEC constants, and the DEVNET harnesses (setup_ekycph.sh, setup_enf.sh)
+# overrode them with --firstname/--email/--phone.  The FLEET driver does not: it calls this script
+# with --deployment and nothing else, so every deployment on a launch chain minted SEC's identity.
+# Because the chain keys a credential on a hash of exactly these fields, the second deployment onto
+# a chain died with `code 1115: Credential already exists` -- from a run that named every KEY
+# correctly, which is why it looked like anything but an identity clash.
+email="$DEPLOY_EMAIL"
+avalue="$DEPLOY_AVALUE"
+firstname="$DEPLOY_FIRSTNAME"
+birthdate="$DEPLOY_BIRTHDATE"
+phone="$DEPLOY_PHONE"
 
 # NO DEFAULT.  The ephemeral count sizes everything downstream -- 4*(count+1) pre-grants, the
 # pool, the per-wallet split of createwalletsponsoramount -- and a silent 30 makes a missing

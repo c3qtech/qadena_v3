@@ -82,7 +82,7 @@ SGX=0
 # therefore a single point of failure for the chain.
 JOINER_VALIDATOR="$SITE_JOINER_VALIDATOR"
 COORD_HOME="$LAUNCH_DIR/coord"
-# THE DEPLOYMENT'S HOME, SUFFIXED BY THE SITE.  ~/sec-ekycph on M1/M2, ~/sec-ekycph-staging
+# THE DEPLOYMENT'S HOME, SUFFIXED BY THE SITE.  ~/ekyc-ph on M1/M2, ~/ekyc-ph-staging
 # on staging.  The suffix is not cosmetic: the rebuild stage DELETES this directory, and staging
 # once shared ~/sec-veritas with the M1/M2 fleet and wiped its keys and mnemonics.
 SEC_HOME="${VERITAS_SEC_HOME:-$DEPLOY_SEC_HOME$SITE_HOME_SUFFIX}"

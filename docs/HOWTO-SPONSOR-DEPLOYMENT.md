@@ -66,7 +66,7 @@ in. `deployment_profile.sh --show ekycph` prints the lot.
 | identity provider | `secidentitysrvprv` | `ekycphidentitysrvprv` | `enfidentitysrvprv` |
 | DSVS provider | `secdsvssrvprv` | `ekycphdsvssrvprv` | `enfdsvssrvprv` |
 | DSVS signer | `secdsvs` | `ekycphdsvs` | `enfdsvs` |
-| state directory | `~/sec-veritas` | `~/sec-ekycph` | `~/sec-enf` |
+| state directory | `~/sec-veritas` | `~/ekyc-ph` | `~/qadena-enf` |
 | sponsors record | `<coord>/veritas-sponsors.json` | `<coord>/ekycph-sponsors.json` | `<coord>/enf-sponsors.json` |
 | pre-grant record | `<coord>/veritas-pregrant.json` | `<coord>/ekycph-pregrant.json` | `<coord>/enf-pregrant.json` |
 | pool record | `<coord>/veritas-pool.json` | `<coord>/ekycph-pool.json` | `<coord>/enf-pool.json` |

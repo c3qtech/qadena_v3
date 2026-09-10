@@ -11,6 +11,11 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# THE DEPLOYMENT PROFILE.  Sourced AFTER setup_env.sh, which clobbers SCRIPT_DIR, so re-derive the
+# path from $0 rather than trusting the variable to still point here.
+source "${0:A:h}/../foundation_scripts/deployment_profile.sh"
+deployment_profile_load "enf" || exit 1
+
 
 
 # inputs
@@ -79,12 +84,16 @@ identityprovidername="enfidentitysrvprv"
 dsvsprovidername="enfdsvssrvprv"
 dsvsname="enfdsvs"
 createwalletsponsorname="enf-create-wallet-sponsor"
-email="no-repy@enf.ph"
-avalue="2100"
-firstname="ENF"
-
-birthdate="2025-Jan-01"
-phone="+6320000000"
+# IDENTITY FROM THE PROFILE.  These were literals here AND (as SEC values) in step_1.sh, so the
+# devnet path and the fleet path disagreed about who enf is -- the fleet path minted SEC's
+# credentials and collided.  One source now; step_1.sh defaults from the same place, so passing
+# them below is belt-and-braces rather than the only thing setting them.
+# (The email also read "no-repy@" here -- a typo that went into a real credential.)
+email="$DEPLOY_EMAIL"
+avalue="$DEPLOY_AVALUE"
+firstname="$DEPLOY_FIRSTNAME"
+birthdate="$DEPLOY_BIRTHDATE"
+phone="$DEPLOY_PHONE"
 
 # Contracts are ON by default; with_contracts is RESOLVED after parsing, not during it, so that the
 # flags do not depend on the order they were typed in.  (When --contracts-only set with_contracts
@@ -110,7 +119,7 @@ usage() {
     echo ""
     echo "  --fund-mode <mode> foundation-sponsored (default) | banksend."
     echo "                     foundation-sponsored: the foundation pays by fee grant, ENF holds"
-    echo "                     no tokens and gets its own admin key, its own ~/sec-enf state and"
+    echo "                     no tokens and gets its own admin key, its own ~/qadena-enf state and"
     echo "                     its own sponsor pool.  Mirrors foundation_scripts/enf_*.sh."
     echo "                     banksend: the original 2M qdn into enf-treasury plus an AML"
     echo "                     whitelist exemption.  Kept for a deployment mid-migration."
@@ -294,7 +303,7 @@ $qadenatestscripts/gov_stake_from_treasury.sh $pioneer 10000000qdn
 
 
 # --deployment is passed only in sponsored mode, which is the only mode that creates an admin key.
-# It selects enf-admin and ~/sec-enf from foundation_scripts/deployment_profile.sh; without it
+# It selects enf-admin and ~/qadena-enf from foundation_scripts/deployment_profile.sh; without it
 # step_1 names the admin sec-veritas-admin, which setup_veritas.sh also uses.
 # banksend creates no admin key and keeps its original invocation.
 # The sponsor accounts are funded before step_1, which needs their addresses: sponsored mode
@@ -371,7 +380,7 @@ if [ "$fund_mode" != "banksend" ]; then
     echo "-------------------------"
     # step_1 wrote this into the deployment's state directory -- the profile's DEPLOY_SEC_HOME,
     # which --deployment enf selected, unless the caller pointed VERITAS_SEC_HOME elsewhere.
-    _pregrant="${VERITAS_SEC_HOME:-$HOME/sec-enf}/pregrant_addresses.json"
+    _pregrant="${VERITAS_SEC_HOME:-$HOME/qadena-enf}/pregrant_addresses.json"
     [ -r "$_pregrant" ] || { echo "FAILED: no $_pregrant -- step_1 did not complete"; exit 1; }
     $qadenafoundationscripts/enf_after_step_1.sh --pregrant "$_pregrant" \
         --foundation-appsvr "$foundation_appsvr"
@@ -418,9 +427,9 @@ $veritasscripts/step_3.sh "${step23_extra[@]}"
 # --foundation-users/-appsvr override the profile's production names with the shared devnet pair.
 if [ "$fund_mode" != "banksend" ]; then
     # --pool-addresses, not --count: --count derives the pool names and resolves them in the
-    # coordinator keyring, which on a devnet is the node's home, not ~/sec-enf.  step_3 already
+    # coordinator keyring, which on a devnet is the node's home, not ~/qadena-enf.  step_3 already
     # wrote the addresses, and passing them needs no keyring.
-    _pool="${VERITAS_SEC_HOME:-$HOME/sec-enf}/pool_addresses.json"
+    _pool="${VERITAS_SEC_HOME:-$HOME/qadena-enf}/pool_addresses.json"
     [ -r "$_pool" ] || { echo "FAILED: no $_pool -- step_3 did not complete"; exit 1; }
     $qadenafoundationscripts/enf_after_step_3.sh --pool-addresses "$_pool" \
         --foundation-users "$foundation_users" \

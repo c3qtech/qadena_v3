@@ -161,7 +161,25 @@ eph_ready() {
             _sig_ok=1
         fi
     fi
-    if [ -n "$_u_onchain" ] && [ "$_fam_missing" -eq 0 ] && [ "$_sig_ok" -eq 1 ]; then
+    # AND THE CREDENTIAL, BECAUSE THE SIGNATORY PROXY HAS A HOLE.
+    #
+    # A user with NO service provider sets _sig_ok=1 above without asking the chain anything, so
+    # for that user the gate below collapsed back to the wallets-only test this comment block was
+    # written to replace.  The create-wallet sponsor is exactly that user (step_3 passes it an
+    # empty dsvsserviceprovider), so a run that created its four wallets and then failed on the
+    # credential would, on resume, report the sponsor "fully set up" and skip create-credential
+    # forever -- leaving a wallet with credentialID "" that verify then flags as
+    # "NO claimed credentials for: <name>".  Measured on the ekycph fleet bring-up 2026-09-10:
+    # the identity provider had broadcast three MsgCreateCredential, all the DSVS's, and none for
+    # the sponsor.
+    #
+    # Claiming is the other thing this script produces, so require it as well.  Cheap: one query,
+    # and only on the path that is about to skip all the work.
+    _cred_ok=0
+    if [ -n "$_u_onchain" ] && [ "$_fam_missing" -eq 0 ]; then
+        [ -n "$(credential_claimed personal-info)" ] && _cred_ok=1
+    fi
+    if [ -n "$_u_onchain" ] && [ "$_fam_missing" -eq 0 ] && [ "$_sig_ok" -eq 1 ] && [ "$_cred_ok" -eq 1 ]; then
         echo "$username is fully set up ON CHAIN -- skipping create_user (resume)"
         # FULLY SET UP ON CHAIN STILL NEEDS THE LOCAL KEYS.  This exited 0 without them, and the
         # caller's very next `keys show $username` failed with
@@ -199,7 +217,13 @@ eph_ready() {
         exit 0
     fi
     if [ -n "$_u_onchain" ] && [ "$_fam_missing" -eq 0 ]; then
-        echo "$username wallets exist but its authorized signatory does not -- resuming"
+        # NAME THE MISSING PIECE.  This said "authorized signatory" whatever was absent, which for
+        # a sponsor -- which never has one -- pointed at the wrong thing entirely.
+        if [ "$_cred_ok" -eq 0 ]; then
+            echo "$username wallets exist but no credential is claimed -- resuming"
+        else
+            echo "$username wallets exist but its authorized signatory does not -- resuming"
+        fi
     fi
     # THE DELETE BELONGS TO THE not-on-chain CASE ONLY.  Left unconditional (as it briefly was),
     # it deleted the key of a main wallet that EXISTS, and the re-create then failed with "Public

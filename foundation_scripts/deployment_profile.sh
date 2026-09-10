@@ -38,6 +38,18 @@
 # DEPLOY_FUND_BUCKET    allocations.csv bucket that funds the two sponsor accounts
 # DEPLOY_STAKE_BUCKET   allocations.csv bucket that provides voting power
 #
+# THE DEPLOYMENT'S OWN IDENTITY.  step_3 mints a personal-info, a phone-contact-info and an
+# email-contact-info credential for the create-wallet sponsor and for the DSVS signer, and the
+# chain keys a credential on (CredentialID, CredentialType) -- where CredentialID is a hash of the
+# very fields below (msg_server_create_credential.go:49).  Two deployments sharing them therefore
+# hash to ONE id, and the second one to run dies with `code 1115: Credential already exists`.
+# These MUST differ per deployment for deployments that share a chain.
+# DEPLOY_FIRSTNAME      personal-info first name
+# DEPLOY_BIRTHDATE      personal-info birthdate
+# DEPLOY_EMAIL          email-contact-info credential
+# DEPLOY_PHONE          phone-contact-info credential
+# DEPLOY_AVALUE         commitment amount; step_3 uses avalue for the sponsor and avalue+1 for DSVS
+#
 # Derived, so they cannot drift apart from DEPLOY_NAME:
 # DEPLOY_STATE_FILE     <coord>/<name>-sponsors.json   written by before_step_1 --stage prepare
 # DEPLOY_PREGRANT_FILE  <coord>/<name>-pregrant.json   retained by after_step_1
@@ -74,6 +86,13 @@ deployment_profile_load() {
         DEPLOY_DSVS_PRV="secdsvssrvprv"
         DEPLOY_DSVS="secdsvs"
         DEPLOY_SEC_HOME="$HOME/sec-veritas"
+        # step_1.sh's historical hardcoded values -- keep them, so a veritas run before and after
+        # this block moved into the profile mints the SAME credential ids.
+        DEPLOY_FIRSTNAME="SEC"
+        DEPLOY_BIRTHDATE="1936-Oct-26"
+        DEPLOY_EMAIL="no-reply@sec.gov.ph"
+        DEPLOY_PHONE="+63282504521"
+        DEPLOY_AVALUE="200"
         # 10 Public Sector Programs.  allocations.csv earmarks it: "SEC PH VERITAS 60M; future
         # MOUs" and, on the same row, "funds foundation-appsvr/foundation-users sponsors".
         DEPLOY_FUND_BUCKET="pubsec"
@@ -93,7 +112,12 @@ deployment_profile_load() {
         DEPLOY_IDENTITY_PRV="ekycphidentitysrvprv"
         DEPLOY_DSVS_PRV="ekycphdsvssrvprv"
         DEPLOY_DSVS="ekycphdsvs"
-        DEPLOY_SEC_HOME="$HOME/sec-ekycph"
+        DEPLOY_SEC_HOME="$HOME/ekyc-ph"
+        DEPLOY_FIRSTNAME="EKYCPH"
+        DEPLOY_BIRTHDATE="2025-Jan-01"
+        DEPLOY_EMAIL="no-reply@ekyc.ph"
+        DEPLOY_PHONE="+6320000000"
+        DEPLOY_AVALUE="2000"
         # 01 Adoption Programs.  Bucket 10 stays earmarked for SEC PH VERITAS and future MOUs.
         # Adoption is a 3of5 multisig where pubsec is 5of7, so the ceremonies here need three
         # signatures and --fund-members names adoption's members.
@@ -112,7 +136,15 @@ deployment_profile_load() {
         DEPLOY_IDENTITY_PRV="enfidentitysrvprv"
         DEPLOY_DSVS_PRV="enfdsvssrvprv"
         DEPLOY_DSVS="enfdsvs"
-        DEPLOY_SEC_HOME="$HOME/sec-enf"
+        DEPLOY_SEC_HOME="$HOME/qadena-enf"
+        DEPLOY_FIRSTNAME="ENF"
+        DEPLOY_BIRTHDATE="2025-Jan-01"
+        # NOT ekycph's +6320000000.  Both scripts carried that same number, so deploying ekycph and
+        # enf to one chain collided on the phone-contact-info credential -- the personal-info one
+        # differs only because FIRSTNAME does.
+        DEPLOY_EMAIL="no-reply@enf.ph"
+        DEPLOY_PHONE="+6320000001"
+        DEPLOY_AVALUE="2100"
         # 01 Adoption Programs, as for ekycph: 3of5, so --fund-members names adoption's members.
         DEPLOY_FUND_BUCKET="adoption"
         DEPLOY_PREFIX="enf"
@@ -125,6 +157,7 @@ deployment_profile_load() {
         DEPLOY_APPSVR=""; DEPLOY_USERS=""; DEPLOY_ADMIN=""; DEPLOY_SPONSOR_BASE=""
         DEPLOY_TREASURY=""; DEPLOY_IDENTITY_PRV=""; DEPLOY_DSVS_PRV=""; DEPLOY_DSVS=""
         DEPLOY_SEC_HOME=""; DEPLOY_FUND_BUCKET=""
+        DEPLOY_FIRSTNAME=""; DEPLOY_BIRTHDATE=""; DEPLOY_EMAIL=""; DEPLOY_PHONE=""; DEPLOY_AVALUE=""
         ;;
     esac
 
@@ -163,7 +196,8 @@ deployment_profile_list() { print -r -- "veritas ekycph enf" }
 deployment_profile_print() {
     local _v
     for _v in NAME PREFIX APPSVR USERS ADMIN SPONSOR_BASE TREASURY IDENTITY_PRV DSVS_PRV DSVS \
-              SEC_HOME FUND_BUCKET FUND_MEMBERS STAKE_BUCKET STAKE_MEMBERS STATE_FILE PREGRANT_FILE POOL_FILE; do
+              SEC_HOME FUND_BUCKET FUND_MEMBERS STAKE_BUCKET STAKE_MEMBERS \
+              FIRSTNAME BIRTHDATE EMAIL PHONE AVALUE STATE_FILE PREGRANT_FILE POOL_FILE; do
         print -r -- "DEPLOY_$_v=${(P)${:-DEPLOY_$_v}}"
     done
 }
