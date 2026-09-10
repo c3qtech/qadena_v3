@@ -61,6 +61,8 @@ _gas_default() {
 [[ -n "$GAS" ]] || GAS="$(_gas_default)"
 GAS_PRICES="${QADENA_GAS_PRICES:-500000000aqdn}"
 VIA_SSH="${QADENA_VIA_SSH:-}"
+# Everything after `--`, for the generic `build` verb.
+EXTRA_ARGS=()
 
 # --keyring-backend IS NOT A GLOBAL FLAG.  `query` rejects it outright ("unknown flag"), so a
 # wrapper that adds it unconditionally breaks every read this script makes -- and breaks them
@@ -113,7 +115,9 @@ qnode() {
 
 usage() {
     print "Usage:"
-    print "  multisig_sign.sh build-feegrant --granter <msig> --grantee <addr> --msgs <csv>"
+    print "  multisig_sign.sh build          --from <msig> --out <file> -- <tx subcommand and args>
+                                  (%MSIG% in the args becomes the multisig's address)
+  multisig_sign.sh build-feegrant --granter <msig> --grantee <addr> --msgs <csv>"
     print "                                  [--period <s>] [--period-limit <amt>] --out <file>"
     print "  multisig_sign.sh build-send     --from <msig> --to <addr> --amount <amt> --out <file>"
     print "  multisig_sign.sh build-delegate --from <msig> --validator <valoper> --amount <amt> --out <f>"
@@ -166,6 +170,7 @@ while [[ $# -gt 0 ]]; do
         --multisig) msig="$2"; shift 2 ;;
         --node) NODE="$2"; shift 2 ;;
         --via-ssh) VIA_SSH="$2"; shift 2 ;;
+        --) shift; EXTRA_ARGS=("$@"); break ;;
         --chain-id) CHAIN="$2"; shift 2 ;;
         --sequence-offset) seqoff="$2"; shift 2 ;;
         --gas) GAS="$2"; shift 2 ;;
@@ -216,6 +221,32 @@ seq_flags() {
 }
 
 case "$CMD" in
+build)
+    # THE GENERIC BUILD.  Every build-* verb below is the same six lines with a different tx
+    # subcommand, so this takes the subcommand itself: everything after `--` is passed to
+    # `qadenad tx ...` verbatim, and this appends only what a multisig build always needs --
+    # --from, --generate-only, the chain and node, and the gas the empty-fee trap requires.
+    #
+    # %MSIG% ANYWHERE IN THE ARGUMENTS IS REPLACED BY THE MULTISIG'S ADDRESS.  It is needed because
+    # the sender is positional in some commands and a flag in others: `tx bank send <FROM> <TO>
+    # <AMT>` wants it as argv[1], `tx staking delegate <VAL> <AMT>` only as --from.  A wrapper
+    # cannot know which, so the caller says where it goes.
+    #
+    #   multisig_sign.sh build --from nodeops --out send.json -- \
+    #       bank send %MSIG% qadena1abc... 100qdn
+    #   multisig_sign.sh build --from foundation --out vote.json -- \
+    #       gov vote 12 yes
+    #
+    # NOT VALIDATED, deliberately: an unknown subcommand or a bad flag fails in qadenad, loudly,
+    # with its own message.  Re-implementing that check here would only make it wrong later.
+    [[ -n "$from" && -n "$out" && ${#EXTRA_ARGS[@]} -gt 0 ]] || usage
+    fa=$(addr_of "$from")
+    _sub=("${EXTRA_ARGS[@]//\%MSIG\%/$fa}")
+    q tx "${_sub[@]}" \
+        --from "$fa" --generate-only --chain-id "$CHAIN" --node "$NODE" \
+        --gas "$GAS" --gas-prices "$GAS_PRICES" > "$out" || exit 1
+    print "built $out  (from $fa: tx ${_sub[*]}) -- unsigned; the sequence binds at sign"
+    ;;
 build-feegrant)
     [[ -n "$granter" && -n "$grantee" && -n "$msgs" && -n "$out" ]] || usage
     ga=$(addr_of "$granter")

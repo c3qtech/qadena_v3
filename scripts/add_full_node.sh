@@ -818,7 +818,17 @@ fi
 
 echo "PIONEER $PIONEER"
 
-PIONEERADDRESS=`qadenad_alias keys show $PIONEER -a --keyring-backend test`
+# $NODE_KB, not a pinned `test`.  This key was created a few lines above with --keyring-backend
+# "$NODE_KB", so reading it back from `test` finds nothing on a file-keyring node -- and an EMPTY
+# address here is not loud: the sponsored path then polls for a fee grant to no address at all,
+# waits 120x3s, and prints "The sponsor must issue the fee grant for :" with the address missing.
+PIONEERADDRESS=`qadenad_alias keys show $PIONEER -a --keyring-backend "$NODE_KB"`
+if [ -z "$PIONEERADDRESS" ]; then
+	echo "FAILED: could not read $PIONEER's address from the $NODE_KB keyring."
+	echo "  Nothing downstream can work without it -- the fee-grant poll would wait on an empty"
+	echo "  address.  Check $QADENAHOME/keyring-$NODE_KB and the passphrase."
+	exit 1
+fi
 echo "PIONEER ADDRESS $PIONEERADDRESS"
 FULL="10"
 VALIDATOR="110000"
