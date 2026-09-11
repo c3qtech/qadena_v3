@@ -591,12 +591,6 @@ cp "$ENV_FILE" "$STACK/.env"
 chmod 600 "$STACK/.env"
 print -r -- "  installed ${ENV_FILE:t} -> $STACK/.env"
 
-# `docker compose restart` does NOT re-read env_file -- it restarts the existing containers with
-# the environment they were created with, so a patched .env would appear to deploy and change
-# nothing.  `up -d` recreates any container whose configuration changed, which is what we want.
-print -r -- "  restarting the stack (up -d, which re-reads .env; restart would not)"
-make -C "$STACK" start
-
 print -r -- ""
 print -r -- "==========================================================================="
 print -r -- "DONE.  chain $NODE"
