@@ -149,7 +149,13 @@ if [ -n "$ARMOR_PASSFILE" ]; then
 	echo "armor passphrase: taken from $ARMOR_PASSFILE (${#ARMOR_PASS} chars, not shown)"
 fi
 
-BACKUP="${ENV_FILE}.bak.$(date -u '+%Y%m%dT%H%M%SZ')"
+# .bak LAST, so the plain `*.bak` rule that nearly every .gitignore already carries
+# actually matches it. This used to be "${ENV_FILE}.bak.<stamp>", where .bak is an
+# infix and `*.bak` matches nothing -- so the header's promise that the backup "is
+# named to be caught by .gitignore patterns" was false, and a file holding the ARMORED
+# PRIVATE KEYS this script just replaced sat untracked-but-visible in `git status`,
+# one `git add -A` from being committed. (Caught 2026-09-14 in follow-the-money.)
+BACKUP="${ENV_FILE}.$(date -u '+%Y%m%dT%H%M%SZ').bak"
 if [ "$DRY_RUN" -eq 0 ]; then
 	cp -p "$ENV_FILE" "$BACKUP"
 	chmod 600 "$BACKUP" 2>/dev/null || true

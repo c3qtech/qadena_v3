@@ -65,3 +65,7 @@ testscripts/.native_periods.json
 tokenomics/__pycache__/
 tokenomics/genesis.json
 .sec-veritas-password
+
+# Backups written by patch_env_file.sh -- they hold the armored keys it replaced.
+*.bak
+*.bak.*

@@ -62,6 +62,34 @@ MAPPINGS="
 # ${PREFIX}dsvs-eph-credential config|${PREFIX}dsvs-credential-names|SEC_DSVS_EPH_CREDENTIAL_USERNAME|${PREFIX}dsvs-credential-keys|SEC_DSVS_EPH_CREDENTIAL_PRIVATE_KEY
 "
 
+# REUSABLE_EKYC_APP_* IS THE ONE PAIR THAT DOES NOT FOLLOW THE PREFIX.
+#
+# It is always the ekycph identity provider, whichever deployment is being patched --
+# setup_enf.sh emits it from "$ekycphidentityprovidername-{names,keys}.base64" and says
+# so.  The table above could not express that, so the pair was simply left out, and
+# every deployment patched by this script kept whatever REUSABLE_EKYC_APP_* it already
+# had.  On the eKYCPH stack that is the pair the app-server signs key recoveries with:
+# the patch would move SEC_IDENTITY_SRV_PRV_* to the new keys and leave the guardian
+# identity on the old ones, which fails only at the guardian step, and fails there with
+# "Failed to decrypt wallet share" -- the share is looked up by NAME, so the wrong key
+# still finds a share, one it can never open.  (Measured 2026-09-14 against the M1/M2
+# fleet: env-dev carried the 24-Aug keyset, the chain the 10-Sep one.)
+#
+# Conditional on the files being present, because a `sec` bring-up patched from SEC's
+# own key directory has no ekycph bundle to offer and must keep working: the block
+# below would otherwise fail the missing-file check with a file the caller never asked
+# for.  When both are there -- an ekycph bring-up, or an ENF one done on the machine
+# that ran setup_ekycph.sh -- they are emitted.
+if [ -f "$KEY_DIR/ekycphidentitysrvprv-names.base64" ] && \
+   [ -f "$KEY_DIR/ekycphidentitysrvprv-keys.base64" ]; then
+	MAPPINGS="$MAPPINGS
+# reusable ekyc app config|ekycphidentitysrvprv-names|REUSABLE_EKYC_APP_NAME|ekycphidentitysrvprv-keys|REUSABLE_EKYC_APP_PRIVATE_KEY
+"
+else
+	echo "note: no ekycphidentitysrvprv bundle in '$KEY_DIR' -- REUSABLE_EKYC_APP_* left unchanged." >&2
+	echo "      An eKYCPH app-server patched without it signs key recoveries with its OLD identity." >&2
+fi
+
 # json_length FILE_CONTENT_DECODED -- echoes the number of elements in a JSON
 # array, or nothing if no JSON tool is available.
 JSON_TOOL=""
