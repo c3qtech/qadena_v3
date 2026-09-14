@@ -582,11 +582,16 @@ fi
     fi
 done
 
-$qadenatestscripts/extract_ephem_keys.sh --provider $identityprovidername# --count $count --include-base-provider --include-base-provider-credential
-$qadenatestscripts/extract_ephem_keys.sh --provider $dsvsprovidername# --count $count --include-base-provider
-$qadenatestscripts/extract_ephem_keys.sh --provider $createwalletsponsorname# --count $count --include-base-provider
-$qadenatestscripts/extract_ephem_keys.sh --provider $dsvsname# --count $count
-$qadenatestscripts/extract_ephem_keys.sh --provider $dsvsname#-credential --count $count
+# INTO THE DEPLOYMENT'S HOME, not the repo root.  The filenames are stemmed on the provider name
+# alone, so two SITES running the same deployment wrote the same files: a veritas run on a second
+# fleet overwrote the first fleet's sponsor keys in place, with no error and no way to tell from
+# the filename which chain they belonged to.  The home already varies per deployment AND per site
+# (SITE_HOME_SUFFIX), so putting them here makes the collision impossible rather than detectable.
+$qadenatestscripts/extract_ephem_keys.sh --provider $identityprovidername# --count $count --include-base-provider --include-base-provider-credential --out-dir "$VERITAS_SEC_HOME"
+$qadenatestscripts/extract_ephem_keys.sh --provider $dsvsprovidername# --count $count --include-base-provider --out-dir "$VERITAS_SEC_HOME"
+$qadenatestscripts/extract_ephem_keys.sh --provider $createwalletsponsorname# --count $count --include-base-provider --out-dir "$VERITAS_SEC_HOME"
+$qadenatestscripts/extract_ephem_keys.sh --provider $dsvsname# --count $count --out-dir "$VERITAS_SEC_HOME"
+$qadenatestscripts/extract_ephem_keys.sh --provider $dsvsname#-credential --count $count --out-dir "$VERITAS_SEC_HOME"
 
 # ---------------------------------------------------------------------------------------------
 # THE HANDOFF TO QFI.

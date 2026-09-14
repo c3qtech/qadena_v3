@@ -42,6 +42,9 @@ fleet_site_profile_load() {
     SITE_PRIMARY=""; SITE_JOINER=""; SITE_PASSFILE=""; SITE_LAUNCH_DIR=""
     SITE_ADVERTISE_P=""; SITE_ADVERTISE_J=""; SITE_HOME_SUFFIX=""
     SITE_ENV_FILE_NAME=""; SITE_JOINER_VALIDATOR=""; SITE_ALLOW_UNVERIFIED_AGREEMENT=0
+    # A CloudFormation template to populate with the run's keys.  Empty on every site that does
+    # not deploy to AWS, which is all of them today -- veritas_full_setup.sh skips the step then.
+    SITE_CF_TEMPLATE=""
     SITE_NODE_GRANTER=""
 
     case "$_s" in
@@ -97,6 +100,42 @@ fleet_site_profile_load() {
         SITE_ALLOW_UNVERIFIED_AGREEMENT=1
         SITE_NODE_GRANTER="nodeops"
         ;;
+    qfi-testnet)
+        # LIKE staging, BUT SINGLE-NODE.  One validator, no joiner: the primary is the whole fleet.
+        #
+        # !! SAME HOST AS staging !!  20.212.178.16 is staging's primary too.  The two sites have
+        # separate LOCAL state (SITE_LAUNCH_DIR, SITE_HOME_SUFFIX), but they share the REMOTE node
+        # home, so they cannot both run: bringing one up replaces the other's chain, and
+        # --rebuild-chain purges whichever chain is there now.  That is fine if qfi-testnet is
+        # meant to SUPERSEDE staging on that box; it is data loss if both are wanted at once, and
+        # the fix then is a second host, not a second profile.
+        SITE_PRIMARY="azureuser@20.212.178.16"
+        SITE_JOINER=""
+        # VISIBLE, AND INSIDE THE LAUNCH DIRECTORY -- not a dotfile in $HOME like the other two
+        # sites.  This is a throwaway testnet whose passphrase is generated rather than chosen, so
+        # it wants to be findable next to the chain it unlocks.  veritas_full_setup.sh mints it on
+        # the first run when the directory has no keyring yet.
+        SITE_LAUNCH_DIR="$HOME/qfi-testnet-fleet-launch"
+        SITE_PASSFILE="$SITE_LAUNCH_DIR/keyring-password"
+        SITE_ADVERTISE_P="20.212.178.16"
+        SITE_ADVERTISE_J=""
+        # ITS OWN STATE DIRECTORY, for the reason staging has one: --rebuild-chain DELETES the
+        # deployment home, so a site sharing it with another fleet destroys that fleet's keys and
+        # mnemonics on the way to building its own chain.
+        SITE_HOME_SUFFIX="-qfi-testnet"
+        SITE_ENV_FILE_NAME="env-staging-no-aws"
+        # MOOT, BUT SET: with no joiner there is nothing to convert.  Left at 0 so that adding a
+        # joiner later does not silently start bonding it.
+        SITE_JOINER_VALIDATOR=0
+        # Nothing to agree WITH on a single node, so the peer-agreement check has no peers to read
+        # out of netinfo.  Same relaxation staging needs for its NLB, different reason.
+        SITE_ALLOW_UNVERIFIED_AGREEMENT=1
+        SITE_NODE_GRANTER="nodeops"
+        # THE CLOUDFORMATION SOURCE.  Read, never written: veritas_full_setup.sh renders a populated
+        # COPY into the deployment home and leaves this tracked file alone.  The older
+        # api/aws/patch-*-cloud-formation-ssm-parameters.yaml files are superseded; do not target them.
+        SITE_CF_TEMPLATE="$HOME/test/follow-the-money/api/aws/v2-cloud-formation-ssm-parameters.yaml"
+        ;;
     *)
         ;;
     esac
@@ -110,6 +149,16 @@ fleet_site_profile_load() {
     fi
 
     if [[ -z "$SITE_PRIMARY" ]]; then
+        # A KNOWN site with no host is a different problem from a TYPO, and telling an operator
+        # "unknown site 'qfi-testnet'" when the name is right sends them looking in the wrong file.
+        if [[ " $(fleet_site_profile_list) " == *" $_s "* ]]; then
+            print -u2 -- "site '$_s' has no SITE_PRIMARY -- its host is not recorded in this repo."
+            print -u2 -- "Set it in $_dir/$_s.env:"
+            print -u2 -- "    SITE_PRIMARY=\"user@host\""
+            print -u2 -- "    SITE_ADVERTISE_P=\"<ip or dns the peers dial>\""
+            print -u2 -- "or pass --primary user@host on the command line."
+            return 1
+        fi
         print -u2 -- "unknown site '$_s' and no profile at $_dir/$_s.env"
         print -u2 -- "known: $(fleet_site_profile_list)"
         print -u2 -- "To add one, write $_dir/$_s.env setting SITE_PRIMARY, SITE_JOINER,"
@@ -122,7 +171,7 @@ fleet_site_profile_load() {
     return 0
 }
 
-fleet_site_profile_list() { print -r -- "M1-M2 staging" }
+fleet_site_profile_list() { print -r -- "M1-M2 staging qfi-testnet" }
 
 fleet_site_profile_print() {
     local _v

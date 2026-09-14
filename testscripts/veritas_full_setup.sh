@@ -90,6 +90,9 @@ COUNT=3
 FROM="bootstrap"
 REBUILD=0
 UNTIL=""
+# The CloudFormation template to populate alongside the env file.  Empty = skip that step; an
+# AWS-deployed site sets SITE_CF_TEMPLATE in its profile, everyone else passes --cloud-formation-template.
+CF_TEMPLATE="${SITE_CF_TEMPLATE:-}"
 # ONE PATH, NOT A DIRECTORY PLUS A NAME -- see the staging script for why.
 # The stack is named for the DEPLOYMENT, the env file within it for the SITE.
 ENV_FILE="$HOME/test/follow-the-money/stacks/$DEPLOY_NAME/$SITE_ENV_FILE_NAME"
@@ -123,6 +126,9 @@ usage() {
     print -r -- "  --from <stage>      resume: bootstrap|prepare|step1|delegate|step2|approve|step3|pool|verify|app"
     print -r -- "  --until <stage>     stop AFTER that stage.  --rebuild-chain --until bootstrap"
     print -r -- "                      builds and starts the chain and runs no ceremony at all."
+    print -r -- "  --cloud-formation-template <file>"
+    print -r -- "                      also patch this CloudFormation template's SSM parameters"
+    print -r -- "                      with the same keys.  Default ${CF_TEMPLATE:-<none: skipped>}"
     print -r -- "  --node-granter <k>  bucket that fee-grants each joiner.  Default $NODE_GRANTER"
     print -r -- "                      (allocations.csv 12 Node Operations).  Covers node FEES; a"
     print -r -- "                      validator's self-bond is a transfer and is not sponsored."
@@ -162,6 +168,7 @@ while [[ $# -gt 0 ]]; do
         --sec-home)      SEC_HOME="$2"; shift 2 ;;
         --from)          FROM="$2"; shift 2 ;;
         --until)         UNTIL="$2"; shift 2 ;;
+        --cloud-formation-template) CF_TEMPLATE="$2"; shift 2 ;;
         --ref)           REF="$2"; shift 2 ;;
         --node-granter)  NODE_GRANTER="$2"; shift 2 ;;
         --site)          shift 2 ;;   # pre-scanned above
@@ -199,7 +206,49 @@ if [[ "$NODE_EXPLICIT" -eq 0 && -z "$NODE" ]]; then
     fi
 fi
 
+# MINT A PASSPHRASE FOR A GENUINELY FRESH SITE, AND ONLY THEN.
+#
+# A site whose keyring already exists has a passphrase that opens it; inventing a new one there
+# produces a file that unseals nothing, and the failure arrives later as "too many failed
+# passphrase attempts" against a keyring nobody can recover -- exactly the ekycph collision of
+# 2026-09-10.  So this is gated on the launch directory holding NO coordinator keyring and NO
+# sealed mnemonics: if either exists, a passphrase was already chosen and must be supplied.
+if [[ -n "$PASSFILE" && ! -e "$PASSFILE" ]]; then
+    _has_state=0
+    [[ -d "$LAUNCH_DIR/coord/keyring-file" ]] && _has_state=1
+    # (N) -- the NULL_GLOB qualifier.  A non-matching glob is a SHELL error in zsh ("no matches
+    # found"), raised before the command runs, so `2>/dev/null` on the command cannot suppress it
+    # and the operator sees a spurious error on every fresh site.
+    _mn=("$LAUNCH_DIR"/mnemonics/*.mnemonic.enc(N))
+    (( ${#_mn} )) && _has_state=1
+    if (( _has_state )); then
+        print -u2 -- "$PASSFILE is missing, but $LAUNCH_DIR already holds a keyring or sealed"
+        print -u2 -- "mnemonics -- they were sealed under a passphrase this run cannot guess."
+        print -u2 -- "Restore the passphrase file, or point --passfile at it."
+        exit 1
+    fi
+    mkdir -p "${PASSFILE:h}"
+    # Alphanumeric only.  The passphrase is fed down pipes, embedded in ssh command strings and
+    # written into heredocs all over this toolchain; a quote or a backslash in it would break in a
+    # different place each time.  40 chars of [A-Za-z0-9] is ~238 bits, so the restriction costs
+    # nothing.
+    LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40 > "$PASSFILE"
+    print -r -- "" >> "$PASSFILE"
+    chmod 600 "$PASSFILE"
+    print -r -- "generated a new keyring passphrase for site '$SITE' -> $PASSFILE"
+    print -r -- "  IT IS THE ONLY COPY.  Everything this run seals -- the coordinator keyring and"
+    print -r -- "  every sealed mnemonic -- is recoverable only with it.  Back it up now."
+fi
+
 [[ -n "$PASSFILE" && -r "$PASSFILE" ]] || { print -u2 "need a readable --passfile"; usage >&2; exit 1 }
+
+# CHECK THE TEMPLATE PATH NOW, NOT IN THE app STAGE.  The cfn patch runs AFTER patch_env_file, so
+# a typo'd path discovered there costs a half-applied app stage: env file rewritten, SSM not.
+# Checked here it costs nothing, and a wrong --site or a moved file is named before the run starts.
+if [[ -n "$CF_TEMPLATE" && ! -f "$CF_TEMPLATE" ]]; then
+    print -u2 -- "--cloud-formation-template $CF_TEMPLATE does not exist"
+    exit 1
+fi
 export QADENA_NODE="$NODE"
 export QADENA_KEYRING_PASSFILE="$PASSFILE"
 
@@ -335,7 +384,10 @@ fi
 if (( REBUILD )); then
     _CURRENT="rebuild"
     banner "0. PURGE AND REBUILD THE CHAIN  (destroys everything on both nodes)"
-    ./testscripts/stop_fleet.sh --node "$PRIMARY" --node "$JOINER" \
+    # SINGLE-NODE SITES PASS NO JOINER.  `--node ""` is not "no node": stop_fleet takes it as an
+    # empty ssh target and the purge either fails or, worse, runs somewhere unintended.
+    _stopn=(--node "$PRIMARY"); [[ -n "$JOINER" ]] && _stopn+=(--node "$JOINER")
+    ./testscripts/stop_fleet.sh "${_stopn[@]}" \
         --purge --reap-archives --immediate
     # SAY WHAT IS BEING DESTROYED, AND REFUSE IF IT BELONGS TO ANOTHER CHAIN.
     #
@@ -418,8 +470,12 @@ if (( REBUILD )); then
     # own, they are what gets bonded, and slashing burns them.  ensure_self_bond delivers them as a
     # transfer.  It is only paid when the joiner is being converted to a validator.
     _ref=(); [[ -n "$REF" ]] && _ref=(--ref "$REF")
+    # fleet_bringup_with_tests keeps joiners in an ARRAY and reports "<none>" for an empty one, so
+    # a single-node site just does not pass the flag.  Passing --joiner "" would append an empty
+    # entry and every per-joiner loop would run once against nothing.
+    _jn=(); [[ -n "$JOINER" ]] && _jn=(--joiner "$JOINER")
     ./testscripts/fleet_bringup_with_tests.sh \
-        --primary "$PRIMARY" --joiner "$JOINER" --block-sync "${_sgx[@]}" "${_jv[@]}" "${_adv[@]}" "${_ref[@]}" \
+        --primary "$PRIMARY" "${_jn[@]}" --block-sync "${_sgx[@]}" "${_jv[@]}" "${_adv[@]}" "${_ref[@]}" \
         --mainnet-source        "$LAUNCH_DIR/fleet-launch-config.yml" \
         --pioneer-mnemonic-file "$_pm" \
         --keyring-passfile      "$PASSFILE" \
@@ -569,8 +625,17 @@ ENV_FILE="${ENV_FILE:A}"
 STACK="${ENV_FILE:h}"
 [[ -f "$ENV_FILE" ]] || { print -u2 "no env file at $ENV_FILE"; exit 1 }
 [[ -f "$STACK/compose.yml" ]] || { print -u2 "no compose.yml beside $ENV_FILE -- is $STACK the stack?"; exit 1 }
-_n=$(ls "$REPO"/${PREFIX}*-names.base64 2>/dev/null | wc -l | tr -d ' ')
-(( _n > 0 )) || { print -u2 "no ${PREFIX}*.base64 files in $REPO -- did step_3 run?"; exit 1 }
+# STEP_3 NOW WRITES THEM INTO THE DEPLOYMENT HOME.  The repo root is still accepted so that an
+# older run's files, or a by-hand extract_ephem_keys with no --out-dir, are still found -- but the
+# home wins, because it is the only one of the two that cannot belong to a different site.
+_b64dir="$SEC_HOME"
+_n=$(ls "$_b64dir"/${PREFIX}*-names.base64 2>/dev/null | wc -l | tr -d ' ')
+if (( _n == 0 )); then
+    _b64dir="$REPO"
+    _n=$(ls "$_b64dir"/${PREFIX}*-names.base64 2>/dev/null | wc -l | tr -d ' ')
+    (( _n > 0 )) && print -r -- "  using .base64 files from $REPO (pre-dating --out-dir)"
+fi
+(( _n > 0 )) || { print -u2 "no ${PREFIX}*.base64 files in $SEC_HOME or $REPO -- did step_3 run?"; exit 1 }
 # ARE THESE KEYS FROM THIS DEPLOYMENT?  Not "are they recent" -- my first version compared mtimes
 # against the pool file and was backwards by construction: step_3 writes the .base64 files (line
 # ~494) BEFORE the pool block (line ~514), two seconds apart, so a correct run always failed it.
@@ -578,7 +643,7 @@ _n=$(ls "$REPO"/${PREFIX}*-names.base64 2>/dev/null | wc -l | tr -d ' ')
 # Timestamps cannot answer this anyway.  The honest test is whether the keys these files carry are
 # the ones on the CURRENT chain: SEC's keys are re-minted every deployment, so an address from a
 # previous one will not appear in this run's pool file.  Decode a name, resolve it, compare.
-_check_name=$(base64 -d < "$REPO/${PREFIX}-create-wallet-sponsor-names.base64" 2>/dev/null \
+_check_name=$(base64 -d < "$_b64dir/${PREFIX}-create-wallet-sponsor-names.base64" 2>/dev/null \
                 | jq -r '.[0] // empty' 2>/dev/null)
 if [[ -n "$_check_name" ]] && [[ -r "$POOL" ]]; then
     _check_addr=$("$HOME/qadena/bin/qadenad" --home "${QADENAHOME:-$HOME/qadena}" \
@@ -600,7 +665,29 @@ fi
 # loop -- reporting "Failed to import private key for <name>:" with an EMPTY reason.  Measured
 # 2026-09-07.  Same passfile as the rest of the run, so they cannot drift.
 ./testscripts/patch_env_file.sh "$PREFIX" "$ENV_FILE" \
-    --key-dir "$REPO" --sponsors "$_sponsors" --armor-passfile "$PASSFILE"
+    --key-dir "$_b64dir" --sponsors "$_sponsors" --armor-passfile "$PASSFILE"
+
+# THE SAME VALUES INTO CLOUDFORMATION, WHEN THERE IS ONE.  An AWS-deployed site reads its config
+# from SSM rather than from .env, so patching only the env file leaves it running the PREVIOUS
+# bring-up's keys -- which is not a failure, it is a deployment quietly signing as the wrong
+# wallets.  Both patchers share gen_key_env_vars.sh, so the two targets cannot disagree.
+#
+# OPTIONAL BY DESIGN: the local and staging fleets have no template, and demanding one would
+# block every run that does not deploy to AWS.
+if [[ -n "$CF_TEMPLATE" ]]; then
+    # Re-checked: the path was validated at startup, so reaching this means the file went away
+    # DURING the run.  Loud either way -- reporting DONE for a deployment whose SSM parameters were
+    # never written is the outcome worth preventing.
+    if [[ ! -f "$CF_TEMPLATE" ]]; then
+        print -u2 -- "$CF_TEMPLATE disappeared during the run"
+        print -u2 -- "  the env file IS patched; re-run --from app once the path is right."
+        exit 1
+    fi
+    print -r -- ""
+    print -r -- "  patching CloudFormation template ${CF_TEMPLATE:t}"
+    ./testscripts/patch_cloud_formation_template.sh "$PREFIX" "$CF_TEMPLATE" \
+        --key-dir "$_b64dir" --sponsors "$_sponsors" --armor-passfile "$PASSFILE"
+fi
 
 # .env IS WHAT compose READS (env_file: .env in compose.yml).  The stack keeps several env files
 # for different targets; installing the one we just patched is a deliberate copy, not a symlink,
@@ -615,6 +702,7 @@ print -r -- "DONE.  chain $NODE"
 print -r -- "  foundation-appsvr $APPSVR"
 print -r -- "  foundation-users  $USERS"
 print -r -- ""
+[[ -n "$CF_TEMPLATE" ]] && print -r -- "  cfn:        $CF_TEMPLATE  (contains private keys -- do not commit)"
 print -r -- "  app logs:   make -C $STACK logs-api"
 print -r -- "  re-verify:  foundation_scripts/sec_veritas_verify.sh --deployment $DEPLOY_NAME --coord-home $COORD_HOME --node $NODE"
 print -r -- "==========================================================================="

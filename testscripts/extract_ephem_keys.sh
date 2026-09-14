@@ -16,11 +16,23 @@ include_base_provider=false
 include_base_provider_credential=false
 json=false
 
+# WHERE THE .base64 FILES LAND.  Defaults to the working directory, which is what every existing
+# caller and every by-hand invocation already assumed -- so an unflagged run behaves exactly as
+# before.  step_3 passes the DEPLOYMENT'S HOME, because that is where the rest of a run's output
+# lives and it is the only path that varies per deployment AND per site.  Without that these files
+# were written to the repo root under a name stemmed on the prefix alone, so a veritas run against
+# a second site silently overwrote the first site's sponsor keys in place.
+out_dir="."
+
 # Process command line arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --keyring-passfile)
             export QADENA_KEYRING_PASSFILE="$2"
+            shift 2
+            ;;
+        --out-dir)
+            out_dir="$2"
             shift 2
             ;;
         --include-base-provider)
@@ -44,12 +56,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --help)
-            echo "Usage: $0 [--provider <providername>] [--count <count>] [--json]"  >&2
+            echo "Usage: $0 [--provider <providername>] [--count <count>] [--json] [--out-dir <dir>]"  >&2
             exit 0
             ;;
         *)
             echo "Unknown option: $1" >&2
-            echo "Usage: $0 [--provider <providername>] [--count <count>] [--json]" >&2
+            echo "Usage: $0 [--provider <providername>] [--count <count>] [--json] [--out-dir <dir>]" >&2
             exit 1
             ;;
     esac
@@ -161,6 +173,10 @@ fi
 # remove the "#" from the provider name
 provider_no_hash=${provider//\#/}
 echo "Provider name without hash: $provider_no_hash" >&2
-echo "$names_base64" > "${provider_no_hash}-names.base64"
-echo "$keys_base64" > "${provider_no_hash}-keys.base64"
+[ -d "$out_dir" ] || mkdir -p "$out_dir" || { echo "cannot create --out-dir $out_dir" >&2; exit 1; }
+echo "$names_base64" > "$out_dir/${provider_no_hash}-names.base64"
+echo "$keys_base64" > "$out_dir/${provider_no_hash}-keys.base64"
+# THESE HOLD ARMORED PRIVATE KEYS.  Readable by their owner and nobody else, wherever they land.
+chmod 600 "$out_dir/${provider_no_hash}-names.base64" "$out_dir/${provider_no_hash}-keys.base64"
+echo "wrote $out_dir/${provider_no_hash}-{names,keys}.base64" >&2
 
