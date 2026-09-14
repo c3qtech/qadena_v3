@@ -89,6 +89,7 @@ SEC_HOME="${VERITAS_SEC_HOME:-$DEPLOY_SEC_HOME$SITE_HOME_SUFFIX}"
 COUNT=3
 FROM="bootstrap"
 REBUILD=0
+UNTIL=""
 # ONE PATH, NOT A DIRECTORY PLUS A NAME -- see the staging script for why.
 # The stack is named for the DEPLOYMENT, the env file within it for the SITE.
 ENV_FILE="$HOME/test/follow-the-money/stacks/$DEPLOY_NAME/$SITE_ENV_FILE_NAME"
@@ -120,6 +121,8 @@ usage() {
     print -r -- "  --coord-home <dir>  foundation keyring (default ~/fleet-launch/coord)"
     print -r -- "  --sec-home <dir>    the deployment's directory (default $SEC_HOME)"
     print -r -- "  --from <stage>      resume: bootstrap|prepare|step1|delegate|step2|approve|step3|pool|verify|app"
+    print -r -- "  --until <stage>     stop AFTER that stage.  --rebuild-chain --until bootstrap"
+    print -r -- "                      builds and starts the chain and runs no ceremony at all."
     print -r -- "  --node-granter <k>  bucket that fee-grants each joiner.  Default $NODE_GRANTER"
     print -r -- "                      (allocations.csv 12 Node Operations).  Covers node FEES; a"
     print -r -- "                      validator's self-bond is a transfer and is not sponsored."
@@ -158,6 +161,7 @@ while [[ $# -gt 0 ]]; do
         --coord-home)    COORD_HOME="$2"; shift 2 ;;
         --sec-home)      SEC_HOME="$2"; shift 2 ;;
         --from)          FROM="$2"; shift 2 ;;
+        --until)         UNTIL="$2"; shift 2 ;;
         --ref)           REF="$2"; shift 2 ;;
         --node-granter)  NODE_GRANTER="$2"; shift 2 ;;
         --site)          shift 2 ;;   # pre-scanned above
@@ -204,7 +208,21 @@ STAGES=(bootstrap prepare step1 delegate step2 approve step3 pool verify app)
 _stage_index() { local i=1; for s in "${STAGES[@]}"; do [[ "$s" == "$1" ]] && { print -r -- $i; return }; i=$(( i + 1 )); done; print -r -- 0 }
 START=$(_stage_index "$FROM")
 (( START > 0 )) || { print -u2 "unknown --from stage '$FROM'"; exit 1 }
-_want() { local i=$(_stage_index "$1"); (( i >= START )) }
+# --until STOPS AFTER the named stage, so a chain can be built and the ceremony driven by hand.
+# Defaults to the last stage, which is the old behaviour exactly.
+if [[ -n "$UNTIL" ]]; then
+    END=$(_stage_index "$UNTIL")
+    (( END > 0 )) || { print -u2 "unknown --until stage '$UNTIL'"; exit 1 }
+    # `print -u2 --` : the message STARTS with "--until", and print parses -u out of the string
+    # itself without the -- terminator ("number expected after -u").
+    (( END >= START )) || { print -u2 -- "--until $UNTIL comes before --from $FROM"; exit 1 }
+else
+    END=${#STAGES}
+fi
+# NOT GATED: --rebuild-chain is a standalone block, not a stage, so it still runs when asked for.
+# That is deliberate -- "--rebuild-chain --until bootstrap" is how you get a built, running chain
+# and nothing else.
+_want() { local i=$(_stage_index "$1"); (( i >= START && i <= END )) }
 
 banner() {
     print -r -- ""
