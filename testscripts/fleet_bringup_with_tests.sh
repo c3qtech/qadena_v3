@@ -139,7 +139,7 @@ source "$SCRIPT_DIR/fleet_lib.sh"
 # itself as an enclave error.
 rsh_build() {   # host, command...
     local host="$1"; shift
-    ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" \
+    ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 -o BatchMode=yes "$host" \
         "cd \$HOME/qv3 && bash -lc $(printf '%q' "$BUILD_PATH $*")"
 }
 
@@ -674,11 +674,11 @@ for j in "${JOINERS[@]}"; do
     jhome=$(rsh_user "$j" 'print $HOME' | tr -d '\r')
     if rsh_user "$j" "test -d $jhome/qadena"; then
         if rsh_user "$j" "test -x $jhome/qadena/scripts/stop_qadena.sh"; then
-            ssh -o ConnectTimeout=10 -o BatchMode=yes "$j" \
+            ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 -o BatchMode=yes "$j" \
                 "sudo zsh -lc $(printf '%q' "$jhome/qadena/scripts/stop_qadena.sh --all")" >/dev/null 2>&1 || true
             sleep 3
         fi
-        left=$(ssh -o ConnectTimeout=10 "$j" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep | wc -l' | tr -d '\r')
+        left=$(ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$j" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep | wc -l' | tr -d '\r')
         [[ "$left" == "0" ]] || fail "$j still has $left node/enclave process(es); kill them BY PID and re-run"
         rsh_user "$j" "mv $jhome/qadena $jhome/qadena.pre-bringup.$STAMP.bak" \
             || fail "could not archive $j's old ~/qadena"
@@ -737,7 +737,10 @@ stage "D. package what is actually running on the primary"
 # Trap 1 and 2: this packages the INSTALLED artifacts, which after the upgrade are the new enclave.
 # It does not rebuild -- a rebuild here would silently produce the PRE-upgrade identity, because the
 # upgrade suite restores the embedded id files on exit.
-"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --only 7 \
+# --no-sgx REACHES PACKAGING TOO, not just the build.  Stage D invoked phase 7 bare, so a fleet
+# built debug-on-purpose lost that fact here and packaging refused on hardware grounds.
+_d_sgx=(); [[ "$BUILD_SGX" == "no" ]] && _d_sgx=(--no-sgx)
+"$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --only 7 "${_d_sgx[@]}" \
     2>&1 | tee "$RUN_DIR/stage-D-package.log"
 [[ ${pipestatus[1]} -eq 0 ]] || fail "packaging failed; see $RUN_DIR/stage-D-package.log"
 
@@ -749,7 +752,10 @@ print "primary measurement: $PRIM_UID" >> "$RUN_DIR/fleet.txt"
 # ---------------------------------------------------------------------------------------------
 fi
 
-if run_stage E; then
+# NOTHING TO INSTALL ON, NOTHING TO ANNOUNCE.  A single-node site has no joiners, and printing the
+# banner for a stage whose body is an empty loop reads as a step that ran and did nothing -- which
+# is indistinguishable, in a log, from a step that was meant to do something and failed.
+if run_stage E && (( ${#JOINERS[@]} )); then
 stage "E. install that package on each joiner"
 # RESUMING INTO THIS STAGE: stage D would normally have set PRIM_UID.  Read it from the binary now
 # if we skipped D, so --from E verifies against what the primary is ACTUALLY running rather than

@@ -102,7 +102,7 @@ while [[ $# -gt 0 ]]; do
 done
 (( ${#NODES[@]} > 0 )) || { print -u2 -- "--node is required (repeatable)"; exit 1 }
 
-rsh() { ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" "$2" 2>/dev/null }
+rsh() { ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 -o BatchMode=yes "$1" "$2" 2>/dev/null }
 
 # Trap 6: bracket-classed, so this can never count or kill the ssh command carrying it.
 PROCPAT='qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]|signer_enclav[e]'

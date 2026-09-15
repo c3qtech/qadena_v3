@@ -251,12 +251,12 @@ if [[ -n "$KEYRING_PASSFILE" ]]; then
         [[ -n "$_h" ]] || continue
         scp -q "$KEYRING_PASSFILE" "$_h:.qadena-join-keyring-pass" \
             || fail "cannot copy the keyring passphrase to $_h"
-        ssh -o ConnectTimeout=10 "$_h" "chmod 600 .qadena-join-keyring-pass" 2>/dev/null
+        ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$_h" "chmod 600 .qadena-join-keyring-pass" 2>/dev/null
     done
     _jkp_cleanup() {
         for _h in "$JOINER" "$PRIMARY"; do
             [[ -n "$_h" ]] || continue
-            ssh -o ConnectTimeout=10 "$_h" 'rm -f .qadena-join-keyring-pass' 2>/dev/null || true
+            ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$_h" 'rm -f .qadena-join-keyring-pass' 2>/dev/null || true
         done
     }
     trap _jkp_cleanup EXIT INT TERM
@@ -266,19 +266,19 @@ fi
 # qadenad_alias definition in setup_env.sh are both present (trap 8).
 rsh() {
     local host="$1"; shift
-    ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "sudo zsh -lc $(printf '%q' "$*")"
+    ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 -o BatchMode=yes "$host" "sudo zsh -lc $(printf '%q' "$*")"
 }
 # rsh_user -- same, without root, for things that must not create root-owned files.
 rsh_user() {
     local host="$1"; shift
-    ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "zsh -lc $(printf '%q' "$*")"
+    ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 -o BatchMode=yes "$host" "zsh -lc $(printf '%q' "$*")"
 }
 
 qad() { print "\$HOME_BIN/qadenad --home \$NODE_HOME" }
 
 # height <host> -- current height, or empty when the RPC is not answering.
 height() {
-    ssh -o ConnectTimeout=10 "$1" 'curl -s --max-time 5 localhost:26657/status 2>/dev/null | jq -r ".result.sync_info.latest_block_height // empty"' 2>/dev/null
+    ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$1" 'curl -s --max-time 5 localhost:26657/status 2>/dev/null | jq -r ".result.sync_info.latest_block_height // empty"' 2>/dev/null
 }
 
 # run_phase <n> -- should phase n run?
@@ -301,8 +301,8 @@ run_phase() {
 repo_on() {
     local host="$1" p
     for p in test/qadena_v3 qadena_v3 test/qv3 qv3; do
-        if ssh -o ConnectTimeout=10 "$host" "test -d \$HOME/$p" 2>/dev/null; then
-            ssh -o ConnectTimeout=10 "$host" "echo \$HOME/$p" 2>/dev/null | tr -d '\r'
+        if ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$host" "test -d \$HOME/$p" 2>/dev/null; then
+            ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$host" "echo \$HOME/$p" 2>/dev/null | tr -d '\r'
             return 0
         fi
     done
@@ -316,7 +316,7 @@ repo_on() {
 # (sudo zsh -lc "cd ~/qadena/..."), because that one expands it as root and gets /root.  Both forms
 # appear in this script and only the second is wrong, which is exactly why the failure looks like a
 # broken install rather than a quoting bug.
-JOINER_HOME=$(ssh -o ConnectTimeout=10 "$JOINER" 'echo $HOME' 2>/dev/null | tr -d '\r')
+JOINER_HOME=$(ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$JOINER" 'echo $HOME' 2>/dev/null | tr -d '\r')
 [[ -n "$JOINER_HOME" ]] || fail "cannot resolve the joiner's home directory on $JOINER"
 
 # SGX_PROBE -- run on a target, answers BOTH questions at once via its exit status.
@@ -336,7 +336,7 @@ for d in /dev/sgx_provision /dev/sgx/provision; do [ -e "$d" ] && { p="$d"; brea
 [ -r "$e" ] && [ -w "$e" ] && [ -r "$p" ] && [ -w "$p" ] || exit 1
 exit 0'
 
-sgx_state() { ssh -o ConnectTimeout=10 "$1" "$SGX_PROBE" >/dev/null 2>&1; print $? }
+sgx_state() { ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$1" "$SGX_PROBE" >/dev/null 2>&1; print $? }
 
 # sudo_for <host> -- "sudo " when that host genuinely needs root, empty otherwise.
 #
@@ -552,7 +552,7 @@ if run_phase 1; then
 phase "1. preflight"
 
 for h in "$PRIMARY" "$JOINER"; do
-    ssh -o ConnectTimeout=10 -o BatchMode=yes "$h" true 2>/dev/null || fail "cannot ssh to $h"
+    ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 -o BatchMode=yes "$h" true 2>/dev/null || fail "cannot ssh to $h"
 done
 for h in "$PRIMARY" "$JOINER"; do
     # Only a host whose devices are OUT OF REACH needs sudo.  A host where the login user is in the
@@ -1187,7 +1187,7 @@ JOINER_LOG_OFFSET=$(ssh -n "$JOINER" "[ -f $JOINER_HOME/qadena/logs/qadena.log ]
 # genesis node already wrote, reports "already initialized", and never reads the keyring.  This is
 # insurance for the case where it does, and for a host that supervises differently.
 _sysd_j=0
-ssh -o ConnectTimeout=10 "$JOINER" \
+ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$JOINER" \
     'systemctl list-unit-files qadena.service 2>/dev/null | grep -q qadena.service' 2>/dev/null && _sysd_j=1
 
 if [[ -n "$NKFEED" ]] && (( _sysd_j )); then
@@ -1199,7 +1199,7 @@ if [[ -n "$NKFEED" ]] && (( _sysd_j )); then
     _jn=0
     for i in {1..24}; do
         sleep 10
-        ssh -o ConnectTimeout=10 "$JOINER" 'curl -s --max-time 5 localhost:26657/status >/dev/null 2>&1' 2>/dev/null \
+        ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$JOINER" 'curl -s --max-time 5 localhost:26657/status >/dev/null 2>&1' 2>/dev/null \
             && { _jn=1; break }
         (( i % 3 == 0 )) && info "  waiting for the joiner's RPC ($((i*10))s of 240s)"
     done
@@ -1226,7 +1226,7 @@ elif [[ -n "$NKFEED" ]]; then
     _jn2=0
     for i in {1..30}; do
         sleep 10
-        ssh -o ConnectTimeout=10 "$JOINER" 'curl -s --max-time 5 localhost:26657/status >/dev/null 2>&1' 2>/dev/null \
+        ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$JOINER" 'curl -s --max-time 5 localhost:26657/status >/dev/null 2>&1' 2>/dev/null \
             && { _jn2=1; info "joiner RPC answering"; break }
         (( i % 3 == 0 )) && info "  waiting for the joiner's RPC ($((i*10))s of 300s)"
     done

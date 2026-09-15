@@ -109,7 +109,7 @@ fleet_site_profile_load() {
         # --rebuild-chain purges whichever chain is there now.  That is fine if qfi-testnet is
         # meant to SUPERSEDE staging on that box; it is data loss if both are wanted at once, and
         # the fix then is a second host, not a second profile.
-        SITE_PRIMARY="azureuser@20.212.178.16"
+        SITE_PRIMARY="cloudsigma@45.115.225.104"
         SITE_JOINER=""
         # VISIBLE, AND INSIDE THE LAUNCH DIRECTORY -- not a dotfile in $HOME like the other two
         # sites.  This is a throwaway testnet whose passphrase is generated rather than chosen, so
@@ -117,7 +117,7 @@ fleet_site_profile_load() {
         # the first run when the directory has no keyring yet.
         SITE_LAUNCH_DIR="$HOME/qfi-testnet-fleet-launch"
         SITE_PASSFILE="$SITE_LAUNCH_DIR/keyring-password"
-        SITE_ADVERTISE_P="20.212.178.16"
+        SITE_ADVERTISE_P="45.115.225.104"
         SITE_ADVERTISE_J=""
         # ITS OWN STATE DIRECTORY, for the reason staging has one: --rebuild-chain DELETES the
         # deployment home, so a site sharing it with another fleet destroys that fleet's keys and

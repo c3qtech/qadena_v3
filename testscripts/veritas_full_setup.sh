@@ -497,10 +497,17 @@ if _want prepare; then
         --members "$DEPLOY_STAKE_MEMBERS"
 fi
 
+# GATED ON A CONSUMER, NOT UNCONDITIONAL.  These three prerequisite checks sit BETWEEN stages and
+# used to run whatever --from/--until asked for, so `--rebuild-chain --until bootstrap` built the
+# chain correctly and then died on "run the prepare stage first" -- reporting FAILED in stage
+# rebuild for a rebuild that had succeeded.  A prerequisite belongs to the stage that reads it.
 _sponsors="$COORD_HOME/$DEPLOY_STATE_FILE"
-[[ -r "$_sponsors" ]] || { print -u2 "no $_sponsors -- run the prepare stage first"; exit 1 }
-APPSVR=$(jq -r '.appsvr' "$_sponsors")
-USERS=$(jq -r '.users'  "$_sponsors")
+APPSVR=""; USERS=""
+if _want step1 || _want delegate || _want step2 || _want approve || _want step3 || _want pool; then
+    [[ -r "$_sponsors" ]] || { print -u2 "no $_sponsors -- run the prepare stage first"; exit 1 }
+    APPSVR=$(jq -r '.appsvr' "$_sponsors")
+    USERS=$(jq -r '.users'  "$_sponsors")
+fi
 
 # --------------------------------------------------------------------------------------------
 if _want step1; then
@@ -512,7 +519,9 @@ if _want step1; then
 fi
 
 PREGRANT="$SEC_HOME/pregrant_addresses.json"
-[[ -r "$PREGRANT" ]] || { print -u2 "no $PREGRANT -- step_1 did not complete"; exit 1 }
+if _want delegate || _want step2 || _want approve || _want step3 || _want pool || _want verify; then
+    [[ -r "$PREGRANT" ]] || { print -u2 "no $PREGRANT -- step_1 did not complete"; exit 1 }
+fi
 
 # --------------------------------------------------------------------------------------------
 if _want delegate; then

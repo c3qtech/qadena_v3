@@ -138,18 +138,34 @@ if [ "$(uname -m)" = "x86_64" ]; then
     # The group is read from the device when it exists, rather than assumed, because the names are
     # set by whichever driver package created it.
     if [ -n "$SUDO_USER" ]; then
-        sgx_groups=""
-        for dev in /dev/sgx_enclave /dev/sgx_provision; do
-            if [ -e "$dev" ]; then
-                sgx_groups="$sgx_groups $(stat -c %G "$dev" 2>/dev/null)"
-            fi
-        done
-        # No devices yet (driver not loaded, or a machine without SGX): fall back to the standard
-        # names so a later reboot finds the user already in them.
+        # PER-DEVICE FALLBACK, NOT ALL-OR-NOTHING.
+        #
+        # This collected groups from whichever devices existed and only fell back to the standard
+        # names when it found NONE.  The real case on a fresh box is one of each: /dev/sgx_enclave
+        # ships on the image (group sgx), while /dev/sgx_provision is created by the DCAP packages
+        # THIS SCRIPT installs a few lines above, and udev has not necessarily settled it by the
+        # time we look.  The list then reads "sgx" -- non-empty -- so the fallback never fired,
+        # sgx_prv was never considered, and NOTHING was printed about it.
+        #
+        # That is the worst shape this can fail in: the node then starts and runs perfectly and
+        # fails REMOTE ATTESTATION later, because sgx_prv is the provision device's group.
+        # Measured on the cloudsigma primary 2026-09-15: user in sgx, absent from sgx_prv, and no
+        # message in the provisioning output saying so.
+        #
         # This script is /bin/sh, so no ${var// /} and no ${=var} -- unquoted $var word-splits here.
-        if [ -z "$(echo "$sgx_groups" | tr -d ' ')" ]; then
-            sgx_groups="sgx sgx_prv"
-        fi
+        sgx_groups=""
+        for dev_grp in /dev/sgx_enclave:sgx /dev/sgx_provision:sgx_prv; do
+            dev=$(echo "$dev_grp" | cut -d: -f1)
+            def=$(echo "$dev_grp" | cut -d: -f2)
+            grp=""
+            [ -e "$dev" ] && grp=$(stat -c %G "$dev" 2>/dev/null)
+            # Unreadable, absent, or owned by root before udev applies the rule: use the standard
+            # name, so a later reboot finds the user already in the right group.
+            case "$grp" in
+                ""|root) grp="$def" ;;
+            esac
+            sgx_groups="$sgx_groups $grp"
+        done
 
         for grp in $sgx_groups; do
             [ -n "$grp" ] || continue

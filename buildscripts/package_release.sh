@@ -65,10 +65,17 @@ since=""
 # The default set is "what a node needs to run".  testscripts is deliberately outside it.
 DEFAULT_COMPONENTS="chain,enclave,signer,libs,scripts,config,prereqs,cosmovisor"
 
+allow_debug=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out)   [[ -n "$2" && "$2" != --* ]] || { echo "--out requires a directory"; exit 1; }; outdir="$2"; shift 2 ;;
     --only)  [[ -n "$2" && "$2" != --* ]] || { echo "--only requires a list"; exit 1; }; only="$2"; shift 2 ;;
+    # THE OPERATOR'S CHOICE, NOT THE HARDWARE'S.  REAL_ENCLAVE below is SGX DETECTION, so on a box
+    # with ego the refusal fires whenever the enclave is unsigned -- including when it is unsigned
+    # because the run was told --no-sgx.  That decision is made at BUILD time and was thrown away
+    # by the time packaging ran, so a deliberate debug fleet could build and then fail to package.
+    # This carries the decision forward; without it, packaging re-derives intent and gets it wrong.
+    --allow-debug) allow_debug=1; shift ;;
     --changed-since) [[ -n "$2" && "$2" != --* ]] || { echo "--changed-since requires a manifest"; exit 1; }; since="$2"; shift 2 ;;
     --help)
       sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
@@ -213,7 +220,7 @@ add_binary() {   # name src [signed]
             # A MACHINE THAT COULD HAVE SIGNED THIS AND DID NOT is the accidental-debug-package case
             # the old hard failure existed to catch, and it still fails.  What no longer fails is the
             # machine that could never have signed it -- not a mistake, but the debug path working.
-            if [[ $REAL_ENCLAVE -eq 1 ]] && command -v ego > /dev/null 2>&1; then
+            if [[ $REAL_ENCLAVE -eq 1 ]] && [[ ${allow_debug:-0} -eq 0 ]] && command -v ego > /dev/null 2>&1; then
                 fail "$name is not ego-signed, but this machine has SGX and ego -- packaging a debug
        enclave from here is almost certainly a mistake.  Rebuild:  buildscripts/build.sh --build-sgx"
             fi

@@ -314,5 +314,16 @@ echo "Send the following information to QFI"
 echo "$identityprovidername proposal_id: $identityproposal_id"
 echo "$dsvsprovidername proposal_id: $dsvsproposal_id"
 echo ""
-echo "QFI votes with:  foundation_scripts/sec_veritas_after_step_2.sh $identityproposal_id $dsvsproposal_id${QADENA_NODE:+ --node $QADENA_NODE} ..."
+# PRINT THE WHOLE COMMAND, NOT A TRAILING "...".  The elided part was three REQUIRED flags, and
+# the two that default silently default WRONG on any site but the first: --coord-home defaults to
+# ~/launch/coord (which on a suffixed site holds none of these keys) and --deployment defaults to
+# veritas (so the hint drives the wrong programme on an ekycph or enf run).  A hint that cannot be
+# run is read as one that can, and costs a cycle to disprove.
+echo "QFI votes with:"
+echo "    foundation_scripts/sec_veritas_after_step_2.sh --deployment $DEPLOY_NAME \\"
+echo "        $identityproposal_id $dsvsproposal_id${QADENA_NODE:+ --node $QADENA_NODE} \\"
+echo "        --members $DEPLOY_STAKE_MEMBERS \\"
+echo "        --coord-home <QFI's coordinator dir> --keyring-passfile <its passphrase file>"
+echo ""
+echo "  The last line is QFI's to fill in -- those paths live on THEIR machine, not this one."
 echo "Wait for both to reach PASSED, then run $veritasscripts/step_3.sh"

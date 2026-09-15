@@ -214,15 +214,23 @@ done
 # delayed_init_enclave down with it as collateral.
 [[ -n "$ADVERTISE" ]] || ADVERTISE="${PRIMARY##*@}"
 
+# KEEPALIVE ON EVERY SSH, NOT JUST A CONNECT TIMEOUT.  ConnectTimeout bounds only the handshake;
+# it does nothing for a channel that is open but SILENT, which is exactly what phase 4 is -- init.sh
+# builds for many minutes and prints nothing.  A NAT table, a cloud firewall or a sleeping laptop
+# Wi-Fi drops an idle mapping, ssh notices only when it next writes, and the remote build dies with
+# the connection.  The symptom is a run that stops mid-phase with no error, having apparently
+# "worked" up to that point (2026-09-15, cloudsigma primary, phase 4).
+# 30s x 240 = two hours of silence tolerated, which is longer than any build here.
+#
 # rsh -- run as root through a LOGIN zsh, so PATH and setup_env.sh's definitions are present.
 rsh() {
     local host="$1"; shift
-    ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "sudo zsh -lc $(printf '%q' "$*")"
+    ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 -o BatchMode=yes "$host" "sudo zsh -lc $(printf '%q' "$*")"
 }
 # rsh_user -- same, unprivileged, for anything that must not create root-owned files (trap 1).
 rsh_user() {
     local host="$1"; shift
-    ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "zsh -lc $(printf '%q' "$*")"
+    ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 -o BatchMode=yes "$host" "zsh -lc $(printf '%q' "$*")"
 }
 
 # BUILD_PATH -- prepended to any command that compiles or packages (trap 8).  Belt and braces: the
@@ -253,7 +261,7 @@ for d in /dev/sgx_provision /dev/sgx/provision; do [ -e "$d" ] && { p="$d"; brea
 [ -r "$e" ] && [ -w "$e" ] && [ -r "$p" ] && [ -w "$p" ] || exit 1
 exit 0'
 
-sgx_state() { ssh -o ConnectTimeout=10 "$1" "$SGX_PROBE" >/dev/null 2>&1; print $? }
+sgx_state() { ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$1" "$SGX_PROBE" >/dev/null 2>&1; print $? }
 
 # sudo_for -- Q2 ONLY: "sudo " when this host's devices are out of reach, empty otherwise.
 #
@@ -398,7 +406,7 @@ if run_phase 1; then
         info "running 'sudo sh ./ubuntu/setup_qadena_build.sh' -- installs the toolchain, several minutes"
         # Root, and from the repo root: the script refuses a non-root caller and needs go.mod in cwd.
         # Output goes to a file on the target -- it is long, and only interesting when it fails.
-        if ! ssh -o ConnectTimeout=10 -o BatchMode=yes "$PRIMARY" \
+        if ! ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 -o BatchMode=yes "$PRIMARY" \
                 "cd $REPO && sudo sh ./ubuntu/setup_qadena_build.sh > \$HOME/provision.$$.log 2>&1"; then
             rsh_user "$PRIMARY" "tail -25 \$HOME/provision.$$.log" | while read -r l; do info "$l"; done
             fail "provisioning failed on $PRIMARY (full log: $PRIMARY:~/provision.$$.log). If sudo needs a password there, run it by hand: cd $REPO && sudo sh ./ubuntu/setup_qadena_build.sh"
@@ -460,9 +468,9 @@ if run_phase 2; then
 
     # trap 3: the bracket class is what stops this matching our own ssh command line.
     sleep 3
-    left=$(ssh -o ConnectTimeout=10 "$PRIMARY" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep | wc -l' | tr -d '\r')
+    left=$(ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep | wc -l' | tr -d '\r')
     [[ "$left" == "0" ]] || {
-        ssh -o ConnectTimeout=10 "$PRIMARY" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep' | while read -r l; do info "$l"; done
+        ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]|signer_enclav[e]" | grep -v grep' | while read -r l; do info "$l"; done
         fail "$left process(es) survived the stop; kill them BY PID and re-run --only 2"
     }
     info "stopped: nothing matching the node or its enclaves is left"
@@ -480,7 +488,7 @@ if run_phase 2; then
     # Done with sudo unconditionally: these files are root-owned precisely when it matters, and
     # removing a file we own needs no privilege anyway.
     rsh "$PRIMARY" 'rm -f /tmp/qadena_*.sock' 2>/dev/null || true
-    left=$(ssh -o ConnectTimeout=10 "$PRIMARY" 'ls /tmp/qadena_*.sock 2>/dev/null | wc -l' | tr -d '\r')
+    left=$(ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" 'ls /tmp/qadena_*.sock 2>/dev/null | wc -l' | tr -d '\r')
     [[ "$left" == "0" ]] || fail "could not remove /tmp/qadena_*.sock on $PRIMARY; the enclave will not be able to bind"
     info "cleared stale enclave sockets"
 
@@ -604,7 +612,7 @@ if run_phase 4; then
         # a deletion; without this the node keyring's passphrase sits in $HOME on the primary
         # indefinitely, next to the keyring it opens.  The mnemonic copied just above has exactly
         # this problem today and is left alone here only because changing it is a separate fix.
-        _kp_cleanup() { ssh -o ConnectTimeout=10 "$PRIMARY" 'rm -f .qadena-init-keyring-pass' 2>/dev/null || true }
+        _kp_cleanup() { ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" 'rm -f .qadena-init-keyring-pass' 2>/dev/null || true }
         trap _kp_cleanup EXIT INT TERM
     fi
 
@@ -638,12 +646,12 @@ if run_phase 4; then
     fi
 
     rsh_user "$PRIMARY" "rm -f $RUNLOG"
-    ssh -o ConnectTimeout=10 "$PRIMARY" \
+    ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" \
         "cd $REPO && nohup zsh -lc '$BUILD_PATH ./buildscripts/init.sh --advertise-ip-address $ADVERTISE$sgx_flag$mainnet_flag$keyring_flag' > $RUNLOG 2>&1 &" \
         || fail "could not launch init.sh on $PRIMARY"
 
     info "waiting for init.sh to finish (log: $PRIMARY:$RUNLOG)"
-    while ssh -o ConnectTimeout=10 "$PRIMARY" 'pgrep -f "buildscripts/init\.s[h]" >/dev/null' 2>/dev/null; do
+    while ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" 'pgrep -f "buildscripts/init\.s[h]" >/dev/null' 2>/dev/null; do
         sleep 30
     done
 
@@ -715,13 +723,13 @@ if run_phase 6; then
     # reaches run.sh and the ordinary start is enough -- doing the dance anyway would restart the
     # node twice for nothing.
     _sysd=0
-    ssh -o ConnectTimeout=10 "$PRIMARY" \
+    ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" \
         'systemctl list-unit-files qadena.service 2>/dev/null | grep -q qadena.service' 2>/dev/null && _sysd=1
 
     if [[ -n "$rem_kp" ]] && (( _sysd )); then
         info "primary is systemd-supervised: first start OUTSIDE it, with the passphrase"
         rsh_user "$PRIMARY" "$NODE_HOME/scripts/stop_qadena.sh > /dev/null 2>&1" || true
-        ssh -o ConnectTimeout=10 "$PRIMARY" \
+        ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" \
             "nohup zsh -c '_p=\$(cat $rem_kp); _end=\$((SECONDS+1200)); while (( SECONDS < _end )); do print -r -- \"\$_p\"; done | ${SUDO}$NODE_HOME/scripts/run.sh' > $RUNLOG.start 2>&1 &" \
             || fail "could not launch run.sh on $PRIMARY"
 
@@ -730,12 +738,12 @@ if run_phase 6; then
         # No systemd here, so start_qadena.sh's own child inherits this pipe and the passphrase
         # reaches the node.  The feed must not end before the enclave's first dispatch.
         info "feeding the keyring passphrase to the first start (no systemd on this host)"
-        ssh -o ConnectTimeout=10 "$PRIMARY" \
+        ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" \
             "nohup zsh -c '_p=\$(cat $rem_kp); _end=\$((SECONDS+1200)); while (( SECONDS < _end )); do print -r -- \"\$_p\"; done | ${SUDO}$NODE_HOME/scripts/start_qadena.sh' > $RUNLOG.start 2>&1 &" \
             || fail "could not launch start_qadena.sh on $PRIMARY"
     else
         # trap 4 again, mirrored: SGX must start WITH sudo, debug must not.
-        ssh -o ConnectTimeout=10 "$PRIMARY" \
+        ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" \
             "nohup ${SUDO}$NODE_HOME/scripts/start_qadena.sh > $RUNLOG.start 2>&1 &" \
             || fail "could not launch start_qadena.sh on $PRIMARY"
     fi
@@ -744,7 +752,7 @@ if run_phase 6; then
     h0=""; ok=0
     for i in {1..40}; do
         sleep 15
-        h=$(ssh -o ConnectTimeout=10 "$PRIMARY" 'curl -s --max-time 5 localhost:26657/status 2>/dev/null | jq -r ".result.sync_info.latest_block_height // empty"' 2>/dev/null | tr -d '\r')
+        h=$(ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" 'curl -s --max-time 5 localhost:26657/status 2>/dev/null | jq -r ".result.sync_info.latest_block_height // empty"' 2>/dev/null | tr -d '\r')
         [[ -z "$h" ]] && continue
         [[ -z "$h0" ]] && { h0="$h"; info "first height seen: $h0"; continue }
         if [[ "$h" -gt "$h0" ]]; then info "height advanced $h0 -> $h"; ok=1; break; fi
@@ -770,13 +778,13 @@ if run_phase 6; then
     _reg=0
     for i in {1..40}; do
         sleep 15
-        _n=$(ssh -o ConnectTimeout=10 "$PRIMARY" \
+        _n=$(ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" \
             "$NODE_HOME/bin/qadenad query qadena list-jar-regulator --output json 2>/dev/null \
              | sed -n '/^{/,\$p' | jq -r '(.jarRegulator // []) | length' 2>/dev/null" 2>/dev/null | tr -d '\r')
         [[ "${_n:-0}" -gt 0 ]] && { info "enclave registered (JarRegulator row on chain)"; _reg=1; break }
     done
     (( _reg )) || {
-        ssh -o ConnectTimeout=10 "$PRIMARY" \
+        ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" \
             "grep -ah 'init-enclave' $NODE_HOME/logs/*.log 2>/dev/null | tail -4" 2>/dev/null \
             | while read -r l; do info "$l"; done
         fail "the enclave did not register on $PRIMARY: list-jar-regulator is still empty.
@@ -791,7 +799,7 @@ if run_phase 6; then
         info "handing the node to systemd (no passphrase needed from here on)"
         rsh_user "$PRIMARY" "$NODE_HOME/scripts/stop_qadena.sh > /dev/null 2>&1" || true
         rsh_user "$PRIMARY" "rm -f $RUNLOG.start"
-        ssh -o ConnectTimeout=10 "$PRIMARY" \
+        ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" \
             "nohup ${SUDO}$NODE_HOME/scripts/start_qadena.sh > $RUNLOG.start 2>&1 &" \
             || fail "could not launch start_qadena.sh on $PRIMARY"
 
@@ -803,7 +811,7 @@ if run_phase 6; then
         _back=0
         for i in {1..40}; do
             sleep 10
-            _h=$(ssh -o ConnectTimeout=10 "$PRIMARY" \
+            _h=$(ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" \
                 'curl -s --max-time 5 localhost:26657/status 2>/dev/null | jq -r ".result.sync_info.latest_block_height // empty"' \
                 2>/dev/null | tr -d '\r')
             [[ -n "$_h" ]] && { info "node is back under systemd at height $_h"; _back=1; break }
@@ -825,7 +833,12 @@ if run_phase 7; then
     # Build once, distribute: a joiner installed from THIS package has a measurement identical to
     # the primary's by construction.  Building the two independently is where drift bites.
     rsh_user "$PRIMARY" "rm -rf $PKG_OUT && mkdir -p $PKG_OUT"
-    out=$(rsh_user "$PRIMARY" "$BUILD_PATH cd $REPO && ./buildscripts/package_release.sh --out $PKG_OUT 2>&1 | tail -25") \
+    # CARRY --no-sgx INTO PACKAGING.  package_release.sh decides debug-vs-sgx from the HARDWARE,
+    # so on an SGX box it refuses an unsigned enclave -- including the one this run deliberately
+    # built unsigned.  Without this, `--no-sgx` built fine and then failed to package, and the
+    # error named a rebuild that would have undone what was asked for (2026-09-15, cloudsigma).
+    _dbg=""; (( NO_SGX )) && _dbg=" --allow-debug"
+    out=$(rsh_user "$PRIMARY" "$BUILD_PATH cd $REPO && ./buildscripts/package_release.sh --out $PKG_OUT$_dbg 2>&1 | tail -25") \
         || { print "$out" | while read -r l; do info "$l"; done; fail "package_release.sh failed"; }
     print "$out" | while read -r l; do info "$l"; done
 
@@ -868,18 +881,18 @@ if run_phase 8 && [[ -n "$JOINER" ]]; then
     if rsh_user "$JOINER" "test -x $JHOME/qadena/scripts/stop_qadena.sh"; then
         rsh "$JOINER" "$JHOME/qadena/scripts/stop_qadena.sh --all" >/dev/null 2>&1 || true
         sleep 3
-        left=$(ssh -o ConnectTimeout=10 "$JOINER" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]" | grep -v grep | wc -l' | tr -d '\r')
+        left=$(ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$JOINER" 'ps -eo pid,cmd | grep -E "qaden[a]d|cosmoviso[r] run|eg[o] run|ego-hos[t]" | grep -v grep | wc -l' | tr -d '\r')
         [[ "$left" == "0" ]] || fail "joiner still has $left process(es) running; kill by PID and re-run --only 8"
     fi
 
     # Relay through the workstation rather than primary->joiner directly: we already have ssh to
     # both, and the two nodes need not be able to reach each other's accounts.
     info "copying $base to $JOINER"
-    ssh -o ConnectTimeout=10 "$PRIMARY" "cat $tgz" | ssh -o ConnectTimeout=10 "$JOINER" "cat > /tmp/$base" \
+    ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" "cat $tgz" | ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$JOINER" "cat > /tmp/$base" \
         || fail "could not copy the package to $JOINER"
 
     info "installing on $JOINER"
-    out=$(ssh -o ConnectTimeout=10 "$JOINER" "cd /tmp && rm -rf $dir && tar xzf $base && ${SUDO_J}./$dir/install.sh 2>&1 | tail -20") \
+    out=$(ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$JOINER" "cd /tmp && rm -rf $dir && tar xzf $base && ${SUDO_J}./$dir/install.sh 2>&1 | tail -20") \
         || { print "$out" | while read -r l; do info "$l"; done; fail "install.sh failed on $JOINER"; }
     print "$out" | while read -r l; do info "$l"; done
 
