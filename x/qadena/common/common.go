@@ -560,8 +560,17 @@ func DisplayHash(h string) string {
 }
 
 func DebugVerifyRemoteReport(logger log.Logger, remoteReportBytes []byte, certifyData string) (success bool, uniqueID string, signerID string) {
-	logger.Debug("DebugVerifyRemoteReport " + certifyData)
+	// NEVER LOG certifyData ITSELF.  It is a "|"-joined record whose fields include PubK and the
+	// secret-share blob -- serialized BINARY, not text -- so string-concatenating it writes raw
+	// bytes to the terminal.  Control characters in that stream corrupt the display of every line
+	// around it, which is how this surfaced: an add_full_node run looked like it had crashed
+	// mid-attestation when it was succeeding (2026-09-16).
+	//
+	// The HASH is the useful value anyway: it is what this function compares against the report's
+	// own field two lines down, so a mismatch is diagnosed by comparing these two numbers.
 	hash := sha256.Sum256([]byte(certifyData))
+	logger.Debug("DebugVerifyRemoteReport certifyData sha256=" + hex.EncodeToString(hash[:]) +
+		" len=" + strconv.Itoa(len(certifyData)))
 
 	r := strings.Split(string(remoteReportBytes), ":")
 	if len(r) < 5 {

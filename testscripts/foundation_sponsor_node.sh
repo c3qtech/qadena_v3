@@ -18,7 +18,7 @@
 #   single key (devnet, test fleets)  this script -- nth_node_bringup phase 4 runs it on the primary
 #   multisig, unattended (test fleet) testscripts/foundation_multisig_sponsor_node.sh
 #   multisig, real custody (MAINNET)  a ceremony among separate keyholders --
-#                                     docs/HOWTO-ADD-LAUNCH-CHAIN-NODE.md step 2, scripts/multisig_sign.sh
+#                                     docs/HOWTO-LAUNCH-CHAIN-ADD-NODE.md step 2, scripts/multisig_sign.sh
 #
 # It lives in testscripts/ because that is what it is.  It used to sit in scripts/ so that nodes
 # would have it installed, but the only thing that runs it is nth_node_bringup's phase 4, on the

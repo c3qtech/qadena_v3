@@ -858,7 +858,13 @@ if [[ -n "$FOUNDATION_GRANTER" ]] ; then
 	echo "Ask the foundation to run this (on a box holding the foundation key):"
 	echo ""
 	echo "    testscripts/foundation_sponsor_node.sh --node $PIONEERADDRESS   (single-key granter)"
-	echo "    ...or a members' ceremony on a launch chain -- docs/HOWTO-ADD-LAUNCH-CHAIN-NODE.md step 2"
+	echo ""
+	echo "    foundation_scripts/sponsor_node.sh --grantee $PIONEERADDRESS \\"
+	echo "        --coord-home <their coordinator dir> --keyring-passfile <its passphrase file> \\"
+	echo "        --node <the chain RPC>                                   (bucket MULTISIG)"
+	echo ""
+	echo "    ...or, where the members are separate people, the hand-driven ceremony:"
+	echo "    docs/HOWTO-LAUNCH-CHAIN-ADD-NODE.md step 2   (add --print-ceremony above to emit it)"
 	echo ""
 	if [[ "$FOUNDATION_GRANTER" == "any" ]] ; then
 		echo "Waiting for a fee grant to $PIONEERADDRESS from any granter."
@@ -986,7 +992,7 @@ while [[ $REPLY != "y" && $REPLY != "n" ]]; do
 			echo "  single-key granter (devnet):  testscripts/foundation_sponsor_node.sh --node $PIONEERADDRESS"
 			echo "  bucket multisig (LAUNCH CHAIN):  a ceremony among the members --"
 			echo "     scripts/multisig_sign.sh build-feegrant --granter <bucket> --grantee $PIONEERADDRESS ..."
-			echo "     see docs/HOWTO-ADD-LAUNCH-CHAIN-NODE.md step 2 for the full sequence."
+			echo "     see docs/HOWTO-LAUNCH-CHAIN-ADD-NODE.md step 2 for the full sequence."
 			echo "Stopping the enclave"
 			$qadenascripts/stop_qadena.sh --enclave > /dev/null
 			exit 1

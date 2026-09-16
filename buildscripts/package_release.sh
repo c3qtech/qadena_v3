@@ -45,6 +45,18 @@
 # any of them between machines either fails to unseal or moves secrets somewhere they were never
 # meant to be.
 #
+# OPTIONS
+#   --out <dir>            where to write the tarball (default: the current directory).
+#                          1st_node_bringup.sh phase 7 passes /tmp/pkg
+#   --only <a,b,c>         package only these components.  Valid: chain enclave signer libs
+#                          scripts config prereqs testscripts cosmovisor
+#   --changed-since <file> package only what differs from that manifest
+#   --allow-debug          package an UNSIGNED enclave from a machine that has SGX and ego.
+#                          Refused by default: doing it by accident ships a debug measurement,
+#                          which is a different unique_id on chain.  Pass it only when the build
+#                          was DELIBERATELY --no-sgx; 1st_node_bringup.sh forwards it for you.
+#   --help                 this text
+#
 #   ./buildscripts/package_release.sh [--out DIR]
 #                                     [--only chain,enclave,signer,libs,scripts,config,testscripts]
 #                                     [--changed-since <manifest.txt>]
@@ -78,7 +90,7 @@ while [[ $# -gt 0 ]]; do
     --allow-debug) allow_debug=1; shift ;;
     --changed-since) [[ -n "$2" && "$2" != --* ]] || { echo "--changed-since requires a manifest"; exit 1; }; since="$2"; shift 2 ;;
     --help)
-      sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,58p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac

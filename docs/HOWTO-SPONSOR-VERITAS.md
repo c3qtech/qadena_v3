@@ -256,7 +256,7 @@ on a real deployment the printed text *is* the entire channel between the organi
 ## Before you start
 
 - **A launch chain**, built and producing blocks. See
-  [HOWTO-LAUNCH-CHAIN-BRINGUP.md](HOWTO-LAUNCH-CHAIN-BRINGUP.md).
+  [HOWTO-LAUNCH-CHAIN-GENESIS.md](HOWTO-LAUNCH-CHAIN-GENESIS.md).
 - **The bucket multisigs exist in your keyring**, along with enough member keys to meet each
   threshold. `foundation_scripts/derive_launch_keys.sh` creates them.
 - **`jq` and `python3`.**

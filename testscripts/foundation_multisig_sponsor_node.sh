@@ -16,7 +16,7 @@
 # arrangement a real bucket exists to prevent.  That is the test fleet's standing shortcut, not
 # something to promote into scripts/.  The real operator path is a ceremony among separate
 # keyholders: scripts/multisig_sign.sh, driven by hand, as in
-# docs/HOWTO-ADD-LAUNCH-CHAIN-NODE.md step 2.
+# docs/HOWTO-LAUNCH-CHAIN-ADD-NODE.md step 2.
 #
 # WHAT IT SIGNS.  The grant covers the seven messages a pioneer broadcasts FOR LIFE -- a join-only
 # or expiring grant stops SS re-sharing silently, and one without MsgVote makes the fleet

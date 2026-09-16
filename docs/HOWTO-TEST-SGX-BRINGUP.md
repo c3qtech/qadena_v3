@@ -3,7 +3,7 @@
 **This is the test fleet.**  SGX1 and SGX2 are real SGX hardware used for TESTING, and this drives
 `testscripts/`.  A LAUNCH chain -- mainnet, or a testnet built on mainnet parameters -- also runs only on SGX, and
 may well run on these same two machines.  Its procedure is manual and lives in
-[HOWTO-LAUNCH-CHAIN-BRINGUP.md](HOWTO-LAUNCH-CHAIN-BRINGUP.md), which now carries the SGX prerequisites, the
+[HOWTO-LAUNCH-CHAIN-GENESIS.md](HOWTO-LAUNCH-CHAIN-GENESIS.md), which now carries the SGX prerequisites, the
 build-once-distribute rule and the `store-hash` note.  Do not follow this page for a launch node.
 
 The short version of the two-node procedure, for REAL SGX rather than debug enclaves. Everything

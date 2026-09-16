@@ -1,5 +1,9 @@
 # Bringing up a launch chain (mainnet, and mainnet-parameter testnets)
 
+> **Creating the chain.** To add a node to one that already exists, see
+> [HOWTO-LAUNCH-CHAIN-ADD-NODE.md](HOWTO-LAUNCH-CHAIN-ADD-NODE.md).
+
+
 Companion to [HOWTO-TEST-FLEET-BRINGUP.md](HOWTO-TEST-FLEET-BRINGUP.md), which brings up a **test**
 fleet on the devnet's own parameters.  This one brings up a chain built from
 `config/launch-config.yml` + `tokenomics/allocations.csv` -- a genesis meant to be permanent.
@@ -600,7 +604,7 @@ fails after genesis, in a way that points at the enclave rather than at the gene
 What Phase 3A does instead: the single genesis validator's own machine runs `init.sh
 --mainnet-source`, which lets `ignite chain init` build the genesis from the rendered instance and
 sign that validator's gentx.  Every other node joins afterwards as a normal validator
-([HOWTO-ADD-LAUNCH-CHAIN-NODE.md](HOWTO-ADD-LAUNCH-CHAIN-NODE.md)), which is the path this project
+([HOWTO-LAUNCH-CHAIN-ADD-NODE.md](HOWTO-LAUNCH-CHAIN-ADD-NODE.md)), which is the path this project
 actually exercises.
 
 **If you need multiple validators AT GENESIS**, the work is to teach the rendered instance to carry

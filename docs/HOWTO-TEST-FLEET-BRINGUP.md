@@ -3,7 +3,7 @@
 **This is test tooling.**  It drives `testscripts/`, and it takes shortcuts a deployment must not:
 above all, one workstation holds every bucket multisig member's key, so the funding ceremony can be
 performed without a second person.  A real bring-up is manual and lives in
-[HOWTO-LAUNCH-CHAIN-BRINGUP.md](HOWTO-LAUNCH-CHAIN-BRINGUP.md).
+[HOWTO-LAUNCH-CHAIN-GENESIS.md](HOWTO-LAUNCH-CHAIN-GENESIS.md).
 
 One script brings up a fleet: `testscripts/fleet_bringup_with_tests.sh`.  It tests
 **nothing** unless you schedule it, and the schedule is the command line.
@@ -83,7 +83,7 @@ it whenever `--mainnet-source` and `--foundation-sponsored` are given together -
 `add_full_node.sh` makes a FULL NODE, and a full node may stay one forever: "this covers
 JOINING only."  Validating is a separate act (`convert_to_validator.sh`), and the self-bond
 is money only that act needs -- sent early to a node that never bonds, it is stranded, because
-coins sent to an unidentified address CANNOT BE SENT BACK (HOWTO-LAUNCH-CHAIN-BRINGUP.md).
+coins sent to an unidentified address CANNOT BE SENT BACK (HOWTO-LAUNCH-CHAIN-GENESIS.md).
 
 So the bond follows a DECLARATION, not a phase:
 
@@ -491,7 +491,7 @@ precisely the arrangement a real bucket exists to prevent.  `scripts/provision_a
 to sign and waits for a human instead; that is correct there and is not a limitation to route
 around.  The wrapper does the ceremony and then hands straight back to `provision_account.sh` for
 staking and the whitelist, so the production logic is borrowed rather than reimplemented.  The
-manual procedure is [HOWTO-LAUNCH-CHAIN-BRINGUP.md](HOWTO-LAUNCH-CHAIN-BRINGUP.md) Phase 4.
+manual procedure is [HOWTO-LAUNCH-CHAIN-GENESIS.md](HOWTO-LAUNCH-CHAIN-GENESIS.md) Phase 4.
 
 ### The ceremony talks to the chain THROUGH the primary
 
@@ -553,7 +553,7 @@ environment rather than by editing scripts:
 
 ## Adding ONE node to an existing test fleet
 
-The manual, operator-side procedure is [HOWTO-ADD-LAUNCH-CHAIN-NODE.md](HOWTO-ADD-LAUNCH-CHAIN-NODE.md).  This is the same
+The manual, operator-side procedure is [HOWTO-LAUNCH-CHAIN-ADD-NODE.md](HOWTO-LAUNCH-CHAIN-ADD-NODE.md).  This is the same
 sequence driven from a workstation, which ssh-es into both machines and watches them from outside:
 
 ```sh
@@ -567,7 +567,7 @@ testscripts/nth_node_bringup.sh --primary <ip> --joiner <ip> --pioneer <name> \
 Pass the SAME flags on both runs — they select what phase 3 tells you to sign and what phase 5
 waits for.  Phases 4 and 7 skip money already delivered, so the ceremony is never repeated.
 See the phase table above for what each one does.  The ceremony itself — what the sponsor signs,
-and why a joiner holds no liquid balance — is [HOWTO-ADD-LAUNCH-CHAIN-NODE.md](HOWTO-ADD-LAUNCH-CHAIN-NODE.md) step 2.
+and why a joiner holds no liquid balance — is [HOWTO-LAUNCH-CHAIN-ADD-NODE.md](HOWTO-LAUNCH-CHAIN-ADD-NODE.md) step 2.
 
 And above all: never re-run phase 3 with a DIFFERENT pioneer name against a joined node.  It
 wipes.

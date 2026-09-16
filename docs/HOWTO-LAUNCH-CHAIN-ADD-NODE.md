@@ -1,8 +1,12 @@
 # Adding a node to a running LAUNCH chain — sponsored or self-funded
 
+> **Joining an existing chain.** To create one, see
+> [HOWTO-LAUNCH-CHAIN-GENESIS.md](HOWTO-LAUNCH-CHAIN-GENESIS.md).
+
+
 For mainnet, and for a mainnet-parameter testnet — the procedure is the same, and so are the
 requirements: every launch-chain node runs a real SGX enclave
-([HOWTO-LAUNCH-CHAIN-BRINGUP.md](HOWTO-LAUNCH-CHAIN-BRINGUP.md) §Every node runs SGX), and the
+([HOWTO-LAUNCH-CHAIN-GENESIS.md](HOWTO-LAUNCH-CHAIN-GENESIS.md) §Every node runs SGX), and the
 package this node installs must be the one built on the primary, so the measurements match by
 construction.
 
@@ -37,10 +41,52 @@ recipient needs a governance whitelist proposal to recover.
 
 ## The manual path
 
-### 0. Install the release package  (on the new node)
+### 0. Build the package  (on a node that already has the build)
 
-Build nothing here.  The primary builds, packages (`buildscripts/package_release.sh`), and you
-install the tarball **as the user who will own the node — not sudo**:
+Nothing is built on the new node. Package the artifacts that are already installed and running,
+on the primary or any node with the toolchain:
+
+```sh
+cd <the checkout>
+./buildscripts/package_release.sh --out /tmp/pkg
+```
+
+It packages **what `install.sh` puts on a node** — `qadenad`, both enclaves, `libwasmvm`,
+`cosmovisor`, `scripts/`, `config/` — because binaries alone are not enough and the easy omissions
+fail late rather than loudly. It prints a manifest: the commit, each binary's version, and the
+enclave `unique_id` and `signer`. Keep that output; step 0b checks the new node against it.
+
+It **refuses to package an unsigned enclave from a machine that has SGX and ego**, because doing
+that by accident ships a debug measurement — a different `unique_id` on chain, which the seed will
+not accept. If the build was *deliberately* `--no-sgx` on SGX hardware, say so:
+
+```sh
+./buildscripts/package_release.sh --out /tmp/pkg --allow-debug
+```
+
+`testscripts/1st_node_bringup.sh --only 7` does all of this and forwards `--allow-debug` for you
+when the run was `--no-sgx`; the bare command above is for when you are not using that path.
+`--help` lists the rest (`--only`, `--changed-since`).
+
+**If the enclave is NEW to the chain**, register it before installing anywhere — the packaging
+output prints the exact command:
+
+```sh
+testscripts/test_update_enclave_identity.sh <unique-id> <signer-id> unvalidated
+```
+
+### 0b. Copy it to the new node and install
+
+The primary usually cannot reach the new node directly, so the tarball goes via your workstation:
+
+```sh
+scp <packaging-host>:/tmp/pkg/qadena-full-<ver>-<commit>.tar.gz /tmp/
+scp /tmp/qadena-full-<ver>-<commit>.tar.gz <new-node>:/tmp/
+```
+
+### 0c. Install the release package  (on the new node)
+
+Install the tarball **as the user who will own the node — not sudo**:
 
 ```sh
 tar xzf qadena-full-<ver>-<commit>.tar.gz
@@ -73,7 +119,24 @@ Give the printed address to whoever holds the money.
 ### 2. The funding ceremony  (wherever the bucket's keys live)
 
 The sponsor bucket (`nodeops` — sponsoring nodes is what that bucket is for) is an N-of-M
-multisig, so nothing here runs on the primary.  `scripts/multisig_sign.sh` drives it; set
+multisig, so nothing here runs on the primary.
+
+**If the foundation holds the whole coordinator keyring**, one command does it — build, sign with
+each member, combine, broadcast, for both the grant and the bond:
+
+```sh
+foundation_scripts/sponsor_node.sh --grantee <addr> \
+    --coord-home <coordinator dir> --keyring-passfile <its passphrase file> \
+    --node tcp://<a node>:26657 \
+    [--granter nodeops] [--self-bond 10000qdn]
+```
+
+It reads the threshold off the bucket and signs as `nodeops-m1..m<threshold>` (`--members`
+overrides), issues the same seven-message non-expiring grant as the single-key script, and handles
+the `--sequence-offset` below for you. Add `--print-ceremony` to emit the per-member commands and
+send nothing — which is what to do when the members are separate people.
+
+**The hand-driven ceremony**, for exactly that case. `scripts/multisig_sign.sh` drives it; set
 `QADENA_NODE=tcp://<primary>:26657` and `QADENA_CHAIN_ID`.
 
 **Sponsored** — the grant, plus the bond only if this node will validate:
@@ -104,6 +167,32 @@ re-sharing, and a grant without MsgVote makes the fleet ungovernable):
 
 `--sequence-offset 1` goes on **sign**, on every share of the second tx — the sequence is
 written when a share is signed, not at build.  Drop it if the first tx already landed.
+
+**If your granter is a SINGLE KEY**, none of the above applies — one command replaces the whole
+ceremony, run on the box holding that key:
+
+```sh
+testscripts/foundation_sponsor_node.sh --node <addr>                      # grant only
+testscripts/foundation_sponsor_node.sh --node <addr> --self-bond 10000qdn # grant + bond
+```
+
+It issues the identical `LIFE_MSGS` grant — the seven messages below are its own default — as a
+`PeriodicAllowance` of `1000qdn` per 30 days, and with `--self-bond` it also sends the bond,
+because no fee grant covers staked principal. The granter defaults to `foundation-nodes`
+(`$QADENA_FOUNDATION_NODES`, or `--granter`).
+
+`add_full_node.sh` prints this exact command at its funding gate, so the new node's operator can
+paste it into the request rather than describing the address.
+
+**Do not pass `--join-only`.** It narrows the grant to the four join-time messages, which is enough
+to get the node running and silently stops SS re-sharing later; the omission surfaces months after
+the join, far from anything naming a permission. Same for `--expiration`.
+
+**On a test fleet holding every member key**, `testscripts/foundation_multisig_sponsor_node.sh
+--node <addr> --granter nodeops --via <user@node>` performs the multisig ceremony above
+unattended. That works only because one workstation holds all of `nodeops-m1..mN`, which is the
+arrangement a real bucket exists to prevent — so it is a fleet shortcut, never an operator
+procedure.
 
 **Self-funded** — one transfer: `--amount 110100qdn` (10,000 bond + 100,100 working balance,
 the launch design's own figure) and no grant.  Same sign/combine/broadcast, no offset needed.

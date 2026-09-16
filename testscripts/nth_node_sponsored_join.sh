@@ -18,7 +18,7 @@
 # A TEST FLEET IS THE ONE PLACE THAT DOES NOT APPLY, because this workstation holds every member
 # key, exactly the arrangement a real bucket must never allow.  So the automation lives here in
 # testscripts/, clearly marked, rather than weakening the driver.  The real operator procedure is
-# scripts/sponsor_join_node.sh and docs/HOWTO-ADD-LAUNCH-CHAIN-NODE.md.
+# scripts/sponsor_join_node.sh and docs/HOWTO-LAUNCH-CHAIN-ADD-NODE.md.
 #
 # THE SHAPE, and why it cannot be a --test-local entry.  A sponsored joiner's address does not
 # exist until nth_node phase 3 mints it, and phase 5 BLOCKS waiting for the grant -- so the
