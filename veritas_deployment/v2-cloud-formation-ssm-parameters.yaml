@@ -1,0 +1,642 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: 'Creates the SSM and Secret Manager parameters for VERITAS.'
+
+Parameters:
+
+  EnvType:
+    Description: Environment type.
+    Default: production
+    Type: String
+    AllowedValues:
+      - staging
+      - production
+    ConstraintDescription: must specify production or staging.
+
+Conditions:
+  CreateProdResources: !Equals 
+    - !Ref EnvType
+    - production
+  Staging: !Equals 
+    - !Ref EnvType
+    - staging
+
+Resources:
+
+
+  GITPATSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub "VERITAS git personal access token"
+      Name: !Sub /veritas/${EnvType}/Common/git-personal-access-token
+      SecretString: !Sub |
+        {
+          "git-personal-access-token": "dummy-token"
+        }      
+
+  QadenaArmorPassphraseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub "VERITAS Qadena armor passphrase, use this to export all the required Qadena keys"
+      Name: !Sub /veritas/${EnvType}/Common/qadena-armor-passphrase
+      SecretString: !Sub |
+        {
+          "qadena-armor-passphrase": "dummy-passphrase"
+        }
+
+  PortalKeycloakBaseUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/Portal/KEYCLOAK_BASE_URL"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "https://privateiam.sec.gov.ph"
+        - !Join [ "", [ "https://deviam.sec.gov.ph:8443" ] ]
+
+
+  PortalKeycloakClientIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/Portal/KEYCLOAK_CLIENT_ID"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "dsvs"
+        - !Join [ "", [ "dsvs" ] ]
+
+  PortalKeycloakClientSecretParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/Portal/KEYCLOAK_CLIENT_SECRET"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "QOQ7wEShCwHK6yhXlIuViO67pYknbUmX"
+        - !Join [ "", [ "QOQ7wEShCwHK6yhXlIuViO67pYknbUmX" ] ]
+
+  PortalKeycloakRealmNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/Portal/KEYCLOAK_REALM_NAME"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "SEC-Private"
+        - !Join [ "", [ "SEC-Employees" ] ]
+
+  AppServerKeycloakBaseUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/KEYCLOAK_BASE_URL"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "https://iampub.sec.gov.ph"
+        - !Join [ "", [ "https://deviam.sec.gov.ph:8443" ] ]
+
+  AppServerSecApiBaseUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SEC_API_BASE_URL"
+      Type: String
+      # staging points at dev-signapp/api/v1, not secapi/dev-veritas.
+      # Staging value verified against stacks/veritas/env-staging-no-aws.
+      # PRODUCTION VALUE IS UNRECONCILED -- it is whatever this template
+      # already carried, which is a stale staging snapshot. Replace it from
+      # the live parameter store before running an update against production.
+      Value: !If
+        - CreateProdResources
+        - "https://secapi.sec.gov.ph/veritas"
+        - "https://dev-signapp.sec.gov.ph/api/v1"
+
+  AppServerSecApiValueParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SEC_API_VALUE"
+      Type: String
+      # staging uses a different key from the one recorded here.
+      # Staging value verified against stacks/veritas/env-staging-no-aws.
+      # PRODUCTION VALUE IS UNRECONCILED -- it is whatever this template
+      # already carried, which is a stale staging snapshot. Replace it from
+      # the live parameter store before running an update against production.
+      Value: !If
+        - CreateProdResources
+        - "5404bc7e-5b8a-4415-84bc-7e5b8ad41502"
+        - "54644877-33e3-429c-9e36-66c5652863e0"
+
+  AppServerEsapApiUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/ESAP_API_URL"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "https://secapi.sec.gov.ph/veritas"
+        - !Join [ "", [ "https://dev-signapp.sec.gov.ph/dsvs" ] ]
+
+  AppServerEsapApiKeyValueParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/ESAP_API_KEY_VALUE"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "5404bc7e-5b8a-4415-84bc-7e5b8ad41502"
+        - !Join [ "", [ "54644877-33e3-429c-9e36-66c5652863e0" ] ]
+
+  # Folded in from patch-2-cloud-formation-ssm-parameters.yaml so this template is
+  # the complete set. The service id genuinely differs per environment, which is
+  # why this is the first parameter here to use the EnvType conditions declared
+  # above rather than a single literal.
+  AppServerEsapVeritasServiceIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/ESAP_VERITAS_SERVICE_ID"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "17c20ff1-18d2-48d3-8c9d-ce760a0ac5df"
+        - "073bb20c-e080-43ce-959e-902c5c2cde70"
+
+  AppServerEsecureClientIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/ESECURE_CLIENT_ID"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "dsvs"
+        - !Join [ "", [ "dsvs" ] ]
+
+  AppServerEsecureClientSecretParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/ESECURE_CLIENT_SECRET"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "QMy4QpaMBoHKN2zCjD58CI4NJji0sOb8"
+        - !Join [ "", [ "QOQ7wEShCwHK6yhXlIuViO67pYknbUmX" ] ]
+
+  AppServerKeycloakRealmNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/ESECURE_REALM_NAME"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "SEC-Public"
+        - !Join [ "", [ "SEC-Development" ] ]
+
+  AppServerEsecureApiBaseParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/ESECURE_API_BASE_URL"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "https://secapi.sec.gov.ph/esecure-v1"
+        - !Join [ "", [ "https://dev-esecure.sec.gov.ph/api/v1/esecure" ] ]
+
+  AppServerEsecureApiValueParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/ESECURE_API_VALUE"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "5e8a66d2-4f99-4ea0-8a66-d24f99cea0a6"
+        - !Join [ "", [ "d585e5f1-c083-4fa9-dev1-c1867a15f8a2" ] ]
+
+  AppServerSMSAppKeyParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SMS_APP_KEY"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "nia3L4r1zh0DcvDD"
+        - !Join [ "", [ "ck1csf1kZaPEHznD" ] ]
+    
+  AppServerSMSAppSecretParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SMS_APP_SECRET"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "mDFkR1XzHoxHniVQ5nRz4rUN2CGtJifQ"
+        - !Join [ "", [ "KfXzN3kyt34Lb615dVpJLkPvtdabHgFy" ] ]
+    
+  AppServerSMSAppSenderParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SMS_APP_SENDER"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "AGMS"
+        - !Join [ "", [ "C3QTECH" ] ]
+
+  # Folded in from patch-3-cloud-formation-ssm-parameters.yaml. The sender id above
+  # is the M360 account; this is the "from" label a handset displays, and production
+  # brands it as the agency while staging keeps the vendor name.
+  AppServerSMSAppFromParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SMS_APP_FROM"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "SEC PH"
+        - "C3QTECH"
+    
+  AppServerSMTPHostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SMTP_HOST"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "smtp.agmstech.com"
+        - !Join [ "", [ "smtp.gmail.com" ] ]
+    
+  AppServerSMTPPortParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SMTP_PORT"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "587"
+        - !Join [ "", [ "587" ] ]
+    
+  AppServerSMTPUserParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SMTP_USER"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "sec@smtp.agmstech.com"
+        - !Join [ "", [ "veritasc3qtech@gmail.com" ] ]
+    
+  AppServerSMTPPasswordParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SMTP_PASSWORD"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "M#l3rQr1$r79FUBTv$izZihpqhic#s"
+        - !Join [ "", [ "cmen afes dtkc eptl" ] ]
+
+  AppServerSMTPSenderParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SMTP_SENDER"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "no-reply@sec.gov.ph"
+        - !Join [ "", [ "donotreply@gmail.com" ] ]
+
+
+  AppServerBaseURLParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/APP_SERVER_BASE_URL"
+      Type: String
+      Value: !If
+        - CreateProdResources
+        - "https://veritas.sec.gov.ph"
+        - !Join [ "", [ "https://uat-veritas.sec.gov.ph" ] ]
+    
+  AppServerQadenaPioneerIpParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/QADENA_PIONEER_IP"
+      Type: String
+      # staging reaches the chain through an NLB, not the bare IP recorded here.
+      # Staging value verified against stacks/veritas/env-staging-no-aws.
+      # PRODUCTION VALUE IS UNRECONCILED -- it is whatever this template
+      # already carried, which is a stale staging snapshot. Replace it from
+      # the live parameter store before running an update against production.
+      Value: !If
+        - CreateProdResources
+        - "dev-nlb-97f5978861fac526.elb.ap-southeast-1.amazonaws.com"
+        - "dev-nlb-97f5978861fac526.elb.ap-southeast-1.amazonaws.com"
+
+  # How the MOBILE APP should reach the chain, served to it by GET /v1/config/chain.
+  # Deliberately NOT QADENA_PIONEER_IP above: that is how the SERVER reaches the
+  # chain and is routinely an internal address, and handing a phone a VPC private
+  # IP is worse than the value baked into the app bundle.
+  #
+  # TO_BE_REPLACED is the "not set yet" value. SSM parameters cannot hold an empty
+  # string, so the app server maps this sentinel back to blank (config.go).
+  #
+  # BLANK IS NOW FATAL, NOT BENIGN. This used to mean "the app keeps the one it
+  # shipped with", but QADENA_BASE_URL was removed from the app's
+  # environment.json when the server became the only source of chain config --
+  # there is no bundled host to fall back to any more. The app requires host,
+  # pioneerId and serviceProviderId to all be non-empty (isComplete in
+  # qadena_chain_config.dart); a blank host means every client shows
+  # "VERITAS is temporarily unavailable ... no settings from <server>".
+  #
+  # So this must hold a real, publicly routable address in every environment that
+  # has clients. Production points at the staging NLB because production is
+  # currently tested against the staging Qadena chain; it moves when the chain does.
+  AppServerQadenaPublicHostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/QADENA_PUBLIC_HOST"
+      Type: String
+      # The NLB DNS name is publicly routable, so it is safe to serve to a phone.
+      # Both branches are the same on purpose -- see the note above.
+      Value: !If
+        - CreateProdResources
+        - "dev-nlb-97f5978861fac526.elb.ap-southeast-1.amazonaws.com"
+        - "dev-nlb-97f5978861fac526.elb.ap-southeast-1.amazonaws.com"
+
+  # WHO PAYS THE FEES, in a toll-free deployment. Neither SEC's citizen sponsors nor its own
+  # operational wallets hold tokens: they hold fee GRANTS from these two foundation accounts, and a
+  # grant is only used when the transaction NAMES it. Leave them blank and the app-server falls back
+  # to expecting its own wallets to be funded -- which on a chain with zero create-wallet incentives
+  # means every call fails with "spendable balance 0aqdn", not a graceful degradation.
+  #
+  # TWO accounts rather than one, deliberately:
+  #   users  -- citizen wallets. The app-server issues each allowance AS this account via an authz
+  #             MsgExec, so it needs no foundation key. That authorisation is unbounded by nature,
+  #             and keeping it on a separate account confines it to the user float.
+  #   appsvr -- SEC's own document and credential operations.
+  # Separate accounts also make citizen spend and SEC processing independently observable.
+  #
+  # veritas_scripts/step_4.sh prints both addresses when the foundation runs it.
+  #
+  # TO_BE_REPLACED is the "not set yet" value; the app server maps the sentinel back to blank.
+  AppServerQadenaFoundationUsersAddressParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/QADENA_FOUNDATION_USERS_ADDRESS"
+      Type: String
+      Value: !Join [ "", [ "TO_BE_REPLACED" ] ]
+
+  AppServerQadenaFoundationAppsvrAddressParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/QADENA_FOUNDATION_APPSVR_ADDRESS"
+      Type: String
+      Value: !Join [ "", [ "TO_BE_REPLACED" ] ]
+
+  # The gRPC port the app should use. The SDK talks to the chain over gRPC for
+  # everything; it never uses the chain's REST/LCD port.
+  AppServerQadenaGrpcPortParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/QADENA_GRPC_PORT"
+      Type: String
+      Value: !Join [ "", [ "9090" ] ]
+
+  # Social-recovery partners a new wallet protects its key with. These are OTHER
+  # organisations' service providers and are validated against the chain before
+  # being served, so a chain that has not had their setup script run cannot create
+  # wallets at all -- and the failure is obscure: MsgCreateWallet is rejected in
+  # the mempool and nothing reaches a block. Keep in step with the threshold below.
+  AppServerSocialRecoveryPartnersParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SOCIAL_RECOVERY_PARTNERS"
+      Type: String
+      Value: !Join [ "", [ "secidentitysrvprv,ekycphidentitysrvprv" ] ]
+
+  # How many of the partners above must cooperate to recover a wallet.
+  AppServerSocialRecoveryThresholdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SOCIAL_RECOVERY_THRESHOLD"
+      Type: String
+      Value: !Join [ "", [ "2" ] ]
+
+  # Where a user is sent to prove who they are when recovering an account, and what
+  # to call it on the button ("Verify your Identity on eKYC.ph"). Served to the app
+  # rather than built into it, so pointing a deployment at a different identity
+  # provider does not need an app release.
+  AppServerSocialRecoveryNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SOCIAL_RECOVERY_NAME"
+      Type: String
+      Value: !Join [ "", [ "eKYC.ph" ] ]
+
+  AppServerSocialRecoveryUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SOCIAL_RECOVERY_URL"
+      Type: String
+      Value: !Join [ "", [ "https://user.ekyc.ph" ] ]
+  
+  AppServerSECDSVSEphUsernameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SEC_DSVS_EPH_USERNAME"
+      Type: String
+      # base64 JSON array of 30 ephemeral wallets, not a single name.
+      # Staging value verified against stacks/veritas/env-staging-no-aws.
+      # PRODUCTION VALUE IS UNRECONCILED -- it is whatever this template
+      # already carried, which is a stale staging snapshot. Replace it from
+      # the live parameter store before running an update against production.
+      Value: !If
+        - CreateProdResources
+        - "WyJSRVBMQUNFX01FX1dBTExFVF9OQU1FUyJd"
+        - "WyJSRVBMQUNFX01FX1dBTExFVF9OQU1FUyJd"
+    
+  # Moved out of Parameter Store: the real value is a base64 JSON array of ~30
+  # armored keys (9724 characters for staging), and an SSM parameter caps at
+  # 8192 even on the Advanced tier. Secrets Manager allows 65536.
+  #
+  # BOTH BRANCHES CARRY THE SAME KEYS, DELIBERATELY: production currently runs
+  # against the STAGING Qadena chain, so the same wallets are correct for both.
+  # When production moves to its own chain this prod branch must be repopulated
+  # from the live store -- it is not automatically right just because it parses.
+  #
+  # SHAPE MATTERS. SecretString must be exactly one JSON object,
+  # {"<NAME>": "<base64>"} -- the app parses that object, takes the field, and
+  # base64-decodes it (utils.ConvertBase64JsonStringToArray). This branch was
+  # previously wrapped TWICE, so the field held JSON rather than base64 and
+  # decoding died on byte 0 ('{'). That failure is SILENT: on a decode error the
+  # helper returns a one-element array holding the raw string, so the app boots
+  # and runs with a single garbage key instead of ~30.
+  AppServerSECDSVSEphPrivateKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub "VERITAS SEC_DSVS_EPH_PRIVATE_KEY (base64 JSON array of armored keys)"
+      Name: !Sub "/veritas/${EnvType}/AppServer/SEC_DSVS_EPH_PRIVATE_KEY"
+      SecretString: !If
+        - CreateProdResources
+        - '{"SEC_DSVS_EPH_PRIVATE_KEY": "WyJSRVBMQUNFX01FX0FSTU9SRURfUFJJVkFURV9LRVlTIl0="}'
+        - '{"SEC_DSVS_EPH_PRIVATE_KEY": "WyJSRVBMQUNFX01FX0FSTU9SRURfUFJJVkFURV9LRVlTIl0="}'
+
+  AppServerSECDSVSEphCredentialUsernameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SEC_DSVS_EPH_CREDENTIAL_USERNAME"
+      Type: String
+      # base64 JSON array of 30 credential wallets.
+      # Staging value verified against stacks/veritas/env-staging-no-aws.
+      # PRODUCTION VALUE IS UNRECONCILED -- it is whatever this template
+      # already carried, which is a stale staging snapshot. Replace it from
+      # the live parameter store before running an update against production.
+      Value: !If
+        - CreateProdResources
+        - "WyJSRVBMQUNFX01FX1dBTExFVF9OQU1FUyJd"
+        - "WyJSRVBMQUNFX01FX1dBTExFVF9OQU1FUyJd"
+    
+  # Moved out of Parameter Store: the real value is a base64 JSON array of ~30
+  # armored keys (9724 characters for staging), and an SSM parameter caps at
+  # 8192 even on the Advanced tier. Secrets Manager allows 65536.
+  #
+  # BOTH BRANCHES CARRY THE SAME KEYS, DELIBERATELY: production currently runs
+  # against the STAGING Qadena chain, so the same wallets are correct for both.
+  # When production moves to its own chain this prod branch must be repopulated
+  # from the live store -- it is not automatically right just because it parses.
+  #
+  # SHAPE MATTERS. SecretString must be exactly one JSON object,
+  # {"<NAME>": "<base64>"} -- the app parses that object, takes the field, and
+  # base64-decodes it (utils.ConvertBase64JsonStringToArray). This branch was
+  # previously wrapped TWICE, so the field held JSON rather than base64 and
+  # decoding died on byte 0 ('{'). That failure is SILENT: on a decode error the
+  # helper returns a one-element array holding the raw string, so the app boots
+  # and runs with a single garbage key instead of ~30.
+  AppServerSECDSVSEphCredentialPrivateKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub "VERITAS SEC_DSVS_EPH_CREDENTIAL_PRIVATE_KEY (base64 JSON array of armored keys)"
+      Name: !Sub "/veritas/${EnvType}/AppServer/SEC_DSVS_EPH_CREDENTIAL_PRIVATE_KEY"
+      SecretString: !If
+        - CreateProdResources
+        - '{"SEC_DSVS_EPH_CREDENTIAL_PRIVATE_KEY": "WyJSRVBMQUNFX01FX0FSTU9SRURfUFJJVkFURV9LRVlTIl0="}'
+        - '{"SEC_DSVS_EPH_CREDENTIAL_PRIVATE_KEY": "WyJSRVBMQUNFX01FX0FSTU9SRURfUFJJVkFURV9LRVlTIl0="}'
+
+  AppServerSECDSVSrvPrvUsernameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SEC_DSVS_SRV_PRV_USERNAME"
+      Type: String
+      # base64 JSON array: base wallet plus 30 ephemerals.
+      # Staging value verified against stacks/veritas/env-staging-no-aws.
+      # PRODUCTION VALUE IS UNRECONCILED -- it is whatever this template
+      # already carried, which is a stale staging snapshot. Replace it from
+      # the live parameter store before running an update against production.
+      Value: !If
+        - CreateProdResources
+        - "WyJSRVBMQUNFX01FX1dBTExFVF9OQU1FUyJd"
+        - "WyJSRVBMQUNFX01FX1dBTExFVF9OQU1FUyJd"
+    
+  # Moved out of Parameter Store: the real value is a base64 JSON array of ~30
+  # armored keys (10048 characters for staging), and an SSM parameter caps at
+  # 8192 even on the Advanced tier. Secrets Manager allows 65536.
+  #
+  # BOTH BRANCHES CARRY THE SAME KEYS, DELIBERATELY: production currently runs
+  # against the STAGING Qadena chain, so the same wallets are correct for both.
+  # When production moves to its own chain this prod branch must be repopulated
+  # from the live store -- it is not automatically right just because it parses.
+  #
+  # SHAPE MATTERS. SecretString must be exactly one JSON object,
+  # {"<NAME>": "<base64>"} -- the app parses that object, takes the field, and
+  # base64-decodes it (utils.ConvertBase64JsonStringToArray). This branch was
+  # previously wrapped TWICE, so the field held JSON rather than base64 and
+  # decoding died on byte 0 ('{'). That failure is SILENT: on a decode error the
+  # helper returns a one-element array holding the raw string, so the app boots
+  # and runs with a single garbage key instead of ~30.
+  AppServerSECDSVSrvPrvPrivateKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub "VERITAS SEC_DSVS_SRV_PRV_PRIVATE_KEY (base64 JSON array of armored keys)"
+      Name: !Sub "/veritas/${EnvType}/AppServer/SEC_DSVS_SRV_PRV_PRIVATE_KEY"
+      SecretString: !If
+        - CreateProdResources
+        - '{"SEC_DSVS_SRV_PRV_PRIVATE_KEY": "WyJSRVBMQUNFX01FX0FSTU9SRURfUFJJVkFURV9LRVlTIl0="}'
+        - '{"SEC_DSVS_SRV_PRV_PRIVATE_KEY": "WyJSRVBMQUNFX01FX0FSTU9SRURfUFJJVkFURV9LRVlTIl0="}'
+
+  AppServerSECIdentitySrvPrvUsernameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SEC_IDENTITY_SRV_PRV_USERNAME"
+      Type: String
+      # base64 JSON array: base, credential, plus 30 ephemerals.
+      # Staging value verified against stacks/veritas/env-staging-no-aws.
+      # PRODUCTION VALUE IS UNRECONCILED -- it is whatever this template
+      # already carried, which is a stale staging snapshot. Replace it from
+      # the live parameter store before running an update against production.
+      Value: !If
+        - CreateProdResources
+        - "WyJSRVBMQUNFX01FX1dBTExFVF9OQU1FUyJd"
+        - "WyJSRVBMQUNFX01FX1dBTExFVF9OQU1FUyJd"
+    
+  # Moved out of Parameter Store: the real value is a base64 JSON array of ~30
+  # armored keys (10372 characters for staging), and an SSM parameter caps at
+  # 8192 even on the Advanced tier. Secrets Manager allows 65536.
+  #
+  # BOTH BRANCHES CARRY THE SAME KEYS, DELIBERATELY: production currently runs
+  # against the STAGING Qadena chain, so the same wallets are correct for both.
+  # When production moves to its own chain this prod branch must be repopulated
+  # from the live store -- it is not automatically right just because it parses.
+  #
+  # SHAPE MATTERS. SecretString must be exactly one JSON object,
+  # {"<NAME>": "<base64>"} -- the app parses that object, takes the field, and
+  # base64-decodes it (utils.ConvertBase64JsonStringToArray). This branch was
+  # previously wrapped TWICE, so the field held JSON rather than base64 and
+  # decoding died on byte 0 ('{'). That failure is SILENT: on a decode error the
+  # helper returns a one-element array holding the raw string, so the app boots
+  # and runs with a single garbage key instead of ~30.
+  AppServerSECIdentitySrvPrvPrivateKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub "VERITAS SEC_IDENTITY_SRV_PRV_PRIVATE_KEY (base64 JSON array of armored keys)"
+      Name: !Sub "/veritas/${EnvType}/AppServer/SEC_IDENTITY_SRV_PRV_PRIVATE_KEY"
+      SecretString: !If
+        - CreateProdResources
+        - '{"SEC_IDENTITY_SRV_PRV_PRIVATE_KEY": "WyJSRVBMQUNFX01FX0FSTU9SRURfUFJJVkFURV9LRVlTIl0="}'
+        - '{"SEC_IDENTITY_SRV_PRV_PRIVATE_KEY": "WyJSRVBMQUNFX01FX0FSTU9SRURfUFJJVkFURV9LRVlTIl0="}'
+
+  AppServerSECCreateWalletSponsorUsernameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/veritas/${EnvType}/AppServer/SEC_CREATE_WALLET_SPONSOR_USERNAME"
+      Type: String
+      # base64 JSON array: base wallet plus 30 ephemerals.
+      # Staging value verified against stacks/veritas/env-staging-no-aws.
+      # PRODUCTION VALUE IS UNRECONCILED -- it is whatever this template
+      # already carried, which is a stale staging snapshot. Replace it from
+      # the live parameter store before running an update against production.
+      Value: !If
+        - CreateProdResources
+        - "WyJSRVBMQUNFX01FX1dBTExFVF9OQU1FUyJd"
+        - "WyJSRVBMQUNFX01FX1dBTExFVF9OQU1FUyJd"
+    
+  # Moved out of Parameter Store: the real value is a base64 JSON array of ~30
+  # armored keys (10048 characters for staging), and an SSM parameter caps at
+  # 8192 even on the Advanced tier. Secrets Manager allows 65536.
+  #
+  # BOTH BRANCHES CARRY THE SAME KEYS, DELIBERATELY: production currently runs
+  # against the STAGING Qadena chain, so the same wallets are correct for both.
+  # When production moves to its own chain this prod branch must be repopulated
+  # from the live store -- it is not automatically right just because it parses.
+  #
+  # SHAPE MATTERS. SecretString must be exactly one JSON object,
+  # {"<NAME>": "<base64>"} -- the app parses that object, takes the field, and
+  # base64-decodes it (utils.ConvertBase64JsonStringToArray). This branch was
+  # previously wrapped TWICE, so the field held JSON rather than base64 and
+  # decoding died on byte 0 ('{'). That failure is SILENT: on a decode error the
+  # helper returns a one-element array holding the raw string, so the app boots
+  # and runs with a single garbage key instead of ~30.
+  AppServerSECCreateWalletSponsorPrivateKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub "VERITAS SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY (base64 JSON array of armored keys)"
+      Name: !Sub "/veritas/${EnvType}/AppServer/SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY"
+      SecretString: !If
+        - CreateProdResources
+        - '{"SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY": "WyJSRVBMQUNFX01FX0FSTU9SRURfUFJJVkFURV9LRVlTIl0="}'
+        - '{"SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY": "WyJSRVBMQUNFX01FX0FSTU9SRURfUFJJVkFURV9LRVlTIl0="}'

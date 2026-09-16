@@ -120,10 +120,17 @@ FOUNDATION_APPSVR=""
 if [ -n "$SPONSORS" ]; then
 	[ -f "$SPONSORS" ] || { echo "error: no such file: $SPONSORS" >&2; exit 1; }
 	command -v jq >/dev/null 2>&1 || { echo "error: --sponsors needs jq" >&2; exit 1; }
-	FOUNDATION_USERS=$(jq -r '.users  // empty' "$SPONSORS")
-	FOUNDATION_APPSVR=$(jq -r '.appsvr // empty' "$SPONSORS")
+	# TWO FILE SHAPES, ONE PAIR OF FACTS -- see the same note in patch_cloud_formation_template.sh.
+	# The foundation holds <deployment>-sponsors.json (.appsvr/.users) in its coordinator home; the
+	# DEPLOYMENT side has no coordinator home and holds variables.json (.appsvraddr/.usersaddr),
+	# which step_1 wrote.  Accept either, so whoever patches does not need the other side's file.
+	FOUNDATION_USERS=$(jq -r '.users  // .usersaddr  // empty' "$SPONSORS")
+	FOUNDATION_APPSVR=$(jq -r '.appsvr // .appsvraddr // empty' "$SPONSORS")
 	[ -n "$FOUNDATION_USERS" ] && [ -n "$FOUNDATION_APPSVR" ] || {
-		echo "error: $SPONSORS has no .users/.appsvr -- is it a veritas-sponsors.json?" >&2
+		echo "error: $SPONSORS names neither .users/.appsvr nor .usersaddr/.appsvraddr." >&2
+		echo "  Point --sponsors at either:" >&2
+		echo "    <coord>/<deployment>-sponsors.json   (foundation side, from --stage prepare)" >&2
+		echo "    <deployment home>/variables.json     (deployment side, written by step_1)" >&2
 		exit 1
 	}
 	echo "foundation from $SPONSORS:"

@@ -2,8 +2,8 @@
 #
 # Render a CloudFormation template with the wallet keys a bring-up produced, as a NEW FILE.
 #
-#   ./testscripts/patch_cloud_formation_template.sh sec \
-#       ~/test/follow-the-money/api/aws/v2-cloud-formation-ssm-parameters.yaml \
+#   ./veritas_scripts/patch_cloud_formation_template.sh sec \
+#       veritas_deployment/v2-cloud-formation-ssm-parameters.yaml \
 #       --key-dir ~/sec-veritas --out ~/sec-veritas/v2-cloud-formation-ssm-parameters.yaml
 #
 # THE SOURCE IS NEVER MODIFIED.  It is a tracked file in the app-server repo and belongs to whoever
@@ -47,13 +47,20 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# LOOK BESIDE, THEN IN testscripts/.  This script moved from testscripts/ to veritas_scripts/ and
+# its generator did not; a bare $SCRIPT_DIR sibling reference then resolved to a path that does not
+# exist, and the only symptom was "cannot run .../veritas_scripts/gen_key_env_vars.sh".  Search
+# both so either layout works and a future move does not silently break it again.
 GEN="$SCRIPT_DIR/gen_key_env_vars.sh"
+[ -x "$GEN" ] || GEN="$SCRIPT_DIR/../testscripts/gen_key_env_vars.sh"
+[ -x "$GEN" ] || GEN="$SCRIPT_DIR/../scripts/gen_key_env_vars.sh"
 
 PREFIX=""
 TEMPLATE=""
 KEY_DIR="."
 SPONSORS=""
 ARMOR_PASSFILE=""
+ARMOR_PROMPT=0
 OUT=""
 BOTH=0
 DRY_RUN=0
@@ -73,6 +80,9 @@ Options:
                      QADENA_FOUNDATION_APPSVR_ADDRESS from a <deployment>-sponsors.json
   --armor-passfile <file>
                      also set ARMOR_PASS_PHRASE from this file's first line
+  --armor-prompt     ask for it on the terminal instead (hidden, asked twice).
+                     Use this rather than writing the deployment's passphrase to
+                     a file just to render one template
   --out <file>       where to write the populated copy
                      (default: <key-dir>/<source basename>)
   --both-branches    also write the PRODUCTION branch of each !If.  Default is the
@@ -88,6 +98,7 @@ while [ $# -gt 0 ]; do
 	--key-dir)        KEY_DIR="$2"; shift 2 ;;
 	--sponsors)       SPONSORS="$2"; shift 2 ;;
 	--armor-passfile) ARMOR_PASSFILE="$2"; shift 2 ;;
+	--armor-prompt)   ARMOR_PROMPT=1; shift ;;
 	--out)            OUT="$2"; shift 2 ;;
 	--both-branches)  BOTH=1; shift ;;
 	--dry-run)        DRY_RUN=1; shift ;;
@@ -135,18 +146,55 @@ fi
 # The sponsor addresses are PUBLIC, unlike everything else here, so they may be printed.
 if [ -n "$SPONSORS" ]; then
 	[ -f "$SPONSORS" ] || { echo "error: $SPONSORS does not exist" >&2; exit 1; }
-	_u=$(jq -r '.users  // empty' "$SPONSORS")
-	_a=$(jq -r '.appsvr // empty' "$SPONSORS")
+	# TWO FILE SHAPES, ONE PAIR OF FACTS.  The foundation has <deployment>-sponsors.json, written
+	# by before_step_1.sh --stage prepare into its COORDINATOR home, with .appsvr/.users.  SEC has
+	# no coordinator home at all -- it has variables.json in the deployment home, where step_1
+	# recorded the same two addresses as .appsvraddr/.usersaddr.  Whoever renders the template
+	# should not have to obtain the other side's file to name addresses they already hold.
+	_u=$(jq -r '.users  // .usersaddr  // empty' "$SPONSORS")
+	_a=$(jq -r '.appsvr // .appsvraddr // empty' "$SPONSORS")
 	[ -n "$_u" ] && [ -n "$_a" ] || {
-		echo "error: $SPONSORS has no .users/.appsvr -- was prepare run?" >&2; exit 1; }
+		echo "error: $SPONSORS names neither .users/.appsvr nor .usersaddr/.appsvraddr." >&2
+		echo "  Point --sponsors at either:" >&2
+		echo "    <coord>/<deployment>-sponsors.json   (foundation side, from --stage prepare)" >&2
+		echo "    <deployment home>/variables.json     (deployment side, written by step_1)" >&2
+		exit 1; }
 	printf 'QADENA_FOUNDATION_USERS_ADDRESS=%s\n'  "$_u" >> "$BLOCK"
 	printf 'QADENA_FOUNDATION_APPSVR_ADDRESS=%s\n' "$_a" >> "$BLOCK"
 	echo "  sponsors: users=$_u appsvr=$_a"
 fi
 
+if [ -n "$ARMOR_PASSFILE" ] && [ "$ARMOR_PROMPT" -eq 1 ]; then
+	echo "error: --armor-passfile and --armor-prompt are alternatives; pass one" >&2
+	exit 1
+fi
 if [ -n "$ARMOR_PASSFILE" ]; then
 	[ -r "$ARMOR_PASSFILE" ] || { echo "error: cannot read $ARMOR_PASSFILE" >&2; exit 1; }
 	printf 'ARMOR_PASS_PHRASE=%s\n' "$(head -1 "$ARMOR_PASSFILE")" >> "$BLOCK"
+elif [ "$ARMOR_PROMPT" -eq 1 ]; then
+	# ASKED, NOT FILED.  This passphrase belongs to the DEPLOYMENT's keyring -- whoever ran step_3
+	# typed it there -- and requiring a file means writing it to disk on a second machine purely to
+	# render a template.  Ask instead; nothing is persisted but the rendered copy.
+	#
+	# ASKED TWICE, because a typo here is silent and expensive: the template renders fully, every
+	# key lands, and the app-server then imports NONE of them and restart-loops reporting an empty
+	# reason.  There is no later check that would catch it -- the keys and the passphrase are only
+	# tested together at app-server start.
+	if [ ! -t 0 ]; then
+		echo "error: --armor-prompt needs a terminal.  For an unattended run use" >&2
+		echo "       --armor-passfile <file> instead." >&2
+		exit 1
+	fi
+	printf "The DEPLOYMENT's keyring passphrase -- the one typed when step_3 exported these\n" >&2
+	printf "keys, NOT the foundation's coordinator passphrase.\n" >&2
+	printf "  passphrase (hidden, will not echo): " >&2
+	IFS= read -rs _ap; echo "" >&2
+	printf "  confirm: " >&2
+	IFS= read -rs _ap2; echo "" >&2
+	[ "$_ap" = "$_ap2" ] || { echo "error: passphrases do not match" >&2; exit 1; }
+	[ -n "$_ap" ] || { echo "error: empty passphrase" >&2; exit 1; }
+	printf 'ARMOR_PASS_PHRASE=%s\n' "$_ap" >> "$BLOCK"
+	unset _ap _ap2
 fi
 
 # The python below edits the file named in TEMPLATE, so point it at the COPY.  On a dry run there
@@ -290,6 +338,30 @@ while i < len(lines):
     if not done:
         novalue.append(key)
     i = j + 1
+
+# THE ARMOR PASSPHRASE IS NEITHER NAMED NOR SHAPED LIKE THE OTHERS.
+#
+# gen_key_env_vars.sh calls it ARMOR_PASS_PHRASE; the template calls it
+#     Name: !Sub /veritas/${EnvType}/Common/qadena-armor-passphrase
+# so the last-segment match above never fires.  Its value is also a JSON FIELD inside a `!Sub |`
+# block scalar, which the loop skips as an intrinsic.  Both together meant the passphrase was left
+# at the template's literal "dummy-passphrase" while every KEY around it was replaced -- and the
+# keys are armored WITH that passphrase, so the app-server imports none of them and restart-loops
+# reporting an empty reason.  Silent, and caused by patching rather than by not patching.
+if "ARMOR_PASS_PHRASE" in vals:
+    _ap = vals["ARMOR_PASS_PHRASE"]
+    _field = re.compile(r'^(\s*)"qadena-armor-passphrase"\s*:\s*".*"(,?)\s*$')
+    _done = False
+    for i, l in enumerate(lines):
+        m = _field.match(l)
+        if m:
+            lines[i] = '%s"qadena-armor-passphrase": "%s"%s' % (m.group(1), _ap, m.group(2))
+            _done = True
+    if _done:
+        updated.append("ARMOR_PASS_PHRASE")
+        vals.setdefault("ARMOR_PASS_PHRASE", _ap)
+    else:
+        skipped.append(("ARMOR_PASS_PHRASE", 0, "no qadena-armor-passphrase field in the template"))
 
 if not dry:
     open(template, "w").write("\n".join(lines))

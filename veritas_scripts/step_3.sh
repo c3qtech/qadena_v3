@@ -635,13 +635,19 @@ pool_file="$VERITAS_SEC_HOME/pool_addresses.json"
 # so step_4 verifies rather than trusts.
 echo ""
 echo "==================================================================="
-echo "SEND THIS BLOCK TO QFI -- they paste it into a terminal as-is:"
+# Same split as step_1's block: the heredoc is ours to choose and pastes verbatim, the flags are
+# QFI's own paths.  This one named NONE of --deployment, --coord-home or --keyring-passfile, so on
+# any deployment but veritas it drove the wrong programme, and on any site but the first it opened
+# the wrong keyring.
+echo "SEND THIS BLOCK TO QFI.  The heredoc pastes as-is; the last two lines are theirs to fill in:"
 echo "==================================================================="
 echo ""
-echo "cat > /tmp/veritas-pool.json <<'POOLEOF'"
+echo "cat > /tmp/$DEPLOY_NAME-pool.json <<'POOLEOF'"
 cat "$pool_file"
 echo "POOLEOF"
-echo "foundation_scripts/sec_veritas_after_step_3.sh --pool-addresses /tmp/veritas-pool.json${QADENA_NODE:+ --node $QADENA_NODE}"
+echo "foundation_scripts/sec_veritas_after_step_3.sh --deployment $DEPLOY_NAME \\"
+echo "    --pool-addresses /tmp/$DEPLOY_NAME-pool.json${QADENA_NODE:+ --node $QADENA_NODE} \\"
+echo "    --coord-home <QFI's coordinator dir> --keyring-passfile <its passphrase file>"
 echo ""
 echo "==================================================================="
 jq -r '"  \(.pool|length) wallet(s), base \(.sponsor_base), chain \(.chain_id)"' "$pool_file" 2>/dev/null

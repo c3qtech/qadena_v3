@@ -134,7 +134,13 @@ fleet_site_profile_load() {
         # THE CLOUDFORMATION SOURCE.  Read, never written: veritas_full_setup.sh renders a populated
         # COPY into the deployment home and leaves this tracked file alone.  The older
         # api/aws/patch-*-cloud-formation-ssm-parameters.yaml files are superseded; do not target them.
-        SITE_CF_TEMPLATE="$HOME/test/follow-the-money/api/aws/v2-cloud-formation-ssm-parameters.yaml"
+        # IN-REPO, not the app-server checkout.  veritas_deployment/ carries this repo's own copy,
+        # so a bring-up does not depend on a sibling repo being present or on which branch it is on.
+        # ${(%):-%x} IS THIS FILE, ${0} IS THE SOURCING SCRIPT.  This file is sourced, so $0 names
+        # whatever sourced it -- veritas_full_setup.sh from testscripts/, but the profile itself
+        # when run directly -- and the repo root came out one level off.  %x always names the file
+        # being read, so the path is correct however this is reached.
+        SITE_CF_TEMPLATE="${${(%):-%x}:A:h:h}/veritas_deployment/v2-cloud-formation-ssm-parameters.yaml"
         ;;
     *)
         ;;

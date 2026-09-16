@@ -401,12 +401,26 @@ else
 fi
 
 # ---- 5. providers registered by governance --------------------------------------------------
-_prov=$(qq query qadena list-interval-public-key-id 2>/dev/null \
-          | grep -B0 -A6 "srvprv" | grep "serviceProviderType:" | grep -cE "identity|dsvs")
-if [[ "${_prov:-0}" -ge 2 ]]; then
-    ok "both service providers registered (identity + dsvs)"
+# KEYED, AND BY NAME FROM THE PROFILE.  This scanned the whole interval list with grep -A6 and
+# counted rows whose serviceProviderType looked like identity/dsvs -- so it answered "are there two
+# provider-ish rows on this chain", not "are THIS deployment's two providers registered".  On a
+# chain carrying another deployment's providers it would pass with neither of ours present, and on
+# a large chain the rows could fall past the page.  Ask for each by name instead.
+_prov=0
+_provmiss=""
+for _p in "$DEPLOY_IDENTITY_PRV" "$DEPLOY_DSVS_PRV"; do
+    [[ -n "$_p" ]] || continue
+    if qq query qadena show-interval-public-key-id "$_p" srv-prv --output json >/dev/null 2>&1; then
+        _prov=$(( _prov + 1 ))
+    else
+        _provmiss="$_provmiss $_p"
+    fi
+done
+if [[ -z "$_provmiss" && "$_prov" -ge 2 ]]; then
+    ok "both service providers registered ($DEPLOY_IDENTITY_PRV + $DEPLOY_DSVS_PRV)"
 else
-    bad "expected 2 registered providers, found ${_prov:-0}"
+    bad "service provider(s) NOT registered by governance:$_provmiss"
+    print "        the proposal has not passed, or passed on a different chain."
 fi
 
 # ---- 6. CAN THE PAYERS ACTUALLY PAY, AND DO THE NON-PAYERS HOLD NOTHING ---------------------
@@ -513,7 +527,9 @@ if [[ -r "$PREGRANT" ]]; then
     fi
 else
     # Without the expected set this degrades to the old, weak assertion -- said plainly.
-    _wcount=$(qq query qadena list-wallet --output json 2>/dev/null | jq -r '(.wallet // [])|length' 2>/dev/null)
+    # --limit here too: without it this reports "100 wallet(s) exist" on any deployment with more,
+    # which reads as a fact and is a page size.
+    _wcount=$(qq query qadena list-wallet --limit 5000 --output json 2>/dev/null | jq -r '(.wallet // [])|length' 2>/dev/null)
     : ${_wcount:=0}
     if [[ "$_wcount" -gt 0 ]]; then
         ok "$_wcount wallet(s) exist on chain (no --pregrant: cannot tell if any are MISSING)"
@@ -538,7 +554,23 @@ fi
 # This scans the credential list, which paginates; on a chain with many citizens it would need a
 # by-owner query that does not exist today.  Said here rather than discovered later.
 _credmiss=""
-_credlist=$(qq query qadena list-credential --output json 2>/dev/null | sed -n '/^{/,$p' || true)
+# THE ONE SCAN THAT CANNOT BECOME A KEYED LOOKUP.  show-credential is keyed on the credential ID,
+# which for a CLAIMED credential is the owner's credential-wallet address -- account 0 --credential
+# of their mnemonic.  This script is foundation-side and deliberately holds no mnemonics, so it
+# cannot derive one.  list-credential carries the owning walletID, which is the only handle we do
+# have.
+#
+# So --limit stays here, and truncation is DETECTED rather than assumed away: a full page means the
+# answer may be short, and a short answer here reads as "not claimed".  Fail loudly instead of
+# reporting a false negative the way the provider-key check used to.
+_CRED_LIMIT=5000
+_credlist=$(qq query qadena list-credential --limit $_CRED_LIMIT --output json 2>/dev/null | sed -n '/^{/,$p' || true)
+_credcount=$(print -r -- "$_credlist" | jq -r '(.credential // [])|length' 2>/dev/null)
+if [[ "${_credcount:-0}" -ge "$_CRED_LIMIT" ]]; then
+    bad "list-credential returned $_credcount rows -- the page cap ($_CRED_LIMIT) was reached"
+    print "        The claim check below scans this list, so a truncated page would report a"
+    print "        CLAIMED credential as missing.  Raise _CRED_LIMIT in this script."
+fi
 for _un in "$DEPLOY_SPONSOR_BASE" "$DEPLOY_DSVS"; do
     _uw=$(jq -r --arg n "$_un" '(.wallets // [])[] | select(.name==$n) | .address' "$PREGRANT" 2>/dev/null | head -1)
     [[ -n "$_uw" ]] || continue
@@ -554,23 +586,44 @@ else
 fi
 
 
+# --limit ON EVERY list-* SCAN.  These paginate at 100 by DEFAULT, and the failure is a false
+# NEGATIVE: a row past the first page is indistinguishable from a row that does not exist, so the
+# verifier reports a correctly-registered provider as having no public key, or a claimed credential
+# as unclaimed.  It scales with the deployment -- invisible at --count 3, certain at --count 30.
+# Measured 2026-09-16 on qfi-testnet: 124 wallets, 131 transaction keys, and secdsvssrvprv reported
+# as "registered with NO public key" while holding both of its keys.
+#
+# The wallet check above already avoids this by asking one address at a time (see its note); these
+# three scans did not.
+# KEYED LOOKUPS, NOT SCANS.  --limit only moves the cliff: it is a guess about how big the
+# deployment will ever get, and when it is wrong the failure is the same silent false negative.
+# Both of these facts have an exact key, so ask for them by key and there is no page to fall off:
+#     show-interval-public-key-id <node-id> srv-prv     -> the provider's pubKID
+#     show-public-key <pub-kid> transaction             -> does that key exist
+# The provider NAMES come from the deployment profile rather than from enumerating the chain, so
+# this also stops depending on a scan for discovery -- and it now checks the providers this
+# deployment is SUPPOSED to have, which a scan cannot do: an absent provider is missing from the
+# list, so enumerating the chain can never notice one that was never registered.
 _nokeys=""
 _provseen=0
-for _prov in $(qq query qadena list-interval-public-key-id --output json 2>/dev/null \
-                 | jq -r '(.intervalPublicKeyID // [])[] | select(.nodeType=="srv-prv") | .nodeID' 2>/dev/null); do
-    _pid=$(qq query qadena list-interval-public-key-id --output json 2>/dev/null \
-             | jq -r --arg n "$_prov" '(.intervalPublicKeyID // [])[] | select(.nodeID==$n) | .pubKID')
-    _k=$(qq query qadena list-public-key --output json 2>/dev/null \
-           | jq -r --arg i "$_pid" '[(.publicKey // [])[] | select(.pubKID==$i and .pubKType=="transaction")] | length')
+for _prov in "$DEPLOY_IDENTITY_PRV" "$DEPLOY_DSVS_PRV"; do
+    [[ -n "$_prov" ]] || continue
     _provseen=$(( _provseen + 1 ))
-    [[ "${_k:-0}" -gt 0 ]] || _nokeys="$_nokeys $_prov"
+    _pid=$(qq query qadena show-interval-public-key-id "$_prov" srv-prv --output json 2>/dev/null \
+             | jq -r '.intervalPublicKeyID.pubKID // empty' 2>/dev/null)
+    if [[ -z "$_pid" ]]; then
+        _nokeys="$_nokeys $_prov(no-interval-id)"
+        continue
+    fi
+    qq query qadena show-public-key "$_pid" transaction --output json >/dev/null 2>&1 \
+        || _nokeys="$_nokeys $_prov"
 done
 # A LOOP THAT FOUND NOTHING MUST NOT REPORT SUCCESS.  The first version of this filtered on
 # nodeType "identity"/"dsvs" -- the serviceProviderType, not the node type -- matched zero rows,
 # and printed "ok" on a chain where BOTH providers were keyless.  The node type is "srv-prv";
 # the identity/dsvs distinction lives in the proposal, not here.
 if [[ "$_provseen" -eq 0 ]]; then
-    bad "no service providers found to check (expected 2) -- has governance run?"
+    bad "the profile names no service providers to check -- is --deployment right?"
 elif [[ -z "$_nokeys" ]]; then
     ok "all $_provseen registered service provider(s) have a transaction public key"
 else

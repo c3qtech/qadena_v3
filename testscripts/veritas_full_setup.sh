@@ -694,7 +694,7 @@ if [[ -n "$CF_TEMPLATE" ]]; then
     fi
     print -r -- ""
     print -r -- "  patching CloudFormation template ${CF_TEMPLATE:t}"
-    ./testscripts/patch_cloud_formation_template.sh "$PREFIX" "$CF_TEMPLATE" \
+    ./veritas_scripts/patch_cloud_formation_template.sh "$PREFIX" "$CF_TEMPLATE" \
         --key-dir "$_b64dir" --sponsors "$_sponsors" --armor-passfile "$PASSFILE"
 fi
 

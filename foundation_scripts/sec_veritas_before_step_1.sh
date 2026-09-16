@@ -720,7 +720,7 @@ prepare)
     print "1. SEND $DEPLOY_DISPLAY THIS COMMAND.  The addresses ride as arguments, so it is"
     print "   paste-and-run; only --count is theirs to choose (wallets per user):"
     print ""
-    print "     veritas_scripts/step_1.sh --count 30 \\"
+    print "     veritas_scripts/step_1.sh --deployment $DEPLOY_NAME --count 30 \\"
     print "         --appsvr $(addr_of $APPSVR) \\"
     # A ${VAR:+...} expansion cannot span two print statements -- the closing brace lands on the
     # next line and the word `print` is emitted literally.  Branch instead.
@@ -737,8 +737,8 @@ prepare)
     print "2. $DEPLOY_DISPLAY RETURNS a PRE-GRANT BLOCK -- their admin address plus every wallet"
     print "   address this deployment will ever create.  Save it to a file, then:"
     print ""
-    print "     foundation_scripts/sec_veritas_after_step_1.sh --pregrant <that file> \\"
-    print "         --coord-home $COORD_HOME${QADENA_NODE:+ --node $QADENA_NODE}"
+    print "     foundation_scripts/sec_veritas_after_step_1.sh --deployment $DEPLOY_NAME --pregrant <that file> \\"
+    print "         --coord-home $COORD_HOME${KEYRING_PASSFILE:+ --keyring-passfile $KEYRING_PASSFILE}${QADENA_NODE:+ --node $QADENA_NODE}"
     print ""
     print "   That one command does BOTH halves: it delegates the three authorities to"
     print "   $DEPLOY_DISPLAY's admin, and pre-grants every wallet in the block -- before any of them"
@@ -852,19 +852,29 @@ approve)
     print ""
     print "2. THEN TELL $DEPLOY_DISPLAY TO RUN, exactly:"
     print ""
-    print "     veritas_scripts/step_3.sh${QADENA_NODE:+ --node $QADENA_NODE}"
+    # --deployment ALWAYS, even for veritas.  It is the default, so omitting it works here and
+    # silently drives the wrong programme the moment this text is read on an ekycph or enf run --
+    # and the two differ only in which variables.json they read, so the failure is late and quiet.
+    print "     veritas_scripts/step_3.sh --deployment $DEPLOY_NAME${QADENA_NODE:+ --node $QADENA_NODE}"
     print ""
     print "   No exports and no addresses: step_3 reads them from the run's own variables.json"
     print "   and verifies the delegation on chain before using it."
     print ""
     print "3. $DEPLOY_DISPLAY returns a POOL BLOCK.  Save it to a file and finish with:"
     print ""
-    print "     foundation_scripts/sec_veritas_after_step_3.sh --pool-addresses <that file> \\"
-    print "         --coord-home $COORD_HOME${QADENA_NODE:+ --node $QADENA_NODE}"
+    # $COORD_HOME interpolated, NOT a placeholder: steps 3 and 4 are the FOUNDATION's own, run on
+    # this machine, so its real path is the useful thing to print.  (Contrast the blocks step_1.sh
+    # and step_3.sh print, which are handed to the OTHER side and must use placeholders.)
+    # The passfile is echoed back only if this run used one, so an interactive run is not told to
+    # pass a flag it never had.
+    print "     foundation_scripts/sec_veritas_after_step_3.sh --deployment $DEPLOY_NAME --pool-addresses <that file> \\"
+    print "         --coord-home $COORD_HOME${KEYRING_PASSFILE:+ --keyring-passfile $KEYRING_PASSFILE}${QADENA_NODE:+ --node $QADENA_NODE}"
     print ""
-    print "4. VERIFY the whole deployment (read-only, no keyring, no passphrase):"
-    print ""
-    print "     foundation_scripts/sec_veritas_verify.sh --coord-home $COORD_HOME${QADENA_NODE:+ --node $QADENA_NODE}"
+    # VERIFY IS NOT LISTED HERE.  It used to be, as a step 4 -- but at this point step_3 has not
+    # run, so the pool does not exist and the verifier is guaranteed to report it missing.  An
+    # operator who follows the list in order sees a red result for a deployment that is merely
+    # unfinished, and the only way to tell that apart from a real failure is to know the sequence
+    # already.  sec_veritas_after_step_3.sh prints it instead, where it can actually pass.
     print "==================================================================="
     ;;
 

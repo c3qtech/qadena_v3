@@ -178,6 +178,19 @@ qk() {
 }
 qq() { "$QBIN" --home "$NODE_HOME" "$@" --node "$NODE"; }
 
+# THE CHAIN-ID IS SIGNED, AND THE COORDINATOR HOME DOES NOT KNOW IT.  Identical to the note in
+# sec_veritas_after_step_1.sh:165 -- that script was fixed on 2026-09-06 and this one was not.
+# A signature binds the chain-id; the tx client fills it from the client.toml of whatever --home it
+# was given, and the COORDINATOR home's client.toml holds whatever derive_launch_keys.sh rendered
+# -- on the qfi-testnet coordinator, "qadena_4828-1" (the DEVNET id) against a chain running
+# qadena_4824-1.  Signing with that and broadcasting is an invalid signature, which this chain
+# reports via cosmos/evm's EIP-712 fallback as
+#     code 111222: recovered: must set RegressionTestingAminoCodec before calling StdSignBytes
+# plus a goroutine dump -- naming neither the chain-id nor the signature.  Measured 2026-09-16:
+# every one of 93 grants failed this way, reported only as "produced no txhash".
+CHAIN="${QADENA_CHAIN_ID:-$(qq status 2>/dev/null | jq -r '.node_info.network // empty')}"
+[ -n "$CHAIN" ] || { echo "cannot determine the chain-id from $NODE; set QADENA_CHAIN_ID"; exit 1; }
+
 # THE FILE IS CHECKED, NOT TRUSTED.
 #
 # Every failure this guards against is silent and per-wallet: the app-server picks an arbitrary
@@ -239,7 +252,12 @@ fa_addr=$(qk keys show "$foundation_appsvr" -a 2>/dev/null) \
     || { echo "$foundation_appsvr not in this keyring -- this script is run by the FOUNDATION, not by SEC"; exit 1; }
 
 echo "-------------------------"
-echo "Step 4: authorising the app-server to grant as $foundation_users"
+# NO BARE STEP NUMBER.  This said "Step 4", left from a retired four-step numbering, and there are
+# now two live schemes that disagree: the HOWTO's handover table calls this 8 of 8, while
+# veritas_full_setup.sh's banner calls it stage 7 (it numbers verify separately).  Any number
+# written here goes stale the moment either changes.  Name the actor and the script it follows --
+# that cannot drift, and it is what an operator actually needs to know.
+echo "FOUNDATION, after $DEPLOY_DISPLAY's step_3: authorising the app-server to grant as $foundation_users"
 echo "-------------------------"
 echo "sponsor pool: $sponsor_base plus $count ephemeral wallets"
 
@@ -251,7 +269,7 @@ echo "sponsor pool: $sponsor_base plus $count ephemeral wallets"
 grant_and_wait() {   # grant_and_wait <label> <wallet> <tx args...>
     local label="$1" w="$2"; shift 2
     local out hash code
-    out=$(qk "$@" --from "$foundation_users" --node "$NODE" --yes --output json \
+    out=$(qk "$@" --from "$foundation_users" --node "$NODE" --chain-id "$CHAIN" --yes --output json \
           --gas-prices $minimum_gas_prices --gas $gas_auto --gas-adjustment $gas_adjustment 2>&1) || {
         # Already granted is not a failure: x/feegrant and x/authz hold at most one grant per
         # (granter, grantee), so a re-run against an authorised pool reports "already exists".
@@ -263,6 +281,17 @@ grant_and_wait() {   # grant_and_wait <label> <wallet> <tx args...>
         echo "  WARNING: $label for $w did not broadcast: $(echo "$out" | tail -1)"; return 1; }
     hash=$(echo "$out" | grep '^{' | tail -1 | jq -r '.txhash // ""' 2>/dev/null)
     [ -n "$hash" ] || { echo "  WARNING: $label for $w produced no txhash"; return 1; }
+    # NAME THIS ONE.  A tx signed for the wrong chain-id is accepted for broadcast, gets a hash,
+    # and fails in CheckTx with a recovered amino panic -- so it reads as a chain bug rather than
+    # as a signature the chain could not verify.  Say what it actually is, once, at the first
+    # occurrence; without this the operator watches 93 identical goroutine dumps scroll past.
+    case "$out" in
+        *RegressionTestingAminoCodec*)
+            echo "  the chain REFUSED this signature.  Almost always a chain-id mismatch:" >&2
+            echo "    signing as: $CHAIN    node reports: $(qq status 2>/dev/null | jq -r '.node_info.network // "?"')" >&2
+            echo "    and $COORD_HOME/config/client.toml says: $(grep -E '^chain-id' "$COORD_HOME/config/client.toml" 2>/dev/null | head -1)" >&2
+            return 1 ;;
+    esac
     qq query wait-tx "$hash" --timeout 60s >/dev/null 2>&1 || true
     code=$(qq query tx "$hash" --output json 2>/dev/null | jq -r '.code // "?"')
     [ "$code" = "0" ] || { echo "  WARNING: $label for $w failed on chain (code $code)"; return 1; }
@@ -331,6 +360,11 @@ if [ "$incomplete" -gt 0 ]; then
     echo "WARNING: partial coverage. The app-server picks an arbitrary pool member per request, so"
     echo "onboarding will fail for SOME users and not others. Re-run this step before going live."
 fi
+# Values for the CHECK block below: the pool file as the verifier would be given it, and one real
+# pool address to spot-check.  Resolved here, where both are still in scope.
+POOL_ARG_SHOWN="${POOL_FILE:-$COORD_HOME/$DEPLOY_POOL_FILE}"
+SPOT_ADDR="${POOL_ADDRS[1]:-<a pool address>}"
+
 echo ""
 echo "-------------------------"
 echo "Send the following to $DEPLOY_DISPLAY, for the app-server configuration"
@@ -341,3 +375,85 @@ echo ""
 echo "Neither $DEPLOY_DISPLAY's citizen sponsors nor its own operational wallets hold tokens -- they hold fee"
 echo "grants from these two accounts. A grant is only used when the transaction NAMES it, so without"
 echo "both settings the app-server fails with \"spendable balance 0aqdn\" rather than degrading."
+
+# HOW TO GET IT INTO CLOUDFORMATION.  These two addresses are not the whole configuration: the
+# app-server also needs the FIVE key bundles step_3 exported, and on an AWS deployment all of it
+# arrives through SSM/Secrets Manager rather than through .env.  Printing the addresses alone left
+# the operator to discover the rest, and the addresses are the easy half.
+echo ""
+echo "-------------------------"
+echo "IF THIS DEPLOYMENT RUNS ON AWS -- patching the CloudFormation template"
+echo "-------------------------"
+echo "The two addresses above plus the five key bundles go into one template.  Render a"
+echo "POPULATED COPY; the tracked template in veritas_deployment/ is never modified:"
+echo ""
+echo "    ${SCRIPT_DIR:h}/veritas_scripts/patch_cloud_formation_template.sh $DEPLOY_PREFIX \\"
+echo "        ${SCRIPT_DIR:h}/veritas_deployment/v2-cloud-formation-ssm-parameters.yaml \\"
+echo "        --key-dir <where step_3 wrote the .base64 files> \\"
+echo "        --sponsors <the sponsor addresses: see below> \\"
+echo "        --armor-prompt \\"
+echo "        --out <somewhere outside any git repo>/v2-cloud-formation-ssm-parameters.yaml"
+echo ""
+echo "  --sponsors TAKES EITHER SIDE'S FILE.  Run from HERE (the foundation):"
+echo "        $COORD_HOME/$DEPLOY_STATE_FILE"
+echo "  Run on $DEPLOY_DISPLAY's machine, which has no coordinator home at all:"
+echo "        $DEPLOY_SEC_HOME/variables.json      (step_1 recorded the same two addresses)"
+echo ""
+echo "  --key-dir IS ON THE MACHINE THAT RAN step_3, not necessarily this one.  step_3 writes"
+echo "  <name>-names.base64 / <name>-keys.base64 into the deployment home ($DEPLOY_SEC_HOME);"
+echo "  older runs left them in the repo root.  Copy that directory across first -- a PARTIAL"
+echo "  copy is refused by gen_key_env_vars.sh rather than half-written."
+echo ""
+echo "  --armor-prompt ASKS FOR $DEPLOY_DISPLAY'S PASSPHRASE, NOT THE FOUNDATION'S.  The keys were"
+echo "  exported by step_3 on $DEPLOY_DISPLAY's machine and armored with the passphrase typed"
+echo "  there -- the one that opens their deployment keyring.  The coordinator passphrase this"
+echo "  script just used opens a different keyring and will not decrypt any of them."
+echo ""
+echo "  (--armor-passfile <file> instead, for an unattended run.)  It is NOT optional."
+echo "  In the template the field is"
+echo "      /veritas/\${EnvType}/Common/qadena-armor-passphrase"
+echo "  and it ships holding the literal \"dummy-passphrase\".  A template carrying real keys and"
+echo "  that dummy produces an app-server that starts, fails to import EVERY key, and"
+echo "  restart-loops reporting an EMPTY reason."
+echo ""
+echo "  By default only the NON-PRODUCTION branch of each !If is written; --both-branches also"
+echo "  writes production.  The rendered copy contains ARMORED PRIVATE KEYS -- do not commit it."
+echo ""
+echo "Then deploy it:"
+echo "    aws cloudformation deploy --template-file <the rendered copy> \\"
+echo "        --stack-name <stack> --parameter-overrides EnvType=<env>"
+
+# CHECK IT WORKED -- HERE, AND ONLY HERE.
+#
+# This is the last act of the ceremony, so it is the first moment a full verification can pass.
+# Earlier steps deliberately do NOT suggest it: before step_3 the pool does not exist, so the
+# verifier reports it missing and an unfinished deployment is indistinguishable from a broken one.
+echo ""
+echo "-------------------------"
+echo "CHECK THE DEPLOYMENT -- read-only, no keyring, no passphrase"
+echo "-------------------------"
+echo "1. The whole thing, in one command.  It compares the chain against the sets this"
+echo "   ceremony recorded, so it can see a wallet that was never granted at all:"
+echo ""
+echo "     foundation_scripts/sec_veritas_verify.sh --deployment $DEPLOY_NAME \\"
+echo "         --coord-home $COORD_HOME${QADENA_NODE:+ --node $QADENA_NODE} \\"
+echo "         --pregrant $COORD_HOME/$DEPLOY_PREGRANT_FILE --pool $POOL_ARG_SHOWN"
+echo ""
+echo "   Without --pregrant/--pool it can only enumerate what EXISTS, which by construction"
+echo "   cannot notice something missing.  Both files were retained above."
+echo ""
+echo "2. Spot-check one pool wallet by hand -- expect BOTH authz types and a MsgExec grant:"
+echo ""
+echo "     qadenad query authz grants $fu_addr $SPOT_ADDR${QADENA_NODE:+ --node $QADENA_NODE}"
+echo "     qadenad query feegrant grant $fu_addr $SPOT_ADDR${QADENA_NODE:+ --node $QADENA_NODE}"
+echo ""
+echo "   MsgGrantAllowance alone is the failure that hides: such a wallet onboards a FRESH"
+echo "   citizen and then silently cannot widen an existing one."
+echo ""
+echo "3. The sponsors must hold tokens and the deployment's wallets must hold NONE:"
+echo ""
+echo "     foundation_scripts/query_accounts.sh --coord-home $COORD_HOME --sponsors"
+echo ""
+echo "   A deployment wallet with a balance means something paid with tokens, and the whole"
+echo "   toll-free construction is unnecessary -- worth understanding before going live."
+echo "-------------------------"

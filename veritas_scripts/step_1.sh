@@ -580,14 +580,21 @@ else
 
     echo ""
     echo "==================================================================="
-    echo "SEND THIS BLOCK TO QFI -- they paste it into a terminal as-is:"
+    # THE HEREDOC IS PASTEABLE; THE COMMAND IS NOT.  /tmp is portable and this side chooses it,
+    # so the file half can be pasted verbatim.  The FLAGS are QFI's own filesystem, which this
+    # machine has no way to know -- and `--coord-home ~/launch/coord` was printed as though it did.
+    # That path matches none of the real fleets (~/fleet-launch/coord, ~/qfi-testnet-fleet-launch/
+    # coord, ~/sec-veritas-staging-fleet-launch/coord), so an operator pasting it verbatim ran the
+    # ceremony against an empty or absent keyring.  Placeholders say what must be supplied.
+    echo "SEND THIS BLOCK TO QFI.  The heredoc pastes as-is; the last two lines are theirs to fill in:"
     echo "==================================================================="
     echo ""
-    echo "cat > /tmp/veritas-pregrant.json <<'PREGRANTEOF'"
+    echo "cat > /tmp/$DEPLOY_NAME-pregrant.json <<'PREGRANTEOF'"
     cat "$pregrant_file"
     echo "PREGRANTEOF"
-    echo "foundation_scripts/sec_veritas_after_step_1.sh --pregrant /tmp/veritas-pregrant.json \\"
-    echo "    --coord-home ~/launch/coord${QADENA_NODE:+ --node $QADENA_NODE}"
+    echo "foundation_scripts/sec_veritas_after_step_1.sh --deployment $DEPLOY_NAME \\"
+    echo "    --pregrant /tmp/$DEPLOY_NAME-pregrant.json${QADENA_NODE:+ --node $QADENA_NODE} \\"
+    echo "    --coord-home <QFI's coordinator dir> --keyring-passfile <its passphrase file>"
     echo ""
     echo "==================================================================="
     jq -r '"  sec-admin \(.sec_admin)   wallets \(.wallets|length)   chain \(.chain_id)"' "$pregrant_file" 2>/dev/null
