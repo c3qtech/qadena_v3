@@ -238,18 +238,8 @@ else
 fi
 
 echo ""
-echo "==================================================================="
-echo "TELL $DEPLOY_DISPLAY TO RUN, exactly:"
-echo ""
-echo "    veritas_scripts/step_2.sh${QADENA_NODE:+ --node $QADENA_NODE}"
-echo ""
-echo "No exports needed: step_2 reads the admin name from variables.json and USES the"
-echo "delegation only after verifying this grant on chain.  step_3 the same, after the"
-echo "proposals pass."
-echo "==================================================================="
-echo ""
-echo "To withdraw this at any time:"
-echo "    qadenad tx authz revoke $sec_admin /cosmos.feegrant.v1beta1.MsgGrantAllowance --from $foundation_appsvr"
+echo "authorisation done.  The handover instructions print at the END of this run --"
+echo "the pre-grant phase below is one line per wallet and would scroll them away."
 
 # ---------------------------------------------------------------------------------------------
 # PRE-GRANT PHASE: one narrow allowance per upcoming wallet, signed by the sponsor AT HOME.
@@ -336,3 +326,27 @@ if [ -n "$PREGRANT" ]; then
         exit 1
     fi
 fi
+
+# THE HANDOVER, LAST -- AFTER THE PRE-GRANT LOOP, NOT BEFORE IT.
+#
+# This printed immediately after the authz grants, which on a --count 30 run left it roughly 124
+# "ok: pregrant <name>" lines above the bottom of the terminal.  The one thing the operator has to
+# copy out of this run was the one thing guaranteed to have scrolled past.
+#
+# It is also only honest here.  Printed early it said "tell them to run step_2" while the wallets
+# step_2 needs were not yet granted -- true by the time anyone read it, but only by accident.  And
+# it sits BELOW the partial-failure exit, so a run that could not grant every wallet never prints a
+# handover at all.
+echo ""
+echo "==================================================================="
+echo "TELL $DEPLOY_DISPLAY TO RUN, exactly:"
+echo ""
+echo "    veritas_scripts/step_2.sh${QADENA_NODE:+ --node $QADENA_NODE}"
+echo ""
+echo "No exports needed: step_2 reads the admin name from variables.json and USES the"
+echo "delegation only after verifying this grant on chain.  step_3 the same, after the"
+echo "proposals pass."
+echo "==================================================================="
+echo ""
+echo "To withdraw this at any time:"
+echo "    qadenad tx authz revoke $sec_admin /cosmos.feegrant.v1beta1.MsgGrantAllowance --from $foundation_appsvr"

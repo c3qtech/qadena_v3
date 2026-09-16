@@ -60,6 +60,159 @@ would put a foundation private key on a SEC machine — the one thing this struc
 
 ---
 
+## Running both sides yourself — the whole ceremony, in order
+
+The table above is the two-party protocol. When you hold **both** keyrings — a test fleet, or a
+rehearsal before the real handover — you run all eight steps yourself, and the paste blocks become
+files you read with `jq` instead of things you email.
+
+`testscripts/veritas_full_setup.sh --site <site>` drives exactly this sequence. Run it by hand when
+you want to stop between steps, inspect state, or rehearse what SEC will see.
+
+**Set the four paths once.** They vary per *site*, and the suffix is what stops one fleet's run from
+destroying another's keys:
+
+| | `$C` coord-home | `$P` passfile | `$N` node | `$H` state home |
+|---|---|---|---|---|
+| `M1-M2` | `~/fleet-launch/coord` | `~/fleet-launch-password` | `10.211.55.5` | `~/sec-veritas` |
+| `staging` | `~/sec-veritas-staging-fleet-launch/coord` | `~/.sec-veritas-password` | `20.212.178.16` | `~/sec-veritas-staging` |
+| `qfi-testnet` | `~/qfi-testnet-fleet-launch/coord` | `~/qfi-testnet-fleet-launch/keyring-password` | `45.115.225.104` | `~/sec-veritas-qfi-testnet` |
+
+`testscripts/fleet_site_profile.sh --show <site>` prints these, so they never have to be transcribed.
+Using `qfi-testnet` below:
+
+```sh
+cd ~/test/qv3
+C=~/qfi-testnet-fleet-launch/coord
+P=~/qfi-testnet-fleet-launch/keyring-password
+N=tcp://45.115.225.104:26657
+H=~/sec-veritas-qfi-testnet
+M=~/qfi-testnet-fleet-launch/mnemonics
+```
+
+### 1 — FOUNDATION: fund and stake the two sponsors
+
+A **5-of-7 `pubsec`** ceremony to fund, and **3-of-5 `foundation`** to stake.
+
+```sh
+foundation_scripts/sec_veritas_before_step_1.sh --deployment veritas --stage prepare \
+    --coord-home $C --keyring-passfile $P --mnemonics-dir $M --node $N \
+    --fund-members pubsec-m1,pubsec-m2,pubsec-m3,pubsec-m4,pubsec-m5,pubsec-m6,pubsec-m7 \
+    --members foundation-m1,foundation-m2,foundation-m3
+```
+
+Writes `$C/veritas-sponsors.json`. Read the two addresses out of it — this is the paste block, as a
+file:
+
+```sh
+APPSVR=$(jq -r .appsvr $C/veritas-sponsors.json)
+USERS=$(jq -r .users   $C/veritas-sponsors.json)
+```
+
+### 2 — SEC: mint keys, derive every wallet address, emit the pre-grant block
+
+```sh
+veritas_scripts/step_1.sh --deployment veritas --count 3 \
+    --appsvr $APPSVR --users $USERS \
+    --node $N --sec-home $H --keyring-passfile $P
+```
+
+### 3 — FOUNDATION: authorise the admin, pre-grant every wallet
+
+```sh
+foundation_scripts/sec_veritas_after_step_1.sh --deployment veritas \
+    --pregrant $H/pregrant_addresses.json \
+    --coord-home $C --keyring-passfile $P --node $N
+```
+
+### 4 — SEC: create the service providers, submit their proposals
+
+```sh
+veritas_scripts/step_2.sh --deployment veritas --node $N --sec-home $H --keyring-passfile $P
+```
+
+It prints the two proposal ids and the exact command for step 5.
+
+### 5 — FOUNDATION: deposit and vote
+
+A **3-of-5 `foundation`** ceremony.
+
+```sh
+foundation_scripts/sec_veritas_after_step_2.sh --deployment veritas <identity-pid> <dsvs-pid> \
+    --coord-home $C --keyring-passfile $P --node $N \
+    --members foundation-m1,foundation-m2,foundation-m3
+```
+
+Wait for both to reach PASSED before step 6:
+
+```sh
+provider_scripts/query_service_provider_proposal.sh <pid> --wait --node $N
+```
+
+> **Watch the clock on a test chain.** `config/launch-config.yml` ships with a **5-minute**
+> `max_deposit_period`, and a proposal that has not met its minimum by `deposit_end_time` is
+> **deleted** — not rejected. The id then reads `NOT FOUND` and it looks as though step 4 never ran.
+> Proposals are submitted `expedited`, so the bar is `expedited_min_deposit` (5× the regular
+> minimum), which the submission's own initial deposit does not reach on its own; step 5 is what
+> tops it up. Have step 5 typed and ready before you start step 4, or raise `max_deposit_period`
+> and rebuild. Check with `qadenad query gov params`.
+
+### 6 — SEC: create the sponsor pool and the DSVS user, claim credentials
+
+```sh
+veritas_scripts/step_3.sh --deployment veritas --node $N --sec-home $H --keyring-passfile $P
+```
+
+### 7 — FOUNDATION: authorise the sponsor pool
+
+**Three** transactions per wallet: `authz` for `MsgGrantAllowance`, `authz` for
+`MsgRevokeAllowance`, and the `MsgExec` fee grant.
+
+```sh
+foundation_scripts/sec_veritas_after_step_3.sh --deployment veritas \
+    --pool-addresses $H/pool_addresses.json \
+    --coord-home $C --keyring-passfile $P --node $N
+```
+
+### 8 — Verify
+
+```sh
+foundation_scripts/sec_veritas_verify.sh --deployment veritas --coord-home $C --node $N \
+    --pregrant $H/pregrant_addresses.json --pool $H/pool_addresses.json
+```
+
+Note the flag is `--pool` here and `--pool-addresses` in step 7 — the same file, two spellings.
+Passing the wrong one is rejected as an unknown option rather than silently ignored.
+
+### Three things that catch people out
+
+**The thresholds differ between steps 1 and 5.** `pubsec` is 5-of-7, `foundation` is 3-of-5. Bucket
+membership is a local naming convention — the chain knows only the multisig address — which is why
+both member lists must be spelled out rather than discovered.
+
+**`$H` carries the site suffix.** `~/sec-veritas-qfi-testnet`, not `~/sec-veritas`. `--rebuild-chain`
+*deletes* the state home, and a run pointed at the unsuffixed path destroys the M1-M2 deployment's
+keyring and sealed mnemonics on its way to building a different chain. That has happened once.
+
+**Step 7 issues three transactions per wallet, not two.** `MsgRevokeAllowance` was added on
+2026-09-11: widening a fee allowance is revoke-then-grant, and a pool holding only
+`MsgGrantAllowance` can onboard a *fresh* citizen and then silently fail to widen an existing one.
+`sec_veritas_verify.sh` fails any pool missing it.
+
+### Letting the driver run a step while you watch
+
+Every stage prints its underlying command before executing it, so
+
+```sh
+testscripts/veritas_full_setup.sh --site qfi-testnet --from step2 --until step2
+```
+
+is both a way to run one step and the cheapest way to read off its exact invocation with this site's
+paths already substituted. `--until` stops *after* the named stage; `--rebuild-chain` is not a stage
+and runs whenever it is passed, so omit it unless you mean to purge the fleet.
+
+---
+
 ## The funding model
 
 Everything below is **foundation-sponsored** -- the same word the node bring-up uses

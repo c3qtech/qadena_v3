@@ -241,13 +241,47 @@ qadena_keyring_unlock() {
         echo "      export QADENA_KEYRING_BACKEND=test" >&2
         exit 1
     else
-        printf "Keyring passphrase for %s (hidden, will not echo): " "$QADENAHOME" >&2
+        # NAME THE KEYRING BEING OPENED, NOT THE NODE HOME.  $QADENA_KEYRING_DIR overrides where
+        # keys live -- SEC's steps point it at $VERITAS_SEC_HOME/keyring while --home still points
+        # at the node for config and RPC.  Printing $QADENAHOME there asks for "the passphrase for
+        # /home/ubuntu/qadena" when the passphrase being asked for is the DEPLOYMENT's, and an
+        # operator who types the node's passphrase gets "too many failed passphrase attempts"
+        # against a keyring the message never mentioned.
+        # SAY WHICH KEYRING, AND WHETHER IT IS NEW.  "Keyring passphrase for <dir>" answers neither
+        # question an operator actually has: is this the node's keyring or the deployment's, and am
+        # I recalling a passphrase or choosing one?  The confirm prompt below already distinguishes
+        # the two cases -- it just never said so, so a second prompt appearing (or not) was the only
+        # clue.
+        _kr="${QADENA_KEYRING_DIR:-$QADENAHOME}"
+        if [ -n "${QADENA_KEYRING_DIR:-}" ] && [ "$QADENA_KEYRING_DIR" != "$QADENAHOME/keyring" ]; then
+            _kr_what="this DEPLOYMENT's keyring (not the node's at $QADENAHOME)"
+        else
+            _kr_what="the NODE's keyring"
+        fi
+        if [ -d "$_kr/keyring-file" ]; then
+            echo "Opening $_kr_what:" >&2
+            echo "  $_kr" >&2
+        else
+            echo "Creating $_kr_what:" >&2
+            echo "  $_kr" >&2
+            echo "  It does not exist yet, so CHOOSE a passphrase.  It is the only thing that opens" >&2
+            echo "  these keys afterwards -- there is no recovery." >&2
+            # The mnemonic-sealing note is TRUE ONLY OF A DEPLOYMENT KEYRING.  step_1 seals into
+            # $VERITAS_SEC_HOME; a node keyring has nothing to do with it, and saying so there sends
+            # the operator looking for mnemonics that were never written.
+            if [ -n "${QADENA_KEYRING_DIR:-}" ] && [ "$QADENA_KEYRING_DIR" != "$QADENAHOME/keyring" ]; then
+                echo "  step_1 seals this deployment's mnemonics with it too, so every later step" >&2
+                echo "  must be given the same one." >&2
+            fi
+        fi
+        printf "  passphrase (hidden, will not echo): " >&2
         read -rs QADENA_KEYRING_PASS; echo "" >&2
-        if [ ! -d "$QADENAHOME/keyring-file" ]; then
+        if [ ! -d "$_kr/keyring-file" ]; then
             printf "  confirm: " >&2; read -rs _kp2; echo "" >&2
             [ "$QADENA_KEYRING_PASS" = "$_kp2" ] || { echo "passphrases do not match" >&2; exit 1; }
             unset _kp2
         fi
+        unset _kr _kr_what
     fi
     [ -n "$QADENA_KEYRING_PASS" ] || { echo "empty passphrase" >&2; exit 1; }
     export QADENA_KEYRING_PASS
