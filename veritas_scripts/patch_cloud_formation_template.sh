@@ -63,6 +63,8 @@ ARMOR_PASSFILE=""
 ARMOR_PROMPT=0
 OUT=""
 BOTH=0
+NODE_HOST=""
+GRPC_PORT=""
 DRY_RUN=0
 
 usage() {
@@ -85,6 +87,11 @@ Options:
                      a file just to render one template
   --out <file>       where to write the populated copy
                      (default: <key-dir>/<source basename>)
+  --node-host <host> set QADENA_PIONEER_IP and QADENA_PUBLIC_HOST to this host or
+                     IP -- the chain THIS deployment's keys belong to.  Without it
+                     both keep whatever the template carried, which is a different
+                     chain's endpoint and fails only at runtime
+  --grpc-port <n>    set QADENA_GRPC_PORT too (default: leave it alone; 9090)
   --both-branches    also write the PRODUCTION branch of each !If.  Default is the
                      non-prod branch only -- the template's own comments warn that its
                      prod values are unreconciled, and rewriting them from a testnet
@@ -101,6 +108,8 @@ while [ $# -gt 0 ]; do
 	--armor-prompt)   ARMOR_PROMPT=1; shift ;;
 	--out)            OUT="$2"; shift 2 ;;
 	--both-branches)  BOTH=1; shift ;;
+	--node-host)      NODE_HOST="$2"; shift 2 ;;
+	--grpc-port)      GRPC_PORT="$2"; shift 2 ;;
 	--dry-run)        DRY_RUN=1; shift ;;
 	-h|--help)        usage; exit 0 ;;
 	-*)               echo "unknown option: $1" >&2; usage >&2; exit 1 ;;
@@ -162,6 +171,23 @@ if [ -n "$SPONSORS" ]; then
 	printf 'QADENA_FOUNDATION_USERS_ADDRESS=%s\n'  "$_u" >> "$BLOCK"
 	printf 'QADENA_FOUNDATION_APPSVR_ADDRESS=%s\n' "$_a" >> "$BLOCK"
 	echo "  sponsors: users=$_u appsvr=$_a"
+fi
+
+# THE ENDPOINT IS NOT SOMETHING THE CEREMONY PRODUCES, WHICH IS WHY IT GOT MISSED.
+#
+# Everything else this script writes comes out of step_3's export or the sponsors file, so a
+# rendered template was complete EXCEPT for the one field saying which chain to talk to.  It kept
+# the source's value -- an AWS NLB pointing at the staging chain -- so a template carrying
+# qfi-testnet's keys and pool grants would authenticate against a DIFFERENT chain and fail every
+# lookup, with nothing in the config naming the cause.  The template's own comment already warns
+# that this value is a stale snapshot; now it can be set.
+if [ -n "$NODE_HOST" ]; then
+	printf 'QADENA_PIONEER_IP=%s\n'  "$NODE_HOST" >> "$BLOCK"
+	printf 'QADENA_PUBLIC_HOST=%s\n' "$NODE_HOST" >> "$BLOCK"
+	echo "  endpoint: QADENA_PIONEER_IP / QADENA_PUBLIC_HOST -> $NODE_HOST"
+fi
+if [ -n "$GRPC_PORT" ]; then
+	printf 'QADENA_GRPC_PORT=%s\n' "$GRPC_PORT" >> "$BLOCK"
 fi
 
 if [ -n "$ARMOR_PASSFILE" ] && [ "$ARMOR_PROMPT" -eq 1 ]; then

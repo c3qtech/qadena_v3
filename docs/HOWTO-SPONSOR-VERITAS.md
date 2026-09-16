@@ -549,6 +549,78 @@ block is the only route.
 
 ---
 
+## Getting the result into the app-server — env file or CloudFormation
+
+The ceremony ends with two addresses printed by `sec_veritas_after_step_3.sh` and five key bundles
+exported by `step_3`. Neither reaches the app-server on its own.
+
+**Where the keys are.** `step_3` writes ten files into the deployment home — `<name>-names.base64`
+and `<name>-keys.base64` for the identity provider, the DSVS provider, the DSVS signer, its
+credential wallet, and the create-wallet sponsor. They are on **the machine that ran step_3**, which
+in a real deployment is SEC's, not the foundation's. Older runs left them in the repo root; if both
+exist, check the mtimes — a stale set renders a template that looks complete and carries another
+deployment's keys.
+
+**Two targets, one generator.** `gen_key_env_vars.sh` turns those bundles into `SEC_*` values;
+`patch_env_file.sh` writes them into an env file and
+`veritas_scripts/patch_cloud_formation_template.sh` writes them into a CloudFormation template. A
+deployment reading its config from SSM needs the second: patching only the env file leaves it
+running the *previous* bring-up's keys, which is not a failure — it is a deployment quietly signing
+as the wrong wallets.
+
+### Rendering the template
+
+```sh
+./veritas_scripts/patch_cloud_formation_template.sh <prefix> \
+    veritas_deployment/v2-cloud-formation-ssm-parameters.yaml \
+    --key-dir   <the deployment home holding the .base64 files> \
+    --sponsors  <sponsor addresses -- see below> \
+    --armor-prompt \
+    --node-host <the chain THIS deployment runs on> --grpc-port 9090 \
+    --out       <a path outside any git repo>/v2-cloud-formation-ssm-parameters.yaml
+```
+
+It writes **14 parameters**: ten key/username values, the two foundation addresses, the armor
+passphrase, and the endpoint. The SOURCE is read and never modified.
+
+| flag | why it is not optional |
+|---|---|
+| `--key-dir` | defaults to `.`, and the repo root may hold an older run's bundles |
+| `--sponsors` | takes `<coord>/<deployment>-sponsors.json` on the foundation's machine, or `<deployment home>/variables.json` on the deployment's — which has no coordinator home |
+| `--armor-prompt` | asks for the **deployment's** keyring passphrase, the one typed when `step_3` exported the keys. The foundation's coordinator passphrase opens a different keyring and decrypts none of them. `--armor-passfile <file>` for an unattended run |
+| `--node-host` | the only value here the ceremony does not produce. Without it the template keeps the source's endpoint — a different chain — and the app-server authenticates with these keys against that chain and fails every lookup |
+
+`--dry-run` reports what would change and writes nothing. `--both-branches` also writes the
+production branch of each `!If`; the default writes only non-production.
+
+### Two failures that are silent by construction
+
+**A stale armor passphrase.** The keys are armored with the passphrase that exported them. A
+template carrying new keys and the wrong passphrase produces an app-server that starts, fails to
+import *every* key, and restart-loops reporting an **empty** reason. In the template the field is
+`/veritas/${EnvType}/Common/qadena-armor-passphrase`, and it ships holding the literal
+`dummy-passphrase`.
+
+**A blank `QADENA_PUBLIC_HOST`.** The app removed `QADENA_BASE_URL` from its `environment.json`
+when the server became the only source of chain config, so there is no bundled fallback: every
+client shows *"VERITAS is temporarily unavailable"*. `--node-host` sets this and
+`QADENA_PIONEER_IP` together. They are normally the same host and differ only where the server
+reaches the chain privately and phones cannot — `QADENA_PUBLIC_HOST` is served to phones, so it
+must be publicly routable.
+
+### The tracked template is a skeleton
+
+`veritas_deployment/v2-cloud-formation-ssm-parameters.yaml` carries placeholders, never values. The
+upstream copy in the app-server repo ships **populated** — with real armored private keys and a
+GitHub personal access token — which is why pushing it was rejected by secret scanning on
+2026-09-16. If you refresh this file from upstream, sanitise before committing.
+
+The RENDERED copy is the opposite: it holds armored private keys and, with `--armor-prompt`, the
+passphrase that opens them. `.gitignore` catches that filename everywhere except
+`veritas_deployment/`, but write it outside the repo anyway.
+
+---
+
 ## Verifying the result
 
 Either side can check the whole deployment against the chain at any time. It is **read-only** --
