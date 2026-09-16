@@ -69,3 +69,28 @@ tokenomics/genesis.json
 # Backups written by patch_env_file.sh -- they hold the armored keys it replaced.
 *.bak
 *.bak.*
+
+# A RENDERED CloudFormation TEMPLATE, ANYWHERE BUT veritas_deployment/.
+#
+# veritas_scripts/patch_cloud_formation_template.sh writes a POPULATED copy that holds armored
+# private keys and -- with --armor-prompt or --armor-passfile -- the passphrase that opens them.
+# It keeps the SOURCE's basename, so "ignore the filename" would also ignore the tracked skeleton.
+# Ignore it everywhere, then un-ignore the one directory that is meant to carry it.
+#
+# The skeleton in veritas_deployment/ has placeholders, never values: the upstream copy ships
+# populated with real keys AND a GitHub PAT, which is what push protection rejected on 2026-09-16.
+# If you ever refresh it from the app-server repo, sanitise before committing.
+*cloud-formation*.yaml
+*cloud-formation*.yml
+!veritas_deployment/*cloud-formation*.yaml
+
+# Belt and braces on the key bundles.  *-names.base64 / *-keys.base64 above match what
+# extract_ephem_keys.sh writes today; this catches anything else that ends up in that form.
+*.base64
+
+# Passphrase files.  .sec-veritas-password is listed above for the staging fleet; these are the
+# names the newer site profiles use.  A generated one is the ONLY copy of what opens a keyring,
+# so it belongs in the launch directory, never in the repo.
+keyring-password
+*.passfile
+.qadena-*-pass
