@@ -16,6 +16,7 @@ import "qadena/qadena/protect_key.proto";
 import "qadena/qadena/recover_key.proto";
 import "qadena/qadena/enclave_identity.proto";
 import "qadena/qadena/scanned_contract_whitelist.proto";
+import "qadena/qadena/parked_external_address.proto";
 
 option go_package = "github.com/c3qtech/qadena_v3/x/qadena/types";
 
@@ -41,5 +42,10 @@ message GenesisState {
   // un-bootstrappable.  Listing it does not exempt it: those funding sends are scanned like any
   // other, and are reportable.
   repeated ScannedContractWhitelist scannedContractWhitelistList = 13 [(gogoproto.nullable) = false] ;
+  // Pioneer addresses parked by the staking hooks while their validator is out of the bonded set
+  // (release_address_on_unbond).  Exported so a chain restarted from an export while a validator
+  // is mid-unbond can still restore its address when it re-bonds -- the enclave never republishes
+  // an empty row, so a lost parked entry is a permanently unaddressable pioneer.
+  repeated ParkedExternalAddress parkedExternalAddressList = 14 [(gogoproto.nullable) = false] ;
 }
 

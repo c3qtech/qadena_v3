@@ -18,7 +18,7 @@
 # keyholders: scripts/multisig_sign.sh, driven by hand, as in
 # docs/HOWTO-LAUNCH-CHAIN-ADD-NODE.md step 2.
 #
-# WHAT IT SIGNS.  The grant covers the seven messages a pioneer broadcasts FOR LIFE -- a join-only
+# WHAT IT SIGNS.  The grant covers the eight messages a pioneer broadcasts FOR LIFE -- a join-only
 # or expiring grant stops SS re-sharing silently, and one without MsgVote makes the fleet
 # ungovernable.  With --self-bond it ALSO sends the bond, because no fee grant covers staked
 # principal.  Both are signed before either is broadcast, the way the operator docs prescribe so
@@ -38,7 +38,11 @@ HOME_DIR="${QADENAHOME:-$HOME/qadena}"
 # Same list as testscripts/foundation_sponsor_node.sh and scripts/sponsor_join_node.sh -- keep the
 # three together.  A grant that misses one of these fails much later, at an SS re-share or a vote,
 # and the node looks healthy until it does.
-MSGS="/qadena.qadena.MsgPioneerAddPublicKey,/qadena.qadena.MsgPioneerUpdateIntervalPublicKeyID,/qadena.qadena.MsgPioneerUpdatePioneerJar,/cosmos.staking.v1beta1.MsgCreateValidator,/qadena.qadena.MsgPioneerUpdatePublicKey,/qadena.qadena.MsgPioneerUpdateJarRegulator,/cosmos.gov.v1.MsgVote"
+#
+# MsgUnjail IS A LIFETIME MESSAGE TOO -- IT IS HOW A JAILED SPONSORED VALIDATOR COMES BACK.  A
+# toll-free validator holds zero liquid QDN (its self-bond is fully staked), so without this it
+# cannot pay for its own unjail and stays jailed forever.
+MSGS="/qadena.qadena.MsgPioneerAddPublicKey,/qadena.qadena.MsgPioneerUpdateIntervalPublicKeyID,/qadena.qadena.MsgPioneerUpdatePioneerJar,/cosmos.staking.v1beta1.MsgCreateValidator,/qadena.qadena.MsgPioneerUpdatePublicKey,/qadena.qadena.MsgPioneerUpdateJarRegulator,/cosmos.gov.v1.MsgVote,/cosmos.slashing.v1beta1.MsgUnjail"
 
 NODE_ADDR="" GRANTER="" VIA="" SELF_BOND="" PERIOD="2592000" PERIOD_LIMIT="1000qdn"
 while [[ $# -gt 0 ]]; do

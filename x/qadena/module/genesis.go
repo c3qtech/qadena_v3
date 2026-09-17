@@ -59,6 +59,12 @@ func InitGenesis(ctx sdk.Context, k keeper.Keeper, genState types.GenesisState) 
 	for _, elem := range genState.ScannedContractWhitelistList {
 		k.SetScannedContractWhitelist(ctx, elem)
 	}
+	// Parked pioneer addresses survive an export/restart taken while a validator is mid-unbond.
+	// Losing one is not cosmetic: the enclave never republishes an empty row, so a pioneer whose
+	// parked value vanished would stay unaddressable forever after re-bonding.
+	for _, elem := range genState.ParkedExternalAddressList {
+		k.SetParkedExternalAddress(ctx, elem)
+	}
 	// this line is used by starport scaffolding # genesis/module/init
 	if err := k.SetParams(ctx, genState.Params); err != nil {
 		panic(err)
@@ -82,6 +88,7 @@ func ExportGenesis(ctx sdk.Context, k keeper.Keeper) *types.GenesisState {
 	genesis.RecoverKeyList = k.GetAllRecoverKey(ctx)
 	genesis.EnclaveIdentityList = k.GetAllEnclaveIdentity(ctx)
 	genesis.ScannedContractWhitelistList = k.GetAllScannedContractWhitelist(ctx)
+	genesis.ParkedExternalAddressList = k.GetAllParkedExternalAddress(ctx)
 	// this line is used by starport scaffolding # genesis/module/export
 
 	return genesis

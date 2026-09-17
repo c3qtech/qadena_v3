@@ -185,6 +185,81 @@ func TestSharedRowFromNonPioneerIsRejected(t *testing.T) {
 	require.ErrorIs(t, err, types.ErrCreatorNotPioneer)
 }
 
+// THE HOOK-CLEARED ROW MUST STAY EMPTY.  The staking hooks empty a parked pioneer's row so the
+// enclave stops counting it as a share-owner candidate; the node itself keeps running and keeps
+// sending its periodic row updates with an empty address ("no opinion").  The carry-forward above
+// carries the STORED value -- which is now "" -- so those updates must not resurrect the parked
+// address.  If they did, an unbonded validator would put itself back into every future owner set
+// within one self-update.
+func TestPioneerRowSelfUpdateDoesNotResurrectAParkedAddress(t *testing.T) {
+	k, ms, goCtx := setupMsgServer(t)
+	ctx := testCtx(goCtx)
+	k.SetEnclaveIdentityNoEnclave(ctx, types.EnclaveIdentity{
+		UniqueID: testUniqueID, SignerID: testSignerID, Status: types.ActiveStatus,
+	})
+
+	// A real operator address, because the hook derives the row PubKID from the validator's
+	// operator bytes -- "alice" would never map back.
+	pubKID := sdk.AccAddress(sdk.ValAddress([]byte("resurrection-test-op"))).String()
+
+	_, err := ms.PioneerUpdateIntervalPublicKeyID(ctx,
+		pioneerRowMsg(t, pubKID, pubKID, "pioneer1", types.PioneerNodeType, "10.0.0.1"))
+	require.NoError(t, err)
+
+	params := k.GetParams(ctx)
+	params.ReleaseAddressOnUnbond = true
+	require.NoError(t, k.SetParams(ctx, params))
+	require.NoError(t, k.Hooks().AfterValidatorBeginUnbonding(ctx, nil,
+		sdk.ValAddress([]byte("resurrection-test-op"))))
+
+	_, err = ms.PioneerUpdateIntervalPublicKeyID(ctx,
+		pioneerRowMsg(t, pubKID, pubKID, "pioneer1", types.PioneerNodeType, ""))
+	require.NoError(t, err)
+
+	row, found := k.GetIntervalPublicKeyID(ctx, "pioneer1", types.PioneerNodeType)
+	require.True(t, found)
+	require.Empty(t, row.ExternalIPAddress, "an empty self-update against a parked row must stay empty")
+	parked, found := k.GetParkedExternalAddress(ctx, pubKID)
+	require.True(t, found, "and must not consume the parked copy")
+	require.Equal(t, "10.0.0.1", parked.ExternalIPAddress)
+}
+
+// A NON-empty self-update while parked is the operator deliberately republishing -- a pioneer can
+// always move its OWN address, bonded or not.  It must take effect, and the re-bond hook must then
+// prefer it over the older parked value.
+func TestPioneerRowManualRepublishWhileParkedWinsOverRestore(t *testing.T) {
+	k, ms, goCtx := setupMsgServer(t)
+	ctx := testCtx(goCtx)
+	k.SetEnclaveIdentityNoEnclave(ctx, types.EnclaveIdentity{
+		UniqueID: testUniqueID, SignerID: testSignerID, Status: types.ActiveStatus,
+	})
+
+	valAddr := sdk.ValAddress([]byte("manual-republish-op1"))
+	pubKID := sdk.AccAddress(valAddr).String()
+
+	_, err := ms.PioneerUpdateIntervalPublicKeyID(ctx,
+		pioneerRowMsg(t, pubKID, pubKID, "pioneer1", types.PioneerNodeType, "10.0.0.1"))
+	require.NoError(t, err)
+
+	params := k.GetParams(ctx)
+	params.ReleaseAddressOnUnbond = true
+	require.NoError(t, k.SetParams(ctx, params))
+	require.NoError(t, k.Hooks().AfterValidatorBeginUnbonding(ctx, nil, valAddr))
+
+	_, err = ms.PioneerUpdateIntervalPublicKeyID(ctx,
+		pioneerRowMsg(t, pubKID, pubKID, "pioneer1", types.PioneerNodeType, "10.0.0.99"))
+	require.NoError(t, err)
+
+	require.NoError(t, k.Hooks().AfterValidatorBonded(ctx, nil, valAddr))
+
+	row, found := k.GetIntervalPublicKeyID(ctx, "pioneer1", types.PioneerNodeType)
+	require.True(t, found)
+	require.Equal(t, "10.0.0.99", row.ExternalIPAddress,
+		"the operator's newer address must survive the restore")
+	_, stillParked := k.GetParkedExternalAddress(ctx, pubKID)
+	require.False(t, stillParked, "the stale parked copy is discarded, not left to restore later")
+}
+
 // Attestation still comes first: a report that does not cover these exact fields is refused before
 // any authorization question is asked.
 func TestRowRejectedWhenAttestationDoesNotCoverTheFields(t *testing.T) {

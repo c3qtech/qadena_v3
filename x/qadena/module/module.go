@@ -16,6 +16,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/types/module"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
+	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 	"github.com/grpc-ecosystem/grpc-gateway/runtime"
 
 	// this line is used by starport scaffolding # 1
@@ -272,6 +273,15 @@ type ModuleOutputs struct {
 
 	QadenaKeeper keeper.Keeper
 	Module       appmodule.AppModule
+
+	// The staking hooks that park a pioneer's published address while its validator is out of
+	// the bonded set (keeper/staking_hooks.go).  Same shape as slashing's and distribution's:
+	// staking's InvokeSetStakingHooks collects every module's wrapper and installs one
+	// MultiStakingHooks.  app_config.go sets no HooksOrder, so the order is sorted module names
+	// ("distribution", "qadena", "slashing") -- deterministic on every node, which is all
+	// consensus needs.  If anyone ever DOES set HooksOrder, it must list all three or staking's
+	// invoker refuses to start.
+	StakingHooks stakingtypes.StakingHooksWrapper
 }
 
 func ProvideModule(in ModuleInputs) ModuleOutputs {
@@ -299,5 +309,9 @@ func ProvideModule(in ModuleInputs) ModuleOutputs {
 		in.PricefeedKeeper,
 	)
 
-	return ModuleOutputs{QadenaKeeper: k, Module: m}
+	return ModuleOutputs{
+		QadenaKeeper: k,
+		Module:       m,
+		StakingHooks: stakingtypes.StakingHooksWrapper{StakingHooks: k.Hooks()},
+	}
 }

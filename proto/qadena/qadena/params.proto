@@ -124,6 +124,21 @@ message Params {
   // block_transfer_without_opt_in_reason (26) documents for itself.
   uint32 sign_recover_key_guardian_assertion_mode = 27;
 
+  // Whether a validator leaving the bonded set has its pioneer row's ExternalIPAddress cleared
+  // (parked, and restored when it re-bonds).  The published address is a SECURITY PARAMETER: the
+  // enclave's owner-candidate set for every NEW secret-share interval key is exactly the pioneer
+  // rows with a non-empty address, and it also sizes the share threshold and the enclave-identity
+  // vote quorum.  Without this, a validator that unbonds or is jailed counts as a share owner
+  // forever.
+  //
+  // proto3's zero (false) means "behave exactly as before the upgrade" -- the same exception
+  // block_transfer_without_opt_in_reason (26) and sign_recover_key_guardian_assertion_mode (27)
+  // document for themselves.  That zero is what makes rolling the binary out consensus-safe: the
+  // staking hooks no-op before any state write, so a new binary replaying pre-upgrade history
+  // reproduces the historical app hashes.  Enable per chain by governance (MsgUpdateParams -- which
+  // replaces the WHOLE params object, see the NOTE below), or at genesis for a new chain.
+  bool release_address_on_unbond = 28;
+
   // NOTE: the bank-send whitelist is deliberately NOT a param.  Params are replaced wholesale by
   // MsgUpdateParams, so adding one address would mean restating every other one, and a mistake
   // there silently drops exemptions.  It lives in its own keyed state with add/remove messages --

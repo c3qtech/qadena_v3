@@ -20,6 +20,7 @@ func DefaultGenesis() *GenesisState {
 		ProtectKeyList:            []ProtectKey{},
 		RecoverKeyList:            []RecoverKey{},
 		EnclaveIdentityList:       []EnclaveIdentity{},
+		ParkedExternalAddressList: []ParkedExternalAddress{},
 		// this line is used by starport scaffolding # genesis/types/default
 		Params: DefaultParams(),
 	}
@@ -129,6 +130,16 @@ func (gs GenesisState) Validate() error {
 			return fmt.Errorf("duplicated index for enclaveIdentity")
 		}
 		enclaveIdentityIndexMap[index] = struct{}{}
+	}
+	// Check for duplicated index in parkedExternalAddress
+	parkedExternalAddressIndexMap := make(map[string]struct{})
+
+	for _, elem := range gs.ParkedExternalAddressList {
+		index := string(ParkedExternalAddressKey(elem.PubKID))
+		if _, ok := parkedExternalAddressIndexMap[index]; ok {
+			return fmt.Errorf("duplicated index for parkedExternalAddress")
+		}
+		parkedExternalAddressIndexMap[index] = struct{}{}
 	}
 	// this line is used by starport scaffolding # genesis/types/validate
 

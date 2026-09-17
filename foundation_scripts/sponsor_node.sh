@@ -58,7 +58,7 @@ usage() {
     print -r -- "  --workdir <dir>      keep the ceremony's files here (default: a temp dir, kept on failure)"
     print -r -- "  --print-ceremony     print the per-member commands and send nothing"
     print -r -- ""
-    print -r -- "  The grant covers the SEVEN messages a pioneer broadcasts for life and does NOT"
+    print -r -- "  The grant covers the EIGHT messages a pioneer broadcasts for life and does NOT"
     print -r -- "  expire.  A join-only or expiring grant stops SS re-sharing silently, months later."
 }
 
@@ -148,11 +148,14 @@ typeset -a MEM; MEM=(${(s:,:)MEMBERS})
 (( ${#MEM} >= THR )) || {
     print -u2 -- "$GRANTER needs $THR signatures; --members names only ${#MEM}"; exit 1 }
 
-# SAME SEVEN MESSAGES AS testscripts/foundation_sponsor_node.sh AND scripts/sponsor_join_node.sh.
+# SAME EIGHT MESSAGES AS testscripts/foundation_sponsor_node.sh AND scripts/sponsor_join_node.sh.
 # Keep the three in step: a grant missing one of these fails much later -- at an SS re-share or a
 # governance vote -- and the node looks healthy until it does.
 JOIN_MSGS="/qadena.qadena.MsgPioneerAddPublicKey,/qadena.qadena.MsgPioneerUpdateIntervalPublicKeyID,/qadena.qadena.MsgPioneerUpdatePioneerJar,/cosmos.staking.v1beta1.MsgCreateValidator"
-LIFE_MSGS="$JOIN_MSGS,/qadena.qadena.MsgPioneerUpdatePublicKey,/qadena.qadena.MsgPioneerUpdateJarRegulator,/cosmos.gov.v1.MsgVote"
+# MsgUnjail IS A LIFETIME MESSAGE TOO -- IT IS HOW A JAILED SPONSORED VALIDATOR COMES BACK.  A
+# toll-free validator holds zero liquid QDN (its self-bond is fully staked), so without this it
+# cannot pay for its own unjail and stays jailed forever.
+LIFE_MSGS="$JOIN_MSGS,/qadena.qadena.MsgPioneerUpdatePublicKey,/qadena.qadena.MsgPioneerUpdateJarRegulator,/cosmos.gov.v1.MsgVote,/cosmos.slashing.v1beta1.MsgUnjail"
 
 if [[ -z "$WORKDIR" ]]; then
     WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/sponsor-node.XXXXXX") || exit 1

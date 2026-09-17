@@ -93,7 +93,10 @@ ADDR=$(qk keys show "$PIONEER" -a 2>/dev/null | tr -d '\r')
 [[ "$ADDR" == qadena1* ]] || { print -u2 "could not read $PIONEER's address after minting"; exit 1 }
 
 # ---------------------------------------------------------------- 2. the ceremony (not ours)
-MSGS="/qadena.qadena.MsgPioneerAddPublicKey,/qadena.qadena.MsgPioneerUpdateIntervalPublicKeyID,/qadena.qadena.MsgPioneerUpdatePioneerJar,/cosmos.staking.v1beta1.MsgCreateValidator,/qadena.qadena.MsgPioneerUpdatePublicKey,/qadena.qadena.MsgPioneerUpdateJarRegulator,/cosmos.gov.v1.MsgVote"
+# MsgUnjail IS A LIFETIME MESSAGE TOO -- IT IS HOW A JAILED SPONSORED VALIDATOR COMES BACK.  A
+# toll-free validator holds zero liquid QDN (its self-bond is fully staked), so without this it
+# cannot pay for its own unjail and stays jailed forever.
+MSGS="/qadena.qadena.MsgPioneerAddPublicKey,/qadena.qadena.MsgPioneerUpdateIntervalPublicKeyID,/qadena.qadena.MsgPioneerUpdatePioneerJar,/cosmos.staking.v1beta1.MsgCreateValidator,/qadena.qadena.MsgPioneerUpdatePublicKey,/qadena.qadena.MsgPioneerUpdateJarRegulator,/cosmos.gov.v1.MsgVote,/cosmos.slashing.v1beta1.MsgUnjail"
 FLOOR=$(dasel -f "$HOME_DIR/config/config.yml" 'validators.first().app.min-self-delegation' 2>/dev/null | tr -d '\r"')
 
 print ""

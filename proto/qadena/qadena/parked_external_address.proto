@@ -1,0 +1,32 @@
+syntax = "proto3";
+package qadena.qadena;
+
+option go_package = "github.com/c3qtech/qadena_v3/x/qadena/types";
+
+// A pioneer row's ExternalIPAddress, held aside while its validator is out of the bonded set.
+//
+// Written by the x/qadena staking hooks (staking_hooks.go): AfterValidatorBeginUnbonding moves the
+// address out of the IntervalPublicKeyID row and in here; AfterValidatorBonded moves it back.  The
+// row's address is a SECURITY PARAMETER -- the enclave counts every pioneer row with a non-empty
+// address as a secret-share owner candidate -- so while the validator has no stake behind it the
+// row must read as unpublished, and the parked value is what lets re-bonding restore it: the
+// enclave itself never republishes an empty row (its PioneerIsValidator latch is sealed and
+// never re-armed, and planExternalAddressRepublish refuses empty rows by design).
+//
+// CHAIN-ONLY STATE, DELIBERATELY NOT MIRRORED TO THE ENCLAVE -- like ScannedContractWhitelist,
+// and unlike most of this module.  The enclave keying off the ROW is the whole mechanism; a
+// mirror of the parked value would give it a second, contradictory answer for "is this pioneer
+// addressable".  The prefix is therefore absent from mirroredStores (enclave_seed_page.go), which
+// also keeps it out of the chain/enclave divergence audit.
+message ParkedExternalAddress {
+  // The pioneer row's PubKID -- the pioneer account's bech32 address, which is also the validator
+  // operator account (convert_to_validator.sh creates the validator --from the pioneer key, and
+  // pioneer rows enforce PubKID == creator).  This is how the staking hooks map a ValAddress to a
+  // row without touching the moniker, which is mutable free text with no consensus link.
+  string pubKID = 1;
+
+  // The value cleared from the row.  May be STALE by the time it is restored -- a node that moved
+  // while unbonded gets its old address back, and the enclave's existing self-heal
+  // (planExternalAddressRepublish) corrects a non-empty row that differs from the sealed address.
+  string externalIPAddress = 2;
+}

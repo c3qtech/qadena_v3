@@ -929,6 +929,18 @@ genesis:
         # issuance produced, which is unproven until those logs are clean.  Individual guardians
         # are exempt in every mode.  Raised by governance, not by a deploy.
         sign_recover_key_guardian_assertion_mode: 0
+        # Park a pioneer's published ExternalIPAddress while its validator is out of the bonded
+        # set, and restore it on re-bond.  The published address is a SECURITY PARAMETER -- it is
+        # what makes a pioneer a secret-share owner candidate for every NEW interval key, and it
+        # sizes the share threshold and the enclave-identity vote quorum -- so without this a
+        # validator that unbonds or is jailed counts as a share owner forever.
+        #
+        # TRUE HERE: a chain launched from this file starts with the behavior on.  A LIVE chain
+        # upgrading to a binary that knows this param reads the absent field as FALSE (pre-upgrade
+        # behavior; that zero is what keeps block-sync-from-genesis deterministic) and flips it by
+        # governance -- and MsgUpdateParams replaces the WHOLE params object, so that proposal
+        # must restate every value above plus this one.
+        release_address_on_unbond: true
 
       # ---------------------------------------------------------------------------------
       # THE AML SCAN WHITELIST -- WITHOUT THIS THE CHAIN IS FUNDED AND FROZEN.

@@ -113,6 +113,19 @@ func TestGenesis(t *testing.T) {
 				UniqueID: "1",
 			},
 		},
+		// A parked address is exactly the state of a chain exported mid-unbond, and losing it on
+		// import is not cosmetic: the enclave never republishes an emptied row, so a pioneer whose
+		// parked value vanished across a restart stays unaddressable forever after re-bonding.
+		ParkedExternalAddressList: []types.ParkedExternalAddress{
+			{
+				PubKID:            "0",
+				ExternalIPAddress: "10.0.0.1",
+			},
+			{
+				PubKID:            "1",
+				ExternalIPAddress: "10.0.0.2",
+			},
+		},
 		// this line is used by starport scaffolding # genesis/test/state
 	}
 
@@ -139,5 +152,6 @@ func TestGenesis(t *testing.T) {
 	require.ElementsMatch(t, genesisState.ProtectKeyList, got.ProtectKeyList)
 	require.ElementsMatch(t, genesisState.RecoverKeyList, got.RecoverKeyList)
 	require.ElementsMatch(t, genesisState.EnclaveIdentityList, got.EnclaveIdentityList)
+	require.ElementsMatch(t, genesisState.ParkedExternalAddressList, got.ParkedExternalAddressList)
 	// this line is used by starport scaffolding # genesis/test/assert
 }

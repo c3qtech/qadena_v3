@@ -110,6 +110,16 @@ func TestGenesisState_Validate(t *testing.T) {
 						UniqueID: "1",
 					},
 				},
+				ParkedExternalAddressList: []types.ParkedExternalAddress{
+					{
+						PubKID:            "0",
+						ExternalIPAddress: "10.0.0.1",
+					},
+					{
+						PubKID:            "1",
+						ExternalIPAddress: "10.0.0.2",
+					},
+				},
 				// this line is used by starport scaffolding # types/genesis/validField
 			},
 			valid: true,
@@ -267,6 +277,20 @@ func TestGenesisState_Validate(t *testing.T) {
 					},
 					{
 						UniqueID: "0",
+					},
+				},
+			},
+			valid: false,
+		},
+		{
+			desc: "duplicated parkedExternalAddress",
+			genState: &types.GenesisState{
+				ParkedExternalAddressList: []types.ParkedExternalAddress{
+					{
+						PubKID: "0",
+					},
+					{
+						PubKID: "0",
 					},
 				},
 			},

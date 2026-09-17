@@ -66,4 +66,9 @@ func TestConfigYamlParamsUnmarshal(t *testing.T) {
 	if !p.UpdateCredentialAllowLastNameLifeEvent || !p.UpdateCredentialAllowGenderChange {
 		t.Errorf("update gates did not decode: %+v", p)
 	}
+	// config.yml (the devnet) sets this true so the fleet exercises the park/restore hooks; a
+	// dropped or typo'd field decodes as proto3's false and would silently un-test the feature.
+	if !p.ReleaseAddressOnUnbond {
+		t.Error("release_address_on_unbond did not decode")
+	}
 }

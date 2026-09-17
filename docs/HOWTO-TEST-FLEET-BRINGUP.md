@@ -447,7 +447,7 @@ a clean purge and a committed tree.
 This is the harder path and exercises what the unsponsored one cannot:
 
 - **`MsgGrantAllowance` through a 3-of-5** -- a different message from `MsgSend`
-- **the seven-message lifetime allowance**, `MsgVote` included and no expiry.  A join-only or
+- **the eight-message lifetime allowance**, `MsgVote` included and no expiry.  A join-only or
   expiring grant stops SS re-sharing silently, later, while the node still looks healthy
 - **two transactions from one bucket in one sitting** -- the grant plus the self-bond, since bonds
   are never sponsored.  The bond's shares are signed at `--sequence-offset 1`

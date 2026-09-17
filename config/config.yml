@@ -423,6 +423,10 @@ genesis:
         # guardian whose name resolves via PioneerNodeType or ServiceProviderNodeType -- pioneer1
         # included, not just the --is-service-provider signers.
         sign_recover_key_guardian_assertion_mode: 1
+        # Park a pioneer's published address while its validator is unbonded/jailed; restore on
+        # re-bond.  On for the devnet so the staking hooks are exercised everywhere the suites
+        # run; see launch-config.yml for the full rationale and the live-chain rollout note.
+        release_address_on_unbond: true
       # Non-wallet parties allowed to take part in a direct bank send.  They are STILL AML-scanned --
       # nothing on this chain moves account-to-account without being scanned.  Listing an address
       # here says only that it may participate while holding no credential, and that reports naming

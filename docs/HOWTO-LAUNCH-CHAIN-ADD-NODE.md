@@ -132,7 +132,7 @@ foundation_scripts/sponsor_node.sh --grantee <addr> \
 ```
 
 It reads the threshold off the bucket and signs as `nodeops-m1..m<threshold>` (`--members`
-overrides), issues the same seven-message non-expiring grant as the single-key script, and handles
+overrides), issues the same eight-message non-expiring grant as the single-key script, and handles
 the `--sequence-offset` below for you. Add `--print-ceremony` to emit the per-member commands and
 send nothing — which is what to do when the members are separate people.
 
@@ -156,13 +156,22 @@ multisig_sign.sh broadcast --tx sb.json
 ```
 
 `LIFE_MSGS` (the full lifetime set — a join-only or expiring grant silently stops SS
-re-sharing, and a grant without MsgVote makes the fleet ungovernable):
+re-sharing, a grant without MsgVote makes the fleet ungovernable, and one without MsgUnjail
+leaves a jailed validator jailed forever, since a toll-free node has no liquid QDN to pay for
+its own unjail):
 
 ```
 /qadena.qadena.MsgPioneerAddPublicKey,/qadena.qadena.MsgPioneerUpdateIntervalPublicKeyID,
 /qadena.qadena.MsgPioneerUpdatePioneerJar,/cosmos.staking.v1beta1.MsgCreateValidator,
 /qadena.qadena.MsgPioneerUpdatePublicKey,/qadena.qadena.MsgPioneerUpdateJarRegulator,
-/cosmos.gov.v1.MsgVote
+/cosmos.gov.v1.MsgVote,/cosmos.slashing.v1beta1.MsgUnjail
+```
+
+To widen an EXISTING node's allowance to this list, revoke first, then re-grant — a second
+feegrant to the same grantee is refused, it does not merge:
+
+```sh
+qadenad tx feegrant revoke <granter> <grantee> ...   # then the grant command above
 ```
 
 `--sequence-offset 1` goes on **sign**, on every share of the second tx — the sequence is
@@ -176,7 +185,7 @@ testscripts/foundation_sponsor_node.sh --node <addr>                      # gran
 testscripts/foundation_sponsor_node.sh --node <addr> --self-bond 10000qdn # grant + bond
 ```
 
-It issues the identical `LIFE_MSGS` grant — the seven messages below are its own default — as a
+It issues the identical `LIFE_MSGS` grant — the eight messages above are its own default — as a
 `PeriodicAllowance` of `1000qdn` per 30 days, and with `--self-bond` it also sends the bond,
 because no fee grant covers staked principal. The granter defaults to `foundation-nodes`
 (`$QADENA_FOUNDATION_NODES`, or `--granter`).

@@ -77,6 +77,11 @@ func (p Params) Validate() error {
 			p.SignRecoverKeyGuardianAssertionMode)
 	}
 
+	// release_address_on_unbond needs no check: it is a genuine bool, so every representable
+	// value is meaningful (false = pre-upgrade behavior, true = the staking hooks act).  Noted
+	// here rather than silently skipped -- this file exists because unvalidated params were once
+	// a bug, and the next reader should see the field was considered, not missed.
+
 	// Coin-shaped strings.  Empty means "unset" for all of these and the loaders supply a default,
 	// so only a non-empty value is checked.
 	for _, f := range []struct {

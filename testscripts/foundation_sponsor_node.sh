@@ -179,7 +179,11 @@ JOIN_MSGS="/qadena.qadena.MsgPioneerAddPublicKey,/qadena.qadena.MsgPioneerUpdate
 #
 # It is NOT in JOIN_MSGS: a --join-only node is "funded normally afterwards" (see above), so it
 # pays for its own votes like any other operator.  This is for the toll-free case.
-LIFE_MSGS="$JOIN_MSGS,/qadena.qadena.MsgPioneerUpdatePublicKey,/qadena.qadena.MsgPioneerUpdateJarRegulator,/cosmos.gov.v1.MsgVote"
+#
+# MsgUnjail IS A LIFETIME MESSAGE TOO -- IT IS HOW A JAILED SPONSORED VALIDATOR COMES BACK.  A
+# toll-free validator holds zero liquid QDN (its self-bond is fully staked), so without this it
+# cannot pay for its own unjail and stays jailed forever.
+LIFE_MSGS="$JOIN_MSGS,/qadena.qadena.MsgPioneerUpdatePublicKey,/qadena.qadena.MsgPioneerUpdateJarRegulator,/cosmos.gov.v1.MsgVote,/cosmos.slashing.v1beta1.MsgUnjail"
 
 if [ "$join_only" = "true" ]; then
     MSGS="$JOIN_MSGS"
