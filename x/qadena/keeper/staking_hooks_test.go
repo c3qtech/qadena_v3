@@ -176,6 +176,38 @@ func TestHooksRestorePutsTheAddressBackAndDeletesParked(t *testing.T) {
 	require.Len(t, eventsOfType(ctx, types.EventTypeExternalAddressRestored), 1)
 }
 
+// THE STRANDED-PIONEER CASE.  Parked while the param was on, then governance turned it off, then
+// the validator re-bonded.  If restore honored the gate, the row would stay empty for good: the
+// enclave never fills an empty row, and re-enabling the param cannot replay a re-bond that already
+// happened -- a bonded, validating node silently never a share owner again.  The param governs
+// whether NEW addresses are released, never whether a released one comes back.
+func TestHooksRestoreIgnoresTheGateSoAParkedPioneerIsNotStranded(t *testing.T) {
+	k, ctx, h := setupHooks(t)
+	setReleaseGate(t, k, ctx, true)
+	seedPioneerRow(k, ctx, "10.0.0.1")
+	require.NoError(t, h.AfterValidatorBeginUnbonding(ctx, nil, testValAddr))
+
+	setReleaseGate(t, k, ctx, false)
+
+	ctx = ctx.WithEventManager(sdk.NewEventManager())
+	require.NoError(t, h.AfterValidatorBonded(ctx, nil, testValAddr))
+
+	row, found := k.GetIntervalPublicKeyIDByPubKID(ctx, testValPubKID())
+	require.True(t, found)
+	require.Equal(t, "10.0.0.1", row.ExternalIPAddress,
+		"turning the param off mid-jail must not strand the pioneer unaddressable")
+	_, stillParked := k.GetParkedExternalAddress(ctx, testValPubKID())
+	require.False(t, stillParked)
+	require.Len(t, eventsOfType(ctx, types.EventTypeExternalAddressRestored), 1)
+
+	// And with the gate still off, the NEXT unbond must not park -- the asymmetry is the point.
+	ctx = ctx.WithEventManager(sdk.NewEventManager())
+	require.NoError(t, h.AfterValidatorBeginUnbonding(ctx, nil, testValAddr))
+	row, _ = k.GetIntervalPublicKeyIDByPubKID(ctx, testValPubKID())
+	require.Equal(t, "10.0.0.1", row.ExternalIPAddress, "the off gate still stops new parking")
+	require.Empty(t, eventsOfType(ctx, types.EventTypeExternalAddressParked))
+}
+
 // A bond with nothing parked is every validator's FIRST bond -- and any bond from before the
 // feature was enabled.  First publication belongs to the enclave (the sealed latch, on the first
 // proposed block), so the hook's silence is correctness, not a missed case.

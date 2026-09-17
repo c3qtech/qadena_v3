@@ -935,6 +935,9 @@ genesis:
         # sizes the share threshold and the enclave-identity vote quorum -- so without this a
         # validator that unbonds or is jailed counts as a share owner forever.
         #
+        # Setting it false later stops NEW parking only; an address already parked is still
+        # restored when its validator re-bonds, so switching it off mid-jail cannot strand a node.
+        #
         # TRUE IS ALSO THE COMPILED-IN DEFAULT (DefaultParams), so this line states what a chain
         # launched from here would get anyway.  It is written out rather than left implicit because
         # MsgUpdateParams replaces the WHOLE params object: the day someone builds a proposal from

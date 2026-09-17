@@ -131,6 +131,11 @@ message Params {
   // vote quorum.  Without this, a validator that unbonds or is jailed counts as a share owner
   // forever.
   //
+  // TURNING IT OFF STOPS NEW PARKING ONLY.  An address parked while it was on is still restored
+  // when its validator re-bonds; otherwise switching this off with a validator mid-jail would
+  // leave that pioneer bonded but permanently unaddressable, since the enclave never fills an
+  // empty row and re-enabling the param cannot replay a re-bond that already happened.
+  //
   // TRUE BY DEFAULT.  DefaultParams sets it, and both config/config.yml and
   // config/launch-config.yml state it, so every chain launched from here has it on; a chain must
   // opt OUT, not in.

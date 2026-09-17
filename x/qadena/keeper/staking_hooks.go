@@ -41,9 +41,10 @@ import (
 // halts consensus.  Nothing this feature does is worth halting a chain over, so anomalies are
 // events and logs, never errors.
 //
-// GATED on Params.ReleaseAddressOnUnbond, which DefaultParams sets TRUE -- a chain opts out of
-// this behavior, not into it.  The gate exists for the two cases that default cannot reach, and
-// both of them need it:
+// PARKING IS GATED on Params.ReleaseAddressOnUnbond, which DefaultParams sets TRUE -- a chain opts
+// out of this behavior, not into it.  RESTORING IS NOT (see restorePioneerExternalAddress): the
+// param decides whether new addresses are released, never whether an already-released one comes
+// back.  The gate exists for the two cases the default cannot reach, and both of them need it:
 //
 //   - PARAMS STORED BEFORE FIELD 28 EXISTED read as false, which is what makes shipping this
 //     binary to a running chain consensus-safe: replaying that chain's pre-upgrade history, the
@@ -200,10 +201,17 @@ func (k Keeper) parkPioneerExternalAddress(ctx context.Context, valAddr sdk.ValA
 
 // restorePioneerExternalAddress puts a parked address back on the row.  Never returns an error --
 // see the file comment.
+//
+// DELIBERATELY NOT GATED on ReleaseAddressOnUnbond.  If it were, turning the param off while a
+// validator is parked would strand that pioneer: its re-bond would skip the restore, re-enabling
+// the param later would not help (restore only runs on a bonding transition, which has passed),
+// and the enclave never fills an empty row -- a bonded, validating node that is silently never a
+// share owner again.  A parked entry is its own evidence that parking was enabled when it was
+// written, so honoring it needs no second permission.
+//
+// This does not reopen the replay hazard the gate exists for: a chain whose params predate the
+// field never parked anything, so there is nothing here to restore while replaying its history.
 func (k Keeper) restorePioneerExternalAddress(ctx context.Context, valAddr sdk.ValAddress) {
-	if !k.GetParams(ctx).ReleaseAddressOnUnbond {
-		return
-	}
 	sdkctx := sdk.UnwrapSDKContext(ctx)
 
 	pubKID := sdk.AccAddress(valAddr).String()
