@@ -78,7 +78,8 @@ func (p Params) Validate() error {
 	}
 
 	// release_address_on_unbond needs no check: it is a genuine bool, so every representable
-	// value is meaningful (false = pre-upgrade behavior, true = the staking hooks act).  Noted
+	// value is meaningful (true = the staking hooks act, and the compiled-in default; false =
+	// pre-upgrade behavior, which is what params stored before the field existed read as).  Noted
 	// here rather than silently skipped -- this file exists because unvalidated params were once
 	// a bug, and the next reader should see the field was considered, not missed.
 

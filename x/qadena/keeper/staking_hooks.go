@@ -41,11 +41,17 @@ import (
 // halts consensus.  Nothing this feature does is worth halting a chain over, so anomalies are
 // events and logs, never errors.
 //
-// GATED on Params.ReleaseAddressOnUnbond (default false).  The gate is what makes shipping this
-// binary consensus-safe: replaying pre-upgrade history, the hooks read the param as false and
-// return before any state write, so historical app hashes reproduce.  It also covers the
-// bootstrap ordering hazard for free -- genesis validators bond during staking's InitGenesis,
-// BEFORE qadena's has run, and GetParams on an empty store returns the zero value, i.e. disabled.
+// GATED on Params.ReleaseAddressOnUnbond, which DefaultParams sets TRUE -- a chain opts out of
+// this behavior, not into it.  The gate exists for the two cases that default cannot reach, and
+// both of them need it:
+//
+//   - PARAMS STORED BEFORE FIELD 28 EXISTED read as false, which is what makes shipping this
+//     binary to a running chain consensus-safe: replaying that chain's pre-upgrade history, the
+//     hooks return before any state write, so the historical app hashes reproduce.  Firing at a
+//     height where the old binary did nothing would fork the state root.
+//   - AN EMPTY PARAM STORE likewise returns the zero value, which covers the bootstrap ordering
+//     hazard for free: genesis validators bond during staking's InitGenesis, BEFORE qadena's has
+//     run and written any params at all.
 
 var _ stakingtypes.StakingHooks = Hooks{}
 

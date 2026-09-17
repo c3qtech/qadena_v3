@@ -131,12 +131,19 @@ message Params {
   // vote quorum.  Without this, a validator that unbonds or is jailed counts as a share owner
   // forever.
   //
-  // proto3's zero (false) means "behave exactly as before the upgrade" -- the same exception
-  // block_transfer_without_opt_in_reason (26) and sign_recover_key_guardian_assertion_mode (27)
-  // document for themselves.  That zero is what makes rolling the binary out consensus-safe: the
-  // staking hooks no-op before any state write, so a new binary replaying pre-upgrade history
-  // reproduces the historical app hashes.  Enable per chain by governance (MsgUpdateParams -- which
-  // replaces the WHOLE params object, see the NOTE below), or at genesis for a new chain.
+  // TRUE BY DEFAULT.  DefaultParams sets it, and both config/config.yml and
+  // config/launch-config.yml state it, so every chain launched from here has it on; a chain must
+  // opt OUT, not in.
+  //
+  // THE UNAVOIDABLE EXCEPTION IS STORED STATE THAT PREDATES THE FIELD.  Params bytes written before
+  // field 28 existed carry no 28, so they unmarshal as proto3's false, and GetParams on an empty
+  // store returns the zero value too.  Neither can be defaulted away, and neither should be: a new
+  // binary replaying such a chain's history must reproduce the app hashes the old binary produced,
+  // and hooks firing at a height where they originally did not would fork the state root.  (The
+  // empty-store case also covers bootstrap ordering for free -- genesis validators bond during
+  // staking's InitGenesis, before qadena's has run.)  Such a chain turns it on by governance
+  // (MsgUpdateParams -- which replaces the WHOLE params object, see the NOTE below), which records
+  // the change at a height that replay can follow.
   bool release_address_on_unbond = 28;
 
   // NOTE: the bank-send whitelist is deliberately NOT a param.  Params are replaced wholesale by

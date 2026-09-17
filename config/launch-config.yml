@@ -935,11 +935,15 @@ genesis:
         # sizes the share threshold and the enclave-identity vote quorum -- so without this a
         # validator that unbonds or is jailed counts as a share owner forever.
         #
-        # TRUE HERE: a chain launched from this file starts with the behavior on.  A LIVE chain
-        # upgrading to a binary that knows this param reads the absent field as FALSE (pre-upgrade
-        # behavior; that zero is what keeps block-sync-from-genesis deterministic) and flips it by
-        # governance -- and MsgUpdateParams replaces the WHOLE params object, so that proposal
-        # must restate every value above plus this one.
+        # TRUE IS ALSO THE COMPILED-IN DEFAULT (DefaultParams), so this line states what a chain
+        # launched from here would get anyway.  It is written out rather than left implicit because
+        # MsgUpdateParams replaces the WHOLE params object: the day someone builds a proposal from
+        # this block, an omitted field is not "leave it alone", it is false.
+        #
+        # A LIVE chain upgrading to a binary that knows this param is the one case the default
+        # cannot reach -- its stored params carry no field 28, so they read as FALSE.  That is
+        # required, not a gap: replaying that chain's history has to reproduce the app hashes the
+        # old binary produced.  Such a chain turns it on by governance.
         release_address_on_unbond: true
 
       # ---------------------------------------------------------------------------------

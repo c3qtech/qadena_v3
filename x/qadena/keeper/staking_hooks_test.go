@@ -40,11 +40,19 @@ func setupHooks(t *testing.T) (keeper.Keeper, sdk.Context, keeper.Hooks) {
 	return k, ctx.WithIsCheckTx(true), k.Hooks()
 }
 
-func enableRelease(t *testing.T, k keeper.Keeper, ctx sdk.Context) {
+// setReleaseGate writes the gate explicitly.  Both positions are spelled out at every call site
+// rather than leaned on: the DEFAULT is true, so a test that wants the off case must say so, and
+// one that wants the on case should not silently depend on the default to get it.
+func setReleaseGate(t *testing.T, k keeper.Keeper, ctx sdk.Context, on bool) {
 	t.Helper()
 	params := k.GetParams(ctx)
-	params.ReleaseAddressOnUnbond = true
+	params.ReleaseAddressOnUnbond = on
 	require.NoError(t, k.SetParams(ctx, params))
+}
+
+func enableRelease(t *testing.T, k keeper.Keeper, ctx sdk.Context) {
+	t.Helper()
+	setReleaseGate(t, k, ctx, true)
 }
 
 // seedPioneerRow writes the row the way a live chain holds one mid-life: address published,
@@ -72,11 +80,13 @@ func eventsOfType(ctx sdk.Context, typ string) []sdk.Event {
 	return out
 }
 
-// The gate.  Default params carry the proto3 zero, so an un-upgraded chain and a replay of
-// pre-upgrade history both take this branch: no write, no park, no event -- byte-identical state
-// is what makes shipping the binary consensus-safe.
+// The gate, OFF.  This is not the default -- DefaultParams turns the feature on -- but it is what
+// params stored before field 28 existed read as, so it is the state a new binary sees while it
+// replays an older chain's history: no write, no park, no event.  Byte-identical state is what
+// makes shipping the binary to a running chain consensus-safe.
 func TestHooksParamOffIsNoOp(t *testing.T) {
 	k, ctx, h := setupHooks(t)
+	setReleaseGate(t, k, ctx, false)
 	seedPioneerRow(k, ctx, "10.0.0.1")
 
 	ctx = ctx.WithEventManager(sdk.NewEventManager())
@@ -276,9 +286,7 @@ func TestHooksAfterValidatorRemovedKeepsParked(t *testing.T) {
 func TestHooksEveryMethodReturnsNilOnEveryBranch(t *testing.T) {
 	for _, gate := range []bool{false, true} {
 		k, ctx, h := setupHooks(t)
-		if gate {
-			enableRelease(t, k, ctx)
-		}
+		setReleaseGate(t, k, ctx, gate)
 
 		exercise := func() {
 			require.NoError(t, h.AfterValidatorCreated(ctx, testValAddr))
@@ -299,6 +307,38 @@ func TestHooksEveryMethodReturnsNilOnEveryBranch(t *testing.T) {
 		exercise() // row present; the unbond in here parks it
 		exercise() // parked; covers empty-row and restore branches
 	}
+}
+
+// THE DEFAULT, AND THE TWO PLACES IT DELIBERATELY DOES NOT REACH.
+//
+// A chain opts OUT of releasing an unbonded pioneer's address, never into it -- leaving the
+// address published for a validator with no stake behind it is not a state anyone should reach by
+// forgetting a config line.  But the two cases below must still read false, and both are
+// consensus properties rather than preferences: params written before field 28 existed carry no
+// 28, and an empty param store has nothing at all, so a binary replaying either has to behave the
+// way the binary that wrote those blocks did.
+func TestReleaseGateDefaultsOnButEmptyStateReadsOff(t *testing.T) {
+	require.True(t, types.DefaultParams().ReleaseAddressOnUnbond,
+		"a chain launched without saying anything about this must still release unbonded addresses")
+
+	// An empty param store -- which is also what qadena's keeper sees while staking's InitGenesis
+	// bonds the genesis validators, before qadena's InitGenesis has written any params.
+	k, ctx := keepertest.QadenaKeeperNoParams(t)
+	ctx = ctx.WithIsCheckTx(true)
+	require.False(t, k.GetParams(ctx).ReleaseAddressOnUnbond,
+		"an empty param store must read the proto3 zero, not the compiled-in default")
+
+	// And the hooks must genuinely no-op there, not merely read false.
+	k.SetIntervalPublicKeyID(ctx, types.IntervalPublicKeyID{
+		PubKID: testValPubKID(), NodeID: "pioneer-genesis-test",
+		NodeType: types.PioneerNodeType, ExternalIPAddress: "10.0.0.1",
+	})
+	ctx = ctx.WithEventManager(sdk.NewEventManager())
+	require.NoError(t, k.Hooks().AfterValidatorBeginUnbonding(ctx, nil, testValAddr))
+
+	row, _ := k.GetIntervalPublicKeyIDByPubKID(ctx, testValPubKID())
+	require.Equal(t, "10.0.0.1", row.ExternalIPAddress)
+	require.Empty(t, ctx.EventManager().Events())
 }
 
 // THE MIRRORING DECISION, PINNED.  The parked store must stay out of mirroredStores: the enclave
