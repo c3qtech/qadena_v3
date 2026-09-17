@@ -21,6 +21,7 @@ import "qadena/qadena/recover_key.proto";
 import "cosmos/base/v1beta1/coin.proto";
 import "qadena/qadena/b_pedersen_commit.proto";
 import "qadena/qadena/enclave_identity.proto";
+import "qadena/qadena/parked_external_address.proto";
 
 option go_package = "github.com/c3qtech/qadena_v3/x/qadena/types";
 
@@ -220,6 +221,22 @@ service Query {
   }
   rpc ScannedContractWhitelistAll (QueryAllScannedContractWhitelistRequest) returns (QueryAllScannedContractWhitelistResponse) {
     option (google.api.http).get = "/qadena/qadena/scanned_contract_whitelist";
+
+  }
+
+  // Queries the addresses the staking hooks have parked -- pioneers whose validator left the
+  // bonded set, with the ExternalIPAddress that will be put back when it re-bonds.
+  //
+  // Needed operationally: "why is this bonded pioneer not addressable" has no other answer short
+  // of a genesis export (which needs the node stopped) or a raw abci_query against a hand-built
+  // key.  An entry here for a validator that is BONDED means a restore has not happened yet --
+  // the one state an operator would otherwise have no way to see.
+  rpc ParkedExternalAddress    (QueryGetParkedExternalAddressRequest) returns (QueryGetParkedExternalAddressResponse) {
+    option (google.api.http).get = "/qadena/qadena/parked_external_address/{pubKID}";
+
+  }
+  rpc ParkedExternalAddressAll (QueryAllParkedExternalAddressRequest) returns (QueryAllParkedExternalAddressResponse) {
+    option (google.api.http).get = "/qadena/qadena/parked_external_address";
 
   }
 }
@@ -575,3 +592,22 @@ message QueryAllScannedContractWhitelistResponse {
            cosmos.base.query.v1beta1.PageResponse pagination               = 2;
 }
 
+
+message QueryGetParkedExternalAddressRequest {
+  // The pioneer row's PubKID: the pioneer account address, which is also the validator operator's
+  // account (the CLI accepts a qadenavaloper address too and converts it).
+  string pubKID = 1;
+}
+
+message QueryGetParkedExternalAddressResponse {
+  ParkedExternalAddress parkedExternalAddress = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAllParkedExternalAddressRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryAllParkedExternalAddressResponse {
+  repeated ParkedExternalAddress                  parkedExternalAddress = 1 [(gogoproto.nullable) = false];
+           cosmos.base.query.v1beta1.PageResponse pagination            = 2;
+}
