@@ -43,6 +43,19 @@ validators:
   bonded: 100000qdn
   app:
     minimum-gas-prices: "500000000aqdn"
+    # THE REST API'S BIND ADDRESS, SET EXPLICITLY BECAUSE THE DEFAULT DIFFERS BY HOW A NODE WAS MADE.
+    #
+    # The genesis node gets app.toml from `ignite chain init`, which renders 0.0.0.0; a JOINING node
+    # gets it from `qadenad init`, whose stock template is the SDK default tcp://localhost:1317.
+    # apply_app_config.sh exists to erase exactly that drift, but it can only copy keys this stanza
+    # HAS -- and this one was missing, so every joiner kept localhost while the genesis node listened
+    # on all interfaces.  Observed on the qfi-testnet joiner, 2026-09-17.
+    #
+    # Nothing in the chain needs REST off-box (qadena_status.sh probes localhost and marks it
+    # optional), so if this deployment does not serve REST to anything, "tcp://localhost:1317" is the
+    # safer value -- and the point of setting it here is that BOTH nodes then agree either way.
+    api:
+      address: "tcp://0.0.0.0:1317"
     # THE VALIDATOR SELF-BOND FLOOR, in aqdn -- a BARE INTEGER, no denom suffix.
     #
     # IGNITE READS THIS KEY.  It is not a passthrough to app.toml: ignite feeds it to pioneer1's
