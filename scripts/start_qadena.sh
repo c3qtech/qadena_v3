@@ -5,6 +5,12 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# BEFORE ANYTHING STARTS.  This path detaches the node's stdin, so if the enclave still owes its
+# one-time registration the passphrase prompt can never reach the operator -- and the node comes
+# up looking perfectly healthy while never registering.  Refuse instead of starting one.
+# Silent, and never refuses, unless a human is watching and the registration is outstanding.
+qadena_block_unregistered_start "$0" || exit 1
+
 # THE CONTRACT IS "A NODE IS RUNNING WHEN THIS RETURNS 0", not "I attempted a start".
 #
 # It used to be the latter, and the difference cost a fleet join on 2026-08-30.  Both exit paths

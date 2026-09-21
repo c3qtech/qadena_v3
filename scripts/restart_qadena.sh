@@ -5,6 +5,12 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# Same reason as start_qadena.sh: this path backgrounds the node with stdin detached, so a node
+# that still owes its enclave registration cannot be given the passphrase through here.  Checked
+# again rather than left to the caller -- this script is also run directly.  Arriving via
+# start_qadena.sh, that one has already refused, so this never double-prints.
+qadena_block_unregistered_start "$0" || exit 1
+
 # UNDER SYSTEMD, ASK SYSTEMD -- one restart, one instance, and the unit keeps its own supervision.
 if qadena_systemd_managed; then
     echo "restart_qadena.sh: systemd unit present -- restarting qadena.service"

@@ -107,6 +107,170 @@ fi
 
 echo "run.sh: cosmovisor (current -> $(readlink $QADENAHOME/cosmovisor/current))"
 
+# ---------------------------------------------------------------------------------------------
+# THE KEYRING PASSPHRASE, WHEN AND ONLY WHEN A HUMAN STARTED THIS.
+#
+# enclave_selfstart's dispatch reads the pioneer key out of the node's own keyring (backend from
+# client.toml) to hand it to the enclave in MsgInitEnclave.  With the `file` backend that read
+# prompts, and qadenad prompts on ITS OWN STDIN -- so answering it means BEING the feed, exactly
+# as 1st_node_bringup.sh is for a remote bring-up.  One answer is not enough: the number of
+# prompts is not fixed, which is why that script streams the passphrase rather than echoing it
+# once.
+#
+# WHY -t 0 IS THE WHOLE TEST.  The three ways this script starts have three different stdins, and
+# only one of them wants a prompt:
+#
+#   a human in a terminal   -> tty      -> ask
+#   1st/nth_node_bringup.sh -> pipe     -> already being fed; asking would consume its first line
+#   systemd                 -> /dev/null-> cannot be answered at all (the unit has no
+#                                          StandardInput, which is why the fleet does the first
+#                                          start outside systemd)
+#
+# So no flag, no env var, and no way for this to fire on the fleet.
+# ---------------------------------------------------------------------------------------------
+
+# The marker, the "can a human answer" test and the "is it still owed" test all live in
+# setup_env.sh, shared with start_qadena.sh and restart_qadena.sh so the three cannot disagree
+# about when the passphrase is needed.  Read the commentary there before changing this.
+
+# ASK THE CHAIN, THE WAY THE BRING-UP DOES.  JarRegulator is what MaybeDispatchInitEnclave itself
+# gates on; genesis leaves the list empty and only the enclave can fill it (the row carries an
+# attestation report), so a non-empty answer is proof rather than a hint.  The log is not usable
+# here -- a successful dispatch has three possible phrasings and has been observed writing none.
+_rs_jar_count() {
+    "$qadenabin/qadenad" query qadena list-jar-regulator --home "$QADENAHOME" --output json 2>/dev/null \
+        | sed -n '/^{/,$p' | jq -r '(.jarRegulator // []) | length' 2>/dev/null
+}
+
+if qadena_can_prompt && qadena_needs_first_start_passphrase ; then
+    echo "run.sh: this node's keyring is the 'file' backend and it is not recorded as registered yet."
+    echo "run.sh: the passphrase is needed ONCE, to hand the pioneer key to the enclave."
+    # ENTER SKIPS, ALWAYS.  A missing or deleted marker on an already-registered node is a
+    # nuisance, not a dead end -- and the watcher below writes the marker either way, so it is a
+    # one-time nuisance.  An answer that cannot be declined would turn a stale marker into a
+    # node that will not start.
+    # CHECK IT BEFORE TRUSTING IT.  An unchecked answer is worse here than no answer: the node
+    # starts, runs, serves RPC and produces blocks, and the only sign that the passphrase was
+    # wrong is an enclave that never registers -- the exact silent failure start_qadena.sh now
+    # refuses to create.  A typo should cost a retry, not a debugging session.
+    #
+    # OPEN THE KEY THE DISPATCH WILL OPEN, not just any key.  runInitEnclaveDispatch reads the key
+    # named by the MONIKER (enclave_selfstart.go: GetAddressByName(clientCtx, moniker, ...)), so
+    # that is what gets tested.  Checking some other key would pass while the one that matters
+    # is missing.
+    _rs_moniker=$(sed -nE 's/^moniker[[:space:]]*=[[:space:]]*"?([^"]*)"?.*/\1/p' \
+        "$QADENAHOME/config/config.toml" 2>/dev/null | head -1)
+    if [[ -z "$_rs_moniker" ]] ; then
+        echo "run.sh:  Error: config.toml has no moniker -- the enclave registers under that name."
+        exit 1
+    fi
+
+    _rs_ok=0
+    _rs_skipped=0
+    for _rs_try in 1 2 3 ; do
+        print -n "run.sh: keyring passphrase for '$_rs_moniker' (Enter to skip if already registered): "
+        read -rs _rs_pass
+        print
+        # ENTER SKIPS, ALWAYS.  A missing or deleted marker on an already-registered node is a
+        # nuisance, not a dead end -- and the watcher below writes the marker either way, so it
+        # is a one-time nuisance.  An answer that cannot be declined would turn a stale marker
+        # into a node that will not start.
+        if [[ -z "$_rs_pass" ]] ; then
+            echo "run.sh: skipped -- starting without a passphrase feed"
+            _rs_skipped=1
+            break
+        fi
+
+        # BUILTINS ONLY, AND MORE PROMPTS THAN IT ASKS FOR.  `repeat`/`print` are zsh builtins, so
+        # the passphrase never becomes an argument visible in `ps` -- the same reason setup_env.sh
+        # feeds it this way rather than with `yes`.  The count is generous because the number of
+        # prompts a command issues is not fixed.
+        # STDERR TO A FILE, NOT TO $( ).  $pipestatus describes the LAST PIPELINE THIS SHELL RAN,
+        # and a pipeline inside $( ) is run by the substitution's own shell -- so reading it after
+        # `_e=$( a | b )` gives the status of the ASSIGNMENT, which is an empty array here.  zsh
+        # then evaluates `(( _rs_rc == 0 ))` on an empty string as arithmetic ZERO, i.e. SUCCESS:
+        # every wrong passphrase was accepted, the feed was armed with it and the node started.
+        # Exactly the silent-unregistered node this check exists to prevent.
+        #
+        # Run the pipeline directly and read $pipestatus on the very next line, where it is valid.
+        _rs_errfile=$(mktemp "${TMPDIR:-/tmp}/.qadena-run-err.XXXXXX") || {
+            echo "run.sh:  Error: could not create a temporary file"; exit 1 }
+        { repeat 8 print -r -- "$_rs_pass" } \
+            | "$qadenabin/qadenad" keys show "$_rs_moniker" -a \
+                  --keyring-backend "$QADENA_KEYRING_BACKEND" --home "$QADENAHOME" \
+                  >/dev/null 2>"$_rs_errfile"
+        _rs_rc=${pipestatus[2]}
+        _rs_err=$(<"$_rs_errfile")
+        rm -f "$_rs_errfile"
+
+        if (( _rs_rc == 0 )) ; then
+            _rs_ok=1
+            echo "run.sh: passphrase accepted -- '$_rs_moniker' opened"
+            break
+        fi
+
+        # WHICH FAILURE, because the exit code is 1 for both.  A wrong passphrase is a retry; a
+        # missing key is not -- no number of attempts creates it, and the dispatch would fail
+        # with "no key named <moniker> in the keyring" however the passphrase was typed.
+        if [[ "$_rs_err" == *"passphrase"* ]] ; then
+            echo "run.sh: that passphrase did not open the keyring (attempt $_rs_try of 3)"
+        else
+            echo "run.sh:  Error: could not read key '$_rs_moniker' from the keyring:"
+            echo "run.sh:         ${_rs_err##*$'\n'}"
+            echo "run.sh:         This is not a passphrase problem -- the enclave registers under"
+            echo "run.sh:         the moniker, so that key has to exist.  Check 'qadenad keys list'."
+            unset _rs_pass
+            exit 1
+        fi
+        unset _rs_pass
+    done
+
+    if (( _rs_ok )) ; then
+        # BECOME THE FEED, by replacing this script's stdin -- so the launch line below is
+        # untouched and cosmovisor inherits it like any other stdin.
+        #
+        # BOUNDED.  When the window closes the pipe reaches EOF, which is what we want a late
+        # read to get: an unbounded feed would leave the passphrase available on stdin for the
+        # entire life of the node.  20 minutes is the bring-up scripts' figure and covers a
+        # genesis start reaching height 2 on a slow box.
+        exec < <(_end=$((SECONDS+1200)); while (( SECONDS < _end )); do print -r -- "$_rs_pass"; done)
+        unset _rs_pass
+        echo "run.sh: feeding the passphrase to the node's first start"
+    elif (( ! _rs_skipped )) ; then
+        # THREE WRONG ANSWERS IS A STOP, not a start.  Proceeding would build precisely the node
+        # start_qadena.sh refuses to create: healthy-looking, unregistered, and silent about why.
+        # An explicit Enter is different -- that is a deliberate choice, and it falls through.
+        unset _rs_pass
+        echo "run.sh:  Error: the passphrase did not open '$_rs_moniker' after 3 attempts -- not starting."
+        echo "run.sh:         Starting anyway would give you a node that runs but never registers."
+        exit 1
+    fi
+fi
+
+# WRITE THE MARKER ONLY ONCE THE CHAIN SAYS SO.  Backgrounded because the node has to be up to
+# answer, and this script is about to hand its foreground to cosmovisor.  It exits on its own:
+# either the row appears, or the window closes and no marker is written -- which is the correct
+# outcome for a node that never registered.
+#
+# Runs even when the prompt was skipped, so an already-registered node stops asking from now on.
+if qadena_needs_first_start_passphrase ; then
+    (
+        _end=$((SECONDS+1800))
+        while (( SECONDS < _end )) ; do
+            sleep 20
+            _n=$(_rs_jar_count)
+            if [[ -n "$_n" && "$_n" != "0" ]] ; then
+                # The passphrase is never needed again: enclave_selfstart reads the keyring at the
+                # first init only, and every later block returns early once GetJarRegulator finds
+                # the row (d.doneForGood).
+                : > "$QADENA_REGISTERED_MARKER" 2>/dev/null && \
+                    echo "run.sh: enclave is registered on chain -- recorded in $QADENA_REGISTERED_MARKER (no passphrase needed on future starts)"
+                break
+            fi
+        done
+    ) &
+fi
+
     # A SWAP COSMOVISOR CANNOT PERFORM ITSELF.
     #
     # cosmovisor decides to upgrade by watching data/upgrade-info.json, but gates that decision on
