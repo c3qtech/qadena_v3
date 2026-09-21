@@ -3193,12 +3193,35 @@ func (s *qadenaServer) GenerateSecretShare(nodeID string, nodeType string, plan 
 // point in history there was none, and would re-initialize an enclave that SyncEnclave had already
 // set up minutes earlier.  Genesis membership answers who the node is, not what its enclave holds.
 //
-// Read from the same field InitEnclave short-circuits on, so the answer and the behaviour cannot
+// Read from the same fields InitEnclave short-circuits on, so the answer and the behaviour cannot
 // drift apart.  Side-effect free: it is a read, safe to call before the chain has decided anything.
+//
+// BOTH CONDITIONS, because this used to test PioneerID alone while InitEnclave and SyncEnclave
+// tested `paramsPersisted && PioneerID != ""`.  That is precisely the drift the line above
+// promises does not happen, and it has a cost:
+//
+//   preInitEnclave sets PioneerID EARLY and the params are sealed only at the very end, after the
+//   registration tx is accepted.  So an init that got as far as generating keys and then failed --
+//   a rejected remote report, or a platform that cannot produce a quote at all -- leaves PioneerID
+//   set with nothing on disk.  Answering "initialized" there tells the chain's dispatch the work
+//   is done; it sets doneForGood and never retries, for a registration that never happened.
+//
+//   Seen on qfi-mainnet .104: InitEnclave failed with OE_UNEXPECTED, and the very next block
+//   logged "the enclave reports it is already initialized as qfi-pioneer1 -- not initializing"
+//   while JarRegulator stayed empty.  A restart clears it (the in-memory ID goes with the
+//   process), so it is not permanent -- it just stops the retry that would have recovered.
+//
+// Reporting the half-done state as NOT initialized sends the dispatch back to InitEnclave, which
+// recognises it ("a previous init got as far as generating keys but never persisted them --
+// redoing it") and redoes the work.  Safe for a genuinely initialized enclave: loadEnclaveParams
+// sets paramsPersisted on the way back up, so a restart still answers true.
+//
+// PioneerID is still returned when it is known, because the caller logs it and "half-initialized
+// as X" is more use than an empty string.
 func (s *qadenaServer) GetEnclaveStatus(ctx context.Context, in *types.MsgGetEnclaveStatus) (*types.GetEnclaveStatusReply, error) {
 	pioneerID := s.getPrivateEnclaveParamsPioneerID()
 	return &types.GetEnclaveStatusReply{
-		Initialized: pioneerID != "",
+		Initialized: s.paramsPersisted && pioneerID != "",
 		PioneerID:   pioneerID,
 	}, nil
 }
