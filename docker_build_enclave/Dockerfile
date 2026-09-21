@@ -44,7 +44,31 @@ RUN printf 'deb https://snapshot.ubuntu.com/ubuntu/%s jammy main restricted univ
  && rm -f /etc/apt/sources.list.d/*.list \
  && echo 'Acquire::https::Verify-Peer "false";' > /etc/apt/apt.conf.d/99snapshot
 
-RUN apt-get update
+# RETRY, AND FAIL LOUDLY IF THE INDEX IS EMPTY.
+#
+# `apt-get update` treats an unreachable repository as a WARNING: it prints "Some index files failed
+# to download. They have been ignored, or old ones used instead." and exits 0.  The pinned install
+# below then dies with "Unable to locate package curl" and "Version '...' for 'libc6' was not found",
+# which reads like the pins are wrong when the truth is that nothing was fetched at all.
+#
+# Measured on the cloudsigma primary 2026-09-21: snapshot.ubuntu.com timed out on both its IPs for
+# ~38s, apt shrugged, and the build failed ~25 minutes into a run with a message that sent the
+# investigation at the version pins.  snapshot.ubuntu.com is the single point of failure for every
+# pin here, so it is worth retrying and worth checking that it actually answered.
+#
+# AND THE REAL DAMAGE IS THE CACHE.  Because the step exits 0, BuildKit caches the layer holding
+# the EMPTY index -- so every later build on that machine reuses it and fails instantly with the
+# same misleading message, long after the network recovered.  Observed here: the retry failed in
+# 0.2s with "#8 [base 3/6] RUN apt-get update -> CACHED", and no amount of re-running could fix it
+# without pruning.  Failing the step is what keeps a broken index out of the cache.
+RUN set -e; \
+    apt-get -o Acquire::Retries=5 update; \
+    if ! apt-cache show libc6 > /dev/null 2>&1; then \
+        echo "FATAL: the apt index is EMPTY -- could not fetch the $APT_SNAPSHOT snapshot."; \
+        echo "       This is a fetch failure, NOT a bad version pin.  Re-run; if it persists,"; \
+        echo "       check reachability of snapshot.ubuntu.com from inside the buildx builder."; \
+        exit 1; \
+    fi
 
 # CUT/PASTE ALERT:  Get the apt-get info from the docker_chain_build/Dockerfile
 
