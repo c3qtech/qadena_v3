@@ -115,6 +115,9 @@ COORD_HOME=""
 # joiner silently stays a full node -- the opposite of the default.
 CONVERT_JOINERS=1
 ADVERTISE_P=""
+# ONE PER JOINER, positional against JOINERS -- or one for all of them.  ADVERTISE_J is the first,
+# kept because the single-value spelling is what every existing caller passes.
+ADVERTISE_JS=()
 ADVERTISE_J=""
 # Passed through to nth_node_bringup.sh.  Empty means "use its defaults", which are DEVNET-sized.
 FUND_QDN_ARG=""
@@ -285,10 +288,11 @@ while [[ $# -gt 0 ]]; do
         # WHAT EACH NODE TELLS PEERS TO DIAL.  Both default to the ssh host, which is wrong behind
         # NAT and across networks -- see nth_node_bringup.sh.  --advertise-ip-address reaches
         # init.sh on the primary; --joiner-advertise-ip-address reaches add_full_node.sh on each
-        # joiner.  One value per joiner is not supported: give them the same routable address or
-        # run nth_node_bringup.sh per node.
+        # joiner.  REPEATABLE: give one per --joiner, in the same order, or exactly one and every
+        # joiner advertises it (which is what a shared NLB or NAT address wants).  It used to be a
+        # single value applied to all, so one address for many joiners still behaves as it did.
         --advertise-ip-address)        ADVERTISE_P="$2"; shift 2 ;;
-        --joiner-advertise-ip-address) ADVERTISE_J="$2"; shift 2 ;;
+        --joiner-advertise-ip-address) ADVERTISE_JS+=("$2"); ADVERTISE_J="${ADVERTISE_JS[1]}"; shift 2 ;;
         --foundation-sponsored)
             SPONSORED=1
             if [[ -n "$2" && "$2" != --* ]]; then SPONSOR_GRANTER="$2"; shift 2; else shift; fi ;;
@@ -621,9 +625,31 @@ mainnet_args=()
 # ARRAYS, NOT ${VAR:+...}.  zsh does not word-split an unquoted parameter expansion, so
 # `${ADVERTISE_P:+--advertise-ip-address "$ADVERTISE_P"}` would arrive as ONE argument and be
 # rejected as an unknown option -- the same bug that made sec_veritas_verify.sh reject --pool.
+# MORE ADDRESSES THAN JOINERS MEANS THE LISTS HAVE DRIFTED, and the extra would be dropped at
+# exactly the node that then advertises the wrong host.  One address for many joiners is a shared
+# route and stays legal.
+if (( ${#ADVERTISE_JS} > 1 && ${#ADVERTISE_JS} != ${#JOINERS} )); then
+    fail "${#ADVERTISE_JS} --joiner-advertise-ip-address value(s) for ${#JOINERS} --joiner(s): give one per joiner, in the same order, or exactly one for all."
+fi
 conv=(); (( CONVERT_JOINERS )) && conv=(--convert-to-validator)
 adv_p=(); [[ -n "$ADVERTISE_P" ]] && adv_p=(--advertise-ip-address "$ADVERTISE_P")
+# RESOLVED PER JOINER INSIDE THE LOOP (see joiner_adv below); this stays for the preflight and
+# for the single-address case, which is every caller that predates the list.
 adv_j=(); [[ -n "$ADVERTISE_J" ]] && adv_j=(--advertise-ip-address "$ADVERTISE_J")
+# joiner_adv <joiner-index> -- the address this joiner should advertise.  One address means all of
+# them share it; a full list is positional.  Silence (no address) is the flat-LAN case, where each
+# node advertises the host its peers already dial.
+typeset -ga _adv_reply
+joiner_adv() {
+    local _i=$1
+    if (( ${#ADVERTISE_JS} == 0 )); then
+        _adv_reply=()
+    elif (( ${#ADVERTISE_JS} == 1 )); then
+        _adv_reply=(--advertise-ip-address "${ADVERTISE_JS[1]}")
+    else
+        _adv_reply=(--advertise-ip-address "${ADVERTISE_JS[$_i]}")
+    fi
+}
 "$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG "${mainnet_args[@]}" "${adv_p[@]}" --only 1 \
     2>&1 | tee "$RUN_DIR/stage-A0-preflight.log"
 [[ ${pipestatus[1]} -eq 0 ]] || fail "the primary failed preflight; nothing has been changed on any host. See $RUN_DIR/stage-A0-preflight.log"
@@ -976,7 +1002,8 @@ fi
     # to `file`, add_full_node.sh builds the joiner's the same way, and both nodes' first start has
     # to unlock one to register an enclave.  An array, not ${VAR:+...} -- zsh does not word-split an
     # unquoted expansion, so that form arrives as a single unrecognised argument.
-    "$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" "${adv_j[@]}" \
+    joiner_adv "${JOINERS[(ie)$j]}"
+    "$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" "${_adv_reply[@]}" \
         --pioneer "$pioneer" "${sync_arg[@]}" "${seed2_arg[@]}" "${sponsor_arg[@]}" "${amount_args[@]}" \
         "${kp_arg[@]}" "${conv[@]}" --from 1 --until 8 \
         2>&1 | tee "$RUN_DIR/stage-G-join-${j##*@}.log"

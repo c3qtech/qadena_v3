@@ -98,11 +98,19 @@ CF_TEMPLATE="${SITE_CF_TEMPLATE:-}"
 ENV_FILE="$HOME/test/follow-the-money/stacks/$DEPLOY_NAME/$SITE_ENV_FILE_NAME"
 PREFIX="$DEPLOY_PREFIX"
 PRIMARY="$SITE_PRIMARY"
-JOINER="$SITE_JOINER"
+# THE WHOLE LIST, NOT THE FIRST.  A site may name several joiners; SITE_JOINER is only the first
+# of them, kept for the single-joiner spelling.  JOINER stays in step for the messages that name
+# one host.
+JOINERS=("${SITE_JOINERS[@]}")
+JOINER="${JOINERS[1]:-}"
+# Positional against JOINERS, or one entry meaning "all of them advertise this".
+ADVERTISE_JS=("${SITE_ADVERTISE_JS[@]}")
+_JOINER_FROM_CLI=0
+_ADV_J_FROM_CLI=0
 SKIP_APP=0
 NODE_GRANTER="$SITE_NODE_GRANTER"
 ADVERTISE_P="$SITE_ADVERTISE_P"
-ADVERTISE_J="$SITE_ADVERTISE_J"
+ADVERTISE_J="${ADVERTISE_JS[1]:-}"
 
 usage() {
     print -r -- "Usage: veritas_full_setup.sh [options]"
@@ -139,8 +147,13 @@ usage() {
     print -r -- "                      Destroys every wallet and credential on them."
     print -r -- "  --advertise-ip-address <ip>         what the PRIMARY tells peers to dial"
     print -r -- "                                      (reaches init.sh).  Default: the ssh host."
-    print -r -- "  --joiner-advertise-ip-address <ip>   same for each JOINER (reaches"
-    print -r -- "                                      add_full_node.sh).  Default: the ssh host."
+    print -r -- "  --joiner <user@host>   REPEATABLE.  Overrides the site's joiners entirely (the"
+    print -r -- "                      first --joiner replaces the list, later ones add to it), so"
+    print -r -- "                      a site with three joiners and one --joiner runs with one."
+    print -r -- "  --joiner-advertise-ip-address <ip>   what each JOINER advertises (reaches"
+    print -r -- "                                      add_full_node.sh).  REPEATABLE: one per"
+    print -r -- "                                      --joiner in the same order, or one for all"
+    print -r -- "                                      of them.  Default: the ssh host."
     print -r -- "  --launch-dir <dir>  the foundation's directory (default ~/fleet-launch).  Created"
     print -r -- "                      by the bootstrap stage if absent -- keys, sealed mnemonics,"
     print -r -- "                      addresses.csv and the rendered launch config."
@@ -184,8 +197,15 @@ while [[ $# -gt 0 ]]; do
         # What each node tells peers to dial.  Both default to the ssh host, which is wrong behind
         # NAT (public ssh address, private interface) and across networks.
         --advertise-ip-address)        ADVERTISE_P="$2"; shift 2 ;;
-        --joiner-advertise-ip-address) ADVERTISE_J="$2"; shift 2 ;;
-        --joiner)        JOINER="$2"; shift 2 ;;
+        # Repeatable too, one per --joiner in the same order (or one for all of them).
+        --joiner-advertise-ip-address)
+            (( _ADV_J_FROM_CLI )) || { ADVERTISE_JS=(); _ADV_J_FROM_CLI=1 }
+            ADVERTISE_JS+=("$2"); ADVERTISE_J="${ADVERTISE_JS[1]}"; shift 2 ;;
+        # REPEATABLE, AND THE FIRST ONE REPLACES THE SITE'S LIST rather than adding to it:
+        # `--site SGX --joiner other` means "that joiner", not "the site's joiner and that one".
+        --joiner)
+            (( _JOINER_FROM_CLI )) || { JOINERS=(); _JOINER_FROM_CLI=1 }
+            JOINERS+=("$2"); JOINER="${JOINERS[1]}"; shift 2 ;;
         --help|-h)       usage; exit 0 ;;
         *) print -u2 -- "unknown option: $1"; usage >&2; exit 1 ;;
     esac
@@ -304,8 +324,9 @@ _on_exit() {
         print -u2 -- "          --rebuild-chain --ref <branch>"
         print -u2 -- "  NOTE: '$_CURRENT' is not a resumable stage -- it is the --rebuild-chain block,"
         print -u2 -- "  which runs before them and PURGES BOTH NODES again.  If the primary built and"
-        print -u2 -- "  only the joiner failed, resume the join instead, without rebuilding:"
-        print -u2 -- "      testscripts/nth_node_bringup.sh --primary $PRIMARY --joiner $JOINER \\"
+        print -u2 -- "  only the joiner failed, resume the join instead, without rebuilding"
+        print -u2 -- "  (one command per joiner; this site has ${#JOINERS}):"
+        print -u2 -- "      testscripts/nth_node_bringup.sh --primary $PRIMARY --joiner ${JOINER:-<joiner>} \\"
         print -u2 -- "          --pioneer <name> --from 3 --keyring-passfile $PASSFILE"
     fi
     print -u2 -- "==========================================================================="
@@ -386,7 +407,7 @@ if (( REBUILD )); then
     banner "0. PURGE AND REBUILD THE CHAIN  (destroys everything on both nodes)"
     # SINGLE-NODE SITES PASS NO JOINER.  `--node ""` is not "no node": stop_fleet takes it as an
     # empty ssh target and the purge either fails or, worse, runs somewhere unintended.
-    _stopn=(--node "$PRIMARY"); [[ -n "$JOINER" ]] && _stopn+=(--node "$JOINER")
+    _stopn=(--node "$PRIMARY"); for _j in "${JOINERS[@]}"; do _stopn+=(--node "$_j"); done
     ./testscripts/stop_fleet.sh "${_stopn[@]}" \
         --purge --reap-archives --immediate
     # SAY WHAT IS BEING DESTROYED, AND REFUSE IF IT BELONGS TO ANOTHER CHAIN.
@@ -467,7 +488,7 @@ if (( REBUILD )); then
     [[ "$JOINER_VALIDATOR" == "0" ]] && _jv=(--no-convert-joiners)
     _adv=()
     [[ -n "$ADVERTISE_P" ]] && _adv+=(--advertise-ip-address "$ADVERTISE_P")
-    [[ -n "$ADVERTISE_J" ]] && _adv+=(--joiner-advertise-ip-address "$ADVERTISE_J")
+    for _a in "${ADVERTISE_JS[@]}"; do _adv+=(--joiner-advertise-ip-address "$_a"); done
     # ONE PASSPHRASE FOR THE WHOLE RUN.  $PASSFILE already unlocks the coordinator keyring and
     # SEC's; passing it here makes it the NODE keyring's too, once config.yml asks for
     # keyring-backend: file.  Same file, so they cannot drift -- and a fleet whose nodes need a
@@ -486,7 +507,7 @@ if (( REBUILD )); then
     # fleet_bringup_with_tests keeps joiners in an ARRAY and reports "<none>" for an empty one, so
     # a single-node site just does not pass the flag.  Passing --joiner "" would append an empty
     # entry and every per-joiner loop would run once against nothing.
-    _jn=(); [[ -n "$JOINER" ]] && _jn=(--joiner "$JOINER")
+    _jn=(); for _j in "${JOINERS[@]}"; do _jn+=(--joiner "$_j"); done
     ./testscripts/fleet_bringup_with_tests.sh \
         --primary "$PRIMARY" "${_jn[@]}" --block-sync "${_sgx[@]}" "${_jv[@]}" "${_adv[@]}" "${_ref[@]}" \
         --mainnet-source        "$LAUNCH_DIR/fleet-launch-config.yml" \
