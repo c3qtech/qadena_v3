@@ -153,18 +153,33 @@ if [ "$(uname -m)" = "x86_64" ]; then
         # message in the provisioning output saying so.
         #
         # This script is /bin/sh, so no ${var// /} and no ${=var} -- unquoted $var word-splits here.
+        # THE STANDARD NAME IS ALWAYS INCLUDED, the observed one only ADDS to it.
+        #
+        # Reading the group off the device is right when udev has settled it and WRONG while it has
+        # not -- and the failure is silent.  The sgx_prv udev rule ships with the DCAP package this
+        # script installs a few lines above, and udev does not retroactively re-apply a new rule to
+        # a device node that already exists from boot.  So /dev/sgx_provision is still carrying its
+        # pre-DCAP group when we look, which on these images is `sgx`, not root and not empty --
+        # so the ""|root fallback never fired, BOTH devices resolved to `sgx`, the user was already
+        # in it, and the loop printed "already in group sgx" twice and added nothing.  Measured on
+        # the cloudsigma joiners 2026-09-21: docker was added in the same run, so SUDO_USER was
+        # set; sgx_prv simply never appeared in the audit log.
+        #
+        # Trusting the device alone cannot be made safe here, because the value it reports is
+        # plausible.  So take the union: the standard name ALWAYS, plus whatever the device says if
+        # it differs.  Being in a group that a later udev rule stops using costs nothing; being
+        # absent from sgx_prv costs remote attestation, months later, far from any permission.
         sgx_groups=""
         for dev_grp in /dev/sgx_enclave:sgx /dev/sgx_provision:sgx_prv; do
             dev=$(echo "$dev_grp" | cut -d: -f1)
             def=$(echo "$dev_grp" | cut -d: -f2)
             grp=""
             [ -e "$dev" ] && grp=$(stat -c %G "$dev" 2>/dev/null)
-            # Unreadable, absent, or owned by root before udev applies the rule: use the standard
-            # name, so a later reboot finds the user already in the right group.
+            sgx_groups="$sgx_groups $def"
             case "$grp" in
-                ""|root) grp="$def" ;;
+                ""|root|"$def") ;;
+                *) sgx_groups="$sgx_groups $grp" ;;
             esac
-            sgx_groups="$sgx_groups $grp"
         done
 
         for grp in $sgx_groups; do

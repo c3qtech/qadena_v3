@@ -148,7 +148,7 @@ fleet_site_profile_load() {
         # meant to SUPERSEDE staging on that box; it is data loss if both are wanted at once, and
         # the fix then is a second host, not a second profile.
         SITE_PRIMARY="cloudsigma@45.115.225.104"
-        SITE_JOINERS=("cloudsigma@45.115.225.170" "cloudsigma@103.56.5.229")
+        SITE_JOINERS=("cloudsigma@103.56.5.229" "cloudsigma@45.115.225.170" )
         # VISIBLE, AND INSIDE THE LAUNCH DIRECTORY -- not a dotfile in $HOME like the other two
         # sites.  This is a throwaway testnet whose passphrase is generated rather than chosen, so
         # it wants to be findable next to the chain it unlocks.  veritas_full_setup.sh mints it on
