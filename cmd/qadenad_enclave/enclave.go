@@ -1937,19 +1937,17 @@ func (s *qadenaServer) verifyRemoteReportMeasurement(remoteReportBytes []byte, c
 		//   from a genuinely out-of-date platform fell through the != comparison and was ACCEPTED.
 		//
 		// So: reject on any error that is not the TCB-level signal, then judge the TCB status
-		// against an explicit ALLOW-list.  A list that must be extended when a new status appears is
-		// the right failure mode; a deny-list silently admits whatever it has not heard of.
+		// against the explicit ALLOW-list in c.AcceptableTCBStatus -- shared with the chain-side
+		// verifier (cmd/qadenad/realenclave_helper.go) so the two cannot diverge into a trust
+		// asymmetry.  Read the commentary there before changing it: OutOfDateConfigurationNeeded is
+		// currently admitted, deliberately, and this path is the expensive one -- it is what hands
+		// a peer the sealed-table secret and reconstructed interval keys.
 		if err != nil && !errors.Is(err, attestation.ErrTCBLevelInvalid) {
 			c.LoggerError(logger, "remote report did not verify: "+err.Error())
 			return false, "", ""
 		}
 		c.LoggerDebug(logger, "remote report tcbstatus "+tcbstatus.Explain(remoteReport.TCBStatus))
-		switch remoteReport.TCBStatus {
-		case tcbstatus.UpToDate, tcbstatus.ConfigurationNeeded,
-			tcbstatus.SWHardeningNeeded, tcbstatus.ConfigurationAndSWHardeningNeeded:
-			// acceptable: the platform needs configuration or software hardening, but its TCB is
-			// not out of date and not revoked.
-		default:
+		if !c.AcceptableTCBStatus(remoteReport.TCBStatus) {
 			c.LoggerError(logger, "refusing remote report with TCB status "+
 				tcbstatus.Explain(remoteReport.TCBStatus))
 			return false, "", ""
