@@ -306,6 +306,97 @@ qadena_systemd_managed() {
 
 
 # ---------------------------------------------------------------------------------------------
+# THE FIRST START NEEDS THE KEYRING PASSPHRASE, AND ONLY THE FIRST.
+#
+# enclave_selfstart's dispatch reads the pioneer key out of the node's keyring to hand it to the
+# enclave in MsgInitEnclave.  With the `file` backend that read prompts, on qadenad's OWN stdin.
+# These three helpers are shared so run.sh (which can answer) and start/restart_qadena.sh (which
+# cannot) agree on when it is needed and say the same thing about it.
+# ---------------------------------------------------------------------------------------------
+
+# WHAT "ALREADY DONE" MEANS: the on-chain JarRegulator row exists.  Recorded as a file because the
+# question is asked BEFORE the node is up, when the chain cannot be queried.
+#
+# The marker records REGISTERED, not ASKED.  Those come apart: a node whose keyring unlocked fine
+# and whose InitEnclave then failed has been asked and still needs asking.  Under $QADENAHOME so
+# that init.sh and --rebuild-chain, which remove the node home wholesale, invalidate it with the
+# chain it describes -- in $HOME it would outlive a wipe and lie about the next one.
+: ${QADENA_REGISTERED_MARKER:="$QADENAHOME/.enclave-registered"}
+
+# A HUMAN WHO CAN ACTUALLY ANSWER A PROMPT.  Two conditions, and the second is not decoration:
+#
+#   -t 0          stdin is a terminal.  Rules out systemd (StandardInput defaults to null) and the
+#                 bring-up scripts (they pipe the passphrase in, and a prompt would eat its first
+#                 line).  It ALSO rules out `nohup ... &` from a script -- restart_qadena.sh's
+#                 shape -- because an asynchronous list in a shell with job control disabled gets
+#                 stdin from /dev/null.
+#
+#   stat has '+'  this process is in the terminal's FOREGROUND group.  Typing `run.sh &` at an
+#                 interactive prompt leaves job control ON, so stdin stays the tty and -t 0 alone
+#                 says "ask" -- but a background reader of the controlling terminal gets SIGTTIN,
+#                 whose default action STOPS the process.  The node would hang before starting.
+#                 Verified on both platforms: foreground is "Ss+", backgrounded is "SN".
+qadena_can_prompt() {
+    [ -t 0 ] || return 1
+    case "$(ps -o stat= -p $$ 2>/dev/null)" in
+        *+*) return 0 ;;
+        *)   return 1 ;;
+    esac
+}
+
+# Does this node still owe its one-time registration?
+qadena_needs_first_start_passphrase() {
+    [ "$QADENA_KEYRING_BACKEND" = "file" ] || return 1
+    [ ! -f "$QADENA_REGISTERED_MARKER" ] || return 1
+    return 0
+}
+
+# REFUSE, DO NOT WARN.  start_qadena.sh and restart_qadena.sh background the node with stdin
+# detached, so the passphrase prompt cannot reach a human through them -- under systemd it cannot
+# reach one at all.  Starting a never-registered node that way produces the worst possible
+# outcome: a node that runs, serves RPC, produces blocks and looks entirely healthy while its
+# enclave is not registered.  Nothing about the symptom points at the cause, and start_qadena.sh's
+# retry loop stacks several of them up while it waits for a node that is already running.
+#
+# A warning is not enough for that, because the thing being warned about still happens.  Returns
+# non-zero and the caller stops.
+#
+# ONLY WHEN A HUMAN IS WATCHING.  qadena_can_prompt is false for the bring-up scripts (which feed
+# the passphrase themselves) and for systemd, so this cannot refuse a fleet start -- those paths
+# keep exactly the behaviour they had.
+#
+# Returns 0 to proceed, 1 to refuse.  $1 is the CALLER'S script path, for the retry hint: inside a
+# zsh function $0 is the function's own name, so building that line from $0 here printed
+# "QADENA_ALLOW_UNREGISTERED_START=1 qadena_block_unregistered_start" -- advice that does nothing.
+qadena_block_unregistered_start() {
+    _qbus_caller="${1:-$qadenascripts/start_qadena.sh}"
+    qadena_can_prompt || return 0
+    qadena_needs_first_start_passphrase || return 0
+    # THE ESCAPE HATCH, because "registered" is inferred from a marker file and a marker can be
+    # wrong -- a node registered before this check existed has no marker until something writes
+    # one.  run.sh's watcher writes it on any start, so the usual fix is to start once through
+    # run.sh; this exists for the case where that is not wanted.
+    [ -z "${QADENA_ALLOW_UNREGISTERED_START:-}" ] || return 0
+    echo "" >&2
+    echo "REFUSING TO START: this node's enclave is not recorded as registered yet." >&2
+    echo "" >&2
+    echo "  The enclave's one-time registration needs the keyring passphrase ('file' backend)," >&2
+    echo "  and it can only be typed into a node started in the FOREGROUND:" >&2
+    echo "" >&2
+    echo "      $qadenascripts/run.sh" >&2
+    echo "" >&2
+    echo "  Started through THIS script the node's stdin is detached, so the prompt could not" >&2
+    echo "  reach you -- the node would run normally while never registering its enclave, which" >&2
+    echo "  is a failure that looks like a healthy node.  Hence the refusal rather than a warning." >&2
+    echo "" >&2
+    echo "  Once it has registered, the passphrase is never needed again and this stops." >&2
+    echo "  To start anyway:  QADENA_ALLOW_UNREGISTERED_START=1 $_qbus_caller" >&2
+    echo "" >&2
+    return 1
+}
+
+
+# ---------------------------------------------------------------------------------------------
 # COSMOVISOR IS THE ONLY LAYOUT.  Every qadena node keeps its binaries in a generation directory
 # under $QADENAHOME/cosmovisor and reaches them through symlinks in $QADENAHOME/bin.  There is no
 # unmanaged mode: a node is born managed (init.sh / install_release.sh build the tree) and stays

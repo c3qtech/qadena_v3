@@ -147,15 +147,25 @@ fleet_site_profile_load() {
         # --rebuild-chain purges whichever chain is there now.  That is fine if qfi-testnet is
         # meant to SUPERSEDE staging on that box; it is data loss if both are wanted at once, and
         # the fix then is a second host, not a second profile.
-        SITE_PRIMARY="cloudsigma@45.115.225.104"
-        SITE_JOINERS=("cloudsigma@103.56.5.229" "cloudsigma@45.115.225.170" )
+        # .229 IS PRIMARY BECAUSE IT IS THE ONLY BOX THAT CAN ATTEST.  .104 and .170 cannot produce
+        # a DCAP quote at all: Intel PCS answers 404 for their QE IDs, i.e. those platforms are not
+        # registered, so there is no PCK cert to sign a quote with.  That is not a PCCS or config
+        # problem on our side and no amount of retrying fixes it -- it needs the host provider to
+        # register them.  Since sync-enclave makes the JOINER produce a quote too, they cannot join
+        # either; hence no joiners, which also matches SITE_JOINER_VALIDATOR=0 below.
+        #
+        # .229 attests, but reports TCB OutOfDateConfigurationNeeded (level tcbDate 2022-08-10 for
+        # FMSPC 00606A000000).  That is admitted only because common.AllowOutOfDateTCB is true --
+        # read the commentary there before assuming this site is safe for real key material.
+        SITE_PRIMARY="cloudsigma@103.56.5.229"
+        SITE_JOINERS=()
         # VISIBLE, AND INSIDE THE LAUNCH DIRECTORY -- not a dotfile in $HOME like the other two
         # sites.  This is a throwaway testnet whose passphrase is generated rather than chosen, so
         # it wants to be findable next to the chain it unlocks.  veritas_full_setup.sh mints it on
         # the first run when the directory has no keyring yet.
         SITE_LAUNCH_DIR="$HOME/qfi-mainnet-fleet-launch"
         SITE_PASSFILE="$SITE_LAUNCH_DIR/keyring-password"
-        SITE_ADVERTISE_P="45.115.225.104"
+        SITE_ADVERTISE_P="103.56.5.229"
         SITE_ADVERTISE_J=""
         # ITS OWN STATE DIRECTORY, for the reason staging has one: --rebuild-chain DELETES the
         # deployment home, so a site sharing it with another fleet destroys that fleet's keys and

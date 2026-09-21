@@ -299,6 +299,65 @@ if [[ -n "$mainnet_source" ]]; then
     echo "Pioneer ID from $mainnet_source: $PIONEER1"
 fi
 
+# THE KEYRING PASSPHRASE: ASK FOR IT WHEN THERE IS SOMEONE TO ASK.
+#
+# BOTH configs in this tree set `keyring-backend: "file"` (config/config.yml:174 for the devnet,
+# config/launch-config.yml:237 for a launch chain), and ignite creates the keys in keyring-test
+# regardless -- so EVERY build migrates the keyring afterwards and every build needs this
+# passphrase.  Without --keyring-passfile the run refuses a few lines below.  That is right for the
+# fleet drivers, which are non-interactive and must not hang on a prompt nobody can see; it is
+# merely unhelpful for a person building a debug chain on their own machine, who had to invent a
+# passphrase file first.
+#
+# So: a terminal gets a prompt, everything else keeps the old refusal.  `[[ -t 0 ]]` is the whole
+# test -- under nohup, ssh without a tty, or a pipeline, stdin is not a terminal, `read` would take
+# EOF for an answer, and an empty passphrase would silently become the keyring's.
+#
+# WRITTEN TO A FILE, not kept in a variable, because that is what the consumers take:
+# migrate_keyring.sh --passfile <path>, and the sealed-mnemonic reader below does
+# `head -1 "$keyring_passfile"`.  Created under umask 077 and shredded on any exit, including a
+# Ctrl-C -- a passphrase that outlives the run is the thing this file spends its time avoiding.
+#
+# ASKED TWICE.  On a devnet build there is nothing to check the answer against: this passphrase
+# ENCRYPTS the new keyring, so a typo is not rejected, it is adopted, and the keyring it produces
+# cannot be opened by what the operator thinks they typed.
+_cfg_for_pass="${mainnet_source:-$qadenabuild/config/config.yml}"
+if [[ -z "$keyring_passfile" ]] \
+   && grep -qE '^[[:space:]]*keyring-backend:[[:space:]]*"?file"?' "$_cfg_for_pass" 2>/dev/null; then
+    if [[ -t 0 ]]; then
+        _try=0
+        while (( _try < 3 )); do
+            _try=$(( _try + 1 ))
+            print -u2 -n "*** Passphrase for the node keyring (hidden, will not echo): "
+            read -s _kp1; print -u2 ""
+            print -u2 -n "*** Again, to confirm: "
+            read -s _kp2; print -u2 ""
+            [[ -t 0 ]] && stty echo 2>/dev/null
+            if [[ -z "$_kp1" ]]; then
+                print -u2 "    Empty -- the keyring needs a passphrase.  Try again."
+            elif [[ "$_kp1" != "$_kp2" ]]; then
+                print -u2 "    They do not match.  Try again."
+            else
+                break
+            fi
+            unset _kp1 _kp2
+        done
+        if [[ -z "$_kp1" || "$_kp1" != "$_kp2" ]]; then
+            unset _kp1 _kp2
+            echo "   INIT FAILED: no usable passphrase after 3 attempts.  Nothing has been changed."
+            exit 1
+        fi
+        umask 077
+        _kp_tmp=$(mktemp "${TMPDIR:-/tmp}/.qadena-init-pass.XXXXXX") || {
+            echo "   INIT FAILED: could not create a temporary passphrase file"; exit 1 }
+        print -r -- "$_kp1" > "$_kp_tmp"
+        unset _kp1 _kp2
+        keyring_passfile="$_kp_tmp"
+        trap '[[ -n "$_kp_tmp" ]] && { shred -u "$_kp_tmp" 2>/dev/null || rm -f "$_kp_tmp"; }' EXIT INT TERM
+        echo "   using the passphrase you just typed (kept in a temporary file, shredded on exit)"
+    fi
+fi
+
 # ASKED BEFORE ANYTHING IS DESTROYED, for the same reason the IP is: a prompt discovered after
 # `rm -rf $QADENAHOME` leaves the operator with a wiped node and a question.
 if [[ -n "$mainnet_source" ]]; then
@@ -921,7 +980,15 @@ fi
 # Both quote styles -- ignite writes "file", dasel writes 'file'.
 _kb=$(sed -nE "s/^keyring-backend[[:space:]]*=[[:space:]]*['\"]?([^'\"]*)['\"]?.*/\\1/p" \
       "$QADENAHOME/config/client.toml" 2>/dev/null | head -1)
-if [[ "$_kb" == "file" ]] && ls "$QADENAHOME"/keyring-test/*.info > /dev/null 2>&1; then
+# (N) -- THE NULL_GLOB QUALIFIER, and it is required here rather than tidy.  In zsh a glob that
+# matches nothing is a SHELL error raised BEFORE the command runs, so the `2>/dev/null` on `ls`
+# cannot suppress it: a node whose keyring-test is already empty -- the normal state on a re-run,
+# or after a previous migration -- printed
+#     init.sh:983: no matches found: /home/user/qadena/keyring-test/*.info
+# straight to the operator, from a line whose whole purpose was to ask a yes/no question quietly.
+# Same trap, same fix as testscripts/veritas_full_setup.sh:239.
+_kt_info=("$QADENAHOME"/keyring-test/*.info(N))
+if [[ "$_kb" == "file" ]] && (( ${#_kt_info} )); then
     echo "client.toml asks for the 'file' keyring, but ignite created the keys in keyring-test."
     if [[ -z "$keyring_passfile" ]]; then
         echo "   INIT FAILED: migrating them needs a passphrase.  Re-run with"
