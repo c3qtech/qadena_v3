@@ -426,25 +426,38 @@ if (( REBUILD )); then
     # quotes" -- a message about quoting, three layers from a passphrase that was never supplied.
     #
     # Write to a temp, CHECK IT IS A MNEMONIC, and only then put it in place.
-    _pm="$LAUNCH_DIR/pioneer-mnemonic.txt"
-    if [[ ! -s "$_pm" ]] || (( $(wc -w < "$_pm") < 12 )); then
-        umask 077
-        _tmp=$(mktemp)
-        if ! print -r -- "$(head -1 "$PASSFILE")" \
-              | foundation_scripts/mnemonic.sh show "$LAUNCH_DIR/mnemonics" qfi-pioneer1 > "$_tmp" 2>/dev/null; then
-            rm -f "$_tmp"
-            print -u2 "could not unseal qfi-pioneer1 from $HOME/fleet-launch/mnemonics"
-            print -u2 "  the sealing passphrase is the one in $PASSFILE -- is it right?"
-            exit 1
+    # THE SEALED FILE GOES OVER, NOT THE WORDS.  init.sh takes --pioneer-mnemonic-enc and opens it
+    # in-process with the --keyring-passfile passphrase (the same one that sealed it), which
+    # 1st_node_bringup.sh detects by the openssl "Salted__" magic.  Nothing is unsealed on this
+    # machine, nothing plaintext is copied to the primary, and the words never reach the primary's
+    # process table or its run log -- all three of which happened while this unsealed first.
+    #
+    # The unseal below is kept ONLY as the fallback for a launch dir that has no sealed file.
+    _pm_enc="$LAUNCH_DIR/mnemonics/qfi-pioneer1.mnemonic.enc"
+    if [[ -r "$_pm_enc" ]]; then
+        _pm="$_pm_enc"
+        print -r -- "  passing the SEALED pioneer mnemonic to the bringup (never unsealed here)"
+    else
+        _pm="$LAUNCH_DIR/pioneer-mnemonic.txt"
+        if [[ ! -s "$_pm" ]] || (( $(wc -w < "$_pm") < 12 )); then
+            umask 077
+            _tmp=$(mktemp)
+            if ! print -r -- "$(head -1 "$PASSFILE")" \
+                  | foundation_scripts/mnemonic.sh show "$LAUNCH_DIR/mnemonics" qfi-pioneer1 > "$_tmp" 2>/dev/null; then
+                rm -f "$_tmp"
+                print -u2 "could not unseal qfi-pioneer1 from $HOME/fleet-launch/mnemonics"
+                print -u2 "  the sealing passphrase is the one in $PASSFILE -- is it right?"
+                exit 1
+            fi
+            _wc=$(wc -w < "$_tmp" | tr -d ' ')
+            if [[ "$_wc" != "12" && "$_wc" != "24" ]]; then
+                rm -f "$_tmp"
+                print -u2 "unsealed $_wc words, which is not a mnemonic -- refusing to build a chain with it"
+                exit 1
+            fi
+            mv "$_tmp" "$_pm"; chmod 600 "$_pm"
+            print -r -- "  unsealed the pioneer mnemonic ($_wc words) for the bringup"
         fi
-        _wc=$(wc -w < "$_tmp" | tr -d ' ')
-        if [[ "$_wc" != "12" && "$_wc" != "24" ]]; then
-            rm -f "$_tmp"
-            print -u2 "unsealed $_wc words, which is not a mnemonic -- refusing to build a chain with it"
-            exit 1
-        fi
-        mv "$_tmp" "$_pm"; chmod 600 "$_pm"
-        print -r -- "  unsealed the pioneer mnemonic ($_wc words) for the bringup"
     fi
     # SGX=0 -> --no-build-sgx (which reaches build.sh as --no-sgx).  SGX=1 -> pass nothing and let
     # the bringup detect what the host can actually do.
@@ -481,7 +494,11 @@ if (( REBUILD )); then
         --keyring-passfile      "$PASSFILE" \
         --coord-home            "$COORD_HOME" \
         --foundation-sponsored "$NODE_GRANTER" --stake 10000
-    rm -f "$_pm"
+    # ONLY THE PLAINTEXT FALLBACK IS DELETED.  $_pm is now usually the SEALED
+    # mnemonics/qfi-pioneer1.mnemonic.enc, which is the authoritative copy of the genesis
+    # validator's key and the only one outside the node keyrings -- deleting it would make that
+    # validator unrecoverable.
+    [[ "$_pm" == *.mnemonic.enc ]] || rm -f "$_pm"
 fi
 
 # --------------------------------------------------------------------------------------------

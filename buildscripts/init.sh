@@ -327,12 +327,23 @@ if [[ -n "$mainnet_source" ]]; then
             echo ""
             echo "Opening the sealed mnemonic for $PIONEER1:"
             echo "  $pioneer_mnemonic_enc"
-            print -u2 "*** The SEALING passphrase -- the one derive_launch_keys.sh asked for."
-            print -u2 "    Same passphrase that opens the coordinator keyring."
-            print -u2 -n "*** passphrase (hidden, will not echo): "
-            read -s _ppass
-            [[ -t 0 ]] && stty echo 2>/dev/null
-            echo ""
+            # TAKE IT FROM --keyring-passfile WHEN THERE IS ONE.  It is the SAME passphrase (the
+            # line below has always said so), and requiring a prompt is what kept this safe path
+            # out of reach of the fleet drivers: they run init.sh under `nohup ... &` over ssh with
+            # no terminal, so `read -s` gets EOF, decryption fails, and the only way to bring a
+            # chain up non-interactively was --pioneer-mnemonic "<words>" -- which puts the genesis
+            # validator's seed phrase in the process table and in the run log.
+            if [[ -n "$keyring_passfile" && -r "$keyring_passfile" ]]; then
+                _ppass=$(head -1 "$keyring_passfile")
+                echo "   using the --keyring-passfile passphrase to unseal (same passphrase)"
+            else
+                print -u2 "*** The SEALING passphrase -- the one derive_launch_keys.sh asked for."
+                print -u2 "    Same passphrase that opens the coordinator keyring."
+                print -u2 -n "*** passphrase (hidden, will not echo): "
+                read -s _ppass
+                [[ -t 0 ]] && stty echo 2>/dev/null
+                echo ""
+            fi
             # BUFFERED, NOT STREAMED, for the reason mnemonic.sh documents: openssl emits partial
             # plaintext as it decrypts and only reports failure at the end, so a wrong passphrase
             # produces BINARY GARBAGE followed by an error.  Capture, check, then use.
@@ -559,6 +570,39 @@ fi
 echo "Initializing chain"
 if ignite chain init --home $QADENAHOME ; then
     echo "Built chain, creating the cosmovisor layout"
+
+    # SCRUB THE MNEMONIC THE MOMENT IGNITE HAS CONSUMED IT.
+    #
+    # ignite needs it in the working config.yml to mint the genesis validator's key, and needs it
+    # only until `ignite chain init` returns -- the key is in the keyring from here on.  Left
+    # behind, that line is the genesis validator's seed phrase sitting in cleartext, and it does
+    # not stay on the builder: package_release.sh stages this same config.yml (for its
+    # minimum-gas-prices) and install_release.sh writes it to $QADENAHOME/config/config.yml on
+    # EVERY joiner.  Found 2026-09-21 on a two-node SGX fleet: the joiner, which has no business
+    # holding it, had the genesis mnemonic at mode 664.
+    #
+    # Rewritten through a new file and the original shredded, so the plaintext blocks are
+    # overwritten rather than merely unlinked from the directory entry.
+    if [[ -n "$pioneer_mnemonic" ]]; then
+        python3 - "$qadenabuild/config.yml" <<'PYSCRUB'
+import io, os, re, subprocess, sys
+p = sys.argv[1]
+src = io.open(p, encoding="utf-8").read().splitlines(keepends=True)
+out, n = [], 0
+for l in src:
+    m = re.match(r'^(\s*mnemonic:\s*)"?(\S.*?)"?\s*$', l)
+    if m and len(m.group(2).split()) >= 12 and "REDACTED" not in m.group(2):
+        out.append(f'{m.group(1)}"REDACTED-AFTER-INIT-SEE-SEALED-MNEMONIC"\n'); n += 1
+    else:
+        out.append(l)
+tmp = p + ".scrub"
+io.open(tmp, "w", encoding="utf-8").writelines(out)
+os.chmod(tmp, 0o600)
+subprocess.run(["shred", "-u", p], check=False)
+os.replace(tmp, p)
+print(f"   scrubbed {n} mnemonic(s) from the working config.yml")
+PYSCRUB
+    fi
 
     # PUT THE KEYS WHERE client.toml SAYS THEY ARE.
     #

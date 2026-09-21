@@ -318,6 +318,25 @@ if want config; then
     # by installing.
     cp "$qadenabuild/config.yml" "$stage/config/config.yml"
 
+    # A PACKAGE MUST NEVER CARRY A SEED PHRASE.  This file is shipped for its minimum-gas-prices
+    # and is installed to $QADENAHOME/config/config.yml on every joiner -- so any `mnemonic:` left
+    # in it is handed to every machine that installs the release.  init.sh scrubs the genesis
+    # validator's mnemonic as soon as `ignite chain init` has consumed it; this is the second line
+    # of defence, because the cost of the two being out of step is the chain's founding key
+    # distributed to every node (observed 2026-09-21: an SGX joiner held it at mode 664).
+    #
+    # REFUSE, don't silently strip: a mnemonic here means something upstream kept one that it was
+    # supposed to drop, and shipping a quietly-fixed package would leave that cause in place.
+    if grep -qE '^\s*mnemonic:\s*"?[a-z]+( [a-z]+){11,}' "$stage/config/config.yml"; then
+        rm -rf "$stage"
+        echo "REFUSING TO PACKAGE: $qadenabuild/config.yml still contains a mnemonic." >&2
+        echo "  That file is installed on every joiner, so packaging it would distribute the key." >&2
+        echo "  init.sh scrubs it after 'ignite chain init'; this build's copy was not scrubbed." >&2
+        echo "  Redact the 'mnemonic:' line (the sealed copy in the coordinator's mnemonics/ dir" >&2
+        echo "  is the authoritative one) and re-run." >&2
+        exit 1
+    fi
+
     # node_params.json is shipped as the TEMPLATE, with the literal "PioneerID" that setPioneerID.sh
     # substitutes.  add_full_node.sh sed-edits this file in place and does NOT create it -- on a
     # machine with a build tree init.sh had already copied it in, which is why joining worked there

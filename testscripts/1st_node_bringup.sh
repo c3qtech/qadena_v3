@@ -628,7 +628,45 @@ if run_phase 4; then
         scp -q "$MAINNET_SRC"  "$PRIMARY:$(basename "$MAINNET_SRC")"  || fail "cannot copy the instance to $PRIMARY"
         scp -q "$MNEMONIC_FILE" "$PRIMARY:$(basename "$MNEMONIC_FILE")" || fail "cannot copy the mnemonic to $PRIMARY"
         ssh "$PRIMARY" "chmod 600 $(basename "$MNEMONIC_FILE")" 2>/dev/null
-        mainnet_flag=" --mainnet-source $rem_src --pioneer-mnemonic \"\$(cat $rem_mn)\""
+
+        # SEALED IF WE CAN, PLAINTEXT ONLY IF WE MUST.
+        #
+        # --pioneer-mnemonic "$(cat ...)" expands ON THE PRIMARY, which puts the genesis validator's
+        # 24 words in that process's argv -- readable from /proc by any local user for the whole
+        # ~40-minute build -- and init.sh's run log then records them too (confirmed 2026-09-21: the
+        # full mnemonic on one line of two primary_bringup.*.log files).  --pioneer-mnemonic-enc
+        # hands init.sh the SEALED file instead and lets it decrypt in-process with the
+        # --keyring-passfile passphrase, which is the same one and is already copied above: nothing
+        # reaches the process table and no plaintext is written.
+        #
+        # Detected by openssl's "Salted__" magic rather than by a flag, so every existing caller
+        # that already passes a .mnemonic.enc is upgraded without changing its command line, and one
+        # still passing plaintext keeps working.
+        if head -c 8 "$MNEMONIC_FILE" 2>/dev/null | grep -q 'Salted__'; then
+            [[ -n "$KEYRING_PASSFILE" ]] || fail "a SEALED --pioneer-mnemonic-file needs --keyring-passfile:
+       init.sh opens it with that passphrase, and without one it would have to prompt -- which it
+       cannot do here, because it runs under nohup over ssh with no terminal."
+            mainnet_flag=" --mainnet-source $rem_src --pioneer-mnemonic-enc $rem_mn"
+        else
+            print -u2 "  WARNING: $MNEMONIC_FILE is PLAINTEXT -- the mnemonic will appear in the"
+            print -u2 "  process table and the run log on $PRIMARY.  Pass the sealed"
+            print -u2 "  <name>.mnemonic.enc instead."
+            mainnet_flag=" --mainnet-source $rem_src --pioneer-mnemonic \"\$(cat $rem_mn)\""
+        fi
+
+        # REMOVED ON ANY EXIT, like the keyring passphrase beside it.  Sealed or not, this file has
+        # no business outliving the run; the plaintext copy shipped before this trap existed was
+        # still sitting in $HOME on an SGX box days later.
+        #
+        # THIS HANDLER REMOVES BOTH SECRETS, because `trap ... EXIT` REPLACES the handler set for
+        # the keyring passphrase a few lines above rather than adding to it -- so cleaning up only
+        # the mnemonic here would silently un-clean the passphrase.  Removing both from either
+        # handler makes the outcome independent of which one ends up installed.
+        _mn_cleanup() {
+            ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" \
+                "rm -f $(basename "$MNEMONIC_FILE") .qadena-init-keyring-pass" 2>/dev/null || true
+        }
+        trap _mn_cleanup EXIT INT TERM
         # THIS IS A LAUNCH-SHAPED TEST, NOT A LAUNCH.  tokenomics/allocations.csv holds
         # <NN_MSIG_ADDR> placeholders until the real bucket multisigs are generated in custody,
         # which happens once, at the real launch.  The instance we just copied over was rendered
