@@ -568,7 +568,25 @@ PYINJECT
 fi
 
 echo "Initializing chain"
-if ignite chain init --home $QADENAHOME ; then
+# IGNITE PRINTS THE ACCOUNT'S MNEMONIC.  "Added account <name> with address <addr> and mnemonic:"
+# followed by the words, on stdout -- which the fleet drivers redirect into a run log that is kept
+# afterwards.  Scrubbing config.yml below would be pointless while the same 24 words sit in a
+# world-readable log next to it (found on M1 and SGX1: a bare mnemonic line in 33 build logs).
+#
+# Filtered at the source so the words never reach the file, rather than redacted afterwards, which
+# would leave a window and depend on every caller remembering to do it.
+#
+# $pipestatus[1], NOT $? -- a pipeline's status is its LAST command, so `if ignite ... | sed` would
+# report sed's success and treat a failed init as a good one.
+_init_rc=0
+if [[ -n "$pioneer_mnemonic" ]]; then
+    ignite chain init --home $QADENAHOME 2>&1 | sed "s/$pioneer_mnemonic/<REDACTED MNEMONIC -- see the sealed copy>/g"
+    _init_rc=${pipestatus[1]}
+else
+    ignite chain init --home $QADENAHOME
+    _init_rc=$?
+fi
+if (( _init_rc == 0 )) ; then
     echo "Built chain, creating the cosmovisor layout"
 
     # SCRUB THE MNEMONIC THE MOMENT IGNITE HAS CONSUMED IT.
