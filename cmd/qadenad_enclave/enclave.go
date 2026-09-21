@@ -1955,6 +1955,21 @@ func (s *qadenaServer) verifyRemoteReportMeasurement(remoteReportBytes []byte, c
 			return false, "", ""
 		}
 
+		// A DEBUG-MODE PEER IS MEASURED BUT NOT CONFIDENTIAL.  SGX debug mode leaves EDBGRD/EDBGWR
+		// open, so that peer's operator can read and write its enclave memory.  This path is what
+		// guards enclave-to-enclave trust -- sync-enclave hands over the sealed-table secret, and
+		// who-has hands over reconstructed interval private keys -- so accepting a debug peer would
+		// hand this node's secrets to a machine whose owner can simply read them out.
+		//
+		// Ordered AFTER the verification gate on purpose: ego returns a ZERO Report on failure and
+		// a zero Report reads Debug=false, so asking this question of an unverified report answers
+		// "production" for anything at all.
+		if remoteReport.Debug {
+			c.LoggerError(logger, "refusing a DEBUG-mode enclave report -- its memory is readable by "+
+				"its host, so the measurement says nothing about confidentiality")
+			return false, "", ""
+		}
+
 		hash := sha256.Sum256([]byte(certifyData))
 		// Length-checked, so this function is panic-free whatever the SDK returns.  The recovery
 		// interceptor turning a panic into a per-request error is not a substitute for not panicking:

@@ -88,16 +88,52 @@ func dialRealEnclave(logger log.Logger, addr string, signerID string, uniqueID s
 // returns true if valid
 func clientVerifyRemoteReportRealEnclave(sdkctx sdk.Context, remoteReportBytes []byte, certifyData string) (success bool, signerID string, uniqueID string) {
 	remoteReport, err := eclient.VerifyRemoteReport(remoteReportBytes)
-	if err != nil {
-		if err != nil {
-			c.ContextDebug(sdkctx, "clientVerifyRemoteReportRealEnclave: remote report tcbstatus "+tcbstatus.Explain(remoteReport.TCBStatus))
-			if remoteReport.TCBStatus == tcbstatus.Revoked || remoteReport.TCBStatus == tcbstatus.OutOfDate {
-				c.ContextError(sdkctx, "clientVerifyRemoteReportRealEnclave: error verifying remote report ", err)
-				return false, "", ""
-			} else {
-				c.ContextError(sdkctx, "clientVerifyRemoteReportRealEnclave: neither revoked nor completely out-of-date")
-			}
-		}
+
+	// A FAILED VERIFICATION MUST NOT REACH THE REPORT'S CONTENTS.  The enclave-side verifier states
+	// this at length (cmd/qadenad_enclave/enclave.go, verifyRemoteReport); this copy had been left
+	// with the shape that was fixed there, and the checks below make that shape unsafe rather than
+	// merely wrong:
+	//
+	//   ego returns a ZERO Report for any error that is not ErrTCBLevelInvalid, and a zero Report
+	//   reads as TCBStatus UpToDate, Debug FALSE and nil Data -- it looks like a healthy PRODUCTION
+	//   report.  Falling through meant a forged report reached Data[:32], panicked on nil, and was
+	//   rejected by the gRPC recovery interceptor BY ACCIDENT rather than by any check.
+	//
+	//   tcbstatus.OutOfDateConfigurationNeeded is 4 while OutOfDate is 1, so an authentic report
+	//   from a genuinely out-of-date platform slipped past the two != comparisons and was accepted.
+	//
+	// So: reject on any error that is not the TCB-level signal, then judge the status against an
+	// explicit ALLOW-list.  A list that must be extended when a new status appears is the right
+	// failure mode; a deny-list silently admits whatever it has not heard of.
+	if err != nil && !errors.Is(err, attestation.ErrTCBLevelInvalid) {
+		c.ContextError(sdkctx, "clientVerifyRemoteReportRealEnclave: remote report did not verify: "+err.Error())
+		return false, "", ""
+	}
+	c.ContextDebug(sdkctx, "clientVerifyRemoteReportRealEnclave: remote report tcbstatus "+tcbstatus.Explain(remoteReport.TCBStatus))
+	switch remoteReport.TCBStatus {
+	case tcbstatus.UpToDate, tcbstatus.ConfigurationNeeded,
+		tcbstatus.SWHardeningNeeded, tcbstatus.ConfigurationAndSWHardeningNeeded:
+		// acceptable: the platform needs configuration or software hardening, but its TCB is
+		// not out of date and not revoked.
+	default:
+		c.ContextError(sdkctx, "clientVerifyRemoteReportRealEnclave: refusing remote report with TCB status "+
+			tcbstatus.Explain(remoteReport.TCBStatus))
+		return false, "", ""
+	}
+
+	// A DEBUG-MODE ENCLAVE IS MEASURED BUT NOT CONFIDENTIAL.  SGX debug mode leaves EDBGRD/EDBGWR
+	// open, so the host can read and write enclave memory at will: the quote still proves WHICH
+	// code ran, and proves nothing about anything that code tried to keep secret.  Every private
+	// key this chain protects would be readable by whoever runs the node.
+	//
+	// The flag comes from enclave.json's "debug" at `ego sign` time and rides in the quote, so this
+	// is the check that makes that setting load-bearing rather than advisory.  It must come AFTER
+	// the verification gate above: on a zero Report this field reads false, which is exactly the
+	// answer an attacker wants.
+	if remoteReport.Debug {
+		c.ContextError(sdkctx, "clientVerifyRemoteReportRealEnclave: refusing a DEBUG-mode enclave report -- "+
+			"its memory is readable by the host, so the measurement says nothing about confidentiality")
+		return false, "", ""
 	}
 
 	hash := sha256.Sum256([]byte(certifyData))
