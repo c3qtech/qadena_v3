@@ -142,6 +142,43 @@ fleet_site_profile_load() {
         # being read, so the path is correct however this is reached.
         SITE_CF_TEMPLATE="${${(%):-%x}:A:h:h}/veritas_deployment/v2-cloud-formation-ssm-parameters.yaml"
         ;;
+    SGX|sgx)
+        # THE ONLY REAL-SGX FLEET.  Two x86 boxes with SGX devices, ego and a working PCCS; M1-M4
+        # are ARM debug enclaves and cannot stand in for them.  SGX1 is the primary and the ONLY
+        # builder -- a measurement is the hash of the binary, so a second independent build is a
+        # second enclave that the chain will refuse.  SGX2 installs the package SGX1 produces.
+        #
+        # SGX IS NOT SET HERE, AND CANNOT BE.  veritas_full_setup.sh takes --sgx 0|1 per run and
+        # DEFAULTS TO 0, which forwards --no-build-sgx and builds debug artifacts even on this
+        # hardware.  A debug chain binary on an SGX box verifies real quotes with the debug
+        # verifier and accepts forged ones for the life of the chain, and nothing fails loudly.
+        # So a bring-up of this site MUST pass --sgx 1; there is no site field that can do it.
+        SITE_PRIMARY="alvillarica@192.168.86.120"
+        SITE_JOINER="alvillarica@192.168.86.140"
+        # Its own launch directory and generated passphrase, like qfi-testnet and for the same
+        # reason: --rebuild-chain deletes the deployment home, so sharing one with another fleet
+        # destroys that fleet's keys on the way to building this chain.
+        SITE_LAUNCH_DIR="$HOME/sgx-fleet-launch"
+        SITE_PASSFILE="$SITE_LAUNCH_DIR/keyring-password"
+        # One flat LAN (192.168.86.0/24): each node advertises the host its peer already dials, so
+        # neither needs an override.
+        SITE_ADVERTISE_P=""
+        SITE_ADVERTISE_J=""
+        # ITS OWN DEPLOYMENT HOMES, like staging and qfi-testnet -- NOT "" as M1-M2 has.  SEC_HOME
+        # is $DEPLOY_SEC_HOME$SITE_HOME_SUFFIX (veritas_full_setup.sh:88), so an empty suffix here
+        # would point this site at ~/sec-veritas and ~/ekyc-ph -- the SAME directories the M1-M2
+        # fleet uses.  Two consequences, both seen: a ceremony here fails with "too many failed
+        # passphrase attempts" because those mnemonics are sealed under M1-M2's passphrase and not
+        # this site's, and a --rebuild-chain here would try to DELETE the other fleet's keys (it is
+        # refused only when the coordinator already holds that deployment's sponsors file).
+        SITE_HOME_SUFFIX="-sgx"
+        SITE_ENV_FILE_NAME="env-sponsored-test"
+        # Bond the joiner: two real-SGX validators is the whole point of this site, and it is the
+        # only fleet where an attested validator set can be exercised at all.
+        SITE_JOINER_VALIDATOR=1
+        SITE_ALLOW_UNVERIFIED_AGREEMENT=0
+        SITE_NODE_GRANTER="nodeops"
+        ;;
     *)
         ;;
     esac
@@ -177,7 +214,7 @@ fleet_site_profile_load() {
     return 0
 }
 
-fleet_site_profile_list() { print -r -- "M1-M2 staging qfi-testnet" }
+fleet_site_profile_list() { print -r -- "M1-M2 staging qfi-testnet SGX" }
 
 fleet_site_profile_print() {
     local _v
