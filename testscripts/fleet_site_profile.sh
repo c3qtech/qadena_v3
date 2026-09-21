@@ -64,14 +64,14 @@ fleet_site_profile_load() {
         # NAMED FOR THE MACHINES, not "local": every site is local to somebody, and the fleet is
         # referred to as M1/M2 everywhere else.  Lowercase is accepted so the capitals are optional.
         SITE_PRIMARY="alvillarica@10.211.55.5"
-        SITE_JOINERS=("alvillarica@10.211.55.6", "alvillarica@10.211.55.7", "alvillarica@10.211.55.8")
+        SITE_JOINERS=("alvillarica@10.211.55.6" "alvillarica@10.211.55.7" "alvillarica@10.211.55.8")
         SITE_PASSFILE="$HOME/fleet-launch-password"
-        SITE_LAUNCH_DIR="$HOME/fleet-launch-m1-m4"
+        SITE_LAUNCH_DIR="$HOME/fleet-launch"
         # Both hosts are on one flat network, so each advertises the address its peer already dials
         # -- the ssh host -- and neither needs an override.
         SITE_ADVERTISE_P=""
         SITE_ADVERTISE_J=""
-        SITE_HOME_SUFFIX=""
+        SITE_HOME_SUFFIX="-m1-m4"
         SITE_ENV_FILE_NAME="env-sponsored-test"
         # Bond the joiner: on a two-node fleet that is what gives the chain a second validator, and
         # without it the primary is the only vote.
@@ -93,12 +93,12 @@ fleet_site_profile_load() {
         SITE_PRIMARY="alvillarica@10.211.55.5"
         SITE_JOINER="alvillarica@10.211.55.6"
         SITE_PASSFILE="$HOME/fleet-launch-password"
-        SITE_LAUNCH_DIR="$HOME/fleet-launch-m1-m2"
+        SITE_LAUNCH_DIR="$HOME/fleet-launch"
         # Both hosts are on one flat network, so each advertises the address its peer already dials
         # -- the ssh host -- and neither needs an override.
         SITE_ADVERTISE_P=""
         SITE_ADVERTISE_J=""
-        SITE_HOME_SUFFIX=""
+        SITE_HOME_SUFFIX="-m1-m2"
         SITE_ENV_FILE_NAME="env-sponsored-test"
         # Bond the joiner: on a two-node fleet that is what gives the chain a second validator, and
         # without it the primary is the only vote.
@@ -148,7 +148,7 @@ fleet_site_profile_load() {
         # meant to SUPERSEDE staging on that box; it is data loss if both are wanted at once, and
         # the fix then is a second host, not a second profile.
         SITE_PRIMARY="cloudsigma@45.115.225.104"
-        SITE_JOINERS=("cloudsigma@45.115.225.170")
+        SITE_JOINERS=("cloudsigma@45.115.225.170" "cloudsigma@103.56.5.229")
         # VISIBLE, AND INSIDE THE LAUNCH DIRECTORY -- not a dotfile in $HOME like the other two
         # sites.  This is a throwaway testnet whose passphrase is generated rather than chosen, so
         # it wants to be findable next to the chain it unlocks.  veritas_full_setup.sh mints it on
@@ -273,7 +273,7 @@ fleet_site_profile_load() {
     return 0
 }
 
-fleet_site_profile_list() { print -r -- "M1-M2 staging qfi-testnet SGX" }
+fleet_site_profile_list() { print -r -- "M1-M2 M1-M4 staging qfi-mainnet SGX" }
 
 fleet_site_profile_print() {
     local _v
