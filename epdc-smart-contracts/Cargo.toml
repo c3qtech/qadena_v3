@@ -23,10 +23,14 @@ overflow-checks = true
 library = []
 
 [package.metadata.scripts]
+# 0.17.0, not 0.16.0: cargo 1.78 in the older image cannot parse the
+# edition-2024 manifests this crate's lock resolves to. See optimizer.sh,
+# which is the script to run -- it also picks the right image for the host
+# architecture.
 optimize = """docker run --rm -v "$(pwd)":/code \
   --mount type=volume,source="$(basename "$(pwd)")_cache",target=/target \
   --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
-  cosmwasm/optimizer:0.16.0
+  cosmwasm/optimizer:0.17.0
 """
 
 [dependencies]
