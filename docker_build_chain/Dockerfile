@@ -208,7 +208,21 @@ RUN apt-mark showmanual \
 
 
 # Install Go 1.25.7 manually
-RUN curl -LO https://go.dev/dl/go1.25.7.linux-amd64.tar.gz && \
+#
+# RETRY, AND FAIL LOUDLY.  A bare `curl -LO` here took the whole build down on 2026-09-22 with
+# `exit code: 35` (an SSL connect error) while go.dev was reachable from the host and from another
+# container seconds later -- i.e. a transient that cost a ~40-minute build on a 2-core box.  The apt
+# step above already carries Acquire::Retries=5 for exactly this reason; this fetch had nothing.
+#
+#   --retry 5 --retry-all-errors   transient TLS/connect failures, not just HTTP 5xx (curl >= 7.71;
+#                                  the pinned curl is 7.81, so this is available)
+#   -f                             without it curl writes the error PAGE to the tarball and the
+#                                  failure surfaces from tar as "not in gzip format", which points
+#                                  at the wrong thing entirely
+#   --connect-timeout/--max-time   a hung connection must fail and be retried, not block the build
+RUN curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+      --connect-timeout 20 --max-time 900 \
+      -O https://go.dev/dl/go1.25.7.linux-amd64.tar.gz && \
     tar -C /usr/local -xzf go1.25.7.linux-amd64.tar.gz && \
     rm go1.25.7.linux-amd64.tar.gz
 
@@ -232,7 +246,10 @@ RUN go version
 #RUN wget https://github.com/edgelesssys/ego/releases/download/v1.7.0/ego_1.7.0_amd64_ubuntu-22.04.deb \
   #&& dpkg -i --force-depends ego_1.7.0_amd64_ubuntu-22.04.deb
 
-RUN wget https://github.com/edgelesssys/ego/releases/download/v1.8.1/ego_1.8.1_amd64_ubuntu-22.04.deb \
+# Same reasoning as the Go fetch: retry a transient rather than lose the build to it.  wget
+# already fails on HTTP errors by default (unlike curl), so only the retry behaviour is added.
+RUN wget --tries=5 --waitretry=3 --retry-connrefused --timeout=30 \
+      https://github.com/edgelesssys/ego/releases/download/v1.8.1/ego_1.8.1_amd64_ubuntu-22.04.deb \
   && dpkg -i --force-depends ego_1.8.1_amd64_ubuntu-22.04.deb
 
 
