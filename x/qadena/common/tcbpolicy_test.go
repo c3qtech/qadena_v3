@@ -184,3 +184,48 @@ func TestUnknownNamesAreIgnoredNotGuessed(t *testing.T) {
 		t.Errorf("effective set should contain only UpToDate, got %q", got.String())
 	}
 }
+
+// OVER-TIGHTENING MUST BE RECOVERABLE BY VOTE, NOT BY REBUILD.
+//
+// "Governance can only subtract" is relative to the BUILD, not to time: the compiled set is a
+// CEILING, and governance moves freely below it in both directions.  A vote that drops a status can
+// be undone by a later vote restoring it, because the compiled set still permits it.
+//
+// That is the difference between a policy knob and a one-way latch, and it is the reason the
+// UpToDate floor exists: a fleet that can always attest can always still govern itself back.  If
+// this ever became monotonic, a single over-tight proposal would cost exactly the rebuild this
+// feature was built to avoid.
+func TestNarrowingIsReversibleByGovernance(t *testing.T) {
+	if !c.AllowOutOfDateTCB {
+		t.Skip("this build's ceiling excludes OutOfDateConfigurationNeeded; nothing to restore")
+	}
+	full := []string{
+		"UpToDate", "ConfigurationNeeded", "SWHardeningNeeded",
+		"ConfigurationAndSWHardeningNeeded", "OutOfDateConfigurationNeeded",
+	}
+	tightened := full[:4] // the .229 case: everything except OutOfDateConfigurationNeeded
+
+	// 1. tighten
+	narrow := c.TCBPolicyFromParams(types.Params{EnclaveTrustPolicy: types.EnclaveTrustPolicy{
+		PermittedTcbStatuses: tightened,
+	}})
+	if narrow.Permits(tcbstatus.OutOfDateConfigurationNeeded) {
+		t.Fatal("precondition: the tightening vote should have dropped it")
+	}
+
+	// 2. change your mind
+	restored := c.TCBPolicyFromParams(types.Params{EnclaveTrustPolicy: types.EnclaveTrustPolicy{
+		PermittedTcbStatuses: full,
+	}})
+	if !restored.Permits(tcbstatus.OutOfDateConfigurationNeeded) {
+		t.Error("a later vote could not restore a status the build still permits -- " +
+			"narrowing has become a one-way latch, and recovering now needs a rebuild")
+	}
+
+	// 3. and clearing the list entirely returns to the build's own policy
+	cleared := c.TCBPolicyFromParams(types.Params{})
+	if cleared.String() != c.CompiledTCBAllowSet().String() {
+		t.Errorf("clearing the policy should return to the compiled set %q, got %q",
+			c.CompiledTCBAllowSet().String(), cleared.String())
+	}
+}
