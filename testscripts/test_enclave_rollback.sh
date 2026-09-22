@@ -43,7 +43,6 @@ rollback_log_start=$(wc -l < "$QADENAHOME/logs/qadena.log" 2>/dev/null || echo 0
 
 RPC="http://localhost:26657"
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 fail() {
     echo "FAIL(test_enclave_rollback): $1"
@@ -126,7 +125,7 @@ fi
 # Env-defaulted like the setup scripts: the devnet's validator is pioneer1, a launch chain's is
 # its own (qfi-pioneer1).  Hardcoding it made this suite devnet-only.
 pioneer="${QADENA_PIONEER:-pioneer1}"
-pioneer_addr=$(qadenad_alias keys show "$pioneer" -a --keyring-backend test) || fail "cannot resolve $pioneer"
+pioneer_addr=$(qadenad_alias keys show "$pioneer" -a) || fail "cannot resolve $pioneer"
 
 # ---- 1. a real transaction ----
 bal_before=$(pioneer_balance)
@@ -142,10 +141,10 @@ hash_before=$(as_enclave_owner "$qadenad_binary" --home "$QADENAHOME" enclave st
 # A CREATE-WALLET, not a bank send: it writes a Wallet into the ENCLAVE, which is the state
 # whose disappearance proves the enclave rolled back.  A bank send moves only chain balances.
 test_wallet="rbtest$(date +%s)"
-test_mnemonic=$(qadenad_alias keys mnemonic --keyring-backend test) || fail "cannot generate a mnemonic"
+test_mnemonic=$(qadenad_alias keys mnemonic) || fail "cannot generate a mnemonic"
 
 result=$(qadenad_alias tx qadena create-wallet "$test_wallet" "$pioneer" \
-    --account-mnemonic="$test_mnemonic" create-wallet-sponsor --yes --keyring-backend test \
+    --account-mnemonic="$test_mnemonic" create-wallet-sponsor --yes \
     --gas-prices "$minimum_gas_prices" --gas auto --gas-adjustment "$gas_adjustment" --output json 2>&1) \
     || fail "create-wallet broadcast failed"
 # create-wallet prints plain text BEFORE and AFTER the JSON tx response (homePioneerAddress,
@@ -167,7 +166,7 @@ done
 h_tx=$(jq -r .height "$txfile")
 rm -f "$txfile"
 
-wallet_id=$(qadenad_alias keys show "$test_wallet" -a --keyring-backend test 2>/dev/null) \
+wallet_id=$(qadenad_alias keys show "$test_wallet" -a 2>/dev/null) \
     || fail "cannot resolve the new wallet's address"
 
 # THE POSITIVE HALF: the enclave must now hold this wallet.

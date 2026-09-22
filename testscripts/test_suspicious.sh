@@ -55,7 +55,6 @@ pioneer="${QADENA_PIONEER:-pioneer1}"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 # 1,200,000 qdn = 12,000 usd at cn:qdn:usd 0.01, comfortably over either threshold
 large_amount="1200000"
@@ -83,7 +82,7 @@ fail() {
 }
 
 addr_of() {
-    qadenad_alias keys show "$1" -a --keyring-backend test 2>/dev/null
+    qadenad_alias keys show "$1" -a 2>/dev/null
 }
 
 # transparent (bank) balance in whole qdn, as an integer string

@@ -31,7 +31,6 @@ pioneer="${QADENA_PIONEER:-pioneer1}"
 # set -e after the source: setup_env.sh queries the chain and falls back on failure
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 amount="100"          # qdn, encrypted
 second_amount="25"    # qdn, encrypted, for the wrong-queue check
@@ -42,7 +41,7 @@ fail() {
 }
 
 addr_of() {
-    qadenad_alias keys show "$1" -a --keyring-backend test 2>/dev/null
+    qadenad_alias keys show "$1" -a 2>/dev/null
 }
 
 # encrypted balance of a wallet, as a plain decimal string.  show-wallet colourises its output, so

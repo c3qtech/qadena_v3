@@ -97,7 +97,7 @@ fi
 
 echo "PIONEER $PIONEER"
 
-PIONEERADDRESS=`qadenad_alias keys show $PIONEER -a --keyring-backend test`
+PIONEERADDRESS=`qadenad_alias keys show $PIONEER -a`
 
 # THE FLOOR COMES FROM config.yml, ALREADY IN aqdn.
 #

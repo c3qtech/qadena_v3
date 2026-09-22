@@ -43,7 +43,6 @@ pioneer="${QADENA_PIONEER:-pioneer1}"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 cd $qadenabuild
 
@@ -74,7 +73,7 @@ EPH_INCENTIVE=50000000000000000000     # query qadena incentives -> createEpheme
 typeset -A verdict_of; typeset -A note_of; order=()
 record() { verdict_of[$1]="$2"; note_of[$1]="$3"; order+=("$1"); echo ""; echo ">>> $1: $2 -- $3"; echo ""; }
 fail() { echo "HARNESS ERROR: $1"; exit 1; }
-addr_of() { qadenad_alias keys show "$1" -a --keyring-backend test 2>/dev/null; }
+addr_of() { qadenad_alias keys show "$1" -a 2>/dev/null; }
 bal() { local a; a=$(qadenad_alias query bank balances "$1" --output json 2>/dev/null \
         | jq -r '.balances[]|select(.denom=="aqdn")|.amount' 2>/dev/null | head -1); echo "${a:-0}"; }
 delta() { python3 -c "print(int('${1:-0}')-int('${2:-0}'))"; }
@@ -100,7 +99,7 @@ tx_result() {
     [ -s "$evidence/$name.tx.json" ] && jq -r '.code // "UNKNOWN"' "$evidence/$name.tx.json" 2>/dev/null || echo "NO_RESULT"
 }
 tx_rawlog() { [ -s "$evidence/$1.tx.json" ] && jq -r '.raw_log // ""' "$evidence/$1.tx.json" 2>/dev/null | head -c 200 || echo ""; }
-fresh_key() { qadenad_alias keys add "$1" --algo eth_secp256k1 --keyring-backend test --output json >/dev/null 2>&1; addr_of "$1"; }
+fresh_key() { qadenad_alias keys add "$1" --algo eth_secp256k1 --output json >/dev/null 2>&1; addr_of "$1"; }
 
 echo "======================================================================"
 echo "TOLL-FREE VERITAS -- two foundation accounts -- run $run_id"
@@ -234,7 +233,7 @@ u_email=$(jq -r --arg n "$USER" '.[]|select(.name==$n)|.email' "$qadenatestdata/
 u_phone=$(jq -r --arg n "$USER" '.[]|select(.name==$n)|.phone' "$qadenatestdata/users.json")
 
 # next free ephemeral index for this user
-last=$(qadenad_alias keys list --keyring-backend test --output json 2>/dev/null \
+last=$(qadenad_alias keys list --output json 2>/dev/null \
     | jq -r --arg u "$USER" '.[].name|select(startswith($u+"-eph"))' | sed "s/^$USER-eph//" | sort -n | tail -1)
 NEW_IDX=$(( ${last:-1} + 1 ))
 NEW_EPH="$USER-eph$NEW_IDX"

@@ -41,7 +41,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 cd $qadenabuild
 
@@ -91,7 +90,7 @@ declares() {
 }
 
 
-addr_of() { qadenad_alias keys show "$1" -a --keyring-backend test 2>/dev/null; }
+addr_of() { qadenad_alias keys show "$1" -a 2>/dev/null; }
 
 bank_aqdn() {
     local a
@@ -130,7 +129,7 @@ tx_height() { [ -s "$evidence/$1.tx.json" ] && jq -r '.height // ""' "$evidence/
 
 # a brand-new eth_secp256k1 key, never funded -- the brief requires this shape for every recipient
 fresh_key() {
-    qadenad_alias keys add "$1" --algo eth_secp256k1 --keyring-backend test --output json >/dev/null 2>&1
+    qadenad_alias keys add "$1" --algo eth_secp256k1 --output json >/dev/null 2>&1
     addr_of "$1"
 }
 
@@ -417,7 +416,7 @@ echo "A2 -- native 2-of-3 multisig as vesting recipient, then withdrawal"
 echo "======================================================================"
 for k in 1 2 3; do fresh_key "$label-a2k$k" > /dev/null; done
 if qadenad_alias keys add "$label-a2msig" --multisig "$label-a2k1,$label-a2k2,$label-a2k3" \
-        --multisig-threshold 2 --keyring-backend test > /dev/null 2>&1; then
+        --multisig-threshold 2 > /dev/null 2>&1; then
     a2_msig=$(addr_of "$label-a2msig")
     echo "2-of-3 multisig: $a2_msig"
 
@@ -462,14 +461,14 @@ if qadenad_alias keys add "$label-a2msig" --multisig "$label-a2k1,$label-a2k2,$l
             for k in 1 2; do
                 qadenad_alias tx sign "$unsigned" --from "$label-a2k$k" --multisig "$a2_msig" \
                     --account-number "$acct_num" --sequence "$seq" --chain-id "$(qadenad_alias status 2>/dev/null | jq -r '.node_info.network // .NodeInfo.network')" \
-                    --keyring-backend test --output-document "$evidence/a2-sig$k.json" > /dev/null 2>&1 || true
+                    --output-document "$evidence/a2-sig$k.json" > /dev/null 2>&1 || true
             done
             if [ -s "$evidence/a2-sig1.json" ] && [ -s "$evidence/a2-sig2.json" ]; then
                 qadenad_alias tx multisign "$unsigned" "$label-a2msig" \
                     "$evidence/a2-sig1.json" "$evidence/a2-sig2.json" \
                     --account-number "$acct_num" --sequence "$seq" \
                     --chain-id "$(qadenad_alias status 2>/dev/null | jq -r '.node_info.network // .NodeInfo.network')" \
-                    --keyring-backend test --output-document "$evidence/a2-signed.json" > /dev/null 2>&1 || true
+                    --output-document "$evidence/a2-signed.json" > /dev/null 2>&1 || true
                 if [ -s "$evidence/a2-signed.json" ]; then
                     out=$(qadenad_alias tx broadcast "$evidence/a2-signed.json" --output json 2>/dev/null)
                     h=$(echo "$out" | jq -r '.txhash // ""')

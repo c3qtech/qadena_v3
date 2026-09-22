@@ -41,7 +41,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 cd $qadenabuild
 
@@ -85,7 +84,7 @@ record() {   # record <id> <verdict> <note>
 
 fail() { echo "HARNESS ERROR: $1"; exit 1; }
 
-addr_of() { qadenad_alias keys show "$1" -a --keyring-backend test 2>/dev/null; }
+addr_of() { qadenad_alias keys show "$1" -a 2>/dev/null; }
 
 bank_aqdn() {
     local a
@@ -140,7 +139,7 @@ tx_rawlog() { [ -s "$evidence/$1.tx.json" ] && jq -r '.raw_log // ""' "$evidence
 
 # a brand-new eth_secp256k1 key, never funded
 fresh_key() {
-    qadenad_alias keys add "$1" --algo eth_secp256k1 --keyring-backend test --output json >/dev/null 2>&1
+    qadenad_alias keys add "$1" --algo eth_secp256k1 --output json >/dev/null 2>&1
     addr_of "$1"
 }
 

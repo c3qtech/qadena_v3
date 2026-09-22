@@ -44,7 +44,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 gas_flags=(--gas auto --gas-adjustment 1.5 --gas-prices 0.5aqdn)
 
@@ -64,7 +63,7 @@ fail() {
 }
 
 addr_of() {
-    qadenad_alias keys show "$1" -a --keyring-backend test 2>/dev/null
+    qadenad_alias keys show "$1" -a 2>/dev/null
 }
 
 bank_aqdn() {
@@ -157,7 +156,7 @@ echo "========================="
 # next run would fail here -- asserting a refusal against an account that is now exempt.  A per-run
 # name means a half-finished run can only ever strand an entry nothing else looks at.
 plain_acct="bankscan-$(date +%s | tail -c 7)"
-qadenad_alias keys add "$plain_acct" --keyring-backend test > /dev/null 2>&1 \
+qadenad_alias keys add "$plain_acct" > /dev/null 2>&1 \
     || fail "could not create $plain_acct"
 plain_addr=$(addr_of "$plain_acct")
 
@@ -505,7 +504,7 @@ echo "========================="
 # for an ordinary wallet is what keeps this from reopening the gap for user-to-user sends; testing
 # only the first half would pass just as well if the recipient gate had been removed outright.
 fresh_acct="bankscan-fresh-$(date +%s | tail -c 7)"
-qadenad_alias keys add "$fresh_acct" --keyring-backend test > /dev/null 2>&1 \
+qadenad_alias keys add "$fresh_acct" > /dev/null 2>&1 \
     || fail "could not create $fresh_acct"
 fresh_addr=$(addr_of "$fresh_acct")
 

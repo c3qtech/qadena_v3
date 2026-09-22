@@ -37,7 +37,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 identityprovider="testidentitysrvprv"
 sponsor="create-wallet-sponsor"
@@ -143,9 +142,9 @@ echo "========================="
 echo "preflight"
 echo "========================="
 qadenad_alias status > /dev/null 2>&1 || fail "chain is not reachable -- start it first"
-qadenad_alias keys show "$identityprovider" -a --keyring-backend test > /dev/null 2>&1 \
+qadenad_alias keys show "$identityprovider" -a > /dev/null 2>&1 \
     || fail "$identityprovider missing -- run testscripts/setup_prerequisites.sh first"
-qadenad_alias keys show "$sponsor" -a --keyring-backend test > /dev/null 2>&1 \
+qadenad_alias keys show "$sponsor" -a > /dev/null 2>&1 \
     || fail "$sponsor missing -- run testscripts/setup_prerequisites.sh first"
 echo "chain up; run id $suffix"
 
@@ -227,9 +226,9 @@ echo "and the refused update left both identities intact"
 echo "-------------------------"
 # A rejection that half-applied would be worse than one that never ran.  Both users must still be
 # able to act on their own credentials, which they could not if either row had been corrupted.
-a_id=$(qadenad_alias keys show "$w_clash_a-credential" -a --keyring-backend test 2>/dev/null) \
+a_id=$(qadenad_alias keys show "$w_clash_a-credential" -a 2>/dev/null) \
     || fail "could not resolve $w_clash_a's credential"
-b_id=$(qadenad_alias keys show "$w_clash_b-credential" -a --keyring-backend test 2>/dev/null) \
+b_id=$(qadenad_alias keys show "$w_clash_b-credential" -a 2>/dev/null) \
     || fail "could not resolve $w_clash_b's credential"
 qadenad_alias q qadena show-credential "$a_id" personal-info > /dev/null 2>&1 \
     || fail "$w_clash_a's credential is no longer queryable"

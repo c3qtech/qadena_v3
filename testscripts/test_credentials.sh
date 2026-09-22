@@ -93,7 +93,6 @@ source "$qadenatestscripts/setup_mnemonic.sh"
 # setup_env.sh provides qadenad_alias as an ALIAS, but expect_ok/expect_reject below invoke their
 # arguments with "$@", and command execution does not expand aliases -- every checked case would
 # die with "command not found: qadenad_alias".  Shadow it with a function, which "$@" can call.
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 # setup.sh seeds users from test_data/users.json with the identity provider below, so the
 # corrections have to be issued by the same provider
@@ -216,8 +215,8 @@ jill_recover2_bf="5678$suffix"
 # surname, and the alias lookup it claims to exercise was never exercised at all.
 recover_jill_wallet="recover-jill$suffix"
 recover_jill2_wallet="recover-jill2$suffix"
-recoverjillmnemonic=$(qadenad_alias keys mnemonic --keyring-backend test)
-recoverjill2mnemonic=$(qadenad_alias keys mnemonic --keyring-backend test)
+recoverjillmnemonic=$(qadenad_alias keys mnemonic)
+recoverjill2mnemonic=$(qadenad_alias keys mnemonic)
 
 # jill's protect-key is filed under her eph1, by msg.Creator -- see the note in case 6a.
 jill_protect_wallet="$u_jill-eph1"
@@ -243,7 +242,7 @@ expect_ok qadenad_alias tx qadena update-credential $al_correct_a $al_correct_bf
 echo "-------------------------"
 echo "al's credential after the correction (expect updateGeneration 1)"
 echo "-------------------------"
-al_credential_id=$(qadenad_alias keys show $u_al-credential -a --keyring-backend test 2>/dev/null)
+al_credential_id=$(qadenad_alias keys show $u_al-credential -a 2>/dev/null)
 qadenad_alias q qadena show-credential "$al_credential_id" personal-info
 
 echo "========================="
@@ -646,7 +645,7 @@ expect_reject qadenad_alias tx qadena update-credential $subcred_a $subcred_bf l
 echo "========================="
 echo "14. a user may remove their own contact credential, but not their identity"
 echo "========================="
-al_credential_id=$(qadenad_alias keys show $u_al-credential -a --keyring-backend test 2>/dev/null)
+al_credential_id=$(qadenad_alias keys show $u_al-credential -a 2>/dev/null)
 expect_reject qadenad_alias tx qadena remove-credential "$al_credential_id" personal-info --from $u_al --yes
 expect_reject qadenad_alias tx qadena remove-credential "$al_credential_id" last-name-personal-info --from $u_al --yes
 expect_ok qadenad_alias tx qadena remove-credential "$al_credential_id" email-contact-info --from $u_al --yes

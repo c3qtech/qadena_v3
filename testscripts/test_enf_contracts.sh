@@ -27,7 +27,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 enfdir="$qadenabuild/enf-smart-contracts"
 cli="$enfdir/enf_cli.sh"
@@ -87,7 +86,7 @@ echo "========================="
 qadenad_alias status > /dev/null 2>&1 || fail "chain is not reachable -- start it first"
 [ -x "$cli" ] || fail "missing $cli"
 [ -f "$enfdir/artifacts/enf_notarial_book.wasm" ] || fail "missing the built contract artifact"
-qadenad_alias keys show "$signer" -a --keyring-backend test > /dev/null 2>&1 \
+qadenad_alias keys show "$signer" -a > /dev/null 2>&1 \
     || fail "signer '$signer' not in the keyring -- run testscripts/setup.sh, or set ENF_TEST_SIGNER"
 qadenad_alias query wasm params > /dev/null 2>&1 || fail "the wasm module is not responding"
 echo "chain up, signing as $signer"

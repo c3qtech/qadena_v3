@@ -37,7 +37,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 fail() {
     echo "FAIL(test_enclave_crash_recovery): $1"

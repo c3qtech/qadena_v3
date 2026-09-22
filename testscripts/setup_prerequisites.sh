@@ -41,9 +41,12 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 # below could never report anything.
 set -e
 
-# setup_env.sh exposes qadenad_alias as an alias.  Aliases only expand at parse time in command
-# position, so shadow it with a function -- that keeps it usable from inside the functions below.
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
+# NO LOCAL qadenad_alias HERE.  setup_env.sh defines it as a FUNCTION (it was an alias once, which
+# is why every script in this directory used to shadow it with one of its own), and that function is
+# what supplies --keyring-backend "$QADENA_KEYRING_BACKEND", the keyring-dir, the --node/--chain-id
+# flags and the passphrase from $QADENA_KEYRING_PASS.  A local shadow silently drops all of it: on a
+# `file` keyring every key lookup then failed with "not found in the keyring", naming the key rather
+# than the keyring it looked in.
 
 # These mnemonics were moved verbatim out of config/config.yml accounts:.  Keeping them unchanged is
 # deliberate: create-wallet derives the transaction key at the same path ignite used, so each
@@ -153,7 +156,7 @@ fail() {
 }
 
 key_exists() {
-    qadenad_alias keys show "$1" --keyring-backend test > /dev/null 2>&1
+    qadenad_alias keys show "$1" > /dev/null 2>&1
 }
 
 # Every guard below tests the END STATE, not "did we run this before".  A run interrupted partway
@@ -184,12 +187,19 @@ import_and_fund() {
     if key_exists "$name"; then
         echo "$name already in the keyring"
     else
-        echo "$mnemonic" | qadenad_alias keys add "$name" --recover --keyring-backend test \
+        # TWO THINGS DOWN ONE PIPE, IN THIS ORDER -- the idiom setup_veritas.sh and
+        # setup_foundation_accounts.sh already use.  `keys add --recover` reads the MNEMONIC from
+        # stdin first and the keyring passphrase after, so the call site owns the whole stream and
+        # must use _raw: qadenad_alias feeds the passphrase itself, which REPLACES the mnemonic and
+        # fails with "invalid mnemonic" -- blaming the input that never arrived.
+        { echo "$mnemonic"
+          [ -z "${QADENA_KEYRING_PASS:-}" ] || { echo "$QADENA_KEYRING_PASS"; echo "$QADENA_KEYRING_PASS"; }
+        } | qadenad_alias_raw keys add "$name" --recover \
             || fail "could not import $name"
         echo "$name imported"
     fi
 
-    addr=$(qadenad_alias keys show "$name" -a --keyring-backend test) \
+    addr=$(qadenad_alias keys show "$name" -a) \
         || fail "could not resolve $name address"
 
     if [ "$(balance_of "$addr")" != "0" ]; then
@@ -292,7 +302,7 @@ else
     # re-running this after a second validator joins tops up the newcomer instead of skipping
     # everything.  That re-run matters: on a two-node bring-up this script runs long before
     # convert_to_validator.sh exists, so the first pass necessarily sees one validator.
-    treasuryaddr=$(qadenad_alias keys show "$treasury" -a --keyring-backend test) \
+    treasuryaddr=$(qadenad_alias keys show "$treasury" -a) \
         || fail "could not resolve $treasury address"
 
     valopers=($(qadenad_alias query staking validators --output json 2>/dev/null \
@@ -337,7 +347,7 @@ else
     oracleaddrs=()
     for i in {1..${#oraclenames[@]}}; do
         import_and_fund "${oraclenames[$i]}" "${oraclemnemonics[$i]}" "$oracleamount"
-        oracleaddrs+=("$(qadenad_alias keys show "${oraclenames[$i]}" -a --keyring-backend test)")
+        oracleaddrs+=("$(qadenad_alias keys show "${oraclenames[$i]}" -a)")
     done
 
     authority=$(jq -r '.messages[0].authority' \

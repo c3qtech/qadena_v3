@@ -32,7 +32,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 cd $qadenabuild
 
@@ -88,11 +87,11 @@ contract_count() {
 # sender is treasury, which is whitelisted; alice could not fund anyone this way.
 ensure_account() {
     local name="$1" addr
-    if ! qadenad_alias keys show "$name" --keyring-backend test > /dev/null 2>&1; then
-        qadenad_alias keys add "$name" --keyring-backend test > /dev/null 2>&1 \
+    if ! qadenad_alias keys show "$name" > /dev/null 2>&1; then
+        qadenad_alias keys add "$name" > /dev/null 2>&1 \
             || fail "could not create $name"
     fi
-    addr=$(qadenad_alias keys show "$name" -a --keyring-backend test)
+    addr=$(qadenad_alias keys show "$name" -a)
     if [ "$(bank_aqdn "$addr")" = "0" ]; then
         run_tx qadenad_alias tx bank send "$funder" "$addr" "$account_funding" \
             --from "$funder" --yes --output json "${gas_flags[@]}"
@@ -106,14 +105,14 @@ echo "preflight"
 echo "========================="
 qadenad_alias status > /dev/null 2>&1 || fail "chain is not reachable -- start it first"
 [ -f "$wasm_file" ] || fail "missing $wasm_file"
-qadenad_alias keys show "$funder" -a --keyring-backend test > /dev/null 2>&1 \
+qadenad_alias keys show "$funder" -a > /dev/null 2>&1 \
     || fail "$funder not in the keyring"
 qadenad_alias query wasm params > /dev/null 2>&1 || fail "the wasm module is not responding"
 
 ensure_account alice
 ensure_account bob
-alice_addr=$(qadenad_alias keys show alice -a --keyring-backend test)
-bob_addr=$(qadenad_alias keys show bob -a --keyring-backend test)
+alice_addr=$(qadenad_alias keys show alice -a)
+bob_addr=$(qadenad_alias keys show bob -a)
 echo "chain up, wasm responding"
 echo "alice (verifier):   $alice_addr  $(qdn "$(bank_aqdn "$alice_addr")")qdn"
 echo "bob (beneficiary):  $bob_addr  $(qdn "$(bank_aqdn "$bob_addr")")qdn"
