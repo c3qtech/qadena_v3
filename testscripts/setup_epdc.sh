@@ -24,8 +24,9 @@
 #   step_3 --deployment epdc  -> the DSVS user epdcdsvs with its ephemeral signing wallets, the
 #                                sponsor pool, and the <name>-names/-keys.base64 files
 #   epdc_after_step_3.sh      -> FOUNDATION: the app-server's sponsor pool grants
-# It prints the EPDC_DSVS_* lines the epdc api loads: the DSVS service provider creates each
-# issuance and certificate document, and epdcdsvs's wallets are the api's document-signing queue.
+# It prints the EPDC_* key lines the epdc api loads: the DSVS service provider creates each
+# issuance and certificate document, epdcdsvs's wallets are the api's document-signing queue, and
+# the identity provider + create-wallet sponsor pool drive custodial payor signing.
 # EPDC_*, not the SEC_* names the other deployments print: e-PDC has nothing to do with SEC.
 #
 # THE CONTRACT HALF deploys the epdc-register contract with epdc_cli.sh: the EPDC deployer /
@@ -296,9 +297,12 @@ emit_key_var EPDC_DSVS_EPH_USERNAME "$dsvsname-names.base64"
 emit_key_var EPDC_DSVS_EPH_PRIVATE_KEY "$dsvsname-keys.base64"
 emit_key_var EPDC_DSVS_EPH_CREDENTIAL_USERNAME "$dsvsname-credential-names.base64"
 emit_key_var EPDC_DSVS_EPH_CREDENTIAL_PRIVATE_KEY "$dsvsname-credential-keys.base64"
-# The identity provider and create-wallet sponsor keys exist too (step_3 wrote their .base64 files
-# alongside), but the epdc api does not load them yet -- payor onboarding will. Not printed, so
-# nobody pastes keys the server silently ignores.
+# Custodial payor signing: the api creates each payor's wallets (sponsored by this pool) and has the
+# identity provider issue the email + phone credentials the enclave checks the signer against.
+emit_key_var EPDC_IDENTITY_SRV_PRV_USERNAME "$identityprovidername-names.base64"
+emit_key_var EPDC_IDENTITY_SRV_PRV_PRIVATE_KEY "$identityprovidername-keys.base64"
+emit_key_var EPDC_CREATE_WALLET_SPONSOR_USERNAME "$createwalletsponsorname-names.base64"
+emit_key_var EPDC_CREATE_WALLET_SPONSOR_PRIVATE_KEY "$createwalletsponsorname-keys.base64"
 if [ -n "$contract_address" ]; then
     echo "EPDC_REGISTER_CONTRACT_ADDRESS=$contract_address"
     "$cli" attestor-keys
