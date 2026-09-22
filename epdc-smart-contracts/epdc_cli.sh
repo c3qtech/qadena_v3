@@ -35,11 +35,12 @@ QADENA_NODE="tcp://localhost:26657"
 FROM="EPDC"                          # the deployer / orchestrator user; override with -k
 CONTRACT_OVERRIDE=""
 
-# The devnet's generic providers, created by testscripts/setup_prerequisites.sh.  ENF uses its own
-# (enfidentitysrvprv, enf-create-wallet-sponsor) because setup_enf.sh onboards them through the
-# veritas steps; epdc does not onboard providers of its own (yet), so it uses the shared ones.
-EPDC_IDENTITY_PROVIDER="${EPDC_IDENTITY_PROVIDER:-testidentitysrvprv}"
-EPDC_CREATE_WALLET_SPONSOR="${EPDC_CREATE_WALLET_SPONSOR:-create-wallet-sponsor}"
+# epdc's OWN identity provider and create-wallet sponsor, onboarded by setup_epdc.sh's chain half
+# through the veritas steps (the `epdc` profile) -- the way enf_cli.sh uses ENF's. Override to point
+# at the devnet's shared ones (testidentitysrvprv, create-wallet-sponsor) on a chain where epdc was
+# not onboarded.
+EPDC_IDENTITY_PROVIDER="${EPDC_IDENTITY_PROVIDER:-epdcidentitysrvprv}"
+EPDC_CREATE_WALLET_SPONSOR="${EPDC_CREATE_WALLET_SPONSOR:-epdc-create-wallet-sponsor}"
 # create_user.sh pays the identity provider's credential transactions from this foundation account
 # (foundation-sponsored mode).  Its default, foundation-veritas-appsvr, exists only after a VERITAS
 # deployment; the devnet's is foundation-appsvr (testscripts/setup_foundation_accounts.sh).
@@ -115,7 +116,7 @@ setup_epdc() {
   [[ -n "$qadenatestscripts" && -x "$qadenatestscripts/grant_from_treasury.sh" ]] || {
     echo "grant_from_treasury.sh not found (qadenatestscripts=$qadenatestscripts)"; exit 1; }
   qadenad_alias keys show "$EPDC_IDENTITY_PROVIDER" > /dev/null 2>&1 || {
-    echo "identity provider '$EPDC_IDENTITY_PROVIDER' is not in the keyring -- run testscripts/setup.sh first"; exit 1; }
+    echo "identity provider '$EPDC_IDENTITY_PROVIDER' is not in the keyring -- run setup_epdc.sh's chain half first"; exit 1; }
 
   local eph_count="$EPDC_EPH_COUNT"
   if qadenad_alias keys show "$name" > /dev/null 2>&1; then

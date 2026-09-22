@@ -118,6 +118,25 @@ deployment_profile_load() {
         DEPLOY_PREFIX="enf"
         DEPLOY_FUND_MEMBERS="adoption-m1,adoption-m2,adoption-m3,adoption-m4,adoption-m5"
         ;;
+    epdc)
+        DEPLOY_APPSVR="foundation-epdc-appsvr"
+        DEPLOY_USERS="foundation-epdc-users"
+        DEPLOY_ADMIN="epdc-admin"
+        DEPLOY_SPONSOR_BASE="epdc-create-wallet-sponsor"
+        DEPLOY_TREASURY="epdc-treasury"
+        DEPLOY_IDENTITY_PRV="epdcidentitysrvprv"
+        DEPLOY_DSVS_PRV="epdcdsvssrvprv"
+        DEPLOY_DSVS="epdcdsvs"
+        # No "sec-" prefix: the other homes carry it from SEC PH VERITAS, the first deployment,
+        # and e-PDC has nothing to do with SEC. (The variable keeps its shared name.)
+        DEPLOY_SEC_HOME="$HOME/epdc-deployment"
+        # 01 Adoption Programs, as for ekycph and enf -- a PLACEHOLDER, not a decision: which
+        # bucket funds the e-PDC programme is the foundation's call. Pin it with an override file
+        # ($QADENA_DEPLOYMENT_DIR/epdc.env) once settled rather than editing this line.
+        DEPLOY_FUND_BUCKET="adoption"
+        DEPLOY_PREFIX="epdc"
+        DEPLOY_FUND_MEMBERS="adoption-m1,adoption-m2,adoption-m3,adoption-m4,adoption-m5"
+        ;;
     *)
         # An unknown name is NOT an error if a profile file defines it -- that is the documented
         # way to add a deployment without editing this script.  It IS an error otherwise: guessing
@@ -156,7 +175,7 @@ deployment_profile_load() {
     return 0
 }
 
-deployment_profile_list() { print -r -- "veritas ekycph enf" }
+deployment_profile_list() { print -r -- "veritas ekycph enf epdc" }
 
 # Print the profile the way a caller would set it -- used by --show and by the dev harnesses, which
 # eval it rather than duplicating the name table.

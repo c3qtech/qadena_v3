@@ -114,6 +114,14 @@ qadena_keyring_unlock
 # so nothing broke in steady state -- but any re-run, repair or partial recovery would hit the
 # narrowed set with no diagnosis.  The union costs nothing and removes the dependency.
 VERITAS_APPSVR_MSGS="/qadena.dsvs.MsgCreateDocument,/qadena.dsvs.MsgRemoveDocument,/qadena.dsvs.MsgSignDocument,/qadena.dsvs.MsgRegisterAuthorizedSignatory,/qadena.qadena.MsgCreateCredential,/qadena.qadena.MsgRemoveCredential,/qadena.qadena.MsgClaimCredential,/qadena.qadena.MsgUpdateCredential,/qadena.qadena.MsgClaimUpdatedCredential,/qadena.qadena.MsgProtectPrivateKey,/qadena.qadena.MsgSignRecoverPrivateKey,/qadena.qadena.MsgAddPublicKey,/qadena.qadena.MsgCreateWallet,/qadena.nameservice.MsgBindCredential,/qadena.nameservice.MsgUnbindCredential,/cosmos.feegrant.v1beta1.MsgGrantAllowance,/cosmos.feegrant.v1beta1.MsgRevokeAllowance"
+# EPDC ONLY: MsgExecuteContract. The e-PDC orchestrator wallets write the epdc-register CosmWasm
+# contract (AppendEvent / RegisterAttestor / SetHolder) under this same appsvr grant; absent, every
+# register anchor fails whole-tx -- a filtered allowance rejects the tx, it does not fall back to
+# self-payment. Scoped to the epdc deployment because it lets a grantee execute ANY contract at the
+# foundation's expense, and no other deployment runs one.
+if [[ "$DEPLOY_NAME" == "epdc" ]]; then
+    VERITAS_APPSVR_MSGS="$VERITAS_APPSVR_MSGS,/cosmwasm.wasm.v1.MsgExecuteContract"
+fi
 
 # fund_wallet <address> -- give this wallet the means to transact, however this deployment does it.
 fund_wallet() {
