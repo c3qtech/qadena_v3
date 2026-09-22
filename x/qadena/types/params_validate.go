@@ -83,6 +83,29 @@ func (p Params) Validate() error {
 	// here rather than silently skipped -- this file exists because unvalidated params were once
 	// a bug, and the next reader should see the field was considered, not missed.
 
+	// enclave_trust_policy: every named status must be one this build knows.  An empty list is
+	// legal and means "unrestricted" -- see the field comment in params.proto.
+	//
+	// REJECT AT THE GATE, because the alternative is silent.  A misspelled "UpToDte" that merely
+	// failed to match would drop UpToDate from a governance-narrowed set without anyone being told,
+	// and the first symptom would be nodes refusing each other's reports.  ValidateBasic calls this
+	// too, so gov refuses such a proposal at SubmitProposal -- no deposit, no vote.
+	//
+	// A name this build knows but never permits (e.g. "OutOfDate") is NOT an error: it is honest for
+	// a proposal to list it, and the intersection in common.TCBPolicyFromParams simply drops it.
+	// Validate's job is to catch typos, not to restate the ratchet.
+	seenTCB := make(map[string]struct{}, len(p.EnclaveTrustPolicy.PermittedTcbStatuses))
+	for i, name := range p.EnclaveTrustPolicy.PermittedTcbStatuses {
+		if _, ok := ParseTCBStatusName(name); !ok {
+			return fmt.Errorf("enclave_trust_policy.permitted_tcb_statuses[%d] %q is not a known TCB status; valid names are %s",
+				i, name, strings.Join(TCBStatusNames(), ", "))
+		}
+		if _, dup := seenTCB[name]; dup {
+			return fmt.Errorf("enclave_trust_policy.permitted_tcb_statuses[%d] %q is listed twice", i, name)
+		}
+		seenTCB[name] = struct{}{}
+	}
+
 	// Coin-shaped strings.  Empty means "unset" for all of these and the loaders supply a default,
 	// so only a non-empty value is checked.
 	for _, f := range []struct {

@@ -86,7 +86,7 @@ func dialRealEnclave(logger log.Logger, addr string, signerID string, uniqueID s
 }
 
 // returns true if valid
-func clientVerifyRemoteReportRealEnclave(sdkctx sdk.Context, remoteReportBytes []byte, certifyData string) (success bool, signerID string, uniqueID string) {
+func clientVerifyRemoteReportRealEnclave(sdkctx sdk.Context, remoteReportBytes []byte, certifyData string, policy c.TCBAllowSet) (success bool, signerID string, uniqueID string) {
 	remoteReport, err := eclient.VerifyRemoteReport(remoteReportBytes)
 
 	// A FAILED VERIFICATION MUST NOT REACH THE REPORT'S CONTENTS.  The enclave-side verifier states
@@ -103,17 +103,24 @@ func clientVerifyRemoteReportRealEnclave(sdkctx sdk.Context, remoteReportBytes [
 	//   from a genuinely out-of-date platform slipped past the two != comparisons and was accepted.
 	//
 	// So: reject on any error that is not the TCB-level signal, then judge the status against the
-	// explicit ALLOW-list in c.AcceptableTCBStatus -- shared with the enclave-side verifier so the
-	// two cannot diverge into a trust asymmetry.  Read the commentary there before changing it:
-	// OutOfDateConfigurationNeeded is currently admitted, deliberately, and that is not free.
+	// EFFECTIVE allow-list -- the build's own set (c.AcceptableTCBStatus, shared with the
+	// enclave-side verifier so the two cannot diverge into a trust asymmetry) narrowed by whatever
+	// governance has voted.  The caller computed it; see keeper.EnclaveClientVerifyRemoteReport for
+	// why it arrives as an argument rather than being read here.
+	//
+	// Governance can only SUBTRACT from the compiled set, so this cannot admit anything the binary
+	// was not built to admit -- read x/qadena/common/tcbpolicy.go before changing that.
 	if err != nil && !errors.Is(err, attestation.ErrTCBLevelInvalid) {
 		c.ContextError(sdkctx, "clientVerifyRemoteReportRealEnclave: remote report did not verify: "+err.Error())
 		return false, "", ""
 	}
 	c.ContextDebug(sdkctx, "clientVerifyRemoteReportRealEnclave: remote report tcbstatus "+tcbstatus.Explain(remoteReport.TCBStatus))
-	if !c.AcceptableTCBStatus(remoteReport.TCBStatus) {
+	if !policy.Permits(remoteReport.TCBStatus) {
+		// NAME THE EFFECTIVE POLICY, not just the status.  "refused OutOfDateConfigurationNeeded"
+		// is ambiguous between "this build never allowed it" and "governance just voted it off",
+		// and those call for completely different responses from whoever reads the log.
 		c.ContextError(sdkctx, "clientVerifyRemoteReportRealEnclave: refusing remote report with TCB status "+
-			tcbstatus.Explain(remoteReport.TCBStatus))
+			tcbstatus.Explain(remoteReport.TCBStatus)+" -- effective policy permits only ["+policy.String()+"]")
 		return false, "", ""
 	}
 

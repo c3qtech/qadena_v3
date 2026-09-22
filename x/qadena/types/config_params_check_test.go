@@ -71,4 +71,13 @@ func TestConfigYamlParamsUnmarshal(t *testing.T) {
 	if !p.ReleaseAddressOnUnbond {
 		t.Error("release_address_on_unbond did not decode")
 	}
+	// enclave_trust_policy ships EMPTY on the devnet, which means "unrestricted -- the binary's own
+	// TCB allow-set applies".  There is no non-zero value to assert, so what this pins is the
+	// INTENT: config.yml must not arrive pre-narrowed, because a fleet that silently refused a TCB
+	// status would look like a broken enclave rather than a policy decision.  A misspelled key is
+	// caught by the decode above rather than here.
+	if n := len(p.EnclaveTrustPolicy.PermittedTcbStatuses); n != 0 {
+		t.Errorf("config.yml should ship an unrestricted enclave_trust_policy, got %d status(es): %v",
+			n, p.EnclaveTrustPolicy.PermittedTcbStatuses)
+	}
 }

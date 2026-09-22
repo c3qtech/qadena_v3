@@ -1947,9 +1947,19 @@ func (s *qadenaServer) verifyRemoteReportMeasurement(remoteReportBytes []byte, c
 			return false, "", ""
 		}
 		c.LoggerDebug(logger, "remote report tcbstatus "+tcbstatus.Explain(remoteReport.TCBStatus))
-		if !c.AcceptableTCBStatus(remoteReport.TCBStatus) {
+		// THE EFFECTIVE POLICY: this build's compiled allow-set, narrowed by whatever the chain has
+		// pushed (enclave_trust_policy.go).  It can only ever be NARROWER than the compiled set --
+		// the push crosses unmeasured host code, so a widening channel here would let this machine's
+		// operator talk its own enclave into sharing secrets with a peer of their choosing.  Before
+		// the first push, and against an older keeper that never sends it, this is exactly the
+		// compiled set, so behaviour matches the previous release.
+		policy := currentEnclaveTrustPolicy()
+		if !policy.Permits(remoteReport.TCBStatus) {
+			// Name the effective policy: "refused OutOfDateConfigurationNeeded" reads the same
+			// whether this build never allowed it or governance just voted it off, and those want
+			// completely different responses from whoever finds the line.
 			c.LoggerError(logger, "refusing remote report with TCB status "+
-				tcbstatus.Explain(remoteReport.TCBStatus))
+				tcbstatus.Explain(remoteReport.TCBStatus)+" -- effective policy permits only ["+policy.String()+"]")
 			return false, "", ""
 		}
 
@@ -3601,6 +3611,16 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 		} else {
 			c.LoggerInfo(logger, "chain is REPLAYING at height "+strconv.FormatInt(in.Height, 10)+" -- trust changes are deferred until caught up")
 		}
+	}
+
+	// THE CHAIN'S TCB POLICY, narrowed by this build's own before it is stored.  See
+	// enclave_trust_policy.go: what arrives here crossed unmeasured host code, so it may only ever
+	// make this enclave STRICTER.  Logged on change only -- a policy shift is rare and worth seeing,
+	// a repeating line every 11 blocks is not.
+	if setEnclaveTrustPolicy(in.PermittedTcbStatuses) {
+		c.LoggerInfo(logger, "enclave trust policy now permits TCB statuses ["+
+			currentEnclaveTrustPolicy().String()+"] (chain proposed ["+strings.Join(in.PermittedTcbStatuses, ",")+
+			"]; this build's own set is the ceiling)")
 	}
 
 	// WHERE THIS NODE SAYS IT LIVES.  Folded in before anything below reads the sealed value, and

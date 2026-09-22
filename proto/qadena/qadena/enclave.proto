@@ -556,6 +556,26 @@ message MsgUpdateHeight {
   // (msg_server_pioneer_update_interval_public_key_i_d.go) refuses to let any node rewrite another
   // node's row.  Without that refusal this field would be an eclipse primitive.
   string externalAddress = 4;
+
+  // The chain's enclave trust policy: which TCB statuses governance currently permits, by canonical
+  // ego name (see Params.enclave_trust_policy).
+  //
+  // EMPTY MEANS "NO OPINION", NEVER "TRUST NOTHING" -- the same rule externalAddress states above,
+  // for the same rolling-upgrade reason: an older keeper does not set this, and a new enclave
+  // paired with one must keep using its own compiled policy rather than falling to an empty set and
+  // refusing every peer.
+  //
+  // TRUSTING THE HOST HERE IS SAFE IN EXACTLY ONE DIRECTION, and that is the whole design.  The
+  // enclave INTERSECTS this with the set it was built with, so the host can only ever make its own
+  // enclave STRICTER.  A host that lies expansively -- "permit everything" -- changes nothing,
+  // which matters because the node process is unmeasured code and a widening channel here would let
+  // an operator stand up a fake peer and be handed the sealed-table secret.  A host that lies
+  // restrictively only refuses peers it could have refused by unplugging the machine.
+  //
+  // This gates node-local trust decisions ONLY -- whether THIS enclave shares secrets with a peer.
+  // It must never reach a value that lands in the EndBlock drains or the store accumulators, which
+  // are consensus state and must be identical on every node.
+  repeated string permittedTcbStatuses = 5;
 }
 
 message MsgScanTransactions {

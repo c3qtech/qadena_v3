@@ -948,6 +948,12 @@ genesis:
         # required, not a gap: replaying that chain's history has to reproduce the app hashes the
         # old binary produced.  Such a chain turns it on by governance.
         release_address_on_unbond: true
+        # Governance's half of the enclave trust policy.  EMPTY = unrestricted: the binary's
+        # own TCB allow-set applies unchanged.  Governance can only SUBTRACT from that set
+        # (see x/qadena/common/tcbpolicy.go), so listing a status here can never ADMIT one
+        # the build refuses -- and "UpToDate" is permitted whether listed or not.
+        enclave_trust_policy:
+          permitted_tcb_statuses: []
 
       # ---------------------------------------------------------------------------------
       # THE AML SCAN WHITELIST -- WITHOUT THIS THE CHAIN IS FUNDED AND FROZEN.

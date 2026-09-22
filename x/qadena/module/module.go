@@ -209,7 +209,22 @@ func (am AppModule) ExportGenesis(ctx sdk.Context, cdc codec.JSONCodec) json.Raw
 // versions.  Whoever first runs a real in-place upgrade will need to register handlers for every
 // step at that point -- RunMigrations refuses outright when a module's version has moved and it has
 // registered none.
-func (AppModule) ConsensusVersion() uint64 { return 4 }
+//
+// 5: Params.enclave_trust_policy -- governance may now NARROW the set of Intel SGX TCB statuses a
+// remote report may carry and still be trusted.  Consensus-breaking because it changes which
+// transactions validate: the chain-side verifier reads the effective policy per call, so a proposal
+// that drops a status makes every report carrying it invalid from that height on, and every node
+// must reach the same verdict.  The enclave reads it too -- pushed on UpdateHeight, gating only its
+// own node-local decision to share secrets -- so chain and enclave binaries move together.
+//
+// No state rewrite, and none possible to need: the block is absent on every existing params object
+// and reads as the proto3 zero, which is DEFINED as "unrestricted, the binary's own set applies".
+// So this step is inert until a governance proposal narrows something -- the same shape as step 4.
+//
+// GOVERNANCE CAN ONLY SUBTRACT from what the binary was built to accept, so no vote can widen trust
+// beyond the measurement.  x/qadena/common/tcbpolicy.go holds the reasoning and the test that fails
+// if the intersection ever becomes a union.
+func (AppModule) ConsensusVersion() uint64 { return 5 }
 
 // BeginBlock contains the logic that is automatically triggered at the beginning of each block.
 // The begin block implementation is optional.

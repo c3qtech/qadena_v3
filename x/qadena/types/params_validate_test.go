@@ -193,3 +193,53 @@ func TestDefaultParamsLeavesAssertionGateOff(t *testing.T) {
 		t.Fatalf("the gate must ship off, got %d", got)
 	}
 }
+
+// A TYPO MUST NOT PASS.  "UpToDte" that merely failed to match would silently drop UpToDate from a
+// narrowed set, and the first symptom would be nodes refusing each other's reports with no clue
+// pointing at the proposal that caused it.  ValidateBasic calls Validate, so gov refuses such a
+// proposal at SubmitProposal -- no deposit, no vote.
+func TestParamsValidateRejectsUnknownTCBStatusName(t *testing.T) {
+	p := types.Params{EnclaveTrustPolicy: types.EnclaveTrustPolicy{
+		PermittedTcbStatuses: []string{"UpToDate", "UpToDte"},
+	}}
+	err := p.Validate()
+	if err == nil {
+		t.Fatal("a misspelled TCB status name must be rejected")
+	}
+	if !strings.Contains(err.Error(), "permitted_tcb_statuses") {
+		t.Errorf("error should name the param, got: %v", err)
+	}
+}
+
+// A name this build knows but never permits is NOT an error.  It is honest for a proposal to list
+// OutOfDate, and the ratchet simply drops it; Validate catches typos, it does not restate policy.
+func TestParamsValidateAllowsKnownButUnpermittedStatus(t *testing.T) {
+	p := types.Params{EnclaveTrustPolicy: types.EnclaveTrustPolicy{
+		PermittedTcbStatuses: []string{"UpToDate", "OutOfDate"},
+	}}
+	if err := p.Validate(); err != nil {
+		t.Errorf("a known status name must validate even if the build never permits it: %v", err)
+	}
+}
+
+func TestParamsValidateRejectsDuplicateTCBStatus(t *testing.T) {
+	p := types.Params{EnclaveTrustPolicy: types.EnclaveTrustPolicy{
+		PermittedTcbStatuses: []string{"UpToDate", "UpToDate"},
+	}}
+	if err := p.Validate(); err == nil {
+		t.Fatal("a duplicated status name must be rejected")
+	}
+}
+
+// The zero value must validate, because that is what every params object predating field 29 reads
+// as, and what GetParams returns on an empty store.  TestParamsValidateEmpty covers the whole
+// object; this pins the reason for this field specifically.
+func TestParamsWithoutEnclaveTrustPolicyValidates(t *testing.T) {
+	var p types.Params
+	if len(p.EnclaveTrustPolicy.PermittedTcbStatuses) != 0 {
+		t.Fatal("zero Params should carry no policy")
+	}
+	if err := p.Validate(); err != nil {
+		t.Errorf("zero Params must validate: %v", err)
+	}
+}

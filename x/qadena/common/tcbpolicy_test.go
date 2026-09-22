@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
+	"github.com/c3qtech/qadena_v3/x/qadena/types"
 	"github.com/edgelesssys/ego/attestation/tcbstatus"
 )
 
@@ -54,5 +55,132 @@ func TestAcceptableTCBStatus(t *testing.T) {
 	if !c.AcceptableTCBStatus(zeroReportStatus) {
 		t.Fatal("precondition changed: a zero-valued status no longer reads as acceptable; " +
 			"re-check whether callers still need to reject verification errors first")
+	}
+}
+
+// ============================================================================================
+// THE RATCHET.  Everything below asserts one property: governance can only SUBTRACT.
+// ============================================================================================
+
+// GOVERNANCE CANNOT WIDEN.  This is the security property the design rests on, so it is asserted
+// against every status the build refuses, not just a convenient one.  If TCBPolicyFromParams ever
+// becomes a union -- which is a one-character mistake -- this fails.
+func TestGovernanceCannotWidenBeyondTheBuild(t *testing.T) {
+	compiled := c.CompiledTCBAllowSet()
+
+	for _, name := range types.TCBStatusNames() {
+		status, ok := types.ParseTCBStatusName(name)
+		if !ok {
+			t.Fatalf("TCBStatusNames returned %q which ParseTCBStatusName rejects", name)
+		}
+		if compiled.Permits(status) {
+			continue // nothing to widen -- the build already allows it
+		}
+
+		// Ask governance for a status the build refuses, and nothing else.
+		p := types.Params{EnclaveTrustPolicy: types.EnclaveTrustPolicy{
+			PermittedTcbStatuses: []string{name},
+		}}
+		got := c.TCBPolicyFromParams(p)
+
+		if got.Permits(status) {
+			t.Errorf("governance naming %q made it permitted, but the build refuses it -- "+
+				"the ratchet has become a union and the measurement no longer bounds what this node accepts", name)
+		}
+	}
+}
+
+// UpToDate SURVIVES ANY NARROWING, including a proposal that names only statuses this build
+// refuses.  Without this floor such a proposal empties the set, no node can accept any report, and
+// recovery needs a rebuild -- the exact outcome the feature exists to avoid.
+func TestUpToDateCannotBeVotedOff(t *testing.T) {
+	for _, names := range [][]string{
+		{"ConfigurationNeeded"},            // simply omits UpToDate
+		{"OutOfDate"},                      // names only what the build refuses
+		{"Revoked", "OutOfDate"},           // ditto, several
+		{"SWHardeningNeeded", "OutOfDate"}, // a mix
+	} {
+		p := types.Params{EnclaveTrustPolicy: types.EnclaveTrustPolicy{PermittedTcbStatuses: names}}
+		got := c.TCBPolicyFromParams(p)
+		if !got.Permits(tcbstatus.UpToDate) {
+			t.Errorf("params %v dropped UpToDate; effective set was %q", names, got.String())
+		}
+	}
+}
+
+// AN ABSENT POLICY MUST BEHAVE EXACTLY AS BEFORE THE FIELD EXISTED.  Params bytes predating field
+// 29 carry no policy and GetParams on an empty store returns the zero value, so this is the state
+// every existing chain is in at the moment of upgrade, and the state at genesis before qadena's
+// InitGenesis has run.  If this diverges from the compiled set, shipping the field changes what
+// running chains accept.
+func TestEmptyPolicyIsUnrestricted(t *testing.T) {
+	compiled := c.CompiledTCBAllowSet()
+	zero := c.TCBPolicyFromParams(types.Params{}) // proto3 zero: no policy block at all
+
+	for _, name := range types.TCBStatusNames() {
+		status, _ := types.ParseTCBStatusName(name)
+		if compiled.Permits(status) != zero.Permits(status) {
+			t.Errorf("status %q: compiled=%v but zero-params=%v -- an absent policy must be unrestricted",
+				name, compiled.Permits(status), zero.Permits(status))
+		}
+	}
+}
+
+// Narrowing WITHIN the compiled set is the whole point, so prove it actually bites: a status the
+// build permits can be removed by governance.
+func TestGovernanceCanNarrowWithinTheBuild(t *testing.T) {
+	compiled := c.CompiledTCBAllowSet()
+	if !compiled.Permits(tcbstatus.SWHardeningNeeded) {
+		t.Skip("build does not permit SWHardeningNeeded; nothing to narrow")
+	}
+
+	p := types.Params{EnclaveTrustPolicy: types.EnclaveTrustPolicy{
+		PermittedTcbStatuses: []string{"UpToDate", "ConfigurationNeeded"},
+	}}
+	got := c.TCBPolicyFromParams(p)
+
+	if got.Permits(tcbstatus.SWHardeningNeeded) {
+		t.Error("SWHardeningNeeded survived a proposal that omitted it -- narrowing does not work")
+	}
+	if !got.Permits(tcbstatus.ConfigurationNeeded) {
+		t.Error("ConfigurationNeeded was named and the build permits it, so it must be permitted")
+	}
+}
+
+// THE OPERATIONAL CASE THIS FEATURE EXISTS FOR: qfi-mainnet ships with AllowOutOfDateTCB so its
+// CloudSigma hosts can attest at all.  When the host microcode is finally patched, dropping
+// OutOfDateConfigurationNeeded must be a vote, not a rebuild.
+func TestOutOfDateConfigurationNeededCanBeVotedOffWithoutARebuild(t *testing.T) {
+	if !c.AllowOutOfDateTCB {
+		t.Skip("build already refuses OutOfDateConfigurationNeeded")
+	}
+	if !c.TCBPolicyFromParams(types.Params{}).Permits(tcbstatus.OutOfDateConfigurationNeeded) {
+		t.Fatal("precondition: an unrestricted policy should permit it on this build")
+	}
+
+	p := types.Params{EnclaveTrustPolicy: types.EnclaveTrustPolicy{
+		PermittedTcbStatuses: []string{
+			"UpToDate", "ConfigurationNeeded", "SWHardeningNeeded", "ConfigurationAndSWHardeningNeeded",
+		},
+	}}
+	if c.TCBPolicyFromParams(p).Permits(tcbstatus.OutOfDateConfigurationNeeded) {
+		t.Error("governance could not tighten away OutOfDateConfigurationNeeded -- " +
+			"the one thing this feature is for")
+	}
+}
+
+// An unparseable name must not widen anything.  Validate rejects these at the gate, so reaching
+// TCBPolicyFromParams means a param written by a newer binary; it must be ignored, never guessed.
+func TestUnknownNamesAreIgnoredNotGuessed(t *testing.T) {
+	p := types.Params{EnclaveTrustPolicy: types.EnclaveTrustPolicy{
+		PermittedTcbStatuses: []string{"UpToDate", "SomeStatusFromTheFuture"},
+	}}
+	got := c.TCBPolicyFromParams(p)
+
+	if !got.Permits(tcbstatus.UpToDate) {
+		t.Error("the recognised name was dropped")
+	}
+	if len(got.Names()) != 1 {
+		t.Errorf("effective set should contain only UpToDate, got %q", got.String())
 	}
 }

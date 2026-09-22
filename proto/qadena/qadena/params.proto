@@ -151,6 +151,16 @@ message Params {
   // the change at a height that replay can follow.
   bool release_address_on_unbond = 28;
 
+  // Governance's half of the enclave trust policy.  A BLOCK rather than a bare field so the knobs
+  // that follow (attestation age, rollback freeze) are additive and do not each claim a Params
+  // number of their own.
+  //
+  // EMPTY IS UNRESTRICTED, and it has to be.  Params bytes written before field 29 carry no 29, and
+  // GetParams on an empty store returns the zero value -- so an absent block must mean "the binary's
+  // own policy applies unchanged", exactly as it did before this existed.  The opposite sentinel
+  // ("an empty list permits nothing") would stop every chain attesting the moment this shipped.
+  EnclaveTrustPolicy enclave_trust_policy = 29 [(gogoproto.nullable) = false];
+
   // NOTE: the bank-send whitelist is deliberately NOT a param.  Params are replaced wholesale by
   // MsgUpdateParams, so adding one address would mean restating every other one, and a mistake
   // there silently drops exemptions.  It lives in its own keyed state with add/remove messages --
@@ -169,4 +179,42 @@ message SuspiciousThresholdOverride {
   // e.g. "500000php".  The keeper converts this to a common unit through the pricefeed before the
   // enclave sees it; the enclave has no pricefeed access of its own.
   string threshold = 2;
+}
+
+// What governance is allowed to say about which enclaves this chain trusts.
+//
+// GOVERNANCE MAY ONLY SUBTRACT.  The binary carries the most permissive set it will ever honour --
+// that set is hashed into MRENCLAVE -- and this block can only remove from it:
+//
+//     effective = (compiled ∩ governance) ∪ {UpToDate}
+//
+// The asymmetry is the whole design, not a limitation.  Tightening is the move an operator actually
+// needs (a host gets its microcode patched; a new advisory lands) and it should not cost a rebuild,
+// a new enclave identity and a fleet upgrade.  Loosening beyond the build must keep costing exactly
+// that, because a measurement is only worth something if it is an upper bound on what the node will
+// accept -- otherwise two nodes with the same MRENCLAVE could trust different things.
+//
+// It is also what makes it safe to hand this to the ENCLAVE at all.  The enclave hears about the
+// chain through the node process, which is unmeasured host code.  If the host could WIDEN the
+// policy, its operator would say "accept anything", stand up a fake peer and be handed the
+// sealed-table secret -- the enclave defeated through its own configuration channel.  Because the
+// push can only narrow, a hostile host achieves nothing but making its own enclave refuse everyone.
+//
+// See x/qadena/common/tcbpolicy.go, which implements this and holds the compiled set.
+message EnclaveTrustPolicy {
+  // Params sets gogoproto.equal, and its generated Equal recurses into this message, so this must
+  // generate an Equal too.
+  option (gogoproto.equal) = true;
+
+  // Canonical ego tcbstatus names: "UpToDate", "ConfigurationNeeded", "SWHardeningNeeded",
+  // "ConfigurationAndSWHardeningNeeded", "OutOfDateConfigurationNeeded", "OutOfDate", "Revoked".
+  //
+  // EMPTY MEANS UNRESTRICTED -- the compiled set applies as-is.  A name not on the compiled list is
+  // accepted by Validate but has no effect, because the intersection drops it; naming "OutOfDate"
+  // here does NOT admit it.
+  //
+  // "UpToDate" is permitted whether or not it appears here.  A proposal cannot remove it, so no
+  // vote -- mistaken or malicious -- can leave the fleet unable to attest at all, which is the one
+  // failure this design could otherwise create and could then only recover from with a rebuild.
+  repeated string permitted_tcb_statuses = 1;
 }

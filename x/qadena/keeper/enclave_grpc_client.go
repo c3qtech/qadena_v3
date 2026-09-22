@@ -210,7 +210,16 @@ var currentBlockHeader header.Info
 var validatorAddress string
 
 var EnclaveDialEnclave func(logger log.Logger, addr string, signerID string, uniqueID string) (*grpc.ClientConn, error)
-var EnclaveClientVerifyRemoteReport func(sdkctx sdk.Context, remoteReportBytes []byte, certifyData string) (bool, string, string)
+
+// EnclaveClientVerifyRemoteReport is the real-SGX verifier, installed by cmd/qadenad's init() when
+// the binary is built with -tags realenclave, and nil otherwise (see the dispatch below).
+//
+// THE POLICY IS PASSED IN, NOT READ IN THERE.  The verifier lives in cmd/qadenad and has an
+// sdk.Context but no keeper, so it cannot read params itself; the caller here can, and does, so the
+// effective allow-set arrives as an argument.  That also keeps the decision deterministic and
+// visible at the call site -- this judgement is consensus-visible, and a verifier that reached for
+// ambient state would be much harder to reason about.
+var EnclaveClientVerifyRemoteReport func(sdkctx sdk.Context, remoteReportBytes []byte, certifyData string, policy c.TCBAllowSet) (bool, string, string)
 
 func SetValidatorAddress(address string) {
 	validatorAddress = address
@@ -361,7 +370,13 @@ func (k Keeper) ClientVerifyRemoteReport(sdkctx sdk.Context, remoteReportBytes [
 			return false
 		}
 	} else {
-		success, signerID, uniqueID = EnclaveClientVerifyRemoteReport(sdkctx, remoteReportBytes, certifyData)
+		// THE EFFECTIVE POLICY, READ HERE, EVERY TIME.  The build's own allow-set narrowed by
+		// governance's -- see c.TCBPolicyFromParams, which can only subtract.  Read per call rather
+		// than cached because a MsgUpdateParams takes effect at the height it lands, and this
+		// decision is consensus-visible: every node must judge the same report the same way at the
+		// same height, which it does because they all read the same params from the same store.
+		policy := c.TCBPolicyFromParams(k.GetParams(sdkctx))
+		success, signerID, uniqueID = EnclaveClientVerifyRemoteReport(sdkctx, remoteReportBytes, certifyData, policy)
 
 		if !success {
 			c.ContextError(sdkctx, "ClientVerifyRemoteReport: the REAL SGX verifier rejected this remote report "+
@@ -1122,11 +1137,21 @@ func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
 		// the start command re-reads the new address from config.toml on every restart and, before
 		// this, had nowhere to put it.  Empty (any command that did not set it, or an older
 		// keeper) means "no opinion" and the enclave leaves its sealed value alone.
+		// PermittedTcbStatuses carries governance's half of the enclave trust policy.  Sent as the
+		// EFFECTIVE set (build ∩ governance) rather than the raw param, so the enclave is told what
+		// this node actually concluded rather than being asked to re-derive it -- and it intersects
+		// with its own compiled set again on arrival, because this value crossed unmeasured host
+		// code and may only ever narrow.
+		//
+		// Every 11 blocks is soon enough.  This gates node-local trust decisions, never consensus
+		// state, so a governance change taking effect a few seconds late on one node is not a fork
+		// -- which is exactly why it rides here and not on EndBlock, whose reply feeds the app hash.
 		_, _ = EnclaveGRPCClient.UpdateHeight(ctx, &types.MsgUpdateHeight{
-			Height:          header.Height,
-			IsProposer:      proposerAddress == validatorAddress,
-			IsLive:          time.Since(header.Time) <= enclaveLiveBlockWindow,
-			ExternalAddress: NodeExternalAddress(),
+			Height:               header.Height,
+			IsProposer:           proposerAddress == validatorAddress,
+			IsLive:               time.Since(header.Time) <= enclaveLiveBlockWindow,
+			ExternalAddress:      NodeExternalAddress(),
+			PermittedTcbStatuses: c.TCBPolicyFromParams(k.GetParams(sdkCtx)).Names(),
 		})
 	}
 }
