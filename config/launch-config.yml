@@ -1053,7 +1053,7 @@ genesis:
       enclaveIdentityList:
         - uniqueID: "test-unique-id"
           signerID: "test-signer-id"
-          productID: "test-product-id"
+          productID: "1"
           status: active
 
       # qfi-pioneer1 and treasury only.  Every service provider is onboarded at runtime by a

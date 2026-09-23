@@ -406,26 +406,30 @@ if _want bootstrap; then
     # guards, because derive_launch_keys.sh runs in between and its addresses go into genesis and
     # cannot be re-minted -- a refusal after that point costs a launch directory.
     #
-    # --test-fleet writes test-unique-id/test-signer-id/test-product-id, which
-    # fill_launch_config.py's own docstring calls "CATASTROPHIC for mainnet -- the chain would
-    # trust a measurement anyone can reproduce".  --test-chain-config 0 stops it being written,
-    # but cannot fix a template that already carries it.
+    # productID ONLY, AND THAT IS THE WHOLE POINT.  This guard used to refuse on uniqueID and
+    # signerID too, which was wrong: buildscripts/build_enclave.sh rewrites BOTH of those in the
+    # generated genesis.json on every build --
+    #     .app_state.qadena.enclaveIdentityList |= map(.uniqueID = $uniqueid | .signerID = $signerid)
+    # -- unconditionally, not only when it finds test values.  It has to: on SGX a rebuild changes
+    # MRENCLAVE, so the measurement cannot be known before the build that produces it.
+    #
+    # That same jq sets TWO fields.  productID is not one of them, so whatever the template holds
+    # ships into genesis verbatim -- and "test-product-id" is not a product id, it is a placeholder
+    # that reached a real network.  The build already says what it should be: productID 1, in
+    # cmd/qadenad_enclave/enclave.json.
     if [[ "$TEST_CHAIN_CONFIG" == "0" ]] \
-       && grep -qE '^[[:space:]]*(uniqueID|signerID|productID): "test-' config/launch-config.yml; then
-        print -u2 -- "REFUSING: --test-chain-config 0 with TEST enclave ids in config/launch-config.yml."
-        print -u2 -- "  uniqueID/signerID/productID are still test-* -- a measurement anyone can"
-        print -u2 -- "  reproduce.  On a real chain that is the enclave trust model gone, silently."
+       && grep -qE '^[[:space:]]*productID: "test-' config/launch-config.yml; then
+        print -u2 -- "REFUSING: --test-chain-config 0 with productID \"test-product-id\"."
+        print -u2 -- "  build_enclave.sh rewrites uniqueID and signerID into genesis on every build,"
+        print -u2 -- "  so those two are fine.  It does NOT touch productID -- the placeholder ships."
         print -u2 -- ""
-        print -u2 -- "  NOT fixable by re-running.  fill_launch_config.py --enclave substitutes the"
-        print -u2 -- "  TODO_ENCLAVE_* placeholders, and this template no longer has them: an earlier"
-        print -u2 -- "  --test-fleet run consumed them and was committed.  So --enclave matches"
-        print -u2 -- "  nothing, writes the file unchanged, and still says \"written to"
-        print -u2 -- "  launch-config.yml\".  It needs, in order:"
-        print -u2 -- "    1. restore TODO_ENCLAVE_UNIQUE_ID / _SIGNER_ID / _PRODUCT_ID in"
-        print -u2 -- "       config/launch-config.yml (or teach --enclave to replace test-* too)"
-        print -u2 -- "    2. a node running the EXACT SGX build you intend to launch, to read the"
-        print -u2 -- "       measurement from -- it is not derivable here"
-        print -u2 -- "    3. a productID, which is ASSIGNED by a human, not computed"
+        print -u2 -- "  Set it in config/launch-config.yml to match the build:"
+        print -u2 -- "      productID: \"1\"      (cmd/qadenad_enclave/enclave.json: \"productID\": 1)"
+        print -u2 -- ""
+        print -u2 -- "  It is ASSIGNED, not derived -- SGX ISVPRODID, which partitions sealing keys"
+        print -u2 -- "  under one signer.  The template is TRACKED and shared by every site, so"
+        print -u2 -- "  changing it changes what test fleets render too (harmlessly: nothing in"
+        print -u2 -- "  x/qadena/keeper compares productID)."
         exit 1
     fi
     # CREATE THE FOUNDATION'S SIDE IF IT IS NOT THERE.

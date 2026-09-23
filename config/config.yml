@@ -466,7 +466,7 @@ genesis:
       enclaveIdentityList:
         - uniqueID: test-unique-id
           signerID: test-signer-id
-          productID: test-product-id
+          productID: 1
           status: active
       publicKeyList:
         - pubKID: pioneer1PubKID
