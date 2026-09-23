@@ -60,13 +60,21 @@ NODE="${QADENA_NODE:-}"
 NODE_EXPLICIT=0
 PASSFILE="$SITE_PASSFILE"
 LAUNCH_DIR="$SITE_LAUNCH_DIR"
-CHAIN_ID="qadena_4824-1"
+# FROM THE SITE.  Was hardcoded to the testnet id, which is how a site called "qfi-mainnet" built
+# qadena_4824-1 for months without anything saying so.  Every site defaults to that same id, so
+# nothing changed except that a site can now declare otherwise.
+CHAIN_ID="$SITE_CHAIN_ID"
 # WHICH COMMIT THE FLEET BUILDS.  Empty means "leave the primary's checkout where it is", which is
 # what 1st_node_bringup does by default -- so a run with no --ref builds whatever M1 happens to
 # have, NOT what is in front of you.  That is how a bring-up died on
 #     Unknown option: --keyring-passfile
 # with the flag present and committed here and absent on the node.  Name the branch to be sure.
 REF=""
+# WHICH SYNC THE JOINERS USE.  Was hardcoded --block-sync at the fleet_bringup call; now AUTO,
+# which lets nth_node_bringup.sh choose per joiner and falls back to block-sync whenever any of its
+# three conditions fails.  --sync block restores the old behaviour unconditionally.  "auto" lets nth_node_bringup.sh choose per joiner (gap,
+# kept snapshots, a distinct --seed2 peer) and "state" forces it.
+SYNC_MODE="auto"
 # SGX=0 BUILDS A DEBUG ENCLAVE, and that has to be said explicitly rather than left to inference.
 # build.sh's default is "ego installed means SGX", so a host with ego and NO /dev/sgx* devices --
 # traxion-vm-01 is exactly that -- produces a signed enclave it cannot load unless --no-sgx is
@@ -75,12 +83,30 @@ REF=""
 #
 # SGX=1 passes nothing and lets the bringup probe the host: ego plus devices -> SGX, otherwise
 # debug.  Use it on the SGX fleet.
-SGX=0
+SGX="$SITE_SGX"
 # JOINER_VALIDATOR=1 bonds each joiner so it counts toward quorum -- what a test fleet wants, and
 # what several suites need (an audit with one validator heals nothing).  0 leaves them as full
 # nodes: they sync and serve RPC but never bond, which makes the PRIMARY the only validator and
 # therefore a single point of failure for the chain.
 JOINER_VALIDATOR="$SITE_JOINER_VALIDATOR"
+# TEST_CHAIN_CONFIG=1 RENDERS A TEST CHAIN, and that is the default because every site in this
+# file is one.  It controls the two flags the bootstrap stage passes to fill_launch_config.py:
+#
+#   --test-gov-timings   voting 300s, expedited 30s, deposit 300s.  Changes no gov RULE -- quorum,
+#                        threshold, veto and deposit are untouched -- only the wait.  Without it
+#                        the approve stage takes the real 6h expedited / 72h fallback.
+#   --zero-incentives    the four wallet incentives set to 0.  The endowment is a SECOND funding
+#                        source, so leaving it on makes a missing fee grant look like success --
+#                        which is why a test chain wants it zeroed and a real one does not.
+#
+# 0 passes NEITHER, which is the only way to render an instance fit for a real launch.  It is also
+# what unblocks the mainnet chain-id: fill_launch_config.py refuses --test-gov-timings together
+# with qadena_482-1, so with the default 1 that id cannot be built at all.
+#
+# THE RENDER IS NOT THE CHAIN.  Changing this re-renders fleet-launch-config.yml, but genesis is
+# built from that file during --rebuild-chain -- so without a rebuild the running chain keeps the
+# timings it was born with, whatever the yml now says.
+TEST_CHAIN_CONFIG="$SITE_TEST_CHAIN_CONFIG"
 COORD_HOME="$LAUNCH_DIR/coord"
 # THE DEPLOYMENT'S HOME, SUFFIXED BY THE SITE.  ~/ekyc-ph on M1/M2, ~/ekyc-ph-staging
 # on staging.  The suffix is not cosmetic: the rebuild stage DELETES this directory, and staging
@@ -165,6 +191,13 @@ usage() {
     print -r -- "                      1 (default) bonds each joiner so it counts toward quorum;"
     print -r -- "                      0 leaves them as full nodes -- they sync and serve RPC but"
     print -r -- "                      never vote, making the primary the only validator."
+    print -r -- "  --test-chain-config 0|1"
+    print -r -- "                      1 (default) renders the launch config with"
+    print -r -- "                      --test-gov-timings and --zero-incentives: a five-minute"
+    print -r -- "                      governance clock and no wallet endowment.  0 passes"
+    print -r -- "                      neither -- real gov timings, real incentives, and the only"
+    print -r -- "                      setting under which the MAINNET chain-id can be built."
+    print -r -- "                      Takes effect on the CHAIN only with --rebuild-chain."
     print -r -- "  --chain-id <id>     for the rendered config (default qadena_4824-1).  Only used"
     print -r -- "                      when bootstrap has to create it."
     print -r -- "  --skip-app          stop after verify; do not touch the app-server stack"
@@ -183,6 +216,10 @@ while [[ $# -gt 0 ]]; do
         --until)         UNTIL="$2"; shift 2 ;;
         --cloud-formation-template) CF_TEMPLATE="$2"; shift 2 ;;
         --ref)           REF="$2"; shift 2 ;;
+        --sync)
+            case "$2" in block|state|auto) SYNC_MODE="$2" ;;
+                *) print -u2 -- "--sync takes block, state or auto (got '$2')"; exit 1 ;; esac
+            shift 2 ;;
         --node-granter)  NODE_GRANTER="$2"; shift 2 ;;
         --site)          shift 2 ;;   # pre-scanned above
         --deployment)    shift 2 ;;   # pre-scanned above
@@ -192,6 +229,7 @@ while [[ $# -gt 0 ]]; do
         --chain-id)      CHAIN_ID="$2"; shift 2 ;;
         --sgx)           SGX="$2"; shift 2 ;;
         --joiner-validator) JOINER_VALIDATOR="$2"; shift 2 ;;
+        --test-chain-config) TEST_CHAIN_CONFIG="$2"; shift 2 ;;
         --env-file)      ENV_FILE="$2"; shift 2 ;;
         --primary)       PRIMARY="$2"; shift 2 ;;
         # What each node tells peers to dial.  Both default to the ssh host, which is wrong behind
@@ -269,6 +307,25 @@ if [[ -n "$CF_TEMPLATE" && ! -f "$CF_TEMPLATE" ]]; then
     print -u2 -- "--cloud-formation-template $CF_TEMPLATE does not exist"
     exit 1
 fi
+# VALIDATED, UNLIKE --sgx.  --sgx treats anything that is not "0" as 1, which is the safe
+# direction for it; here the safe direction is the opposite -- a typo such as
+# `--test-chain-config false` silently building a TEST chain is the whole failure this flag exists
+# to prevent.  So only 0 and 1 are accepted.
+if [[ "$TEST_CHAIN_CONFIG" != "0" && "$TEST_CHAIN_CONFIG" != "1" ]]; then
+    print -u2 -- "--test-chain-config takes 0 or 1, not '$TEST_CHAIN_CONFIG'"
+    exit 1
+fi
+# NAME THE REFUSED COMBINATION HERE, not three layers down in python.  fill_launch_config.py
+# rejects --test-gov-timings with the mainnet id and says so well, but only once the bootstrap
+# stage has already minted the launch keys -- and those addresses go into genesis and cannot be
+# re-minted, so a run that dies after them is not free.
+if [[ "$TEST_CHAIN_CONFIG" == "1" && "$CHAIN_ID" == "qadena_482-1" ]]; then
+    print -u2 -- "--chain-id qadena_482-1 is the MAINNET id and --test-chain-config is 1."
+    print -u2 -- "  A five-minute governance clock on mainnet's chain-id is a testnet wearing the"
+    print -u2 -- "  production network's identity -- and EIP-155 replay protection IS the chain id,"
+    print -u2 -- "  so anything signed there replays against mainnet.  Pass --test-chain-config 0."
+    exit 1
+fi
 export QADENA_NODE="$NODE"
 export QADENA_KEYRING_PASSFILE="$PASSFILE"
 
@@ -317,8 +374,13 @@ _on_exit() {
     # guarded by --rebuild-chain -- so a failure there printed "--from rebuild", which the very
     # next run rejects with "unknown --from stage 'rebuild'".  A resume hint that does not resume
     # is worse than none: it is read as the answer and costs a cycle to disprove.
+    # --site AND --deployment MUST BE IN THE HINT.  They are pre-scanned and shifted past in the
+    # parse loop, so they were absent from it -- and a hint that omits --site resumes against the
+    # DEFAULT site, not the one that just failed.  That was survivable while every site built the
+    # same chain; it is not now that a site carries its own chain-id, so resuming a qfi-mainnet
+    # failure with this line would quietly build a testnet somewhere else.
     if (( $(_stage_index "$_CURRENT") > 0 )); then
-        print -u2 -- "      $_SELF --passfile $PASSFILE --node $NODE --count $COUNT --from $_CURRENT"
+        print -u2 -- "      $_SELF --site $SITE_NAME --deployment $DEPLOY_NAME --passfile $PASSFILE --node $NODE --count $COUNT --from $_CURRENT"
     else
         print -u2 -- "      $_SELF --passfile $PASSFILE --node $NODE --count $COUNT \\"
         print -u2 -- "          --rebuild-chain --ref <branch>"
@@ -340,6 +402,32 @@ cd "$REPO"
 # --------------------------------------------------------------------------------------------
 if _want bootstrap; then
     _CURRENT="bootstrap"
+    # BEFORE ANYTHING IS CREATED.  Checked at the top of the stage rather than beside the render it
+    # guards, because derive_launch_keys.sh runs in between and its addresses go into genesis and
+    # cannot be re-minted -- a refusal after that point costs a launch directory.
+    #
+    # --test-fleet writes test-unique-id/test-signer-id/test-product-id, which
+    # fill_launch_config.py's own docstring calls "CATASTROPHIC for mainnet -- the chain would
+    # trust a measurement anyone can reproduce".  --test-chain-config 0 stops it being written,
+    # but cannot fix a template that already carries it.
+    if [[ "$TEST_CHAIN_CONFIG" == "0" ]] \
+       && grep -qE '^[[:space:]]*(uniqueID|signerID|productID): "test-' config/launch-config.yml; then
+        print -u2 -- "REFUSING: --test-chain-config 0 with TEST enclave ids in config/launch-config.yml."
+        print -u2 -- "  uniqueID/signerID/productID are still test-* -- a measurement anyone can"
+        print -u2 -- "  reproduce.  On a real chain that is the enclave trust model gone, silently."
+        print -u2 -- ""
+        print -u2 -- "  NOT fixable by re-running.  fill_launch_config.py --enclave substitutes the"
+        print -u2 -- "  TODO_ENCLAVE_* placeholders, and this template no longer has them: an earlier"
+        print -u2 -- "  --test-fleet run consumed them and was committed.  So --enclave matches"
+        print -u2 -- "  nothing, writes the file unchanged, and still says \"written to"
+        print -u2 -- "  launch-config.yml\".  It needs, in order:"
+        print -u2 -- "    1. restore TODO_ENCLAVE_UNIQUE_ID / _SIGNER_ID / _PRODUCT_ID in"
+        print -u2 -- "       config/launch-config.yml (or teach --enclave to replace test-* too)"
+        print -u2 -- "    2. a node running the EXACT SGX build you intend to launch, to read the"
+        print -u2 -- "       measurement from -- it is not derivable here"
+        print -u2 -- "    3. a productID, which is ASSIGNED by a human, not computed"
+        exit 1
+    fi
     # CREATE THE FOUNDATION'S SIDE IF IT IS NOT THERE.
     #
     # ~/fleet-launch holds four things the bring-up cannot run without: the coordinator keyring,
@@ -368,6 +456,21 @@ if _want bootstrap; then
         _need_cfg=1
         print -r -- "  config/launch-config.yml is NEWER than the rendered instance -- re-rendering"
         print -r -- "    (a rendered config older than its source builds the previous chain's genesis)"
+    # RE-RENDER WHEN THE FLAG DISAGREES WITH WHAT IS ON DISK.  Existence and mtime cannot see this:
+    # a config rendered with test timings is no older than its source, so --test-chain-config 0
+    # against an existing launch dir would print "launch config present" and build the test chain
+    # anyway -- the flag silently doing nothing, which is worse than it erroring.
+    #
+    # expedited_voting_period IS THE WITNESS.  --test-gov-timings writes exactly "30s" there
+    # (fill_launch_config.py:483) and nothing else in the file does, so its presence identifies how
+    # the instance was rendered without having to parse the yaml.
+    elif { grep -qE '^[[:space:]]*expedited_voting_period: "30s"' "$LAUNCH_DIR/fleet-launch-config.yml" \
+           && [[ "$TEST_CHAIN_CONFIG" == "0" ]] } \
+      || { ! grep -qE '^[[:space:]]*expedited_voting_period: "30s"' "$LAUNCH_DIR/fleet-launch-config.yml" \
+           && [[ "$TEST_CHAIN_CONFIG" == "1" ]] }; then
+        _need_cfg=1
+        print -r -- "  the rendered instance disagrees with --test-chain-config $TEST_CHAIN_CONFIG -- re-rendering"
+        (( REBUILD )) || print -r -- "    NOTE: no --rebuild-chain, so the RUNNING chain keeps the timings it was born with"
     fi
 
     if (( _need_keys || _need_cfg )); then
@@ -389,13 +492,30 @@ if _want bootstrap; then
 
     if (( _need_cfg )); then
         print -r -- "  rendering the launch config for $CHAIN_ID"
+        # AN ARRAY, so that 0 passes NOTHING rather than an empty argument -- the same reason
+        # _sgx, _jv and _ref below are arrays.  zsh expands "${empty[@]}" to no words at all.
+        _tcfg=()
+        if [[ "$TEST_CHAIN_CONFIG" == "1" ]]; then
+            _tcfg=(--test-gov-timings --zero-incentives)
+        else
+            print -r -- "  --test-chain-config 0: REAL gov timings and REAL wallet incentives"
+            print -r -- "    the approve stage will take the real 6h expedited clock, not 30 seconds"
+        fi
         # ENCLAVE IDS FIRST.  --enclave writes the TEMPLATE, so running it after --apply would
         # leave the instance carrying whatever the template held before.
-        python3 foundation_scripts/fill_launch_config.py --enclave --test-fleet
+        #
+        # AND ONLY FOR A TEST CHAIN.  --test-fleet writes test-unique-id/test-signer-id/
+        # test-product-id, which fill_launch_config.py's own docstring calls "CATASTROPHIC for
+        # mainnet -- the chain would trust a measurement anyone can reproduce".  It ran
+        # unconditionally, so --test-chain-config 0 alone would still have produced a real
+        # chain-id over forged-able enclave identity, which is worse than an honest testnet.
+        if [[ "$TEST_CHAIN_CONFIG" == "1" ]]; then
+            python3 foundation_scripts/fill_launch_config.py --enclave --test-fleet
+        fi
         python3 foundation_scripts/fill_launch_config.py \
             --apply "$LAUNCH_DIR/addresses.csv" \
             --out   "$LAUNCH_DIR/fleet-launch-config.yml" \
-            --chain-id "$CHAIN_ID" --test-gov-timings --zero-incentives
+            --chain-id "$CHAIN_ID" "${_tcfg[@]}"
     else
         print -r -- "  launch config present: $LAUNCH_DIR/fleet-launch-config.yml"
     fi
@@ -509,7 +629,7 @@ if (( REBUILD )); then
     # entry and every per-joiner loop would run once against nothing.
     _jn=(); for _j in "${JOINERS[@]}"; do _jn+=(--joiner "$_j"); done
     ./testscripts/fleet_bringup_with_tests.sh \
-        --primary "$PRIMARY" "${_jn[@]}" --block-sync "${_sgx[@]}" "${_jv[@]}" "${_adv[@]}" "${_ref[@]}" \
+        --primary "$PRIMARY" "${_jn[@]}" --sync "$SYNC_MODE" "${_sgx[@]}" "${_jv[@]}" "${_adv[@]}" "${_ref[@]}" \
         --mainnet-source        "$LAUNCH_DIR/fleet-launch-config.yml" \
         --pioneer-mnemonic-file "$_pm" \
         --keyring-passfile      "$PASSFILE" \

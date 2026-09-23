@@ -67,7 +67,14 @@ while [[ $# -gt 0 ]]; do
         # the gap size, the primary's kept snapshots and whether a --seed2 peer exists; it is
         # opt-in there because state-sync seeds the enclave's private state from a snapshot
         # rather than rebuilding it block by block, and that path has no negative-control test.
-        --sync) SYNC_ARG=(--sync "$2"); shift 2 ;;
+        # VALIDATED HERE TOO, not just forwarded.  This script does real work before it ever
+        # invokes nth_node_bringup.sh -- it resolves the granter and runs the sponsorship
+        # ceremony -- so a typo caught only downstream would be caught after a fee grant had
+        # already been signed.
+        --sync)
+            case "$2" in block|state|auto) SYNC_ARG=(--sync "$2") ;;
+                *) print -u2 -- "--sync takes block, state or auto (got '$2')"; exit 1 ;; esac
+            shift 2 ;;
         --convert-to-validator) CONVERT=1; shift ;;
         --keyring-passfile) KEYRING_PASSFILE="$2"; shift 2 ;;
         --coord-home) COORD_HOME="$2"; shift 2 ;;

@@ -90,6 +90,12 @@ SKIP_UPDATE=0
 SCHEDULE=()
 ADDRESSABLE_WAIT_MIN=20
 BLOCK_SYNC=0
+# --sync auto: let nth_node_bringup.sh decide block-vs-state per joiner from the gap, the
+# primary's kept snapshots and whether a distinct --seed2 peer exists.  Kept separate from
+# BLOCK_SYNC rather than folded into it, because the run header must be able to say AUTO and
+# then say what auto actually chose -- two strings that can disagree about what happened is one
+# too many, which is the same rule SYNC_KIND already follows.
+SYNC_AUTO=1
 # TOLL-FREE JOINS.  With --foundation-sponsored no joiner is ever sent coins: each one gets a
 # bounded, recurring fee grant instead, and joins with no balance and no treasury of its own.
 # Passed straight through to nth_node_bringup.sh, which does the work in its phases 3 and 4.
@@ -277,7 +283,15 @@ while [[ $# -gt 0 ]]; do
             print -u2 "        --joiner m2 --test \"./testscripts/test_ss_key_rotation.sh --key-added-only\" \\"
             print -u2 "        --joiner m3 --test \"./testscripts/run_regression_continually.sh\""
             exit 1 ;;
-        --block-sync)    BLOCK_SYNC=1; shift ;;
+        --block-sync)    BLOCK_SYNC=1; SYNC_AUTO=0; shift ;;
+        --sync)
+            case "$2" in
+                block) BLOCK_SYNC=1; SYNC_AUTO=0 ;;
+                state) BLOCK_SYNC=0; SYNC_AUTO=0 ;;
+                auto)  SYNC_AUTO=1 ;;
+                *) fail "--sync takes block, state or auto (got '$2')" ;;
+            esac
+            shift 2 ;;
         --funder)        FUNDER="$2"; shift 2 ;;
         --mainnet-source) MAINNET_SRC="$2"; shift 2 ;;
         --fund-qdn)      FUND_QDN_ARG="$2"; shift 2 ;;
@@ -848,7 +862,14 @@ if run_stage G; then
 # The header used to say "state-sync" unconditionally, so a --block-sync run wrote a log that
 # claimed coverage of the one path block-sync never touches -- and the run directory is the only
 # record anyone reads afterwards.  Two strings that can disagree about what happened is one too many.
-if (( BLOCK_SYNC )); then
+if (( SYNC_AUTO )); then
+    # DECIDED PER JOINER, not here: the gap and the available snapshots differ for each one, and a
+    # joiner that is already part-way caught up is a different question from a fresh box.  The
+    # sponsored wrapper resolves it ONCE per joiner and passes a concrete mode to both of its
+    # invocations; the unsponsored path below invokes nth_node_bringup.sh once, so it can evaluate
+    # directly.  Either way the chosen mode is printed with its reasoning.
+    SYNC_KIND="auto (decided per joiner)"; sync_arg=(--sync auto)
+elif (( BLOCK_SYNC )); then
     SYNC_KIND="block-sync"; sync_arg=()
 else
     SYNC_KIND="state-sync"; sync_arg=(--state-sync)

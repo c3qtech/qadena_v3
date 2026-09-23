@@ -115,9 +115,9 @@ NKFEED=""
 REM_KP=""
 AFN_KP_ARG=""
 STATE_SYNC=0
-# --sync auto: decide block-vs-state from the size of the gap.  OFF unless asked for -- see the
-# decision block where SECOND_IP_ARG is computed for why the default stays block-sync.
-SYNC_AUTO=0
+# --sync auto: decide block-vs-state from the size of the gap.  ON BY DEFAULT.  --sync block or an
+# explicit --state-sync overrides it; see the decision block where SECOND_IP_ARG is computed.
+SYNC_AUTO=1
 # --resolve-sync: evaluate `--sync auto` and print `block` or `state` to STDOUT, then exit
 # without touching either host.  Exists so a wrapper that invokes this script MORE THAN ONCE
 # can decide the mode ONCE and pass the concrete answer to every invocation -- see the comment
@@ -151,14 +151,17 @@ while [[ $# -gt 0 ]]; do
         --stake)   VALIDATOR_STAKE="$2"; shift 2 ;;
         --fund-qdn) FUND_QDN="$2"; shift 2 ;;
         --pioneer) PIONEER_NAME="$2"; shift 2 ;;
-        --state-sync) STATE_SYNC=1; shift ;;
+        # EXPLICIT MODES CLEAR AUTO.  Harmless while SYNC_AUTO defaulted to 0; once auto became
+        # the default, leaving it set meant the decision block ran anyway and overrode the very
+        # flag the caller passed.  Caught by testing the overrides after flipping the default.
+        --state-sync) STATE_SYNC=1; SYNC_AUTO=0; shift ;;
         --resolve-sync) RESOLVE_SYNC=1; SYNC_AUTO=1; shift ;;
         --sync)
             case "$2" in
-                block) STATE_SYNC=0 ;;
-                state) STATE_SYNC=1 ;;
+                block) STATE_SYNC=0; SYNC_AUTO=0 ;;
+                state) STATE_SYNC=1; SYNC_AUTO=0 ;;
                 auto)  SYNC_AUTO=1 ;;
-                *) print -u2 "--sync takes block, state or auto (got '$2')"; exit 1 ;;
+                *) print -u2 -- "--sync takes block, state or auto (got '$2')"; exit 1 ;;
             esac
             shift 2 ;;
         --convert-to-validator) CONVERT=1; shift ;;
@@ -212,16 +215,16 @@ while [[ $# -gt 0 ]]; do
             print "                five messages a node broadcasts for life -- join, SS rotation and"
             print "                SS re-share -- so the node keeps working, not just joining."
             print "                Does NOT sponsor a validator self-bond; --stake is unaffected."
-            print "  --sync <mode> block (default), state, or auto.  AUTO picks state-sync only when"
+            print "  --sync <mode> auto (DEFAULT), block, or state.  AUTO picks state-sync only when"
             print "                ALL THREE hold: the gap exceeds SYNC_AUTO_THRESHOLD (2000), the"
             print "                primary still KEEPS a snapshot above the joiner height, and a"
             print "                --seed2 peer exists to corroborate the trust height.  It says"
             print "                which it chose and why, in both directions."
-            print "                BLOCK IS THE DEFAULT ON PURPOSE: state-sync seeds the enclave"
-            print "                private state from a snapshot instead of rebuilding it block by"
-            print "                block, and that path has no negative-control test.  Choosing it"
-            print "                automatically would mean the first real exercise of it is"
-            print "                whoever happens to hit a large gap."
+            print "                WHAT AUTO COSTS: state-sync seeds the enclave private state from"
+            print "                a snapshot instead of rebuilding it block by block.  That path"
+            print "                works (M2/M3, 2026-09-23) but has NO negative-control test, so a"
+            print "                broken import is not known to be detectable.  Pass --sync block"
+            print "                when a joiner must rebuild every table itself."
             print "  --state-sync  join by STATE-SYNC instead of block-sync.  add_full_node.sh turns"
             print "                it on only when a SECOND genesis-pioneer IP is supplied and the"
             print "                two agree on the trust height and hash, so this passes the primary"
@@ -444,15 +447,18 @@ if (( SPONSORED )); then SPONSOR_CV_ARG=" --foundation-sponsored"; else SPONSOR_
 #                                                    the weakest form of the one guarantee
 #                                                    state-sync rests on
 #
-# WHY AUTO IS OPT-IN AND BLOCK REMAINS THE DEFAULT.  State-sync seeds the joiner's ENCLAVE PRIVATE
-# STATE from a snapshot instead of rebuilding it by executing every block, and that path is not
-# validated: this suite's own closing note lists "state-sync, and the private-state transfer it
-# depends on" as NOT COVERED, and testing it properly needs a negative control (repeat with the
-# import disabled and confirm the peers DO diverge) that has never been run.  Switching to it
-# silently would mean the first real exercise of that path is whoever happens to hit a large gap,
-# and a private-state divergence is exactly what the peer-agreement check exists to catch.
+# AUTO IS THE DEFAULT, AND WHAT THAT COSTS.  State-sync seeds the joiner's ENCLAVE PRIVATE STATE
+# from a snapshot instead of rebuilding it by executing every block.  That path now has evidence --
+# M2 and M3 joined by state-sync on 2026-09-23 and reached three-way app-hash agreement at height
+# 9820 with earliest_block_height 8001 -- but it still has NO NEGATIVE CONTROL: nothing has shown
+# the peer-agreement check would CATCH a broken private-state import.  It shows the import works,
+# not that a failure would be detected.
 #
-# So: auto must be ASKED FOR, and when it fires it says why, in both directions.
+# Defaulting to auto therefore trades a slow, fully-rebuilt joiner for a fast one whose enclave
+# tables were imported, on a path whose failure mode is unproven.  That is a deliberate choice, not
+# an oversight; --sync block is one flag away and is what to reach for when a joiner must rebuild
+# everything itself.  Auto still refuses state-sync unless all three conditions hold, and says why
+# in both directions.
 if (( SYNC_AUTO )); then
     # STDOUT IS THE ANSWER, so during --resolve-sync everything else has to go elsewhere.
     # Real stdout is parked on fd 3 and stdout is pointed at stderr, so every info() below
