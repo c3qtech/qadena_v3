@@ -121,6 +121,32 @@ CHAIN=$(ph status | jq -r '.node_info.network // empty')
 print "sponsored join: $PIONEER on ${JOINER##*@}, sponsored by $GRANTER ($GADDR)"
 print "  chain $CHAIN via $PRIMARY"
 
+# RESOLVE `--sync auto` ONCE, HERE, BEFORE EITHER INVOCATION.
+#
+# This script calls nth_node_bringup.sh TWICE -- phases 1-3 to mint the key, then phases 5-8 to
+# join, with the ceremony in between -- and the auto decision was evaluated independently inside
+# each.  Observed on the M3 join 2026-09-23: it decided at primary height 9780 and again at 9788,
+# and agreed both times.
+#
+# AGREEING IS NOT GUARANTEED, and the disagreement is the dangerous case.  The gap can cross the
+# threshold between the two calls, or snapshot-keep-recent can delete the last usable snapshot, and
+# then the key is minted for one mode and the join resumed as the other -- the exact mid-flight
+# config.toml rewrite nth_node_bringup.sh's own comment warns about: "a key minted for a block-sync
+# join and then resumed as a state-sync one would rewrite config.toml mid-flight".
+#
+# --resolve-sync asks THE SAME decision code for an answer and changes nothing on either host, so
+# there is still one implementation of the three conditions.  Both invocations then receive a
+# concrete `--sync block|state` and cannot drift.
+if [[ "${SYNC_ARG[*]}" == *auto* ]]; then
+    _resolved=$("$HERE/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$JOINER" \
+                    --pioneer "$PIONEER" "${EXTRA[@]}" --resolve-sync) || {
+        print -u2 "could not resolve --sync auto"; exit 1 }
+    [[ "$_resolved" == block || "$_resolved" == state ]] \
+        || { print -u2 "--resolve-sync returned '$_resolved', expected block or state"; exit 1 }
+    print "  sync auto resolved ONCE to: $_resolved (both phases will use it)"
+    SYNC_ARG=(--sync "$_resolved")
+fi
+
 nthargs=(--primary "$PRIMARY" --joiner "$JOINER" --pioneer "$PIONEER"
          --foundation-sponsored "$GADDR" "${SYNC_ARG[@]}" "${EXTRA[@]}")
 (( CONVERT )) && nthargs+=(--convert-to-validator)

@@ -118,6 +118,11 @@ STATE_SYNC=0
 # --sync auto: decide block-vs-state from the size of the gap.  OFF unless asked for -- see the
 # decision block where SECOND_IP_ARG is computed for why the default stays block-sync.
 SYNC_AUTO=0
+# --resolve-sync: evaluate `--sync auto` and print `block` or `state` to STDOUT, then exit
+# without touching either host.  Exists so a wrapper that invokes this script MORE THAN ONCE
+# can decide the mode ONCE and pass the concrete answer to every invocation -- see the comment
+# at the decision block for why re-deciding per invocation is unsafe.
+RESOLVE_SYNC=0
 # The gap, in blocks, above which auto prefers state-sync.  One snapshot-interval (2000) is the
 # floor that makes sense: below it there is no snapshot between the joiner and the tip to restore
 # from, so state-sync cannot help even in principle.
@@ -147,6 +152,7 @@ while [[ $# -gt 0 ]]; do
         --fund-qdn) FUND_QDN="$2"; shift 2 ;;
         --pioneer) PIONEER_NAME="$2"; shift 2 ;;
         --state-sync) STATE_SYNC=1; shift ;;
+        --resolve-sync) RESOLVE_SYNC=1; SYNC_AUTO=1; shift ;;
         --sync)
             case "$2" in
                 block) STATE_SYNC=0 ;;
@@ -448,6 +454,10 @@ if (( SPONSORED )); then SPONSOR_CV_ARG=" --foundation-sponsored"; else SPONSOR_
 #
 # So: auto must be ASKED FOR, and when it fires it says why, in both directions.
 if (( SYNC_AUTO )); then
+    # STDOUT IS THE ANSWER, so during --resolve-sync everything else has to go elsewhere.
+    # Real stdout is parked on fd 3 and stdout is pointed at stderr, so every info() below
+    # still reaches a human while the caller's $(...) captures exactly one word.
+    if (( RESOLVE_SYNC )); then exec 3>&1 1>&2; fi
     _ph=$(height "$PRIMARY"); _jh=$(height "$JOINER")
     : ${_ph:=0}; : ${_jh:=0}
     _gap=$(( _ph - _jh ))
@@ -478,6 +488,13 @@ if (( SYNC_AUTO )); then
         info "           rebuilding it block by block, and has no negative-control test.  Check peer"
         info "           agreement before trusting the result."
         STATE_SYNC=1
+    fi
+
+    # ANSWER ON STDOUT, REASONING ON STDERR, then stop.  The caller captures one word; the human
+    # still sees why.  Nothing has been started, stopped or written at this point.
+    if (( RESOLVE_SYNC )); then
+        (( STATE_SYNC )) && print -u3 -- "state" || print -u3 -- "block"
+        exit 0
     fi
 fi
 
