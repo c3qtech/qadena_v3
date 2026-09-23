@@ -442,12 +442,36 @@ if run_phase 1; then
             || fail "$PRIMARY's codegen plugins STILL do not match go.mod after provisioning. That is a real disagreement between go.mod and ubuntu/setup_qadena_build.sh's pins, not a stale machine -- resolve it before building."
     fi
 
+# THE ONE FILE THIS GUARD MUST NOT TRIP ON: docs/static/openapi.yml.
+#
+# It is generated API documentation whose content depends on WHICH generation path ran rather than
+# on the source -- buf.gen.sta.yaml uses openapi_naming_strategy=simple, buf.gen.swagger.yaml uses
+# fqn, and `ignite generate openapi` and the generation inside `ignite chain init` do not agree.
+# Measured 2026-08-18: the committed file was 208 KB, an aligned Mac regenerated 894 KB, and M1
+# produced a third result missing the qadena.dsvs.Msg endpoints -- same source, same pinned plugin
+# versions.  So `ignite chain init` leaves it dirty on every host after every build, and this guard
+# then refuses the NEXT run.  Cleared by hand three times on 2026-09-22/23 before it was worth
+# fixing.
+#
+# package_release.sh already carves out exactly this file, for exactly this reason, and says the
+# quiet part: "deciding which generation path is canonical is a separate question (backlog 68) and
+# should not be settled by whichever machine happened to run last."  Committing a regenerated copy
+# here would do precisely that -- and make a fourth variant.  So the guard matches that exclusion
+# rather than pretending the file is stable.
+#
+# NARROW ON PURPOSE.  Only this exact path, only when it is the ONLY thing dirty is not required --
+# any OTHER modified file still fails the run, because `git clean -fd` really would destroy it.
+dirty_tree() {
+    rsh_user "$1" "git -C $REPO status --porcelain | head -20" | tr -d '\r' \
+        | grep -vE '^[ MARCD?!]{1,2} docs/static/openapi\.yml$'
+}
+
     # THE DIRTY-TREE GUARD BELONGS HERE, NOT IN PHASE 3.  It is a property of the checkout, knowable
     # now, and phase 3 is two phases past the point where the node has already been stopped.  Only
     # meaningful with --ref, which is what runs `git clean -fd`; without one the tree is left alone.
     # Phase 3 still repeats it, because --from 3 must not skip the guard.
     if [[ -n "$REF" ]] && (( ! FORCE )); then
-        dirty=$(rsh_user "$PRIMARY" "git -C $REPO status --porcelain | head -20" | tr -d '\r')
+        dirty=$(dirty_tree "$PRIMARY")
         if [[ -n "$dirty" ]]; then
             print "$dirty" | while read -r l; do info "dirty: $l"; done
             fail "$REPO has uncommitted work, which the build's 'git clean -fd' will DESTROY. Commit it, move it aside, or pass --force."
@@ -501,7 +525,7 @@ fi
 # ---------------------------------------------------------------------------------------------
 run_phase 3 && phase "3. update the checkout"
 if run_phase 3; then
-    dirty=$(rsh_user "$PRIMARY" "git -C $REPO status --porcelain | head -20" | tr -d '\r')
+    dirty=$(dirty_tree "$PRIMARY")
     if [[ -n "$dirty" ]]; then
         print "$dirty" | while read -r l; do info "dirty: $l"; done
         # trap 6: the build's own git clean -fd would delete this without asking.
