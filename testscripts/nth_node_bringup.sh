@@ -115,6 +115,13 @@ NKFEED=""
 REM_KP=""
 AFN_KP_ARG=""
 STATE_SYNC=0
+# --sync auto: decide block-vs-state from the size of the gap.  OFF unless asked for -- see the
+# decision block where SECOND_IP_ARG is computed for why the default stays block-sync.
+SYNC_AUTO=0
+# The gap, in blocks, above which auto prefers state-sync.  One snapshot-interval (2000) is the
+# floor that makes sense: below it there is no snapshot between the joiner and the tip to restore
+# from, so state-sync cannot help even in principle.
+SYNC_AUTO_THRESHOLD=${SYNC_AUTO_THRESHOLD:-2000}
 SEED2=""
 
 fail() { print -u2 "FAIL(nth_node_bringup): $*"; exit 1 }
@@ -140,6 +147,14 @@ while [[ $# -gt 0 ]]; do
         --fund-qdn) FUND_QDN="$2"; shift 2 ;;
         --pioneer) PIONEER_NAME="$2"; shift 2 ;;
         --state-sync) STATE_SYNC=1; shift ;;
+        --sync)
+            case "$2" in
+                block) STATE_SYNC=0 ;;
+                state) STATE_SYNC=1 ;;
+                auto)  SYNC_AUTO=1 ;;
+                *) print -u2 "--sync takes block, state or auto (got '$2')"; exit 1 ;;
+            esac
+            shift 2 ;;
         --convert-to-validator) CONVERT=1; shift ;;
         --funder)     FUNDER="$2"; shift 2 ;;
         --foundation-sponsored)
@@ -149,7 +164,7 @@ while [[ $# -gt 0 ]]; do
         --help)
             print "Usage: nth_node_bringup.sh --primary <ip> --joiner <ip> [--from N] [--until N] [--only N]"
             print "                          [--stake qdn] [--quiesce]"
-            print "                          [--pioneer <name>] [--state-sync] [--seed2 <ip>]"
+            print "                          [--pioneer <name>] [--state-sync|--sync auto] [--seed2 <ip>]"
             print ""
             print "  --quiesce-immediate  as --quiesce, but END the in-flight run NOW instead of"
             print "                waiting it out.  SIGTERM first so test traps run, then SIGKILL,"
@@ -191,6 +206,16 @@ while [[ $# -gt 0 ]]; do
             print "                five messages a node broadcasts for life -- join, SS rotation and"
             print "                SS re-share -- so the node keeps working, not just joining."
             print "                Does NOT sponsor a validator self-bond; --stake is unaffected."
+            print "  --sync <mode> block (default), state, or auto.  AUTO picks state-sync only when"
+            print "                ALL THREE hold: the gap exceeds SYNC_AUTO_THRESHOLD (2000), the"
+            print "                primary still KEEPS a snapshot above the joiner height, and a"
+            print "                --seed2 peer exists to corroborate the trust height.  It says"
+            print "                which it chose and why, in both directions."
+            print "                BLOCK IS THE DEFAULT ON PURPOSE: state-sync seeds the enclave"
+            print "                private state from a snapshot instead of rebuilding it block by"
+            print "                block, and that path has no negative-control test.  Choosing it"
+            print "                automatically would mean the first real exercise of it is"
+            print "                whoever happens to hit a large gap."
             print "  --state-sync  join by STATE-SYNC instead of block-sync.  add_full_node.sh turns"
             print "                it on only when a SECOND genesis-pioneer IP is supplied and the"
             print "                two agree on the trust height and hash, so this passes the primary"
@@ -397,6 +422,65 @@ if (( SPONSORED )); then SPONSOR_CV_ARG=" --foundation-sponsored"; else SPONSOR_
 # SECOND_IP_ARG -- the extra seed that turns statesync on.  Computed here rather than inside phase
 # 5, because phase 3 now drives add_full_node.sh too and the two must agree: a key minted for a
 # block-sync join and then resumed as a state-sync one would rewrite config.toml mid-flight.
+# --sync auto -- decided HERE, for the same reason SECOND_IP_ARG is computed here: phase 3 drives
+# add_full_node.sh too, and a key minted for a block-sync join then resumed as a state-sync one
+# would rewrite config.toml mid-flight.  Phase 5 is too late.
+#
+# THREE CONDITIONS, NOT JUST THE BLOCK COUNT.  Gap size alone is the wrong predicate:
+#
+#   1. the gap exceeds SYNC_AUTO_THRESHOLD        -- below one snapshot-interval there is nothing
+#                                                    to restore from, so state-sync cannot help
+#   2. the primary still KEEPS a snapshot in range -- snapshot-keep-recent is 3, so old ones are
+#                                                    deleted; a snapshot at 16000 is no use to a
+#                                                    node that must reach 20000 if it is gone
+#   3. a DISTINCT peer exists for the trust check  -- with --seed2 defaulting to the primary the
+#                                                    cross-check is self-corroborating, which is
+#                                                    the weakest form of the one guarantee
+#                                                    state-sync rests on
+#
+# WHY AUTO IS OPT-IN AND BLOCK REMAINS THE DEFAULT.  State-sync seeds the joiner's ENCLAVE PRIVATE
+# STATE from a snapshot instead of rebuilding it by executing every block, and that path is not
+# validated: this suite's own closing note lists "state-sync, and the private-state transfer it
+# depends on" as NOT COVERED, and testing it properly needs a negative control (repeat with the
+# import disabled and confirm the peers DO diverge) that has never been run.  Switching to it
+# silently would mean the first real exercise of that path is whoever happens to hit a large gap,
+# and a private-state divergence is exactly what the peer-agreement check exists to catch.
+#
+# So: auto must be ASKED FOR, and when it fires it says why, in both directions.
+if (( SYNC_AUTO )); then
+    _ph=$(height "$PRIMARY"); _jh=$(height "$JOINER")
+    : ${_ph:=0}; : ${_jh:=0}
+    _gap=$(( _ph - _jh ))
+    info "sync auto: primary at ${_ph}, joiner at ${_jh} -- gap ${_gap} block(s)"
+
+    # Snapshots the primary still holds, as heights.  Read from disk rather than guessed from
+    # snapshot-interval: keep-recent deletes them, so the interval says when one was TAKEN, never
+    # whether it is still THERE.
+    _snaps=$(rsh_user "$PRIMARY" 'ls ~/qadena/data/snapshots 2>/dev/null' 2>/dev/null | tr -d '\r' | grep -E '^[0-9]+$' | sort -n)
+    _usable=$(print -r -- "$_snaps" | awk -v j="$_jh" -v p="$_ph" '$1 > j && $1 <= p' | tail -1)
+
+    if (( _gap <= SYNC_AUTO_THRESHOLD )); then
+        info "sync auto: BLOCK-SYNC -- gap ${_gap} is within ${SYNC_AUTO_THRESHOLD}, replay is cheap and needs no snapshot"
+        STATE_SYNC=0
+    elif [[ -z "$_usable" ]]; then
+        info "sync auto: BLOCK-SYNC -- gap ${_gap} is large, but the primary keeps no snapshot above ${_jh}"
+        info "           (has: ${${_snaps//$'\n'/ }:-none}).  Lower snapshot-interval in the primary's"
+        info "           app.toml, or raise snapshot-keep-recent, to make state-sync possible here."
+        STATE_SYNC=0
+    elif [[ -z "$SEED2" ]]; then
+        info "sync auto: BLOCK-SYNC -- gap ${_gap} and snapshot ${_usable} are both fine, but no --seed2 was"
+        info "           given, so the trust height would be corroborated only by the primary itself."
+        info "           Pass --seed2 <an existing peer> to let auto choose state-sync."
+        STATE_SYNC=0
+    else
+        info "sync auto: STATE-SYNC -- gap ${_gap} > ${SYNC_AUTO_THRESHOLD}, snapshot ${_usable} available, trust corroborated by ${SEED2##*@}"
+        info "           NOTE: this path seeds the enclave's private state from a snapshot rather than"
+        info "           rebuilding it block by block, and has no negative-control test.  Check peer"
+        info "           agreement before trusting the result."
+        STATE_SYNC=1
+    fi
+fi
+
 if (( STATE_SYNC )); then
     SECOND_IP_ARG=" --genesis-pioneer-second-ip-address ${${SEED2:-$PRIMARY}##*@}"
 else

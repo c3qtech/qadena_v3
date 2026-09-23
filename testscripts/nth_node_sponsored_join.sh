@@ -3,7 +3,7 @@
 # nth_node_bringup, for a joiner sponsored by a bucket MULTISIG -- test fleets only.
 #
 #   nth_node_sponsored_join.sh --primary <p> --joiner <j> --pioneer <name> --granter nodeops \
-#       [--block-sync|--state-sync] [--convert-to-validator]
+#       [--block-sync|--state-sync|--sync block|state|auto] [--convert-to-validator]
 #
 # NAMED FOR WHAT IT WRAPS.  It takes nth_node_bringup's arguments and drives its phases; the only
 # thing it adds is a ceremony in the middle.  The signing itself is not here -- that is
@@ -63,6 +63,11 @@ while [[ $# -gt 0 ]]; do
         --granter) GRANTER="$2"; shift 2 ;;
         --block-sync) SYNC_ARG=(); shift ;;
         --state-sync) SYNC_ARG=(--state-sync); shift ;;
+        # --sync block|state|auto, forwarded verbatim.  AUTO lets nth_node_bringup decide from
+        # the gap size, the primary's kept snapshots and whether a --seed2 peer exists; it is
+        # opt-in there because state-sync seeds the enclave's private state from a snapshot
+        # rather than rebuilding it block by block, and that path has no negative-control test.
+        --sync) SYNC_ARG=(--sync "$2"); shift 2 ;;
         --convert-to-validator) CONVERT=1; shift ;;
         --keyring-passfile) KEYRING_PASSFILE="$2"; shift 2 ;;
         --coord-home) COORD_HOME="$2"; shift 2 ;;
