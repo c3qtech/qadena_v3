@@ -14,7 +14,7 @@ Instance details
 - enter a virtual machine name, e.g. qadena-node-1
 - Region [e.g. (Asia Pacific) Southeast Asia]
 - azure-selected zone
-- Image (e.g. Ubuntu Server 22.04 LTS - x64 Gen2)
+- Image (e.g. Ubuntu Server 24.04 LTS - x64 Gen2)
 - VM: x64
 - Size: (DC-Series - Designed to protect the confidentiality and integrity of code and data for general-purpose workloads)
 	DC1s_v3 (1 vcpu, 8 GB RAM) - confidential compute

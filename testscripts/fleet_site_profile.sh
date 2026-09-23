@@ -158,7 +158,7 @@ fleet_site_profile_load() {
         # FMSPC 00606A000000).  That is admitted only because common.AllowOutOfDateTCB is true --
         # read the commentary there before assuming this site is safe for real key material.
         SITE_PRIMARY="cloudsigma@103.56.5.229"
-        SITE_JOINERS=()
+        SITE_JOINERS=("azureuser@172.188.59.88")
         # VISIBLE, AND INSIDE THE LAUNCH DIRECTORY -- not a dotfile in $HOME like the other two
         # sites.  This is a throwaway testnet whose passphrase is generated rather than chosen, so
         # it wants to be findable next to the chain it unlocks.  veritas_full_setup.sh mints it on
