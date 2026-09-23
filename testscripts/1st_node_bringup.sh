@@ -594,6 +594,34 @@ fi
 
 # ---------------------------------------------------------------------------------------------
 run_phase 4 && phase "4. build, wipe the home, re-init genesis, install"
+# STAGED OUTSIDE THE PHASE BLOCKS, because phase 6 uses rem_kp and only phase 4 used to set it.
+# `--from 6` -- an advertised feature of this script -- therefore died on `rem_kp: parameter not
+# set` under `set -u`, which is exactly how it failed on M1 2026-09-23 when a build that had
+# already succeeded needed only its start phase re-run.
+#
+# The same correction nth_node_bringup.sh already carries for SECOND_IP_ARG and SPONSOR_CV_ARG,
+# and for the same stated reason: a value a later phase interpolates must exist whether or not the
+# earlier phase ran in THIS invocation.
+#
+# Safe to run unconditionally: the scp and chmod are idempotent, and the cleanup trap removing the
+# passphrase on any exit is wanted for every invocation that stages one, not just a full run.
+keyring_flag=""
+rem_kp=""
+if [[ -n "$KEYRING_PASSFILE" ]]; then
+    [[ -f "$KEYRING_PASSFILE" ]] || fail "--keyring-passfile $KEYRING_PASSFILE does not exist"
+    rem_kp="\$HOME/.qadena-init-keyring-pass"
+    scp -q "$KEYRING_PASSFILE" "$PRIMARY:.qadena-init-keyring-pass" \
+        || fail "cannot copy the keyring passphrase to $PRIMARY"
+    ssh "$PRIMARY" "chmod 600 .qadena-init-keyring-pass" 2>/dev/null
+    keyring_flag=" --keyring-passfile $rem_kp"
+    # REMOVED ON ANY EXIT, including a failed build or a Ctrl-C.  A promise in a comment is not
+    # a deletion; without this the node keyring's passphrase sits in $HOME on the primary
+    # indefinitely, next to the keyring it opens.  The mnemonic copied just above has exactly
+    # this problem today and is left alone here only because changing it is a separate fix.
+    _kp_cleanup() { ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" 'rm -f .qadena-init-keyring-pass' 2>/dev/null || true }
+    trap _kp_cleanup EXIT INT TERM
+fi
+
 if run_phase 4; then
     (( BUILD_SGX )) && info "reproducible docker build: expect ~24 minutes"
     info "NOTE: init.sh REMOVES $NODE_HOME entirely, including any chain history on this machine"
@@ -623,22 +651,6 @@ if run_phase 4; then
     # "$(cat ...)", which puts it in `ps` on the primary; init.sh takes --keyring-passfile as a FILE
     # precisely so the passphrase never reaches the process table.  Do not "simplify" this to
     # --keyring-pass "$(cat ...)".
-    keyring_flag=""
-    rem_kp=""
-    if [[ -n "$KEYRING_PASSFILE" ]]; then
-        [[ -f "$KEYRING_PASSFILE" ]] || fail "--keyring-passfile $KEYRING_PASSFILE does not exist"
-        rem_kp="\$HOME/.qadena-init-keyring-pass"
-        scp -q "$KEYRING_PASSFILE" "$PRIMARY:.qadena-init-keyring-pass" \
-            || fail "cannot copy the keyring passphrase to $PRIMARY"
-        ssh "$PRIMARY" "chmod 600 .qadena-init-keyring-pass" 2>/dev/null
-        keyring_flag=" --keyring-passfile $rem_kp"
-        # REMOVED ON ANY EXIT, including a failed build or a Ctrl-C.  A promise in a comment is not
-        # a deletion; without this the node keyring's passphrase sits in $HOME on the primary
-        # indefinitely, next to the keyring it opens.  The mnemonic copied just above has exactly
-        # this problem today and is left alone here only because changing it is a separate fix.
-        _kp_cleanup() { ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$PRIMARY" 'rm -f .qadena-init-keyring-pass' 2>/dev/null || true }
-        trap _kp_cleanup EXIT INT TERM
-    fi
 
     mainnet_flag=""
     if [[ -n "$MAINNET_SRC" ]]; then
