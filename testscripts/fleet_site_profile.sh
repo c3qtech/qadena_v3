@@ -57,6 +57,11 @@ fleet_site_profile_load() {
     # not deploy to AWS, which is all of them today -- veritas_full_setup.sh skips the step then.
     SITE_CF_TEMPLATE=""
     SITE_NODE_GRANTER=""
+    # WHAT KIND OF CHAIN THIS SITE BUILDS.  All three were command-line-only defaults inside
+    # veritas_full_setup.sh, which meant a site could not say "I am a real network" -- and a
+    # mainnet built by forgetting one flag is indistinguishable from a testnet until it is too
+    # late to change.  Empty here, defaulted to today's testnet values after the case.
+    SITE_CHAIN_ID=""; SITE_TEST_CHAIN_CONFIG=""; SITE_SGX=""
 
     case "$_s" in
     M1-M4|m1-m4)
@@ -139,26 +144,56 @@ fleet_site_profile_load() {
         SITE_NODE_GRANTER="nodeops"
         ;;
     qfi-mainnet)
-        # LIKE staging, BUT SINGLE-NODE.  One validator, no joiner: the primary is the whole fleet.
+        # THE ONLY SITE THAT BUILDS A REAL NETWORK.  Everything else in this file renders a
+        # testnet; this one sets SITE_CHAIN_ID to the mainnet id and SITE_TEST_CHAIN_CONFIG=0, so
+        # the launch config carries the real governance clock and the real wallet incentives.
         #
-        # !! SAME HOST AS staging !!  20.212.178.16 is staging's primary too.  The two sites have
-        # separate LOCAL state (SITE_LAUNCH_DIR, SITE_HOME_SUFFIX), but they share the REMOTE node
-        # home, so they cannot both run: bringing one up replaces the other's chain, and
-        # --rebuild-chain purges whichever chain is there now.  That is fine if qfi-testnet is
-        # meant to SUPERSEDE staging on that box; it is data loss if both are wanted at once, and
-        # the fix then is a second host, not a second profile.
-        # .229 IS PRIMARY BECAUSE IT IS THE ONLY BOX THAT CAN ATTEST.  .104 and .170 cannot produce
+        # THE NAME WAS A LIE UNTIL NOW, and the chain running on .229 today is the evidence: it is
+        # qadena_4824-1, the TESTNET id, because veritas_full_setup.sh defaulted the chain-id and
+        # hardcoded --test-gov-timings with no way for a site to object.  A run against this
+        # profile now builds what the name says -- which also means --rebuild-chain here destroys
+        # a REAL network, not a scratch one.
+        #
+        # !! THE STAGING COLLISION IS OVER !!  This block used to warn that 20.212.178.16 was
+        # staging's primary too.  It is not this site's primary any more (see below), so the two
+        # no longer share a remote node home and can both run.
+        #
+        # .229 IS PRIMARY BECAUSE IT WAS THE ONLY BOX THAT COULD ATTEST.  .104 and .170 cannot produce
         # a DCAP quote at all: Intel PCS answers 404 for their QE IDs, i.e. those platforms are not
         # registered, so there is no PCK cert to sign a quote with.  That is not a PCCS or config
         # problem on our side and no amount of retrying fixes it -- it needs the host provider to
         # register them.  Since sync-enclave makes the JOINER produce a quote too, they cannot join
-        # either; hence no joiners, which also matches SITE_JOINER_VALIDATOR=0 below.
+        # either -- which is why this site had no joiners for a while.
+        #
+        # THAT IS NO LONGER TRUE OF THE AZURE BOX.  172.188.59.88 qualifies: a valid DCAP quote,
+        # TCB SWHardeningNeeded, one advisory (INTEL-SA-00615).  It is on a CURRENT TCB and would
+        # pass even a strict allow-list -- strictly better than .229, which is admitted only by
+        # AllowOutOfDateTCB.  So it is a joiner, and it bonds (SITE_JOINER_VALIDATOR=1 below).
         #
         # .229 attests, but reports TCB OutOfDateConfigurationNeeded (level tcbDate 2022-08-10 for
         # FMSPC 00606A000000).  That is admitted only because common.AllowOutOfDateTCB is true --
         # read the commentary there before assuming this site is safe for real key material.
         SITE_PRIMARY="cloudsigma@103.56.5.229"
         SITE_JOINERS=("azureuser@172.188.59.88")
+        # THE THREE THAT MAKE IT A MAINNET RATHER THAN A TESTNET WEARING THE NAME.
+        #
+        # SITE_CHAIN_ID is the real id.  EIP-155 replay protection IS the chain id, so this is not
+        # cosmetic: it is what stops anything signed here replaying elsewhere, and what stops
+        # anything signed on a testnet replaying here.
+        #
+        # SITE_TEST_CHAIN_CONFIG=0 drops --test-gov-timings (the 300s/30s clock) and
+        # --zero-incentives.  Governance here takes the real 6h expedited / 72h fallback, and the
+        # wallet endowment is real -- both of which a test fleet suppresses and a network must not.
+        # fill_launch_config.py REFUSES --test-gov-timings with the mainnet id, so 1 here would not
+        # merely be wrong, it would not build at all.
+        #
+        # SITE_SGX=1 because .229 has ego and SGX devices.  The default 0 forwards --no-build-sgx
+        # and produces a DEBUG chain binary, which verifies real quotes with the debug verifier and
+        # accepts forged ones for the life of the chain, silently.  On a mainnet that is the whole
+        # trust model gone.
+        SITE_CHAIN_ID="qadena_482-1"
+        SITE_TEST_CHAIN_CONFIG=0
+        SITE_SGX=1
         # VISIBLE, AND INSIDE THE LAUNCH DIRECTORY -- not a dotfile in $HOME like the other two
         # sites.  This is a throwaway testnet whose passphrase is generated rather than chosen, so
         # it wants to be findable next to the chain it unlocks.  veritas_full_setup.sh mints it on
@@ -172,11 +207,24 @@ fleet_site_profile_load() {
         # mnemonics on the way to building its own chain.
         SITE_HOME_SUFFIX="-qfi-mainnet"
         SITE_ENV_FILE_NAME="env-staging-no-aws"
-        # MOOT, BUT SET: with no joiner there is nothing to convert.  Left at 0 so that adding a
-        # joiner later does not silently start bonding it.
-        SITE_JOINER_VALIDATOR=0
-        # Nothing to agree WITH on a single node, so the peer-agreement check has no peers to read
-        # out of netinfo.  Same relaxation staging needs for its NLB, different reason.
+        # BONDS, and on this site that is the safe direction rather than the risky one.  This was
+        # 0, defensively, back when the site had no joiners -- "so that adding a joiner later does
+        # not silently start bonding it".  A joiner was added; the 0 stayed; and the result was a
+        # profile that would build a MAINNET with a single validator, i.e. one box able to halt the
+        # network by itself.  The live chain already runs two (the Azure node was converted by hand
+        # via nth_node_sponsored_join.sh --convert-to-validator, outside this profile); this makes
+        # the profile reproduce that instead of silently undoing it.
+        #
+        # TWO IS STILL NOT ENOUGH for a rolling upgrade -- stakes are uneven and quorum needs four.
+        # Adding validators is a fleet decision, not a profile one; this only stops the profile
+        # from actively removing the second.
+        SITE_JOINER_VALIDATOR=1
+        # RELAXED, AND NO LONGER HARMLESS.  The original reason was "nothing to agree WITH on a
+        # single node".  There is a joiner now, so this no longer excuses an empty comparison --
+        # it permits a real one to be skipped.  It has already bitten: the Azure join reported
+        # "NOT A PASS: the suite found no peers and compared nothing", and app-hash agreement had
+        # to be checked by hand.  Kept at 1 only because the NLB/cross-cloud path still cannot be
+        # read out of netinfo; verify agreement yourself until that is fixed.
         SITE_ALLOW_UNVERIFIED_AGREEMENT=1
         SITE_NODE_GRANTER="nodeops"
         # THE CLOUDFORMATION SOURCE.  Read, never written: veritas_full_setup.sh renders a populated
@@ -196,11 +244,13 @@ fleet_site_profile_load() {
         # builder -- a measurement is the hash of the binary, so a second independent build is a
         # second enclave that the chain will refuse.  SGX2 installs the package SGX1 produces.
         #
-        # SGX IS NOT SET HERE, AND CANNOT BE.  veritas_full_setup.sh takes --sgx 0|1 per run and
-        # DEFAULTS TO 0, which forwards --no-build-sgx and builds debug artifacts even on this
-        # hardware.  A debug chain binary on an SGX box verifies real quotes with the debug
-        # verifier and accepts forged ones for the life of the chain, and nothing fails loudly.
-        # So a bring-up of this site MUST pass --sgx 1; there is no site field that can do it.
+        # SGX IS SET HERE NOW.  This comment used to end "there is no site field that can do it",
+        # and every bring-up of this site therefore depended on an operator remembering --sgx 1.
+        # SITE_SGX is that field.  It matters because the default 0 forwards --no-build-sgx and
+        # builds debug artifacts even on this hardware: a debug chain binary on an SGX box verifies
+        # real quotes with the debug verifier and accepts forged ones for the life of the chain,
+        # and nothing fails loudly.
+        SITE_SGX=1
         SITE_PRIMARY="alvillarica@192.168.86.120"
         SITE_JOINER="alvillarica@192.168.86.140"
         # Its own launch directory and generated passphrase, like qfi-testnet and for the same
@@ -278,6 +328,12 @@ fleet_site_profile_load() {
         return 1
     fi
     : ${SITE_JOINER_VALIDATOR:=1}
+    # TESTNET BY DEFAULT, deliberately.  A site that says nothing gets the chain every site in this
+    # file got before these fields existed, so adding them changed no existing site's behaviour.
+    # Only qfi-mainnet opts out, and it has to say so in three separate fields to do it.
+    : ${SITE_CHAIN_ID:=qadena_4824-1}
+    : ${SITE_TEST_CHAIN_CONFIG:=1}
+    : ${SITE_SGX:=0}
     : ${SITE_ENV_FILE_NAME:=env-sponsored-test}
     : ${SITE_NODE_GRANTER:=nodeops}
     return 0
@@ -288,7 +344,8 @@ fleet_site_profile_list() { print -r -- "M1-M2 M1-M4 staging qfi-mainnet SGX" }
 fleet_site_profile_print() {
     local _v
     for _v in NAME PRIMARY JOINER PASSFILE LAUNCH_DIR ADVERTISE_P ADVERTISE_J \
-              HOME_SUFFIX ENV_FILE_NAME JOINER_VALIDATOR ALLOW_UNVERIFIED_AGREEMENT NODE_GRANTER; do
+              HOME_SUFFIX ENV_FILE_NAME JOINER_VALIDATOR ALLOW_UNVERIFIED_AGREEMENT NODE_GRANTER \
+              CHAIN_ID TEST_CHAIN_CONFIG SGX; do
         print -r -- "SITE_$_v=${(P)${:-SITE_$_v}}"
     done
     # THE ARRAYS TOO, because SITE_JOINER alone shows only the FIRST of them -- and "--show says
