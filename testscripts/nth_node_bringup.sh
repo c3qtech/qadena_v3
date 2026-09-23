@@ -1408,6 +1408,46 @@ joiner_errors=$(ssh -n "$JOINER" "tail -c +${JOINER_LOG_OFFSET} $JOINER_HOME/qad
      # consensus, or any other reason text, still fails the run.  Peers going quiet during CONSENSUS
      # is the two-validator-fork shape this check exists to catch.` \
     | grep -avE 'SendTimeout module=blocksync .*peer did not send us anything' \
+    `# THE SAME MECHANISM, THE OTHER REASON STRING: a peer that IS answering, just below the rate
+     # floor.  CometBFT's blocksync drops a peer whose delivery falls under minRecvRate and asks
+     # another; recovering from a slow peer is the mechanism working, exactly as for the "did not
+     # send us anything" case allowed above.
+     #
+     # THIS IS NOT TUNABLE, which is why it has to be forgiven rather than configured away:
+     # minRecvRate is a hardcoded 128 KB/s constant in the vendored reactor
+     # (vendor/github.com/cometbft/cometbft/blocksync/pool.go:44) with no config.toml knob.  Any
+     # link that sits near it will produce these for the whole catch-up.
+     #
+     # Measured on the Azure joiner 2026-09-23: curRate 125 KB/s against minRate 128 KB/s over the
+     # CloudSigma->Azure link -- 2% under the floor.  The node recovered every time and replayed all
+     # 18,700 blocks to agreement with the primary (app hash 71890E6E... at height 19065), yet the
+     # run was failed over 56 transport lines.
+     #
+     # Scoped to module=blocksync and that reason on purpose: a SendTimeout from CONSENSUS is the
+     # two-validator-fork shape this check exists to catch, and still fails the run.` \
+     `# NOTE THE .* BEFORE module=: this variant carries curRate/minRate fields between SendTimeout
+     # and module=, so the tighter "SendTimeout module=blocksync" form used above does NOT match it.
+     # Checked against the captured lines rather than assumed.` \
+    | grep -avE 'SendTimeout .*module=blocksync .*not sending us data fast enough' \
+    `# THE WAKE OF A DROPPED PEER, not a bad block.  When blocksync drops a slow peer, requests
+     # already in flight to it return with an empty requester -- "requested block #N from [], not
+     # <id>" -- and the reactor re-asks someone else.  The bracket pair is literally empty because
+     # the peer the request was booked against is gone.
+     #
+     # CONSENSUS-NEUTRAL BY CONSTRUCTION, the same argument the "already committed block" entry
+     # above makes: this is about WHICH peer a request was booked against, never about what a block
+     # contained.  A block whose CONTENT disagreed fails as a wrong-AppHash or a bad-commit line,
+     # and neither is allowed here.
+     #
+     # Requires the empty-bracket form, so a mismatch naming a REAL other peer is still a failure.` \
+    | grep -avE 'failed to add block .*requested block #[0-9]+ from \[\], not ' \
+    `# STOPPING A PEER THAT IS ALREADY STOPPED.  The p2p layer and the blocksync reactor can both
+     # decide to drop the same slow peer; the second one to act finds it gone and says so.  Pure
+     # bookkeeping, and only ever seen alongside the two entries above.
+     #
+     # The existing filter already forgives "error while stopping connection"; this is the peer-level
+     # twin of it, and is scoped to that exact error text rather than to the whole message.` \
+    | grep -avE 'error while stopping peer error="already stopped"' \
     | grep -avE "$CV_HALT_RE" \
       | grep -avE "ss-reconstruct: LAZY PATH")
 
