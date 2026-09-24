@@ -61,7 +61,14 @@ fleet_site_profile_load() {
     # veritas_full_setup.sh, which meant a site could not say "I am a real network" -- and a
     # mainnet built by forgetting one flag is indistinguishable from a testnet until it is too
     # late to change.  Empty here, defaulted to today's testnet values after the case.
-    SITE_CHAIN_ID=""; SITE_TEST_CHAIN_CONFIG=""; SITE_SGX=""
+    # TWO KNOBS, NOT ONE.  These were a single SITE_TEST_CHAIN_CONFIG, which bundled two
+    # independent decisions and so could not express either mixed state -- a real-clock rehearsal
+    # that still suppresses the endowment, or a fast-clock chain that exercises the real incentive
+    # path.  fill_launch_config.py takes them as separate flags and has no coupling between them.
+    # SITE_TEST_CHAIN_CONFIG is still read below as a default for both, so an existing site file
+    # setting it keeps working.
+    SITE_CHAIN_ID=""; SITE_TEST_GOV_TIMINGS=""; SITE_ZERO_INCENTIVES=""; SITE_SGX=""
+    SITE_TEST_CHAIN_CONFIG=""
 
     case "$_s" in
     M1-M4|m1-m4)
@@ -70,8 +77,13 @@ fleet_site_profile_load() {
         # referred to as M1/M2 everywhere else.  Lowercase is accepted so the capitals are optional.
         SITE_PRIMARY="alvillarica@10.211.55.5"
         SITE_JOINERS=("alvillarica@10.211.55.6" "alvillarica@10.211.55.7" "alvillarica@10.211.55.8")
-        SITE_PASSFILE="$HOME/fleet-launch-password"
-        SITE_LAUNCH_DIR="$HOME/fleet-launch"
+        # UNDER ~/qadena-launch, AND THE PASSPHRASE INSIDE ITS OWN LAUNCH DIR.  These used to
+        # scatter across $HOME -- a launch dir here, a bare -password file beside it, a dotfile for
+        # another site -- so nothing collected the state of a fleet in one place and a stray
+        # *-password in $HOME gave no clue which chain it opened.  One parent, one directory per
+        # site, and the passphrase lives with the keyring it unlocks.
+        SITE_LAUNCH_DIR="$HOME/qadena-launch/fleet-launch"
+        SITE_PASSFILE="$SITE_LAUNCH_DIR/keyring-password"
         # Both hosts are on one flat network, so each advertises the address its peer already dials
         # -- the ssh host -- and neither needs an override.
         SITE_ADVERTISE_P=""
@@ -97,14 +109,31 @@ fleet_site_profile_load() {
         # referred to as M1/M2 everywhere else.  Lowercase is accepted so the capitals are optional.
         SITE_PRIMARY="alvillarica@10.211.55.5"
         SITE_JOINER="alvillarica@10.211.55.6"
-        SITE_PASSFILE="$HOME/fleet-launch-password"
-        SITE_LAUNCH_DIR="$HOME/fleet-launch"
+        # UNDER ~/qadena-launch, AND THE PASSPHRASE INSIDE ITS OWN LAUNCH DIR.  These used to
+        # scatter across $HOME -- a launch dir here, a bare -password file beside it, a dotfile for
+        # another site -- so nothing collected the state of a fleet in one place and a stray
+        # *-password in $HOME gave no clue which chain it opened.  One parent, one directory per
+        # site, and the passphrase lives with the keyring it unlocks.
+        SITE_LAUNCH_DIR="$HOME/qadena-launch/fleet-launch"
+        SITE_PASSFILE="$SITE_LAUNCH_DIR/keyring-password"
         # Both hosts are on one flat network, so each advertises the address its peer already dials
         # -- the ssh host -- and neither needs an override.
         SITE_ADVERTISE_P=""
         SITE_ADVERTISE_J=""
         SITE_HOME_SUFFIX="-m1-m2"
         SITE_ENV_FILE_NAME="env-sponsored-test"
+        # FAST CLOCK, REAL ENDOWMENT -- the mixed state the single knob could not express.
+        #
+        # SITE_TEST_GOV_TIMINGS=1 keeps the 300s/30s/300s governance clock, because a bring-up on
+        # this fleet should not sit six hours on the approve stage.
+        #
+        # SITE_ZERO_INCENTIVES=0 leaves the four wallet incentives at their real values, so this
+        # fleet exercises the endowment path that every other test site suppresses.  Know what that
+        # costs you: the endowment is a SECOND funding source, so a wallet that should have died on
+        # a missing fee grant can now pay from its own balance and the test passes anyway.  That is
+        # precisely why the other sites zero it -- run a fee-grant regression on M1-M4, not here.
+        SITE_TEST_GOV_TIMINGS=1
+        SITE_ZERO_INCENTIVES=0
         # Bond the joiner: on a two-node fleet that is what gives the chain a second validator, and
         # without it the primary is the only vote.
         SITE_JOINER_VALIDATOR=1
@@ -122,8 +151,13 @@ fleet_site_profile_load() {
         # Azure primary, AWS joiner.  Two clouds, so nothing is on one network.
         SITE_PRIMARY="azureuser@20.212.178.16"
         SITE_JOINER="ubuntu@172.31.20.18"
-        SITE_PASSFILE="$HOME/.sec-veritas-password"
-        SITE_LAUNCH_DIR="$HOME/sec-veritas-staging-fleet-launch"
+        # UNDER ~/qadena-launch, AND THE PASSPHRASE INSIDE ITS OWN LAUNCH DIR.  These used to
+        # scatter across $HOME -- a launch dir here, a bare -password file beside it, a dotfile for
+        # another site -- so nothing collected the state of a fleet in one place and a stray
+        # *-password in $HOME gave no clue which chain it opened.  One parent, one directory per
+        # site, and the passphrase lives with the keyring it unlocks.
+        SITE_LAUNCH_DIR="$HOME/qadena-launch/sec-veritas-staging-fleet-launch"
+        SITE_PASSFILE="$SITE_LAUNCH_DIR/keyring-password"
         # WHAT EACH NODE TELLS PEERS TO DIAL, which is NOT the address we ssh to.  The joiner is
         # behind an NLB and its ssh address is a private 172.31 one that the primary cannot reach;
         # advertising that would produce a peer nobody can dial and a chain that never gossips.
@@ -143,9 +177,9 @@ fleet_site_profile_load() {
         SITE_ALLOW_UNVERIFIED_AGREEMENT=1
         SITE_NODE_GRANTER="nodeops"
         ;;
-    qfi-mainnet)
+    c3q-mainnet)
         # THE ONLY SITE THAT BUILDS A REAL NETWORK.  Everything else in this file renders a
-        # testnet; this one sets SITE_CHAIN_ID to the mainnet id and SITE_TEST_CHAIN_CONFIG=0, so
+        # testnet; this one sets SITE_CHAIN_ID to the mainnet id and both test knobs to 0, so
         # the launch config carries the real governance clock and the real wallet incentives.
         #
         # THE NAME WAS A LIE UNTIL NOW, and the chain running on .229 today is the evidence: it is
@@ -181,31 +215,41 @@ fleet_site_profile_load() {
         # cosmetic: it is what stops anything signed here replaying elsewhere, and what stops
         # anything signed on a testnet replaying here.
         #
-        # SITE_TEST_CHAIN_CONFIG=0 drops --test-gov-timings (the 300s/30s clock) and
-        # --zero-incentives.  Governance here takes the real 6h expedited / 72h fallback, and the
-        # wallet endowment is real -- both of which a test fleet suppresses and a network must not.
-        # fill_launch_config.py REFUSES --test-gov-timings with the mainnet id, so 1 here would not
-        # merely be wrong, it would not build at all.
+        # SITE_TEST_GOV_TIMINGS=1 keeps the "fast"" governance clock, for the early stages of mainnet
+        #
+        # SITE_ZERO_INCENTIVES=0 keeps the wallet endowment real.  A test fleet zeroes it because
+        # the endowment is a SECOND funding source, which makes a missing fee grant look like
+        # success; a network that actually pays its users must not.
+        #
+        # They are separate because they are separate decisions.  A staging rehearsal of mainnet
+        # timings that still wants no endowment is TEST_GOV_TIMINGS=0 with ZERO_INCENTIVES=1, and
+        # the single knob these replaced could not say that.
         #
         # SITE_SGX=1 because .229 has ego and SGX devices.  The default 0 forwards --no-build-sgx
         # and produces a DEBUG chain binary, which verifies real quotes with the debug verifier and
         # accepts forged ones for the life of the chain, silently.  On a mainnet that is the whole
         # trust model gone.
         SITE_CHAIN_ID="qadena_482-1"
-        SITE_TEST_CHAIN_CONFIG=0
+        SITE_TEST_GOV_TIMINGS=1
+        SITE_ZERO_INCENTIVES=0
         SITE_SGX=1
         # VISIBLE, AND INSIDE THE LAUNCH DIRECTORY -- not a dotfile in $HOME like the other two
         # sites.  This is a throwaway testnet whose passphrase is generated rather than chosen, so
         # it wants to be findable next to the chain it unlocks.  veritas_full_setup.sh mints it on
         # the first run when the directory has no keyring yet.
-        SITE_LAUNCH_DIR="$HOME/qfi-mainnet-fleet-launch"
+        # UNDER ~/qadena-launch, AND THE PASSPHRASE INSIDE ITS OWN LAUNCH DIR.  These used to
+        # scatter across $HOME -- a launch dir here, a bare -password file beside it, a dotfile for
+        # another site -- so nothing collected the state of a fleet in one place and a stray
+        # *-password in $HOME gave no clue which chain it opened.  One parent, one directory per
+        # site, and the passphrase lives with the keyring it unlocks.
+        SITE_LAUNCH_DIR="$HOME/qadena-launch/c3q-mainnet-fleet-launch"
         SITE_PASSFILE="$SITE_LAUNCH_DIR/keyring-password"
         SITE_ADVERTISE_P="103.56.5.229"
         SITE_ADVERTISE_J=""
         # ITS OWN STATE DIRECTORY, for the reason staging has one: --rebuild-chain DELETES the
         # deployment home, so a site sharing it with another fleet destroys that fleet's keys and
         # mnemonics on the way to building its own chain.
-        SITE_HOME_SUFFIX="-qfi-mainnet"
+        SITE_HOME_SUFFIX="-c3q-mainnet"
         SITE_ENV_FILE_NAME="env-staging-no-aws"
         # BONDS, and on this site that is the safe direction rather than the risky one.  This was
         # 0, defensively, back when the site had no joiners -- "so that adding a joiner later does
@@ -256,7 +300,12 @@ fleet_site_profile_load() {
         # Its own launch directory and generated passphrase, like qfi-testnet and for the same
         # reason: --rebuild-chain deletes the deployment home, so sharing one with another fleet
         # destroys that fleet's keys on the way to building this chain.
-        SITE_LAUNCH_DIR="$HOME/sgx-fleet-launch"
+        # UNDER ~/qadena-launch, AND THE PASSPHRASE INSIDE ITS OWN LAUNCH DIR.  These used to
+        # scatter across $HOME -- a launch dir here, a bare -password file beside it, a dotfile for
+        # another site -- so nothing collected the state of a fleet in one place and a stray
+        # *-password in $HOME gave no clue which chain it opened.  One parent, one directory per
+        # site, and the passphrase lives with the keyring it unlocks.
+        SITE_LAUNCH_DIR="$HOME/qadena-launch/sgx-fleet-launch"
         SITE_PASSFILE="$SITE_LAUNCH_DIR/keyring-password"
         # One flat LAN (192.168.86.0/24): each node advertises the host its peer already dials, so
         # neither needs an override.
@@ -330,22 +379,26 @@ fleet_site_profile_load() {
     : ${SITE_JOINER_VALIDATOR:=1}
     # TESTNET BY DEFAULT, deliberately.  A site that says nothing gets the chain every site in this
     # file got before these fields existed, so adding them changed no existing site's behaviour.
-    # Only qfi-mainnet opts out, and it has to say so in three separate fields to do it.
+    # Only c3q-mainnet opts out, and it has to say so in four separate fields to do it.
     : ${SITE_CHAIN_ID:=qadena_4824-1}
-    : ${SITE_TEST_CHAIN_CONFIG:=1}
+    # THE RETIRED SINGLE KNOB STILL SEEDS BOTH, so a site file in $QADENA_SITE_DIR written against
+    # SITE_TEST_CHAIN_CONFIG keeps its meaning instead of silently reverting to the test defaults.
+    # Set explicitly, either new field wins over it.
+    : ${SITE_TEST_GOV_TIMINGS:=${SITE_TEST_CHAIN_CONFIG:-1}}
+    : ${SITE_ZERO_INCENTIVES:=${SITE_TEST_CHAIN_CONFIG:-1}}
     : ${SITE_SGX:=0}
     : ${SITE_ENV_FILE_NAME:=env-sponsored-test}
     : ${SITE_NODE_GRANTER:=nodeops}
     return 0
 }
 
-fleet_site_profile_list() { print -r -- "M1-M2 M1-M4 staging qfi-mainnet SGX" }
+fleet_site_profile_list() { print -r -- "M1-M2 M1-M4 staging c3q-mainnet SGX" }
 
 fleet_site_profile_print() {
     local _v
     for _v in NAME PRIMARY JOINER PASSFILE LAUNCH_DIR ADVERTISE_P ADVERTISE_J \
               HOME_SUFFIX ENV_FILE_NAME JOINER_VALIDATOR ALLOW_UNVERIFIED_AGREEMENT NODE_GRANTER \
-              CHAIN_ID TEST_CHAIN_CONFIG SGX; do
+              CHAIN_ID TEST_GOV_TIMINGS ZERO_INCENTIVES SGX; do
         print -r -- "SITE_$_v=${(P)${:-SITE_$_v}}"
     done
     # THE ARRAYS TOO, because SITE_JOINER alone shows only the FIRST of them -- and "--show says

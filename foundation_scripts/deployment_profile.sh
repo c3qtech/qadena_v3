@@ -101,7 +101,11 @@ deployment_profile_load() {
         DEPLOY_IDENTITY_PRV="secidentitysrvprv"
         DEPLOY_DSVS_PRV="secdsvssrvprv"
         DEPLOY_DSVS="secdsvs"
-        DEPLOY_SEC_HOME="$HOME/sec-veritas"
+        # UNDER ~/qadena-launch, beside the launch directories.  A deployment's SEC home holds
+        # its keys and sealed mnemonics; leaving it loose in $HOME put custody material next
+        # to everything else and made "what does this fleet consist of" unanswerable from the
+        # filesystem.  $SITE_HOME_SUFFIX still distinguishes one site's copy from another's.
+        DEPLOY_SEC_HOME="$HOME/qadena-launch/sec-veritas"
         DEPLOY_DISPLAY="SEC"
         # step_1.sh's historical hardcoded values -- keep them, so a veritas run before and after
         # this block moved into the profile mints the SAME credential ids.
@@ -129,7 +133,11 @@ deployment_profile_load() {
         DEPLOY_IDENTITY_PRV="ekycphidentitysrvprv"
         DEPLOY_DSVS_PRV="ekycphdsvssrvprv"
         DEPLOY_DSVS="ekycphdsvs"
-        DEPLOY_SEC_HOME="$HOME/ekyc-ph"
+        # UNDER ~/qadena-launch, beside the launch directories.  A deployment's SEC home holds
+        # its keys and sealed mnemonics; leaving it loose in $HOME put custody material next
+        # to everything else and made "what does this fleet consist of" unanswerable from the
+        # filesystem.  $SITE_HOME_SUFFIX still distinguishes one site's copy from another's.
+        DEPLOY_SEC_HOME="$HOME/qadena-launch/ekyc-ph"
         DEPLOY_DISPLAY="ekyc.ph"
         DEPLOY_FIRSTNAME="EKYCPH"
         DEPLOY_BIRTHDATE="2025-Jan-01"
@@ -154,7 +162,11 @@ deployment_profile_load() {
         DEPLOY_IDENTITY_PRV="enfidentitysrvprv"
         DEPLOY_DSVS_PRV="enfdsvssrvprv"
         DEPLOY_DSVS="enfdsvs"
-        DEPLOY_SEC_HOME="$HOME/qadena-enf"
+        # UNDER ~/qadena-launch, beside the launch directories.  A deployment's SEC home holds
+        # its keys and sealed mnemonics; leaving it loose in $HOME put custody material next
+        # to everything else and made "what does this fleet consist of" unanswerable from the
+        # filesystem.  $SITE_HOME_SUFFIX still distinguishes one site's copy from another's.
+        DEPLOY_SEC_HOME="$HOME/qadena-launch/qadena-enf"
         DEPLOY_DISPLAY="Qadena ENF"
         # THE ELECTRONIC NOTARIAL BOOK.  ENF is the only deployment that drives a CosmWasm
         # contract: create_entry / register_enp / update_enp, plus every CND anchor write, all
