@@ -96,7 +96,13 @@ SPONSOR_GRANTER="treasury"
 # flag none of that happens, and no coins are parked on a node that may never bond -- which
 # matters here because coins sent to an unidentified address CANNOT be sent back (AML code 1159).
 CONVERT=0
+# A DEFAULT, NOT A CONSTANT.  Left alone, the preflight below replaces it with the next free name
+# in the SERIES THE CHAIN ALREADY USES -- see "THE DEFAULT PIONEER NAME MUST FOLLOW THE CHAIN".
+# PIONEER_SET records whether --pioneer was given, because an explicit name must never be
+# second-guessed: naming the joiner is the operator's call, and the name is unrecoverable once
+# registered.
 PIONEER_NAME="pioneer2"
+PIONEER_SET=0
 
 # THE NODE KEYRING'S PASSPHRASE, and what it implies for every remote qadenad call below.
 #
@@ -150,7 +156,7 @@ while [[ $# -gt 0 ]]; do
         --only)    ONLY="$2";    shift 2 ;;
         --stake)   VALIDATOR_STAKE="$2"; shift 2 ;;
         --fund-qdn) FUND_QDN="$2"; shift 2 ;;
-        --pioneer) PIONEER_NAME="$2"; shift 2 ;;
+        --pioneer) PIONEER_NAME="$2"; PIONEER_SET=1; shift 2 ;;
         # EXPLICIT MODES CLEAR AUTO.  Harmless while SYNC_AUTO defaulted to 0; once auto became
         # the default, leaving it set meant the decision block ran anyway and overrode the very
         # flag the caller passed.  Caught by testing the overrides after flipping the default.
@@ -190,7 +196,10 @@ while [[ $# -gt 0 ]]; do
             print "                        4 fund it, 5 join, 6 start+catch up, 7 validator, 8 peer agreement."
             print "                --until 3 then --from 5 SKIPS THE FUNDING, for custody this script"
             print "                cannot drive: a multisig, an HSM, or a foundation on another continent."
-            print "  --pioneer     the joiner's pioneer name (default pioneer2).  MUST BE UNUSED ON"
+            print "  --pioneer     the joiner's pioneer name.  DEFAULTS TO THE CHAIN'S OWN SERIES --"
+            print "                the preflight reads the registered pioneers, takes the genesis"
+            print "                one's stem and picks the next free index, so a chain of"
+            print "                qfi-pioneer1.. gets qfi-pioneer2, not pioneer2.  MUST BE UNUSED ON"
             print "                THE CHAIN: add_full_node.sh refuses a name already registered, so"
             print "                a re-join after a wipe needs a fresh one -- the key is gone"
             print "                locally but the chain still remembers it."
@@ -786,18 +795,52 @@ fi
 # The trap is that the name outlives the machine: wiping a joiner removes its key but the CHAIN
 # still remembers the registration, so the default pioneer2 is burned by any previous join attempt
 # that got as far as sync-enclave.  Asked here, it costs one query and names the fix.
-registered=$(ssh "$PRIMARY" "~/qadena/bin/qadenad --home ~/qadena query qadena list-interval-public-key-id --output json 2>/dev/null \
-    | jq -r '.intervalPublicKeyID[].nodeID' 2>/dev/null" | tr -d '\r')
+#
+# Asked with the nodeType so the pioneers can be told from jar1, regulator1, treasury and the
+# service providers -- both the default-name derivation and the "next free" suggestion below are
+# nonsense if they count rows that are not pioneers.
+reg_rows=$(ssh "$PRIMARY" "~/qadena/bin/qadenad --home ~/qadena query qadena list-interval-public-key-id --output json 2>/dev/null \
+    | jq -r '.intervalPublicKeyID[] | (.nodeType // \"?\") + \" \" + (.nodeID // \"?\")' 2>/dev/null" | tr -d '\r')
+registered=$(print -r -- "$reg_rows" | awk 'NF{print $2}')
+reg_pioneers=$(print -r -- "$reg_rows" | awk '$1=="pioneer"{print $2}')
+
+# THE DEFAULT PIONEER NAME MUST FOLLOW THE CHAIN, NOT A CONSTANT.  A fleet whose genesis validator
+# is `qfi-pioneer1` wants its joiners called qfi-pioneer2..N.  The hardcoded `pioneer2` registered a
+# name from a different series instead, and it went unnoticed because nothing downstream cares what
+# a pioneer is called -- the node syncs, bonds and validates perfectly as `pioneer2` on a chain of
+# `qfi-pioneer`s.  It is only unpickable afterwards: the registration outlives the machine, so the
+# wrong name cannot be taken back without a new chain.
+#
+# fleet_bringup_with_tests.sh already derives this stem, but from the LAUNCH CONFIG's genesis
+# validator -- which a standalone nth_node run does not have.  Deriving it from the chain makes the
+# two agree, and makes the single-node case (the one that produced `pioneer2` on M1-M4) correct.
+PIONEER_STEM="pioneer"
+if [[ -n "$reg_pioneers" ]]; then
+    # The genesis pioneer is the one with the LOWEST trailing index -- normally <stem>1.  Sorting by
+    # that index rather than by name keeps a chain whose first pioneer sorts late from being missed.
+    _stem=$(print -r -- "$reg_pioneers" \
+            | sed -n 's/^\(.*[^0-9]\)\([0-9][0-9]*\)$/\2 \1/p' | sort -n | head -1 | cut -d' ' -f2-)
+    [[ -n "$_stem" ]] && PIONEER_STEM="$_stem"
+fi
+if (( ! PIONEER_SET )); then
+    _n=2
+    while print -r -- "$registered" | grep -qx "$PIONEER_STEM$_n"; do (( _n++ )); done
+    if [[ "$PIONEER_NAME" != "$PIONEER_STEM$_n" ]]; then
+        info "pioneer name  following the chain's own series -- using '$PIONEER_STEM$_n', not the default '$PIONEER_NAME'"
+        PIONEER_NAME="$PIONEER_STEM$_n"
+    fi
+fi
+
 if print -r -- "$registered" | grep -qx "$PIONEER_NAME"; then
-    # Suggest the next free pioneerN, counting only pioneer names -- the list also holds jar1,
-    # regulator1, treasury and the service providers, so a bare count suggests nonsense.
+    # Suggest the next free name IN THE CHAIN'S OWN SERIES, for the same reason the default follows
+    # it: suggesting `pioneer3` to an operator on a `qfi-pioneer` chain just moves the mistake.
     suggest=2
-    while print -r -- "$registered" | grep -qx "pioneer$suggest"; do (( suggest++ )); done
+    while print -r -- "$registered" | grep -qx "$PIONEER_STEM$suggest"; do (( suggest++ )); done
     fail "the pioneer name '$PIONEER_NAME' is ALREADY REGISTERED on this chain.
        add_full_node.sh will refuse it in phase 4, after wiping and funding the joiner.  The name
        outlives the machine: wiping a joiner clears its key, but the chain keeps the registration.
        Names already taken: $(print -r -- "$registered" | tr '\n' ' ')
-       Pass an unused one:  --pioneer pioneer$suggest"
+       Pass an unused one:  --pioneer $PIONEER_STEM$suggest"
 fi
 info "pioneer name '$PIONEER_NAME' is free on this chain"
 fi

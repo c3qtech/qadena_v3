@@ -55,7 +55,12 @@ COUNT="${VERITAS_COUNT:-2}"
 PIONEER="${QADENA_PIONEER:-pioneer1}"
 FUND_MODE="foundation-sponsored"
 ALLOW_BUILD=0
-KEYRING_PASSFILE="$HOME/fleet-launch-password"
+# THE PASSPHRASE LIVES WITH THE KEYRING IT OPENS, under ~/qadena-launch.  This used to be a bare
+# ~/fleet-launch-password beside the launch dir, which gave no clue which chain it opened; the
+# refactor that moved fleet state under ~/qadena-launch missed this default, leaving it pointing
+# at a file that no longer exists.  This script has no --site, so the M1-M2/M1-M4 launch dir is
+# the right default; other sites pass --keyring-passfile.
+KEYRING_PASSFILE="$HOME/qadena-launch/fleet-launch/keyring-password"
 ENV_FILE=""
 EXTRA=()
 

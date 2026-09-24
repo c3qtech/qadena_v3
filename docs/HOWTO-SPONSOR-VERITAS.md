@@ -74,8 +74,8 @@ destroying another's keys:
 
 | | `$C` coord-home | `$P` passfile | `$N` node | `$H` state home |
 |---|---|---|---|---|
-| `M1-M2` | `~/fleet-launch/coord` | `~/fleet-launch-password` | `10.211.55.5` | `~/sec-veritas` |
-| `staging` | `~/sec-veritas-staging-fleet-launch/coord` | `~/.sec-veritas-password` | `20.212.178.16` | `~/sec-veritas-staging` |
+| `M1-M2` | `~/qadena-launch/fleet-launch/coord` | `~/qadena-launch/fleet-launch/keyring-password` | `10.211.55.5` | `~/sec-veritas` |
+| `staging` | `~/qadena-launch/sec-veritas-staging-fleet-launch/coord` | `~/qadena-launch/sec-veritas-staging-fleet-launch/keyring-password` | `20.212.178.16` | `~/sec-veritas-staging` |
 | `qfi-testnet` | `~/qfi-testnet-fleet-launch/coord` | `~/qfi-testnet-fleet-launch/keyring-password` | `45.115.225.104` | `~/sec-veritas-qfi-testnet` |
 
 `testscripts/fleet_site_profile.sh --show <site>` prints these, so they never have to be transcribed.

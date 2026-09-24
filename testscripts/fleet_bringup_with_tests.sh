@@ -77,7 +77,12 @@ PRIMARY=""
 JOINERS=()
 REF="main"
 BUILD_SGX="auto"           # auto | yes | no
+# THE JOINERS' NAME STEM.  Defaulted here, but DERIVED from the launch config's own genesis
+# validator when there is one -- see below.  Left alone, a launch fleet comes up with a genesis
+# pioneer called qfi-pioneer1 and joiners called pioneer2, pioneer3: two naming schemes on one
+# chain, differing only for the node that happens to be first.
 PIONEER_PREFIX="pioneer"
+PIONEER_PREFIX_SET=0
 SNAP_INTERVAL=2000
 SNAP_WAIT_MIN=120
 RUN_DIR=""
@@ -273,7 +278,7 @@ while [[ $# -gt 0 ]]; do
         # leaves the primary as the SOLE validator, so its downtime is the chain's downtime.
         --no-convert-joiners) CONVERT_JOINERS=0; shift ;;
         --skip-update)     SKIP_UPDATE=1; shift ;;
-        --pioneer-prefix) PIONEER_PREFIX="$2"; shift 2 ;;
+        --pioneer-prefix) PIONEER_PREFIX="$2"; PIONEER_PREFIX_SET=1; shift 2 ;;
         --snapshot-interval) SNAP_INTERVAL="$2"; shift 2 ;;
         --addressable-wait) ADDRESSABLE_WAIT_MIN="$2"; shift 2 ;;
         --skip-regression|--no-loop|--after-primary|--after-join|--at-end)
@@ -618,6 +623,23 @@ info "primary       $PRIMARY"
 info "joiners       ${JOINERS[*]:-<none>}"
 info "ref           $REF"
 info "build         $KIND"
+# FOLLOW THE GENESIS VALIDATOR'S NAME, rather than making one up alongside it.
+#
+# validators[0].name in the launch config IS the genesis pioneer -- the launch config's own comment
+# explains that the two are deliberately one identity.  Its stem is therefore the fleet's naming
+# scheme, and the joiners belong to the same series: qfi-pioneer1 genesis -> qfi-pioneer2 joining.
+#
+# Only with --mainnet-source (a devnet has no launch config to read), and only when the operator
+# has not named a prefix explicitly.
+if [[ -n "$MAINNET_SRC" ]] && (( ! PIONEER_PREFIX_SET )) && [[ -r "$MAINNET_SRC" ]]; then
+    _gen=$(awk '/^validators:/{f=1;next} f && /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/{sub(/^[[:space:]]*-[[:space:]]*name:[[:space:]]*/,""); print; exit}' "$MAINNET_SRC")
+    # Strip the trailing index, not any digit: a stem ending in a number is still a stem.
+    _stem=$(print -r -- "$_gen" | sed 's/[0-9]*$//')
+    if [[ -n "$_stem" && "$_stem" != "$PIONEER_PREFIX" ]]; then
+        info "pioneer name  following the genesis validator '$_gen' -- joiners are ${_stem}2.."
+        PIONEER_PREFIX="$_stem"
+    fi
+fi
 info "pioneers      ${PIONEER_PREFIX}2 .. ${PIONEER_PREFIX}$(( ${#JOINERS[@]} + 1 ))"
 
 # ---------------------------------------------------------------------------------------------
@@ -833,12 +855,46 @@ if (( ${#JOINERS[@]} == 0 )); then
 fi
 
 # ---------------------------------------------------------------------------------------------
+# DOES ANY JOINER ACTUALLY NEED A SNAPSHOT?  Ask the decision code; do not reimplement it.
+#
+# nth_node_bringup.sh --resolve-sync evaluates the same three conditions the join itself will, and
+# changes nothing on either host.  nth_node_sponsored_join.sh already calls it for exactly this
+# reason -- so that one implementation of the rules serves every caller.
+#
+# Conservative on failure: if the answer cannot be read, assume state-sync and wait, which is the
+# behaviour this replaced.
+auto_wants_state() {
+    local j r n=1
+    for j in "${JOINERS[@]}"; do
+        n=$(( n + 1 ))
+        r=$("$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" \
+                --pioneer "${PIONEER_PREFIX}${n}" --resolve-sync 2>/dev/null) || return 0
+        [[ "$r" == state ]] && return 0
+    done
+    return 1
+}
+
 if run_stage F; then
 if (( BLOCK_SYNC )); then
     stage "F. (skipped -- --block-sync needs no snapshot)"
     # Block-sync replays from genesis, so it has no precondition beyond a chain producing blocks.
     # That is the whole saving: no ~50-minute wait for the snapshot interval.  It is a DIFFERENT
     # test, not a faster one -- see the note in stage H.
+    assert_advancing "$PRIMARY" "before joining"
+elif (( SYNC_AUTO )) && ! auto_wants_state; then
+    # THE WAIT WAS UNCONDITIONAL, AND THAT DEFEATED auto.
+    #
+    # auto exists to CHOOSE block-vs-state per joiner.  Its first condition is `gap <= 2000 ->
+    # BLOCK-SYNC, replay is cheap and needs no snapshot` -- so on a freshly rebuilt chain it wants
+    # block-sync and needs nothing from this stage.  Waiting here anyway was not merely a wasted
+    # ~50 minutes: it waits for height to pass 2000, which DRAGS THE GAP PAST THE THRESHOLD and so
+    # manufactures the very condition it is a precondition for.  The wait changed auto's answer.
+    #
+    # Worse on a two-node fleet, where there is no distinct --seed2 peer: auto's third condition
+    # can never hold, so it resolves to block-sync no matter how long this waits.  Measured on
+    # M1-M2 2026-09-24 -- gap 264, guaranteed block-sync, 45 minutes of waiting for a snapshot
+    # that would never be used.
+    stage "F. (skipped -- --sync auto resolves to block-sync for every joiner)"
     assert_advancing "$PRIMARY" "before joining"
 else
 stage "F. wait for height past $SNAP_INTERVAL and a snapshot on disk"

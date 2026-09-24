@@ -321,14 +321,14 @@ skipping the last one is the failure people actually hit -- the bringup dies at 
 # 1. MINT THE KEYS.  Encrypted keyring + one sealed mnemonic per key + the addresses CSV.
 #    The account list comes from the template, so it cannot drift from what genesis expects.
 foundation_scripts/derive_launch_keys.sh \
-    --home          ~/fleet-launch/coord \
-    --mnemonics-dir ~/fleet-launch/mnemonics \
-    --out           ~/fleet-launch/addresses.csv
+    --home          ~/qadena-launch/fleet-launch/coord \
+    --mnemonics-dir ~/qadena-launch/fleet-launch/mnemonics \
+    --out           ~/qadena-launch/fleet-launch/addresses.csv
 
 # 2. RENDER THE INSTANCE.
 python3 foundation_scripts/fill_launch_config.py \
-    --apply ~/fleet-launch/addresses.csv \
-    --out   ~/fleet-launch/fleet-launch-config.yml \
+    --apply ~/qadena-launch/fleet-launch/addresses.csv \
+    --out   ~/qadena-launch/fleet-launch/fleet-launch-config.yml \
     --chain-id qadena_4824-1 \
     --test-gov-timings \
     --zero-incentives
@@ -341,12 +341,12 @@ python3 foundation_scripts/fill_launch_config.py --enclave --test-fleet
 #    --pioneer-mnemonic-file wants a plaintext local path.  Prompts for the sealing
 #    passphrase -- the same one that unlocks the coordinator keyring.
 umask 077
-foundation_scripts/mnemonic.sh show ~/fleet-launch/mnemonics qfi-pioneer1 \
-    > ~/fleet-launch/pioneer-mnemonic.txt
+foundation_scripts/mnemonic.sh show ~/qadena-launch/fleet-launch/mnemonics qfi-pioneer1 \
+    > ~/qadena-launch/fleet-launch/pioneer-mnemonic.txt
 ```
 
 **Delete `pioneer-mnemonic.txt` once the fleet is up.**  The sealed `.enc` is the copy worth
-keeping, and `~/fleet-launch/mnemonics/` is the only recovery that exists for all 60 keys -- back
+keeping, and `~/qadena-launch/fleet-launch/mnemonics/` is the only recovery that exists for all 60 keys -- back
 it up off this machine before you go further.
 
 **`--zero-incentives` is what makes a green run mean something.**  The four wallet incentives
@@ -422,8 +422,8 @@ Then the run itself:
   --joiner alvillarica@192.168.86.52 \
   --joiner alvillarica@192.168.86.136 \
   --block-sync \
-  --mainnet-source ~/fleet-launch/fleet-launch-config.yml \
-  --pioneer-mnemonic-file ~/fleet-launch/pioneer-mnemonic.txt \
+  --mainnet-source ~/qadena-launch/fleet-launch/fleet-launch-config.yml \
+  --pioneer-mnemonic-file ~/qadena-launch/fleet-launch/pioneer-mnemonic.txt \
   --funder qfi-pioneer1 --fund-qdn 10100 --stake 10000 \
   --test-local "./testscripts/provision_from_bucket_local.sh --name treasury --from-bucket adoption --amount 50000000 --stake 10000000 --whitelist --host alvillarica@10.211.55.5" \
   --test "QADENA_PIONEER=qfi-pioneer1 QADENA_GENESIS_NODES=qfi-pioneer1,wallet-incentive-pool QADENA_PF_TARGET=fn:php:usd QADENA_PF_CONTROL=cn:qdn:usd ./testscripts/regression.sh"

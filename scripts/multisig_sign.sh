@@ -121,7 +121,10 @@ usage() {
     print "                                  [--period <s>] [--period-limit <amt>] --out <file>"
     print "  multisig_sign.sh build-send     --from <msig> --to <addr> --amount <amt> --out <file>"
     print "  multisig_sign.sh build-delegate --from <msig> --validator <valoper> --amount <amt> --out <f>"
+    print "  multisig_sign.sh build-redelegate --from <msig> --src-validator <valoper> \\"
+    print "                                    --validator <valoper> --amount <amt> --out <f>"
     print "  multisig_sign.sh build-deposit  --from <msig> --proposal <id> --amount <amt> --out <f>"
+    print "  multisig_sign.sh build-submit-proposal --from <msig> --proposal-file <f> --out <f>"
     print "  multisig_sign.sh build-vote     --from <msig> --proposal <id> --vote <opt> --out <f>"
     print "  multisig_sign.sh sign           --tx <unsigned> --multisig <msig> --from <member> --out <sig>"
     print "  multisig_sign.sh combine        --tx <unsigned> --multisig <msig> --out <signed> <sig>..."
@@ -150,7 +153,7 @@ CMD="$1"; shift
 [[ "$CMD" == "--help" || "$CMD" == "-h" ]] && usage 0
 granter="" grantee="" msgs="" period="2592000" period_limit="1000qdn" out=""
 from="" to="" amount="" tx="" msig="" seqoff=0
-validator="" proposal="" vote_opt=""
+validator="" proposal="" vote_opt="" src_validator="" proposal_file=""
 sigs=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -163,7 +166,13 @@ while [[ $# -gt 0 ]]; do
         --to) to="$2"; shift 2 ;;
         --amount) amount="$2"; shift 2 ;;
         --validator) validator="$2"; shift 2 ;;
+        # build-redelegate needs TWO validators; --validator is the destination, matching
+        # build-delegate, and --src-validator is where the stake comes from.
+        --src-validator) src_validator="$2"; shift 2 ;;
         --proposal) proposal="$2"; shift 2 ;;
+        # A FILE, not an id: submit-proposal takes the message JSON, whereas --proposal names an
+        # already-submitted one for deposit and vote.  Two flags because they are two things.
+        --proposal-file) proposal_file="$2"; shift 2 ;;
         --vote) vote_opt="$2"; shift 2 ;;
         --out) out="$2"; shift 2 ;;
         --tx) tx="$2"; shift 2 ;;
@@ -276,6 +285,27 @@ build-delegate)
         --gas "$GAS" --gas-prices "$GAS_PRICES" > "$out" || exit 1
     print "built $out  (delegator $fa -> $validator) -- unsigned; the sequence binds at sign"
     ;;
+build-redelegate)
+    # MOVING BONDED STAKE, NOT UNBONDING IT.  A redelegation keeps the tokens bonded throughout, so
+    # the delegator's voting weight never dips -- which matters when that delegator is the only one
+    # who can carry a proposal.  Undelegate-then-delegate would lock them for the unbonding period
+    # (504h here) and drop the treasury below its threshold for the whole window.
+    #
+    # It is NOT free of constraints: the chain refuses a second hop out of the destination for the
+    # unbonding period, so a rebalance that overshoots cannot simply be reversed.
+    #
+    # EXISTS BECAUSE THE CALLER WAS HAND-ROLLING IT.  scripts/gov_rebalance_and_slow.sh built this
+    # tx itself with `tx staking redelegate --generate-only` and no gas flags, so the tx carried a
+    # ZERO fee and CheckTx rejected it (code 13, "gas prices too low, got: 0aqdn") only after three
+    # members had signed.  Every build-* here exists so that the fee is not a thing each caller
+    # remembers separately.
+    [[ -n "$from" && -n "$src_validator" && -n "$validator" && -n "$amount" && -n "$out" ]] || usage
+    fa=$(addr_of "$from")
+    q tx staking redelegate "$src_validator" "$validator" "$amount" \
+        --from "$fa" --generate-only --chain-id "$CHAIN" --node "$NODE" \
+        --gas "$GAS" --gas-prices "$GAS_PRICES" > "$out" || exit 1
+    print "built $out  (delegator $fa: $src_validator -> $validator) -- unsigned; the sequence binds at sign"
+    ;;
 build-deposit)
     [[ -n "$from" && -n "$proposal" && -n "$amount" && -n "$out" ]] || usage
     fa=$(addr_of "$from")
@@ -283,6 +313,19 @@ build-deposit)
         --from "$fa" --generate-only --chain-id "$CHAIN" --node "$NODE" \
         --gas "$GAS" --gas-prices "$GAS_PRICES" > "$out" || exit 1
     print "built $out  (depositor $fa, proposal $proposal) -- unsigned; the sequence binds at sign"
+    ;;
+build-submit-proposal)
+    # THE SUBMITTER NEED NOT BE THE VOTER, and usually should not be: submitting costs the DEPOSIT
+    # (liquid funds), voting costs nothing but requires BONDED STAKE.  This exists for the case
+    # where the same bucket does both -- on a sponsored fleet the treasury is the only account
+    # with either, so a proposal it cannot submit is a proposal nobody can.
+    [[ -n "$from" && -n "$proposal_file" && -n "$out" ]] || usage
+    [[ -r "$proposal_file" ]] || { print -u2 "no proposal file at $proposal_file"; exit 1 }
+    fa=$(addr_of "$from")
+    q tx gov submit-proposal "$proposal_file" \
+        --from "$fa" --generate-only --chain-id "$CHAIN" --node "$NODE" \
+        --gas "$GAS" --gas-prices "$GAS_PRICES" > "$out" || exit 1
+    print "built $out  (proposer $fa, from $proposal_file) -- unsigned; the sequence binds at sign"
     ;;
 build-vote)
     [[ -n "$from" && -n "$proposal" && -n "$vote_opt" && -n "$out" ]] || usage

@@ -89,24 +89,35 @@ SGX="$SITE_SGX"
 # nodes: they sync and serve RPC but never bond, which makes the PRIMARY the only validator and
 # therefore a single point of failure for the chain.
 JOINER_VALIDATOR="$SITE_JOINER_VALIDATOR"
-# TEST_CHAIN_CONFIG=1 RENDERS A TEST CHAIN, and that is the default because every site in this
-# file is one.  It controls the two flags the bootstrap stage passes to fill_launch_config.py:
+# THE TWO TEST-CHAIN FLAGS the bootstrap stage passes to fill_launch_config.py.  Both default to
+# 1 because every site in fleet_site_profile.sh is a test fleet.  They were ONE knob
+# (--test-chain-config) until it became clear the two decisions are independent:
 #
-#   --test-gov-timings   voting 300s, expedited 30s, deposit 300s.  Changes no gov RULE -- quorum,
-#                        threshold, veto and deposit are untouched -- only the wait.  Without it
-#                        the approve stage takes the real 6h expedited / 72h fallback.
-#   --zero-incentives    the four wallet incentives set to 0.  The endowment is a SECOND funding
-#                        source, so leaving it on makes a missing fee grant look like success --
-#                        which is why a test chain wants it zeroed and a real one does not.
+#   TEST_GOV_TIMINGS=1  -> --test-gov-timings.  Voting 300s, expedited 30s, deposit 300s.  Changes
+#                       no gov RULE -- quorum, threshold, veto and deposit are untouched -- only
+#                       the wait.  At 0 the approve stage takes the real 6h expedited / 72h
+#                       fallback, which is six hours of a bring-up sitting on one stage.
+#   ZERO_INCENTIVES=1   -> --zero-incentives.  The four wallet incentives set to 0.  The endowment
+#                       is a SECOND funding source, so leaving it real makes a missing fee grant
+#                       look like success -- which is why a test chain zeroes it and a network
+#                       that actually pays its users does not.
 #
-# 0 passes NEITHER, which is the only way to render an instance fit for a real launch.  It is also
-# what unblocks the mainnet chain-id: fill_launch_config.py refuses --test-gov-timings together
-# with qadena_482-1, so with the default 1 that id cannot be built at all.
+# fill_launch_config.py has no coupling between them, so all four combinations render.  The two
+# mixed states are the reason for the split: a rehearsal of mainnet TIMINGS that still suppresses
+# the endowment is 0/1, and a fast-clock chain that exercises the real incentive path is 1/0.
 #
-# THE RENDER IS NOT THE CHAIN.  Changing this re-renders fleet-launch-config.yml, but genesis is
+# TEST_GOV_TIMINGS IS ALSO THE "IS THIS A REAL NETWORK" DISCRIMINATOR, and that is a judgement
+# call worth naming: it gates the enclave-identity handling below (test-fleet measurement ids, and
+# the productID refusal).  It is the honest signal because fill_launch_config.py itself treats it
+# that way -- it refuses --test-gov-timings with the mainnet chain-id and nothing else in the file
+# is keyed to mainnet at all.  ZERO_INCENTIVES carries no such meaning: a real network may
+# legitimately launch with the endowment at 0.
+#
+# THE RENDER IS NOT THE CHAIN.  Changing either re-renders fleet-launch-config.yml, but genesis is
 # built from that file during --rebuild-chain -- so without a rebuild the running chain keeps the
 # timings it was born with, whatever the yml now says.
-TEST_CHAIN_CONFIG="$SITE_TEST_CHAIN_CONFIG"
+TEST_GOV_TIMINGS="$SITE_TEST_GOV_TIMINGS"
+ZERO_INCENTIVES="$SITE_ZERO_INCENTIVES"
 COORD_HOME="$LAUNCH_DIR/coord"
 # THE DEPLOYMENT'S HOME, SUFFIXED BY THE SITE.  ~/ekyc-ph on M1/M2, ~/ekyc-ph-staging
 # on staging.  The suffix is not cosmetic: the rebuild stage DELETES this directory, and staging
@@ -155,7 +166,7 @@ usage() {
     print -r -- "                      (tcp://<primary-host>:26657), or \$QADENA_NODE, or"
     print -r -- "                      tcp://localhost:26657 when there is no --primary."
     print -r -- "  --count <n>         ephemeral wallets per user (default 3; 30 for a real run)"
-    print -r -- "  --coord-home <dir>  foundation keyring (default ~/fleet-launch/coord)"
+    print -r -- "  --coord-home <dir>  foundation keyring (default $COORD_HOME)"
     print -r -- "  --sec-home <dir>    the deployment's directory (default $SEC_HOME)"
     print -r -- "  --from <stage>      resume: bootstrap|prepare|step1|delegate|step2|approve|step3|pool|verify|app"
     print -r -- "  --until <stage>     stop AFTER that stage.  --rebuild-chain --until bootstrap"
@@ -180,7 +191,7 @@ usage() {
     print -r -- "                                      add_full_node.sh).  REPEATABLE: one per"
     print -r -- "                                      --joiner in the same order, or one for all"
     print -r -- "                                      of them.  Default: the ssh host."
-    print -r -- "  --launch-dir <dir>  the foundation's directory (default ~/fleet-launch).  Created"
+    print -r -- "  --launch-dir <dir>  the foundation's directory (default $LAUNCH_DIR).  Created"
     print -r -- "                      by the bootstrap stage if absent -- keys, sealed mnemonics,"
     print -r -- "                      addresses.csv and the rendered launch config."
     print -r -- "  --sgx 0|1           0 (default) builds a DEBUG enclave via --no-build-sgx;"
@@ -191,13 +202,18 @@ usage() {
     print -r -- "                      1 (default) bonds each joiner so it counts toward quorum;"
     print -r -- "                      0 leaves them as full nodes -- they sync and serve RPC but"
     print -r -- "                      never vote, making the primary the only validator."
-    print -r -- "  --test-chain-config 0|1"
-    print -r -- "                      1 (default) renders the launch config with"
-    print -r -- "                      --test-gov-timings and --zero-incentives: a five-minute"
-    print -r -- "                      governance clock and no wallet endowment.  0 passes"
-    print -r -- "                      neither -- real gov timings, real incentives, and the only"
-    print -r -- "                      setting under which the MAINNET chain-id can be built."
-    print -r -- "                      Takes effect on the CHAIN only with --rebuild-chain."
+    print -r -- "  --test-gov-timings 0|1"
+    print -r -- "                      1 (default) renders voting 300s / expedited 30s /"
+    print -r -- "                      deposit 300s.  0 keeps the real 6h expedited, 72h regular,"
+    print -r -- "                      24h deposit -- and is the only setting under which the"
+    print -r -- "                      MAINNET chain-id can be built.  It also gates the enclave"
+    print -r -- "                      identity: at 0 the test measurement ids are not written and"
+    print -r -- "                      a test productID is refused."
+    print -r -- "  --zero-incentives 0|1"
+    print -r -- "                      1 (default) sets the four wallet incentives to 0.  0 keeps"
+    print -r -- "                      the endowment real.  Independent of --test-gov-timings:"
+    print -r -- "                      all four combinations render."
+    print -r -- "                      Both take effect on the CHAIN only with --rebuild-chain."
     print -r -- "  --chain-id <id>     for the rendered config (default qadena_4824-1).  Only used"
     print -r -- "                      when bootstrap has to create it."
     print -r -- "  --skip-app          stop after verify; do not touch the app-server stack"
@@ -229,7 +245,8 @@ while [[ $# -gt 0 ]]; do
         --chain-id)      CHAIN_ID="$2"; shift 2 ;;
         --sgx)           SGX="$2"; shift 2 ;;
         --joiner-validator) JOINER_VALIDATOR="$2"; shift 2 ;;
-        --test-chain-config) TEST_CHAIN_CONFIG="$2"; shift 2 ;;
+        --test-gov-timings)  TEST_GOV_TIMINGS="$2"; shift 2 ;;
+        --zero-incentives)   ZERO_INCENTIVES="$2"; shift 2 ;;
         --env-file)      ENV_FILE="$2"; shift 2 ;;
         --primary)       PRIMARY="$2"; shift 2 ;;
         # What each node tells peers to dial.  Both default to the ssh host, which is wrong behind
@@ -309,21 +326,25 @@ if [[ -n "$CF_TEMPLATE" && ! -f "$CF_TEMPLATE" ]]; then
 fi
 # VALIDATED, UNLIKE --sgx.  --sgx treats anything that is not "0" as 1, which is the safe
 # direction for it; here the safe direction is the opposite -- a typo such as
-# `--test-chain-config false` silently building a TEST chain is the whole failure this flag exists
-# to prevent.  So only 0 and 1 are accepted.
-if [[ "$TEST_CHAIN_CONFIG" != "0" && "$TEST_CHAIN_CONFIG" != "1" ]]; then
-    print -u2 -- "--test-chain-config takes 0 or 1, not '$TEST_CHAIN_CONFIG'"
+# `--test-gov-timings false` silently building a TEST chain is the whole failure these flags exist
+# to prevent.  So only 0 and 1 are accepted, for both.
+if [[ "$TEST_GOV_TIMINGS" != "0" && "$TEST_GOV_TIMINGS" != "1" ]]; then
+    print -u2 -- "--test-gov-timings takes 0 or 1, not '$TEST_GOV_TIMINGS'"
+    exit 1
+fi
+if [[ "$ZERO_INCENTIVES" != "0" && "$ZERO_INCENTIVES" != "1" ]]; then
+    print -u2 -- "--zero-incentives takes 0 or 1, not '$ZERO_INCENTIVES'"
     exit 1
 fi
 # NAME THE REFUSED COMBINATION HERE, not three layers down in python.  fill_launch_config.py
 # rejects --test-gov-timings with the mainnet id and says so well, but only once the bootstrap
 # stage has already minted the launch keys -- and those addresses go into genesis and cannot be
 # re-minted, so a run that dies after them is not free.
-if [[ "$TEST_CHAIN_CONFIG" == "1" && "$CHAIN_ID" == "qadena_482-1" ]]; then
-    print -u2 -- "--chain-id qadena_482-1 is the MAINNET id and --test-chain-config is 1."
+if [[ "$TEST_GOV_TIMINGS" == "1" && "$CHAIN_ID" == "qadena_482-1" ]]; then
+    print -u2 -- "--chain-id qadena_482-1 is the MAINNET id and --test-gov-timings is 1."
     print -u2 -- "  A five-minute governance clock on mainnet's chain-id is a testnet wearing the"
     print -u2 -- "  production network's identity -- and EIP-155 replay protection IS the chain id,"
-    print -u2 -- "  so anything signed there replays against mainnet.  Pass --test-chain-config 0."
+    print -u2 -- "  so anything signed there replays against mainnet.  Pass --test-gov-timings 0."
     exit 1
 fi
 export QADENA_NODE="$NODE"
@@ -417,9 +438,9 @@ if _want bootstrap; then
     # ships into genesis verbatim -- and "test-product-id" is not a product id, it is a placeholder
     # that reached a real network.  The build already says what it should be: productID 1, in
     # cmd/qadenad_enclave/enclave.json.
-    if [[ "$TEST_CHAIN_CONFIG" == "0" ]] \
+    if [[ "$TEST_GOV_TIMINGS" == "0" ]] \
        && grep -qE '^[[:space:]]*productID: "test-' config/launch-config.yml; then
-        print -u2 -- "REFUSING: --test-chain-config 0 with productID \"test-product-id\"."
+        print -u2 -- "REFUSING: --test-gov-timings 0 with productID \"test-product-id\"."
         print -u2 -- "  build_enclave.sh rewrites uniqueID and signerID into genesis on every build,"
         print -u2 -- "  so those two are fine.  It does NOT touch productID -- the placeholder ships."
         print -u2 -- ""
@@ -460,21 +481,35 @@ if _want bootstrap; then
         _need_cfg=1
         print -r -- "  config/launch-config.yml is NEWER than the rendered instance -- re-rendering"
         print -r -- "    (a rendered config older than its source builds the previous chain's genesis)"
-    # RE-RENDER WHEN THE FLAG DISAGREES WITH WHAT IS ON DISK.  Existence and mtime cannot see this:
-    # a config rendered with test timings is no older than its source, so --test-chain-config 0
+    # RE-RENDER WHEN EITHER FLAG DISAGREES WITH WHAT IS ON DISK.  Existence and mtime cannot see
+    # this: a config rendered with test timings is no older than its source, so --test-gov-timings 0
     # against an existing launch dir would print "launch config present" and build the test chain
     # anyway -- the flag silently doing nothing, which is worse than it erroring.
     #
-    # expedited_voting_period IS THE WITNESS.  --test-gov-timings writes exactly "30s" there
-    # (fill_launch_config.py:483) and nothing else in the file does, so its presence identifies how
-    # the instance was rendered without having to parse the yaml.
-    elif { grep -qE '^[[:space:]]*expedited_voting_period: "30s"' "$LAUNCH_DIR/fleet-launch-config.yml" \
-           && [[ "$TEST_CHAIN_CONFIG" == "0" ]] } \
-      || { ! grep -qE '^[[:space:]]*expedited_voting_period: "30s"' "$LAUNCH_DIR/fleet-launch-config.yml" \
-           && [[ "$TEST_CHAIN_CONFIG" == "1" ]] }; then
-        _need_cfg=1
-        print -r -- "  the rendered instance disagrees with --test-chain-config $TEST_CHAIN_CONFIG -- re-rendering"
-        (( REBUILD )) || print -r -- "    NOTE: no --rebuild-chain, so the RUNNING chain keeps the timings it was born with"
+    # ONE WITNESS PER KNOB, checked independently, because the two can now disagree with the
+    # instance separately.  A single combined test would miss exactly the mixed states the split
+    # exists to allow.
+    #
+    #   expedited_voting_period: "30s"   written only by --test-gov-timings (fill_launch_config.py:483)
+    #   create_wallet_incentive amount 0 written only by --zero-incentives  (:460)
+    #
+    # The incentive witness reads the line AFTER the key, since the amount is a nested field; -A1
+    # on the key name is the smallest thing that cannot match some other zero in the file.
+    else
+        _r_gov=0; _r_inc=0
+        grep -qE '^[[:space:]]*expedited_voting_period: "30s"' "$LAUNCH_DIR/fleet-launch-config.yml" && _r_gov=1
+        grep -A1 -E '^[[:space:]]*create_wallet_incentive:' "$LAUNCH_DIR/fleet-launch-config.yml" \
+            | grep -qE '^[[:space:]]*amount: "0"' && _r_inc=1
+        if (( _r_gov != TEST_GOV_TIMINGS )); then
+            _need_cfg=1
+            print -r -- "  rendered instance has test-gov-timings=$_r_gov, this run asks $TEST_GOV_TIMINGS -- re-rendering"
+        fi
+        if (( _r_inc != ZERO_INCENTIVES )); then
+            _need_cfg=1
+            print -r -- "  rendered instance has zero-incentives=$_r_inc, this run asks $ZERO_INCENTIVES -- re-rendering"
+        fi
+        (( _need_cfg && ! REBUILD )) && \
+            print -r -- "    NOTE: no --rebuild-chain, so the RUNNING chain keeps what it was born with"
     fi
 
     if (( _need_keys || _need_cfg )); then
@@ -499,21 +534,24 @@ if _want bootstrap; then
         # AN ARRAY, so that 0 passes NOTHING rather than an empty argument -- the same reason
         # _sgx, _jv and _ref below are arrays.  zsh expands "${empty[@]}" to no words at all.
         _tcfg=()
-        if [[ "$TEST_CHAIN_CONFIG" == "1" ]]; then
-            _tcfg=(--test-gov-timings --zero-incentives)
-        else
-            print -r -- "  --test-chain-config 0: REAL gov timings and REAL wallet incentives"
-            print -r -- "    the approve stage will take the real 6h expedited clock, not 30 seconds"
+        [[ "$TEST_GOV_TIMINGS" == "1" ]] && _tcfg+=(--test-gov-timings)
+        [[ "$ZERO_INCENTIVES"  == "1" ]] && _tcfg+=(--zero-incentives)
+        if [[ "$TEST_GOV_TIMINGS" == "0" ]]; then
+            print -r -- "  --test-gov-timings 0: REAL governance clock"
+            print -r -- "    the approve stage will take the real 6h expedited / 72h fallback, not 30s"
         fi
+        [[ "$ZERO_INCENTIVES" == "0" ]] && print -r -- "  --zero-incentives 0: the wallet endowment is REAL"
         # ENCLAVE IDS FIRST.  --enclave writes the TEMPLATE, so running it after --apply would
         # leave the instance carrying whatever the template held before.
         #
         # AND ONLY FOR A TEST CHAIN.  --test-fleet writes test-unique-id/test-signer-id/
         # test-product-id, which fill_launch_config.py's own docstring calls "CATASTROPHIC for
         # mainnet -- the chain would trust a measurement anyone can reproduce".  It ran
-        # unconditionally, so --test-chain-config 0 alone would still have produced a real
-        # chain-id over forged-able enclave identity, which is worse than an honest testnet.
-        if [[ "$TEST_CHAIN_CONFIG" == "1" ]]; then
+        # unconditionally, so real gov timings alone would still have produced a real chain-id over
+        # forged-able enclave identity, which is worse than an honest testnet.
+        #
+        # KEYED TO TEST_GOV_TIMINGS, not ZERO_INCENTIVES -- see the note at the top of this file.
+        if [[ "$TEST_GOV_TIMINGS" == "1" ]]; then
             python3 foundation_scripts/fill_launch_config.py --enclave --test-fleet
         fi
         python3 foundation_scripts/fill_launch_config.py \
@@ -590,7 +628,7 @@ if (( REBUILD )); then
             if ! print -r -- "$(head -1 "$PASSFILE")" \
                   | foundation_scripts/mnemonic.sh show "$LAUNCH_DIR/mnemonics" qfi-pioneer1 > "$_tmp" 2>/dev/null; then
                 rm -f "$_tmp"
-                print -u2 "could not unseal qfi-pioneer1 from $HOME/fleet-launch/mnemonics"
+                print -u2 "could not unseal qfi-pioneer1 from $LAUNCH_DIR/mnemonics"
                 print -u2 "  the sealing passphrase is the one in $PASSFILE -- is it right?"
                 exit 1
             fi
@@ -724,16 +762,129 @@ if _want approve; then
     # A vote is not a result: the provider is registered when the proposal EXECUTES, and step_3
     # creates wallets that need the providers to exist.  Poll the registration itself rather than
     # the proposal, because a re-run's proposal id may be a duplicate that will never pass.
-    for _p in "$DEPLOY_IDENTITY_PRV" "$DEPLOY_DSVS_PRV"; do
-        _n=0
-        while (( _n < 60 )); do
+    # THE BOUND COMES FROM THE CHAIN, NOT A CONSTANT.  This was `60 iterations of sleep 5` -- five
+    # minutes, which is correct only on a --test-gov-timings chain where expedited voting is 30s.
+    # On a real clock the same proposals need SIX HOURS, so the stage reported FAILED for a vote
+    # progressing exactly as designed -- and did it AFTER depositing, so the operator's instinct
+    # (re-run the stage) would deposit a second time.  Measured on qfi-mainnet 2026-09-23.
+    #
+    # The deadline is each proposal's own voting_end_time, re-read every poll: an expedited
+    # proposal that misses expedited_threshold falls back to the regular 72h clock rather than
+    # failing, which moves voting_end out.  Re-reading follows it; a constant cannot.
+
+    # BSD AND GNU date DISAGREE, and this runs on the operator's Mac.  TZ=UTC on BOTH forms:
+    # `date -j -f` parses in LOCAL time otherwise, which would shift every deadline by the
+    # operator's offset -- +8 here, i.e. it would read a 6h wait as already expired.
+    _iso_epoch() {
+        local t="${1%%.*}"; t="${t%Z}"
+        [[ -n "$t" ]] || return 1
+        TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$t" +%s 2>/dev/null \
+            || TZ=UTC date -u -d "${t}Z" +%s 2>/dev/null
+    }
+    _hms() {
+        local s=$1; (( s < 0 )) && s=0
+        if   (( s >= 3600 )); then printf '%dh%02dm' $(( s / 3600 )) $(( (s % 3600) / 60 ))
+        elif (( s >= 60 ));   then printf '%dm%02ds' $(( s / 60 ))   $(( s % 60 ))
+        else                       printf '%ds' $s; fi
+    }
+    _bar() {
+        local p=$1 i f; (( p < 0 )) && p=0; (( p > 100 )) && p=100; f=$(( p / 5 ))
+        printf '['; for (( i = 0; i < 20; i++ )); do (( i < f )) && printf '#' || printf '-'; done; printf ']'
+    }
+    # IN-PLACE ONLY ON A TERMINAL.  \r overwriting is unreadable in a redirected log -- and these
+    # runs are routinely teed -- so a non-tty gets one appended line per interval instead.
+    [[ -t 1 ]] && _tty=1 || _tty=0
+
+    _provs=("$DEPLOY_IDENTITY_PRV" "$DEPLOY_DSVS_PRV")
+    _ppids=("$IDENTITY_PID" "$DSVS_PID")
+    _k=0
+    for _p in "${_provs[@]}"; do
+        _k=$(( _k + 1 )); _pid="${_ppids[$_k]}"
+        _t0=$(date +%s); _id=""; _announced=0; _last=0
+        while true; do
             _id=$("$HOME/qadena/bin/qadenad" --home "${QADENAHOME:-$HOME/qadena}" \
                     query qadena list-interval-public-key-id --node "$NODE" --output json 2>/dev/null \
                     | jq -r --arg n "$_p" '(.intervalPublicKeyID // [])[] | select(.nodeID==$n) | .pubKID' 2>/dev/null)
-            if [[ -n "$_id" ]]; then print -r -- "  $_p registered"; break; fi
-            _n=$(( _n + 1 )); sleep 5
+            if [[ -n "$_id" ]]; then
+                (( _tty )) && printf '\r\033[K'
+                print -r -- "  $_p registered  (after $(_hms $(( $(date +%s) - _t0 ))))"
+                break
+            fi
+
+            _vs=""; _ve=""; _st=""
+            if [[ -n "$_pid" ]]; then
+                _pj=$("$HOME/qadena/bin/qadenad" --home "${QADENAHOME:-$HOME/qadena}" \
+                        query gov proposal "$_pid" --node "$NODE" --output json 2>/dev/null)
+                _vs=$(print -r -- "$_pj" | jq -r '.proposal.voting_start_time // empty' 2>/dev/null)
+                _ve=$(print -r -- "$_pj" | jq -r '.proposal.voting_end_time   // empty' 2>/dev/null)
+                _st=$(print -r -- "$_pj" | jq -r '.proposal.status             // empty' 2>/dev/null)
+            fi
+
+            # A DECIDED-AGAINST PROPOSAL WILL NEVER REGISTER.  Waiting out a 72h clock for a
+            # REJECTED proposal is six hours of a progress bar telling you it is fine.
+            if [[ "$_st" == "PROPOSAL_STATUS_REJECTED" || "$_st" == "PROPOSAL_STATUS_FAILED" ]]; then
+                (( _tty )) && printf '\r\033[K'
+                print -u2 -- "  proposal $_pid for $_p is $_st -- it will never register."
+                print -u2 -- "  Governance decided against it; re-running this stage cannot change that."
+                exit 1
+            fi
+
+            _now=$(date +%s)
+            _dlraw=$(_iso_epoch "$_ve" || true)
+            if [[ -n "$_dlraw" ]]; then
+                # +120s: PASSED is set at voting_end, but the provider is registered by the
+                # proposal EXECUTING in a later block.  Expiring exactly at voting_end fails on
+                # the gap between the two.
+                _dl=$(( _dlraw + 120 ))
+            else
+                _dl=$(( _t0 + 300 ))
+            fi
+
+            if (( _now > _dl )); then
+                (( _tty )) && printf '\r\033[K'
+                print -u2 -- "  $_p never registered (waited $(_hms $(( _now - _t0 ))), past voting_end${_ve:+ $_ve})"
+                print -u2 -- "  proposal $_pid status: ${_st:-unknown}"
+                print -u2 -- "  Do NOT resume from 'approve' -- it deposits again.  Confirm with"
+                print -u2 -- "      provider_scripts/query_service_provider_proposal.sh $_pid --wait --node $NODE"
+                print -u2 -- "  then resume with --from step3."
+                exit 1
+            fi
+
+            if (( ! _announced )); then
+                _announced=1
+                if [[ -n "$_dlraw" ]]; then
+                    print -r -- "  $_p: voting ends $_ve -- blocking for up to $(_hms $(( _dl - _now )))"
+                    print -r -- "    (Ctrl-C is safe; resume with --from step3 once it has PASSED)"
+                elif [[ -z "$_pid" ]]; then
+                    print -r -- "  $_p: no proposal id on file -- polling registration for 5m"
+                else
+                    # DISTINGUISH AN UNREADABLE PROPOSAL FROM A PENDING ONE.  Both queries here
+                    # are 2>/dev/null, so an unreachable node, a wrong --node, or a qadenad that
+                    # cannot open the network looks EXACTLY like "voted, not yet executed" -- and
+                    # the operator waits out the fallback budget before learning otherwise.
+                    print -r -- "  $_p: could not read proposal $_pid from $NODE"
+                    print -r -- "    (node unreachable, wrong --node, or the id is not on this chain)"
+                    print -r -- "    falling back to a 5m poll -- if this is wrong, stop now rather than wait it out"
+                fi
+            fi
+
+            _left=$(( _dl - _now ))
+            if [[ -n "$_vs" ]] && _vsep=$(_iso_epoch "$_vs") && (( _dlraw > _vsep )); then
+                _pct=$(( (_now - _vsep) * 100 / (_dlraw - _vsep) ))
+            else
+                _pct=$(( (_now - _t0) * 100 / (_dl - _t0) ))
+            fi
+            _line="  $(_bar $_pct) ${_pct}%  $(_hms $(( _now - _t0 ))) elapsed, ~$(_hms $_left) left  ${_st#PROPOSAL_STATUS_}"
+            if (( _tty )); then
+                printf '\r\033[K%s' "$_line"
+            elif (( _now - _last >= 300 )); then
+                _last=$_now; print -r -- "$_line"
+            fi
+
+            # 5s only when it matters.  A 6h wait polled every 5 seconds is 4320 queries at the
+            # node for no benefit; near the deadline the resolution is what the operator watches.
+            (( _left <= 300 )) && sleep 5 || sleep 30
         done
-        [[ -n "${_id:-}" ]] || { print -u2 "  $_p never registered after 5 minutes"; exit 1 }
     done
 fi
 
