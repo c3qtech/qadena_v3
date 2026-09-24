@@ -321,7 +321,7 @@ def validator_name(lc):
     return None
 
 def render(supplied, pubkeys=None, generate=None, test_gov=False, amounts=None,
-           chain_id=None, zero_incentives=False):
+           chain_id=None, zero_incentives=False, allow_test_gov_on_mainnet=False):
     """Return launch-config.yml with every supplied address substituted.
 
     WRITES NOTHING.  This used to write config/launch-config.yml and tokenomics/allocations.csv
@@ -434,12 +434,23 @@ def render(supplied, pubkeys=None, generate=None, test_gov=False, amounts=None,
     # transaction signed on it replayable against mainnet.  Together they are a testnet wearing
     # the production network's identity, which is the one combination worth refusing outright.
     if test_gov and (chain_id or MAINNET_CHAIN_ID) == MAINNET_CHAIN_ID:
-        sys.exit(f"--test-gov-timings with chain-id {MAINNET_CHAIN_ID} (the MAINNET id) is refused.\n"
-                 f"Pass --chain-id for the network you are actually building, e.g.\n"
-                 f"    --chain-id qadena_4824-1     (testnet)\n"
-                 f"Addresses derive identically on every EVM chain and EIP-155 replay protection\n"
-                 f"IS the chain id, so a short-clock chain sharing mainnet's id makes anything\n"
-                 f"signed there replayable against mainnet.")
+        # OVERRIDABLE, BUT ONLY BY SAYING SO.  The combination remains a bad default and stays
+        # refused by accident; --allow-test-gov-on-mainnet is for the deliberate case, where the
+        # operator is launching the mainnet id with a short clock on purpose (a mainnet whose
+        # governance must be exercisable before the real timings are voted in, for instance).
+        # The warning still prints, because the risk does not go away by being accepted.
+        if not allow_test_gov_on_mainnet:
+            sys.exit(f"--test-gov-timings with chain-id {MAINNET_CHAIN_ID} (the MAINNET id) is refused.\n"
+                     f"Pass --chain-id for the network you are actually building, e.g.\n"
+                     f"    --chain-id qadena_4824-1     (testnet)\n"
+                     f"Addresses derive identically on every EVM chain and EIP-155 replay protection\n"
+                     f"IS the chain id, so a short-clock chain sharing mainnet's id makes anything\n"
+                     f"signed there replayable against mainnet.\n"
+                     f"If that is deliberate, re-run with --allow-test-gov-on-mainnet.")
+        print(f"  !! --allow-test-gov-on-mainnet: building {MAINNET_CHAIN_ID} with a SHORT")
+        print(f"     governance clock.  EIP-155 replay protection IS the chain id, so anything")
+        print(f"     signed on this chain is replayable against any other chain sharing that id,")
+        print(f"     and any proposal here passes in minutes.  Deliberate, per the operator.")
     if chain_id:
         lc, _ = set_chain_id(lc, chain_id)
         changed += 1
@@ -487,7 +498,8 @@ def render(supplied, pubkeys=None, generate=None, test_gov=False, amounts=None,
     return lc, changed, unknown
 
 
-def cmd_apply(path, out, generate=None, test_gov=False, chain_id=None, zero_incentives=False):
+def cmd_apply(path, out, generate=None, test_gov=False, chain_id=None, zero_incentives=False,
+              allow_test_gov_on_mainnet=False):
     if not out:
         sys.exit("--apply needs --out FILE.\n"
                  "The filled config is a build INSTANCE, not an edit to the template:\n"
@@ -513,7 +525,8 @@ def cmd_apply(path, out, generate=None, test_gov=False, chain_id=None, zero_ince
     cross_check(supplied)
 
     lc, changed, unknown = render(supplied, pubkeys, generate, test_gov, chain_id=chain_id,
-                                  zero_incentives=zero_incentives)
+                                  zero_incentives=zero_incentives,
+                                  allow_test_gov_on_mainnet=allow_test_gov_on_mainnet)
     missing = [n for n, *_ in ACCOUNTS if n not in supplied]
 
     outp = pathlib.Path(out)
@@ -620,6 +633,10 @@ def main():
     ap.add_argument("--no-generate", action="store_true",
                     help="do not strip any account's address, not even the validator's. "
                          "Only for a genesis whose validator signs its gentx elsewhere")
+    ap.add_argument("--allow-test-gov-on-mainnet", action="store_true",
+                    help="permit --test-gov-timings together with the MAINNET chain-id. Refused "
+                         "without this, because a short clock on the id that IS EIP-155 replay "
+                         "protection is normally a mistake. Warns loudly either way.")
     ap.add_argument("--test-gov-timings", action="store_true",
                     help="INSTANCE ONLY: shorten gov voting to 300s/30s so proposal-gated tests "
                          "can finish.  Changes no rule, only the wait.  NEVER for a real launch.")
@@ -633,7 +650,8 @@ def main():
     if a.template:  cmd_template(a.template); return 0
     if a.dev_keys:  cmd_dev_keys(a.dev_keys, a.i_understand); return 0
     if a.apply:     cmd_apply(a.apply, a.out, [] if a.no_generate else None,
-                              a.test_gov_timings, a.chain_id, a.zero_incentives); return 0
+                              a.test_gov_timings, a.chain_id, a.zero_incentives,
+                              a.allow_test_gov_on_mainnet); return 0
     if a.enclave:   return cmd_enclave_test_fleet() if a.test_fleet else cmd_enclave()
     ap.print_help(); return 1
 

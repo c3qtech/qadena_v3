@@ -68,6 +68,7 @@ fleet_site_profile_load() {
     # SITE_TEST_CHAIN_CONFIG is still read below as a default for both, so an existing site file
     # setting it keeps working.
     SITE_CHAIN_ID=""; SITE_TEST_GOV_TIMINGS=""; SITE_ZERO_INCENTIVES=""; SITE_SGX=""
+    SITE_ALLOW_TEST_GOV_ON_MAINNET=""
     SITE_TEST_CHAIN_CONFIG=""
 
     case "$_s" in
@@ -230,7 +231,29 @@ fleet_site_profile_load() {
         # accepts forged ones for the life of the chain, silently.  On a mainnet that is the whole
         # trust model gone.
         SITE_CHAIN_ID="qadena_482-1"
+        # 0, AND IT CANNOT BE 1 HERE.  fill_launch_config.py refuses --test-gov-timings together
+        # with the mainnet chain-id -- a five-minute governance clock on the id that IS EIP-155
+        # replay protection is a testnet wearing the production network's identity -- and
+        # veritas_full_setup.sh refuses the pair before it mints anything.  So 1 does not merely
+        # build the wrong chain, it builds nothing.
+        #
+        # It also contradicts the chain that is already running: .229 reports voting_period 72h0m0s
+        # and expedited 6h0m0s, i.e. it was built with 0.  This read 1 after the rename to
+        # c3q-mainnet, which would have refused every run against a fleet that is already live.
+        # SHORT CLOCK ON THE MAINNET ID, DELIBERATELY.  This pair is refused by default in both
+        # veritas_full_setup.sh and fill_launch_config.py, because it is normally a mistake: the
+        # chain-id IS EIP-155 replay protection, so a short-clock chain sharing mainnet's id makes
+        # anything signed there replayable against mainnet, and any proposal passes in minutes.
+        #
+        # Requested explicitly for this fleet -- governance here has to be exercisable before the
+        # real timings are voted in.  SITE_ALLOW_TEST_GOV_ON_MAINNET is what makes the refusal step
+        # aside; both layers still print the warning on every run.
+        #
+        # NOTE the live chain was built with 0 (.229 reports voting_period 72h0m0s), so this takes
+        # effect only on a --rebuild-chain.  To move the RUNNING chain to a short clock instead,
+        # scripts/gov_rebalance_and_slow.sh --only gov takes --voting-period/--expedited-period.
         SITE_TEST_GOV_TIMINGS=1
+        SITE_ALLOW_TEST_GOV_ON_MAINNET=1
         SITE_ZERO_INCENTIVES=0
         SITE_SGX=1
         # VISIBLE, AND INSIDE THE LAUNCH DIRECTORY -- not a dotfile in $HOME like the other two
@@ -295,6 +318,13 @@ fleet_site_profile_load() {
         # real quotes with the debug verifier and accepts forged ones for the life of the chain,
         # and nothing fails loudly.
         SITE_SGX=1
+        # DECLARED, NOT INHERITED.  Without this the site fell through to the file's default
+        # qadena_4824-1, while the fleet actually runs qadena_4826-1 -- which its own rendered
+        # config says too (~/qadena-launch/sgx-fleet-launch/fleet-launch-config.yml:89).  The
+        # bootstrap stage re-renders whenever the instance disagrees with the run, so an ordinary
+        # deployment here would have quietly rewritten the launch config to a DIFFERENT chain-id
+        # than the one the nodes are on, and the next --rebuild-chain would have built that.
+        SITE_CHAIN_ID="qadena_4826-1"
         SITE_PRIMARY="alvillarica@192.168.86.120"
         SITE_JOINER="alvillarica@192.168.86.140"
         # Its own launch directory and generated passphrase, like qfi-testnet and for the same
@@ -387,6 +417,7 @@ fleet_site_profile_load() {
     : ${SITE_TEST_GOV_TIMINGS:=${SITE_TEST_CHAIN_CONFIG:-1}}
     : ${SITE_ZERO_INCENTIVES:=${SITE_TEST_CHAIN_CONFIG:-1}}
     : ${SITE_SGX:=0}
+    : ${SITE_ALLOW_TEST_GOV_ON_MAINNET:=0}
     : ${SITE_ENV_FILE_NAME:=env-sponsored-test}
     : ${SITE_NODE_GRANTER:=nodeops}
     return 0
@@ -398,7 +429,7 @@ fleet_site_profile_print() {
     local _v
     for _v in NAME PRIMARY JOINER PASSFILE LAUNCH_DIR ADVERTISE_P ADVERTISE_J \
               HOME_SUFFIX ENV_FILE_NAME JOINER_VALIDATOR ALLOW_UNVERIFIED_AGREEMENT NODE_GRANTER \
-              CHAIN_ID TEST_GOV_TIMINGS ZERO_INCENTIVES SGX; do
+              CHAIN_ID TEST_GOV_TIMINGS ZERO_INCENTIVES SGX ALLOW_TEST_GOV_ON_MAINNET; do
         print -r -- "SITE_$_v=${(P)${:-SITE_$_v}}"
     done
     # THE ARRAYS TOO, because SITE_JOINER alone shows only the FIRST of them -- and "--show says

@@ -117,6 +117,9 @@ JOINER_VALIDATOR="$SITE_JOINER_VALIDATOR"
 # built from that file during --rebuild-chain -- so without a rebuild the running chain keeps the
 # timings it was born with, whatever the yml now says.
 TEST_GOV_TIMINGS="$SITE_TEST_GOV_TIMINGS"
+# DELIBERATE MAINNET-ID + SHORT-CLOCK.  Refused by default in both this script and
+# fill_launch_config.py, because it is normally a mistake.  A site that means it says so.
+ALLOW_TGM="${SITE_ALLOW_TEST_GOV_ON_MAINNET:-0}"
 ZERO_INCENTIVES="$SITE_ZERO_INCENTIVES"
 COORD_HOME="$LAUNCH_DIR/coord"
 # THE DEPLOYMENT'S HOME, SUFFIXED BY THE SITE.  ~/ekyc-ph on M1/M2, ~/ekyc-ph-staging
@@ -209,6 +212,9 @@ usage() {
     print -r -- "                      MAINNET chain-id can be built.  It also gates the enclave"
     print -r -- "                      identity: at 0 the test measurement ids are not written and"
     print -r -- "                      a test productID is refused."
+    print -r -- "  --allow-test-gov-on-mainnet"
+    print -r -- "                      permit --test-gov-timings 1 with the MAINNET chain-id."
+    print -r -- "                      Refused without it.  Warns loudly either way."
     print -r -- "  --zero-incentives 0|1"
     print -r -- "                      1 (default) sets the four wallet incentives to 0.  0 keeps"
     print -r -- "                      the endowment real.  Independent of --test-gov-timings:"
@@ -247,6 +253,7 @@ while [[ $# -gt 0 ]]; do
         --joiner-validator) JOINER_VALIDATOR="$2"; shift 2 ;;
         --test-gov-timings)  TEST_GOV_TIMINGS="$2"; shift 2 ;;
         --zero-incentives)   ZERO_INCENTIVES="$2"; shift 2 ;;
+        --allow-test-gov-on-mainnet) ALLOW_TGM=1; shift ;;
         --env-file)      ENV_FILE="$2"; shift 2 ;;
         --primary)       PRIMARY="$2"; shift 2 ;;
         # What each node tells peers to dial.  Both default to the ssh host, which is wrong behind
@@ -340,11 +347,18 @@ fi
 # rejects --test-gov-timings with the mainnet id and says so well, but only once the bootstrap
 # stage has already minted the launch keys -- and those addresses go into genesis and cannot be
 # re-minted, so a run that dies after them is not free.
-if [[ "$TEST_GOV_TIMINGS" == "1" && "$CHAIN_ID" == "qadena_482-1" ]]; then
+if [[ "$TEST_GOV_TIMINGS" == "1" && "$CHAIN_ID" == "qadena_482-1" && "$ALLOW_TGM" == "1" ]]; then
+    # ACCEPTED, AND STILL SAID OUT LOUD.  The operator has asked for this combination explicitly;
+    # the risk is unchanged by being accepted, so it is stated rather than suppressed.
+    print -r -- "!! MAINNET chain-id with a SHORT governance clock, by explicit request."
+    print -r -- "   anything signed on qadena_482-1 is replayable against any chain sharing that"
+    print -r -- "   id, and any proposal here passes in minutes.  Proceeding."
+elif [[ "$TEST_GOV_TIMINGS" == "1" && "$CHAIN_ID" == "qadena_482-1" ]]; then
     print -u2 -- "--chain-id qadena_482-1 is the MAINNET id and --test-gov-timings is 1."
     print -u2 -- "  A five-minute governance clock on mainnet's chain-id is a testnet wearing the"
     print -u2 -- "  production network's identity -- and EIP-155 replay protection IS the chain id,"
-    print -u2 -- "  so anything signed there replays against mainnet.  Pass --test-gov-timings 0."
+    print -u2 -- "  so anything signed there replays against mainnet.  Pass --test-gov-timings 0,"
+    print -u2 -- "  or --allow-test-gov-on-mainnet if the combination is deliberate."
     exit 1
 fi
 export QADENA_NODE="$NODE"
@@ -464,7 +478,13 @@ if _want bootstrap; then
     # would change every bucket address in genesis, so it must never run against an existing
     # keyring by accident.
     _need_keys=0; _need_cfg=0
-    [[ -d "$LAUNCH_DIR/coord" ]] && ls "$LAUNCH_DIR"/mnemonics/*.mnemonic.enc > /dev/null 2>&1 || _need_keys=1
+    # (N) HERE TOO.  This is the same glob line 304 already guards, and for the same reason: a
+    # non-matching glob is a SHELL error in zsh, raised before `ls` runs, so the 2>/dev/null on the
+    # command cannot suppress it -- the operator sees "no matches found" on any launch dir that has
+    # a coord keyring but no sealed mnemonics.  Counting an array is also the honest test: what is
+    # being asked is "are there any", not "did ls succeed".
+    _mnc=("$LAUNCH_DIR"/mnemonics/*.mnemonic.enc(N))
+    [[ -d "$LAUNCH_DIR/coord" ]] && (( ${#_mnc} )) || _need_keys=1
     # RE-RENDER WHEN THE SOURCE HAS MOVED, not only when the rendered file is absent.
     #
     # This tested for existence alone, so a launch config rendered before a change to
@@ -526,7 +546,7 @@ if _want bootstrap; then
             --out           "$LAUNCH_DIR/addresses.csv" \
             --passphrase-file "$PASSFILE"
     else
-        print -r -- "  keys present: $(ls "$LAUNCH_DIR"/mnemonics/*.mnemonic.enc 2>/dev/null | wc -l | tr -d ' ') sealed mnemonic(s)"
+        print -r -- "  keys present: ${#_mnc} sealed mnemonic(s)"
     fi
 
     if (( _need_cfg )); then
@@ -535,6 +555,7 @@ if _want bootstrap; then
         # _sgx, _jv and _ref below are arrays.  zsh expands "${empty[@]}" to no words at all.
         _tcfg=()
         [[ "$TEST_GOV_TIMINGS" == "1" ]] && _tcfg+=(--test-gov-timings)
+        [[ "$ALLOW_TGM" == "1" ]] && _tcfg+=(--allow-test-gov-on-mainnet)
         [[ "$ZERO_INCENTIVES"  == "1" ]] && _tcfg+=(--zero-incentives)
         if [[ "$TEST_GOV_TIMINGS" == "0" ]]; then
             print -r -- "  --test-gov-timings 0: REAL governance clock"
