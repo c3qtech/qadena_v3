@@ -181,21 +181,45 @@ while IFS='|' read -r moniker ip; do
     pcatching=$(echo "$pstatus" | jq -r '.result.sync_info.catching_up')
     [ -n "$pheight" ] && [ "$pheight" != "null" ] || { echo "  $moniker: no height"; continue; }
 
-    # LIKE FOR LIKE: the peer's latest app hash is the header of ITS block at pheight, so compare it
-    # against this node's header for the SAME height.
-    # Same guard: this one queries the LOCAL node, but a node that is restarting answers nothing
-    # and the assignment would be just as fatal.
-    mine=$(curl -s -m 8 "$RPC/block?height=$pheight" 2>/dev/null \
-           | jq -r '.result.block.header.app_hash' 2>/dev/null) || mine=""
+    # COMPARE AT A HEIGHT BOTH NODES HAVE, NOT AT THE PEER'S TIP.
+    #
+    # This used the peer's latest_app_hash, i.e. its header at ITS current height, and asked this
+    # node for the same height.  On a LIVE chain that races: the peer commits another block between
+    # section 1 and section 2, so it reports height P+1 while this node is still at P, and the
+    # lookup asks for a block that does not exist here yet.  The suite then reported "NOTHING
+    # COMPARED -- NOT TESTED" and suggested --peer-rpc for a NAT problem, when the peer had been
+    # reached perfectly well and was simply one block ahead.  Measured on c3q-mainnet 2026-09-24:
+    # section 1 printed "height 90", section 2 asked for 91.
+    #
+    # So: take the LOWER of the two tips and read that header from BOTH sides.  Still like for
+    # like, and no longer dependent on the two nodes being on the same block at the same instant.
+    myheight=$(curl -s -m 8 "$RPC/status" 2>/dev/null \
+               | jq -r '.result.sync_info.latest_block_height // empty' 2>/dev/null) || myheight=""
+    if [ -z "$myheight" ]; then
+        echo "  $moniker: this node's own RPC did not answer -- NOT compared"
+        skipped=$(( skipped + 1 ))
+        continue
+    fi
+    if [ "$pheight" -lt "$myheight" ]; then cmph="$pheight"; else cmph="$myheight"; fi
 
-    if [ -z "$mine" ] || [ "$mine" = "null" ]; then
-        echo "  $moniker: this node has no block at $pheight -- NOT compared"
+    mine=$(curl -s -m 8 "$RPC/block?height=$cmph" 2>/dev/null \
+           | jq -r '.result.block.header.app_hash' 2>/dev/null) || mine=""
+    # The peer's tip hash is only valid for ITS tip, so once cmph may differ from pheight the hash
+    # has to come from the peer's BLOCK at cmph, not from its /status.
+    ptheirs=$(curl -s -m 8 "$prpc/block?height=$cmph" 2>/dev/null \
+              | jq -r '.result.block.header.app_hash' 2>/dev/null) || ptheirs=""
+
+    if [ -z "$ptheirs" ] || [ "$ptheirs" = "null" ]; then
+        echo "  $moniker: peer served no block at $cmph -- NOT compared"
+        skipped=$(( skipped + 1 ))
+    elif [ -z "$mine" ] || [ "$mine" = "null" ]; then
+        echo "  $moniker: this node has no block at $cmph -- NOT compared"
         skipped=$(( skipped + 1 ))
     elif [ "$ptheirs" = "$mine" ]; then
-        echo "  $moniker: MATCH at height $pheight  ${mine:0:32}"
+        echo "  $moniker: MATCH at height $cmph  ${mine:0:32}"
         compared=$(( compared + 1 ))
     else
-        echo "  $moniker: DIVERGED at height $pheight"
+        echo "  $moniker: DIVERGED at height $cmph"
         echo "      peer      ($moniker): $ptheirs"
         echo "      this node ($local_moniker): $mine"
         divergence=1
