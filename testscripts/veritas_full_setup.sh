@@ -133,6 +133,11 @@ UNTIL=""
 # The CloudFormation template to populate alongside the env file.  Empty = skip that step; an
 # AWS-deployed site sets SITE_CF_TEMPLATE in its profile, everyone else passes --cloud-formation-template.
 CF_TEMPLATE="${SITE_CF_TEMPLATE:-}"
+# WHICH ENVIRONMENT THE RENDERED CFN COPY IS PINNED TO.  From the site, overridable per run.
+# Empty leaves the copy's EnvType as the template ships it -- both values allowed, DEFAULTING TO
+# production -- so an unpinned copy deployed without an explicit EnvType lands in
+# /veritas/production/ regardless of which chain its keys came from.  Only c3q-mainnet sets it.
+CF_ENV="${SITE_CF_ENV:-}"
 # ONE PATH, NOT A DIRECTORY PLUS A NAME -- see the staging script for why.
 # The stack is named for the DEPLOYMENT, the env file within it for the SITE.
 ENV_FILE="$HOME/test/follow-the-money/stacks/$DEPLOY_NAME/$SITE_ENV_FILE_NAME"
@@ -177,6 +182,11 @@ usage() {
     print -r -- "  --cloud-formation-template <file>"
     print -r -- "                      also patch this CloudFormation template's SSM parameters"
     print -r -- "                      with the same keys.  Default ${CF_TEMPLATE:-<none: skipped>}"
+    print -r -- "  --cf-env production|staging|none"
+    print -r -- "                      pin the rendered CloudFormation copy to that environment,"
+    print -r -- "                      and write THAT branch of each !If.  Default from the site"
+    print -r -- "                      (${CF_ENV:-none}).  'none' leaves EnvType as the template"
+    print -r -- "                      ships it -- which allows both and defaults to production."
     print -r -- "  --node-granter <k>  bucket that fee-grants each joiner.  Default $NODE_GRANTER"
     print -r -- "                      (allocations.csv 12 Node Operations).  Covers node FEES; a"
     print -r -- "                      validator's self-bond is a transfer and is not sponsored."
@@ -237,6 +247,7 @@ while [[ $# -gt 0 ]]; do
         --from)          FROM="$2"; shift 2 ;;
         --until)         UNTIL="$2"; shift 2 ;;
         --cloud-formation-template) CF_TEMPLATE="$2"; shift 2 ;;
+        --cf-env)        CF_ENV="$2"; shift 2 ;;
         --ref)           REF="$2"; shift 2 ;;
         --sync)
             case "$2" in block|state|auto) SYNC_MODE="$2" ;;
@@ -327,6 +338,14 @@ fi
 # CHECK THE TEMPLATE PATH NOW, NOT IN THE app STAGE.  The cfn patch runs AFTER patch_env_file, so
 # a typo'd path discovered there costs a half-applied app stage: env file rewritten, SSM not.
 # Checked here it costs nothing, and a wrong --site or a moved file is named before the run starts.
+# VALIDATED HERE, not at the app stage.  The cfn patch is the LAST thing a run does, so a typo
+# in this value would be discovered after the whole ceremony -- the same reason the template path
+# is checked at startup rather than where it is used.
+case "$CF_ENV" in
+    production|staging) ;;
+    none|"")            CF_ENV="" ;;
+    *) print -u2 -- "--cf-env takes production, staging or none (got '$CF_ENV')"; exit 1 ;;
+esac
 if [[ -n "$CF_TEMPLATE" && ! -f "$CF_TEMPLATE" ]]; then
     print -u2 -- "--cloud-formation-template $CF_TEMPLATE does not exist"
     exit 1
@@ -1007,8 +1026,27 @@ fi
 # old passphrase produces an app that starts, fails to import every key, and exits 1 in a restart
 # loop -- reporting "Failed to import private key for <name>:" with an EMPTY reason.  Measured
 # 2026-09-07.  Same passfile as the rest of the run, so they cannot drift.
+# THE SOURCE ENV FILE IS NO LONGER TOUCHED.  patch_env_file.sh now renders a populated COPY into
+# the deployment home -- the same place patch_cloud_formation_template.sh writes its copy, and the
+# same place step_3 leaves the .base64 files.  The stack's env file stays as the record of what
+# was deployed FROM; the file holding the armored private keys stays with the deployment's other
+# secrets rather than in a directory people edit by hand and occasionally commit.
+# THE ENDPOINT COMES FROM --node, WHICH IS THE CHAIN THESE KEYS BELONG TO.
+#
+# Neither patcher was being told it, so both left whatever the source carried -- and the source is
+# routinely a previous deployment's file pointing at a previous chain.  The result authenticates
+# with the new keys against the old endpoint and fails at runtime, which is precisely what
+# patch_cloud_formation_template.sh's --node-host comment describes; the option existed there and
+# was never passed, and did not exist here at all.
+#
+# tcp://host:port -> host.  Strip the scheme, then the port; an IPv6 literal would need more, and
+# this fleet has none, so it is left simple rather than half-handled.
+_nodehost="${${NODE#*://}%%:*}"
+_nh=(); [[ -n "$_nodehost" ]] && _nh=(--node-host "$_nodehost")
+
 ./testscripts/patch_env_file.sh "$PREFIX" "$ENV_FILE" \
-    --key-dir "$_b64dir" --sponsors "$_sponsors" --armor-passfile "$PASSFILE"
+    --key-dir "$_b64dir" --sponsors "$_sponsors" --armor-passfile "$PASSFILE" "${_nh[@]}"
+_PATCHED_ENV="$_b64dir/${ENV_FILE:t}"
 
 # THE SAME VALUES INTO CLOUDFORMATION, WHEN THERE IS ONE.  An AWS-deployed site reads its config
 # from SSM rather than from .env, so patching only the env file leaves it running the PREVIOUS
@@ -1017,6 +1055,16 @@ fi
 #
 # OPTIONAL BY DESIGN: the local and staging fleets have no template, and demanding one would
 # block every run that does not deploy to AWS.
+# THE SITE OFFERS A TEMPLATE; THE DEPLOYMENT DECIDES WHETHER IT HAS ONE.  SITE_CF_TEMPLATE is
+# site-level, so without this gate every deployment on an AWS-deployed site would render it --
+# and ekyc.ph rendering VERITAS's template overwrites VERITAS's parameters with ekyc.ph keys,
+# because the parameter NAMES are SEC_* for every deployment.
+if [[ -n "$CF_TEMPLATE" && "${DEPLOY_USES_CFN:-0}" != "1" ]]; then
+    print -r -- ""
+    print -r -- "  skipping the CloudFormation patch: $DEPLOY_NAME has no template of its own"
+    print -r -- "    (${CF_TEMPLATE:t} belongs to veritas; its parameters are /veritas/... )"
+    CF_TEMPLATE=""
+fi
 if [[ -n "$CF_TEMPLATE" ]]; then
     # Re-checked: the path was validated at startup, so reaching this means the file went away
     # DURING the run.  Loud either way -- reporting DONE for a deployment whose SSM parameters were
@@ -1027,17 +1075,25 @@ if [[ -n "$CF_TEMPLATE" ]]; then
         exit 1
     fi
     print -r -- ""
-    print -r -- "  patching CloudFormation template ${CF_TEMPLATE:t}"
+    # AN ARRAY, NOT ${CF_ENV:+...}: zsh does not word-split an unquoted parameter expansion, so
+    # the one-word form arrives as a single argument and the patcher answers "unknown option".
+    _cfenv=(); [[ -n "$CF_ENV" ]] && _cfenv=(--${CF_ENV}-only)
+    print -r -- "  patching CloudFormation template ${CF_TEMPLATE:t}${CF_ENV:+  (pinned to $CF_ENV)}"
     ./veritas_scripts/patch_cloud_formation_template.sh "$PREFIX" "$CF_TEMPLATE" \
-        --key-dir "$_b64dir" --sponsors "$_sponsors" --armor-passfile "$PASSFILE"
+        --key-dir "$_b64dir" --sponsors "$_sponsors" --armor-passfile "$PASSFILE" \
+        "${_cfenv[@]}" "${_nh[@]}"
 fi
 
 # .env IS WHAT compose READS (env_file: .env in compose.yml).  The stack keeps several env files
 # for different targets; installing the one we just patched is a deliberate copy, not a symlink,
 # so the source stays readable as the record of what was deployed.
-cp "$ENV_FILE" "$STACK/.env"
+# INSTALL THE PATCHED COPY, NOT THE SOURCE.  This copied $ENV_FILE, which was correct only while
+# the patch happened in place; now the source carries no keys and the stack would start with
+# whatever it had before, silently.
+[[ -r "$_PATCHED_ENV" ]] || { print -u2 "expected the patched env at $_PATCHED_ENV and it is not there"; exit 1 }
+cp "$_PATCHED_ENV" "$STACK/.env"
 chmod 600 "$STACK/.env"
-print -r -- "  installed ${ENV_FILE:t} -> $STACK/.env"
+print -r -- "  installed ${_PATCHED_ENV} -> $STACK/.env"
 
 print -r -- ""
 print -r -- "==========================================================================="
@@ -1045,7 +1101,7 @@ print -r -- "DONE.  chain $NODE"
 print -r -- "  foundation-appsvr $APPSVR"
 print -r -- "  foundation-users  $USERS"
 print -r -- ""
-[[ -n "$CF_TEMPLATE" ]] && print -r -- "  cfn:        $CF_TEMPLATE  (contains private keys -- do not commit)"
+[[ -n "$CF_TEMPLATE" ]] && print -r -- "  cfn:        $_b64dir/${CF_TEMPLATE:t}${CF_ENV:+  [$CF_ENV]}  (contains private keys -- do not commit)"
 print -r -- "  app logs:   make -C $STACK logs-api"
 print -r -- "  re-verify:  foundation_scripts/sec_veritas_verify.sh --deployment $DEPLOY_NAME --coord-home $COORD_HOME --node $NODE"
 print -r -- "==========================================================================="

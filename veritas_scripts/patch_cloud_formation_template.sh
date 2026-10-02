@@ -63,6 +63,7 @@ ARMOR_PASSFILE=""
 ARMOR_PROMPT=0
 OUT=""
 BOTH=0
+PIN_ENV=""
 NODE_HOST=""
 GRPC_PORT=""
 DRY_RUN=0
@@ -96,6 +97,12 @@ Options:
                      non-prod branch only -- the template's own comments warn that its
                      prod values are unreconciled, and rewriting them from a testnet
                      bring-up would point production at testnet wallets.
+  --production-only  write the PRODUCTION branch of each !If and nothing else, and
+                     pin EnvType in the COPY to production (AllowedValues reduced
+                     to it).  The branch written is then exactly the branch the
+                     stack resolves, and the staging branch is left untouched.
+  --staging-only     the same for staging: non-prod branch only, EnvType pinned to
+                     staging.  This is the default branch behaviour plus the pin.
   --dry-run          report what would change; write nothing
 EOF
 }
@@ -108,6 +115,12 @@ while [ $# -gt 0 ]; do
 	--armor-prompt)   ARMOR_PROMPT=1; shift ;;
 	--out)            OUT="$2"; shift 2 ;;
 	--both-branches)  BOTH=1; shift ;;
+	--production-only)
+		[ -z "$PIN_ENV" ] || { echo "--production-only and --staging-only are mutually exclusive" >&2; exit 1; }
+		PIN_ENV="production"; shift ;;
+	--staging-only)
+		[ -z "$PIN_ENV" ] || { echo "--production-only and --staging-only are mutually exclusive" >&2; exit 1; }
+		PIN_ENV="staging"; shift ;;
 	--node-host)      NODE_HOST="$2"; shift 2 ;;
 	--grpc-port)      GRPC_PORT="$2"; shift 2 ;;
 	--dry-run)        DRY_RUN=1; shift ;;
@@ -121,6 +134,22 @@ while [ $# -gt 0 ]; do
 		shift ;;
 	esac
 done
+
+# WHICH BRANCH OF EACH !If GETS WRITTEN.
+#
+#   nonprod  br[2] only -- the default, and what --staging-only pins to
+#   prod     br[1] only -- what --production-only pins to
+#   both     br[1:]     -- --both-branches, independent of any pin
+#
+# The pin and the branch are ONE decision, not two: asking for production and writing the staging
+# branch produces a template whose resolved values are the ones this run never touched.  An
+# earlier version made --production-only REQUIRE --both-branches, which forced the operator to
+# overwrite staging values they had not asked to change in order to fix that -- solving it at the
+# wrong end.  --both-branches still wins if given explicitly, since it is a superset.
+if [ "$BOTH" -eq 1 ]; then          BRANCH="both"
+elif [ "$PIN_ENV" = "production" ]; then BRANCH="prod"
+else                                 BRANCH="nonprod"
+fi
 
 [ -n "$PREFIX" ] && [ -n "$TEMPLATE" ] || { usage >&2; exit 1; }
 [ -x "$GEN" ] || { echo "error: cannot run $GEN" >&2; exit 1; }
@@ -234,12 +263,54 @@ else
 	TARGET="$TEMPLATE"
 fi
 
-BLOCK="$BLOCK" TEMPLATE="$TARGET" DRY_RUN="$DRY_RUN" BOTH_BRANCHES="$BOTH" python3 - <<'PY'
+# PIN THE ENVIRONMENT IN THE COPY, never in the source.  The source is tracked and shared; the
+# copy is this deployment's.
+if [ -n "$PIN_ENV" ]; then
+	if [ "$DRY_RUN" -eq 1 ]; then
+		echo "  dry run: would pin EnvType to $PIN_ENV (Default + AllowedValues)"
+	else
+		PIN_ENV="$PIN_ENV" TARGET="$TARGET" python3 - <<'PYPIN' || exit 1
+import os, sys
+env, path = os.environ["PIN_ENV"], os.environ["TARGET"]
+lines = open(path).read().split("\n")
+out, i, n, changed = [], 0, len(lines), 0
+while i < n:
+    ln = lines[i]
+    if ln.strip() == "EnvType:" and ln.startswith("  "):
+        out.append(ln); i += 1
+        # The parameter's own block: blank lines, or anything indented deeper than "  EnvType:".
+        while i < n and (lines[i].strip() == "" or lines[i].startswith("    ")):
+            st = lines[i].strip()
+            if st.startswith("Default:"):
+                out.append("    Default: " + env); changed += 1; i += 1
+            elif st.startswith("AllowedValues:"):
+                out.append("    AllowedValues:"); i += 1
+                while i < n and lines[i].strip().startswith("- "):
+                    i += 1                      # drop every shipped value
+                out.append("      - " + env); changed += 1
+            elif st.startswith("ConstraintDescription:"):
+                out.append("    ConstraintDescription: must specify " + env +
+                           " (pinned by --" + env + "-only)."); changed += 1; i += 1
+            else:
+                out.append(lines[i]); i += 1
+        continue
+    out.append(ln); i += 1
+# REFUSE RATHER THAN CLAIM.  A template whose EnvType moved or was renamed would otherwise be
+# reported as pinned while deploying wherever its default points.
+if changed == 0:
+    sys.exit("error: no EnvType parameter found in %s -- refusing to report it as pinned" % path)
+open(path, "w").write("\n".join(out))
+print("  pinned EnvType to %s (%d field(s))" % (env, changed))
+PYPIN
+	fi
+fi
+
+BLOCK="$BLOCK" TEMPLATE="$TARGET" DRY_RUN="$DRY_RUN" BRANCH="$BRANCH" python3 - <<'PY'
 import os, re, sys
 
 block, template = os.environ["BLOCK"], os.environ["TEMPLATE"]
 dry  = os.environ["DRY_RUN"] == "1"
-both = os.environ.get("BOTH_BRANCHES", "0") == "1"
+branch = os.environ.get("BRANCH", "nonprod")
 
 vals = {}
 for line in open(block):
@@ -338,7 +409,9 @@ while i < len(lines):
                 br = if_branches(j)
                 # br[0] is the CONDITION NAME, never a value.  br[1] is the true branch
                 # (production), br[2] the false branch.
-                targets = br[1:] if both else br[2:]
+                if   branch == "both": targets = br[1:]
+                elif branch == "prod": targets = br[1:2]
+                else:                  targets = br[2:]
                 if not targets:
                     skipped.append((key, j + 1, "!If with no branch to write"))
                 else:
@@ -403,7 +476,9 @@ for k in missing:
     print("  ABSENT   %s: nothing in the template carries that Name:" % k)
 
 print("\n  %d parameter(s) updated, %d available%s"
-      % (len(updated), len(vals), "  [BOTH branches]" if both else "  [non-prod branch only]"))
+      % (len(updated), len(vals), {"both": "  [BOTH branches]",
+                                   "prod": "  [production branch only]"}.get(branch,
+                                   "  [non-prod branch only]")))
 sys.exit(0 if updated else 3)
 PY
 _rc=$?

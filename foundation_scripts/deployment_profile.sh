@@ -73,6 +73,16 @@ deployment_profile_load() {
 
     DEPLOY_NAME="$_d"
     DEPLOY_DISPLAY=""
+    # DOES THIS DEPLOYMENT HAVE A CLOUDFORMATION TEMPLATE AT ALL?
+    #
+    # SITE_CF_TEMPLATE is a property of the SITE, so it applies to every deployment brought up
+    # there -- but the template is a VERITAS artifact: its parameter paths are /veritas/${EnvType}/
+    # and it lives in veritas_deployment/.  Worse, the patcher writes SEC_* parameter NAMES
+    # whatever the deployment is (gen_key_env_vars.sh binds them unconditionally), so rendering it
+    # from an ekyc.ph run would overwrite VERITAS's values with ekyc.ph keys under VERITAS's own
+    # parameter names, and report success.  Only a deployment that actually owns a template sets
+    # this to 1.
+    DEPLOY_USES_CFN=0
 
     # THE APPSVR FEE-GRANT ALLOW-LIST.  An AllowedMsgAllowance pays gas ONLY for the message types
     # named in it, and the chain rejects the WHOLE tx when one is missing -- so a type absent here
@@ -120,6 +130,8 @@ deployment_profile_load() {
         # The .base64 filename stem step_3 writes -- sec-create-wallet-sponsor-names.base64 etc.
         # NOT the env VARIABLE prefix, which stays SEC_ for every deployment (gen_key_env_vars.sh).
         DEPLOY_PREFIX="sec"
+        # The only one with a CloudFormation template (veritas_deployment/).
+        DEPLOY_USES_CFN=1
         # Bucket 10 is 5-of-7; naming all seven lets the ceremony pick.  derive_launch_keys.sh
         # mints them as <bucket>-m1..mN, so these are a convention, not something the chain knows.
         DEPLOY_FUND_MEMBERS="pubsec-m1,pubsec-m2,pubsec-m3,pubsec-m4,pubsec-m5,pubsec-m6,pubsec-m7"

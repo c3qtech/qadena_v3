@@ -56,6 +56,11 @@ fleet_site_profile_load() {
     # A CloudFormation template to populate with the run's keys.  Empty on every site that does
     # not deploy to AWS, which is all of them today -- veritas_full_setup.sh skips the step then.
     SITE_CF_TEMPLATE=""
+    # WHICH ENVIRONMENT THE RENDERED TEMPLATE IS PINNED TO: production, staging, or empty for
+    # neither.  Empty is the old behaviour -- the copy keeps the template's own EnvType parameter,
+    # which AllowedValues both and DEFAULTS TO PRODUCTION, so an unpinned copy deployed without an
+    # explicit EnvType writes /veritas/production/.  A site that knows which it is says so.
+    SITE_CF_ENV=""
     SITE_NODE_GRANTER=""
     # WHAT KIND OF CHAIN THIS SITE BUILDS.  All three were command-line-only defaults inside
     # veritas_full_setup.sh, which meant a site could not say "I am a real network" -- and a
@@ -149,34 +154,17 @@ fleet_site_profile_load() {
         SITE_NODE_GRANTER="nodeops"
         ;;        
     staging)
-        # Azure primary, AWS joiner.  Two clouds, so nothing is on one network.
-        SITE_PRIMARY="azureuser@20.212.178.16"
-        SITE_JOINER="ubuntu@172.31.20.18"
-        # UNDER ~/qadena-launch, AND THE PASSPHRASE INSIDE ITS OWN LAUNCH DIR.  These used to
-        # scatter across $HOME -- a launch dir here, a bare -password file beside it, a dotfile for
-        # another site -- so nothing collected the state of a fleet in one place and a stray
-        # *-password in $HOME gave no clue which chain it opened.  One parent, one directory per
-        # site, and the passphrase lives with the keyring it unlocks.
+        SITE_PRIMARY="ubuntu@172.31.20.18"
         SITE_LAUNCH_DIR="$HOME/qadena-launch/sec-veritas-staging-fleet-launch"
         SITE_PASSFILE="$SITE_LAUNCH_DIR/keyring-password"
-        # WHAT EACH NODE TELLS PEERS TO DIAL, which is NOT the address we ssh to.  The joiner is
-        # behind an NLB and its ssh address is a private 172.31 one that the primary cannot reach;
-        # advertising that would produce a peer nobody can dial and a chain that never gossips.
-        SITE_ADVERTISE_P="20.212.178.16"
-        SITE_ADVERTISE_J="dev-nlb-97f5978861fac526.elb.ap-southeast-1.amazonaws.com"
-        # A SEPARATE STATE DIRECTORY.  Staging shared ~/sec-veritas with the M1/M2 fleet, and the
-        # rebuild stage DELETES it -- so a staging run wiped the local deployment's keys and
-        # mnemonics before it had even reached its own chain (2026-09-07).  Two sites, two homes.
+        SITE_ADVERTISE_P="dev-nlb-97f5978861fac526.elb.ap-southeast-1.amazonaws.com"
+        SITE_ADVERTISE_J=""
         SITE_HOME_SUFFIX="-staging"
         SITE_ENV_FILE_NAME="env-staging-no-aws"
-        # Full nodes only: the joiner serves RPC and syncs but does not vote, so the primary stays
-        # the sole validator and a joiner outage cannot stall the chain.
         SITE_JOINER_VALIDATOR=0
-        # The peer-agreement check reads addresses out of netinfo, which behind an NLB reports the
-        # load balancer rather than the peer.  The check cannot verify that and refusing on it would
-        # block every staging run; see the note in fleet_bringup_with_tests.sh.
         SITE_ALLOW_UNVERIFIED_AGREEMENT=1
         SITE_NODE_GRANTER="nodeops"
+        SITE_SGX=0
         ;;
     c3q-mainnet)
         # THE ONLY SITE THAT BUILDS A REAL NETWORK.  Everything else in this file renders a
@@ -304,6 +292,12 @@ fleet_site_profile_load() {
         # when run directly -- and the repo root came out one level off.  %x always names the file
         # being read, so the path is correct however this is reached.
         SITE_CF_TEMPLATE="${${(%):-%x}:A:h:h}/veritas_deployment/v2-cloud-formation-ssm-parameters.yaml"
+        # THE ONLY SITE THAT RENDERS A PRODUCTION-PINNED TEMPLATE.  It is the only one carrying the
+        # mainnet chain-id, so it is the only one whose keys belong under /veritas/production/.
+        # This also selects WHICH BRANCH of each !If is written -- the production one -- so the
+        # values the stack resolves are the values this run wrote, and the staging branch is left
+        # exactly as the template shipped it.
+        SITE_CF_ENV="production"
         ;;
     SGX|sgx)
         # THE ONLY REAL-SGX FLEET.  Two x86 boxes with SGX devices, ego and a working PCCS; M1-M4
@@ -429,7 +423,7 @@ fleet_site_profile_print() {
     local _v
     for _v in NAME PRIMARY JOINER PASSFILE LAUNCH_DIR ADVERTISE_P ADVERTISE_J \
               HOME_SUFFIX ENV_FILE_NAME JOINER_VALIDATOR ALLOW_UNVERIFIED_AGREEMENT NODE_GRANTER \
-              CHAIN_ID TEST_GOV_TIMINGS ZERO_INCENTIVES SGX ALLOW_TEST_GOV_ON_MAINNET; do
+              CHAIN_ID TEST_GOV_TIMINGS ZERO_INCENTIVES SGX ALLOW_TEST_GOV_ON_MAINNET CF_ENV; do
         print -r -- "SITE_$_v=${(P)${:-SITE_$_v}}"
     done
     # THE ARRAYS TOO, because SITE_JOINER alone shows only the FIRST of them -- and "--show says

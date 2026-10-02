@@ -41,6 +41,10 @@ ENV_FILE=""
 KEY_DIR="."
 SPONSORS=""
 ARMOR_PASSFILE=""
+OUT=""
+IN_PLACE=0
+NODE_HOST=""
+GRPC_PORT=""
 DRY_RUN=0
 
 usage() {
@@ -49,7 +53,7 @@ Usage: patch_env_file.sh <prefix> <env-file> [options]
 
   <prefix>      the leading component of the .base64 FILENAMES: sec, ekycph, ...
                 (the VARIABLE names are always SEC_*; see gen_key_env_vars.sh)
-  <env-file>    an EXISTING env file to patch in place
+  <env-file>    an EXISTING env file; it is READ, never written (see --out)
 
 Options:
   --key-dir <dir>    where the *.base64 files are (default: the current directory)
@@ -62,9 +66,24 @@ Options:
                      which is the keyring passphrase -- pass the same file you gave
                      the bring-up.  Without it the app dies at startup with
                      "Failed to import private key" and no further detail.
+  --node-host <host> set QADENA_PIONEER_IP and QADENA_PUBLIC_HOST to this host or
+                     IP -- the chain THIS deployment's keys belong to.  Without it
+                     both keep whatever the env file already carried, which is a
+                     DIFFERENT chain's endpoint: the app then authenticates with
+                     the new keys against the old chain and fails at runtime, with
+                     nothing in the config naming the cause.
+  --grpc-port <n>    set QADENA_GRPC_PORT too (default: leave it alone)
+  --out <file>       where to write the populated copy
+                     (default: <key-dir>/<source basename>, i.e. the deployment home,
+                     the same place patch_cloud_formation_template.sh puts its copy)
+  --in-place         patch the SOURCE instead, keeping a timestamped backup beside
+                     it.  This was the only behaviour once; it is now opt-in.
   --dry-run          report what would change; write nothing
 
-  A timestamped backup is written beside the env file before anything is modified.
+  THE SOURCE IS NOT MODIFIED unless --in-place is given.  The output holds ARMORED
+  PRIVATE KEYS and belongs with the rest of the deployment's secrets, not in a
+  stack directory that is edited by hand and easy to commit.  --in-place still
+  writes the timestamped backup it always did.
   Keys are never printed -- progress names variables and sizes only.
 
   ./testscripts/patch_env_file.sh sec stacks/veritas/env-sponsored-test \
@@ -78,6 +97,10 @@ while [ $# -gt 0 ]; do
 	--key-dir)  KEY_DIR="$2"; shift 2 ;;
 	--sponsors) SPONSORS="$2"; shift 2 ;;
 	--armor-passfile) ARMOR_PASSFILE="$2"; shift 2 ;;
+	--node-host) NODE_HOST="$2"; shift 2 ;;
+	--grpc-port) GRPC_PORT="$2"; shift 2 ;;
+	--out)      OUT="$2"; shift 2 ;;
+	--in-place) IN_PLACE=1; shift ;;
 	--dry-run)  DRY_RUN=1; shift ;;
 	--help|-h)  usage; exit 0 ;;
 	--*)        echo "unknown option: $1" >&2; usage >&2; exit 1 ;;
@@ -101,6 +124,24 @@ if [ ! -f "$ENV_FILE" ]; then
 	echo "  This patches an EXISTING env file; it does not create one.  Copy the stack's" >&2
 	echo "  template first (e.g. stacks/veritas/env.template) and patch that." >&2
 	exit 1
+fi
+
+# WHERE THE POPULATED COPY GOES.  Defaulted beside the keys, exactly as
+# patch_cloud_formation_template.sh does: --key-dir is the deployment home, which already varies
+# per deployment AND per site, so one deployment's rendered env cannot be mistaken for another's.
+if [ "$IN_PLACE" -eq 1 ]; then
+	[ -z "$OUT" ] || { echo "error: --out and --in-place are mutually exclusive." >&2; exit 1; }
+	OUT="$ENV_FILE"
+else
+	[ -n "$OUT" ] || OUT="${KEY_DIR%/}/$(basename "$ENV_FILE")"
+	# SAME FILE BY A DIFFERENT PATH IS STILL THE SAME FILE.  --key-dir pointed at the stack
+	# directory would resolve to the source and patch it in place while reporting a copy.
+	if [ "$(cd "$(dirname "$OUT")" 2>/dev/null && pwd)/$(basename "$OUT")" = \
+	     "$(cd "$(dirname "$ENV_FILE")" && pwd)/$(basename "$ENV_FILE")" ]; then
+		echo "error: --out resolves to the source env file." >&2
+		echo "  Use --in-place if patching it is what you meant; it keeps a backup." >&2
+		exit 1
+	fi
 fi
 
 # GENERATE FIRST, WRITE NOTHING YET.  gen_key_env_vars.sh validates every file -- base64, JSON
@@ -148,6 +189,22 @@ fi
 # "Failed to import private key for <name>:" with an EMPTY reason, which points nowhere near the
 # cause.  Measured 2026-09-07: the env shipped dummy-passphrase, the keys were encrypted with the
 # keyring passphrase, and the api container exited 1 in a restart loop.
+# THE ENDPOINT, SET FOR THE SAME REASON AS IN THE CFN PATCHER -- an option present in one patcher
+# and absent in the other is how the two drift.
+#
+# NOT THROUGH $BLOCK, THOUGH.  The block is `VAR='value'` and the python carries those lines over
+# verbatim, so routing the endpoint through it writes QADENA_PIONEER_IP='103.56.5.229' -- quoted,
+# where this file writes the host UNQUOTED, and every consumer that does not strip quotes then
+# resolves a hostname with apostrophes in it.  The file already carries both conventions: the
+# base64 blobs are quoted, the addresses and the endpoint are not.  So these go the way the
+# addresses go, as plain values handed to the editor.
+if [ -n "$NODE_HOST" ]; then
+	echo "  endpoint: QADENA_PIONEER_IP / QADENA_PUBLIC_HOST -> $NODE_HOST"
+fi
+if [ -n "$GRPC_PORT" ]; then
+	echo "  endpoint: QADENA_GRPC_PORT -> $GRPC_PORT"
+fi
+
 ARMOR_PASS=""
 if [ -n "$ARMOR_PASSFILE" ]; then
 	[ -r "$ARMOR_PASSFILE" ] || { echo "error: cannot read $ARMOR_PASSFILE" >&2; exit 1; }
@@ -162,18 +219,28 @@ fi
 # named to be caught by .gitignore patterns" was false, and a file holding the ARMORED
 # PRIVATE KEYS this script just replaced sat untracked-but-visible in `git status`,
 # one `git add -A` from being committed. (Caught 2026-09-14 in follow-the-money.)
-BACKUP="${ENV_FILE}.$(date -u '+%Y%m%dT%H%M%SZ').bak"
+BACKUP="${OUT}.$(date -u '+%Y%m%dT%H%M%SZ').bak"
 if [ "$DRY_RUN" -eq 0 ]; then
-	cp -p "$ENV_FILE" "$BACKUP"
-	chmod 600 "$BACKUP" 2>/dev/null || true
+	if [ "$IN_PLACE" -eq 1 ]; then
+		cp -p "$ENV_FILE" "$BACKUP"
+		chmod 600 "$BACKUP" 2>/dev/null || true
+	else
+		# The copy IS the output; the source stays as it was, so there is nothing to back up.
+		BACKUP=""
+		mkdir -p "$(dirname "$OUT")"
+		cp -p "$ENV_FILE" "$OUT"
+		chmod 600 "$OUT" 2>/dev/null || true
+	fi
 fi
 
 DRY_RUN="$DRY_RUN" \
-ENV_FILE="$ENV_FILE" \
+ENV_FILE="$OUT" \
 BLOCK="$BLOCK" \
 FOUNDATION_USERS="$FOUNDATION_USERS" \
 FOUNDATION_APPSVR="$FOUNDATION_APPSVR" \
 ARMOR_PASS="$ARMOR_PASS" \
+NODE_HOST="$NODE_HOST" \
+GRPC_PORT="$GRPC_PORT" \
 python3 - <<'PY'
 import os, re, sys
 
@@ -200,6 +267,17 @@ for var in ("QADENA_FOUNDATION_USERS_ADDRESS", "QADENA_FOUNDATION_APPSVR_ADDRESS
 _armor = os.environ.get("ARMOR_PASS", "")
 if _armor:
     pairs["ARMOR_PASS_PHRASE"] = f"ARMOR_PASS_PHRASE={_armor}"
+
+# UNQUOTED, matching how this file already writes the host and the addresses.  Both names take the
+# same value: PIONEER_IP is what the app dials, PUBLIC_HOST what it advertises, and a deployment
+# where those disagree works until something follows the advertised address.
+_host = os.environ.get("NODE_HOST", "")
+if _host:
+    pairs["QADENA_PIONEER_IP"]  = f"QADENA_PIONEER_IP={_host}"
+    pairs["QADENA_PUBLIC_HOST"] = f"QADENA_PUBLIC_HOST={_host}"
+_grpc = os.environ.get("GRPC_PORT", "")
+if _grpc:
+    pairs["QADENA_GRPC_PORT"] = f"QADENA_GRPC_PORT={_grpc}"
 
 if not pairs:
     sys.exit("error: the generated block contained no assignments")
@@ -261,16 +339,28 @@ PY
 
 if [ "$DRY_RUN" -eq 1 ]; then
 	echo ""
-	echo "DRY RUN -- $ENV_FILE was not modified."
+	echo "DRY RUN -- nothing written (source $ENV_FILE only read; would write $OUT)."
 	exit 0
 fi
 
-chmod 600 "$ENV_FILE" 2>/dev/null || true
+chmod 600 "$OUT" 2>/dev/null || true
 echo ""
-echo "  patched:  $ENV_FILE  (mode 600)"
-echo "  backup:   $BACKUP"
+if [ "$IN_PLACE" -eq 1 ]; then
+	echo "  patched:  $OUT  (mode 600, IN PLACE)"
+	echo "  backup:   $BACKUP"
+else
+	# NAME BOTH. The source is the record of what was deployed FROM; the output is the thing
+	# with the keys in it. Printing only one leaves an operator guessing which to copy.
+	echo "  source:   $ENV_FILE  (unmodified)"
+	echo "  written:  $OUT  (mode 600)"
+fi
 echo ""
 echo "THIS FILE NOW CONTAINS ARMORED PRIVATE KEYS.  Whoever holds"
 echo "SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY can sign as every pooled sponsor wallet."
-echo "Do not commit it, and delete the backup once the deployment is confirmed:"
-echo "    rm -f $BACKUP"
+if [ -n "$BACKUP" ]; then
+	echo "Do not commit it, and delete the backup once the deployment is confirmed:"
+	echo "    rm -f $BACKUP"
+else
+	echo "Do not commit it.  It lives in the deployment home beside mnemonics.json and"
+	echo "the rendered CloudFormation copy, which is where this deployment's secrets belong."
+fi
