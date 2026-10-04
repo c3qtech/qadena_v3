@@ -196,7 +196,11 @@ setup_backend() {
     '{contract_address:$c, enf_username:$u, enf_private_key:$k}')
   local url="$ENF_API_BASE/$APIVERSION/enf/setup_enf"
   echo "POST $url  (contract=$addr, signer=$FROM)"
-  curl -sS -X POST "$url" -H "Content-Type: application/json" -d "$body" | jq 2>/dev/null \
+  # A FIRST setup is accepted as is. Replacing an existing one (e.g. after a chain reset changed
+  # the contract address) needs the api's ENF_SETUP_TOKEN, sent when it is set here.
+  local token_hdr=()
+  [[ -n "${ENF_SETUP_TOKEN:-}" ]] && token_hdr=(-H "X-Setup-Token: $ENF_SETUP_TOKEN")
+  curl -sS -X POST "$url" -H "Content-Type: application/json" "${token_hdr[@]}" -d "$body" | jq 2>/dev/null \
     || { echo "Request to $url failed (is the ENF API running? override with -a <base_url>)"; exit 1; }
 }
 

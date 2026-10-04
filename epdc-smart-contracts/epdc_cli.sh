@@ -298,13 +298,23 @@ setup_backend() {
   # THE KEYS ARE ARMORED WITH THE KEYRING PASSPHRASE (extract_ephem_keys.sh), and the app-server
   # decrypts them with its ARMOR_PASS_PHRASE -- so the two must be equal, or this fails with
   # "failed to decrypt private key", which names the wrong culprit.
-  local resp=$(curl -sS -X POST "$url" -H "Content-Type: application/json" -d "$body") \
+  # A FIRST registration is accepted as is. Replacing an existing one (e.g. after a chain reset
+  # changed the contract address) needs the api's EPDC_SETUP_TOKEN, sent when it is set here.
+  local token_hdr=()
+  [[ -n "${EPDC_SETUP_TOKEN:-}" ]] && token_hdr=(-H "X-Setup-Token: $EPDC_SETUP_TOKEN")
+  local resp=$(curl -sS -X POST "$url" -H "Content-Type: application/json" "${token_hdr[@]}" -d "$body") \
     || { echo "Request to $url failed (is the epdc API running? override with -a <base_url>)"; exit 1; }
   echo "$resp" | jq 2>/dev/null || echo "$resp"
   if echo "$resp" | grep -qi "decrypt"; then
     echo ""
     echo "The app-server could not decrypt the keys: its ARMOR_PASS_PHRASE must equal this"
     echo "keyring's passphrase (the one in QADENA_KEYRING_PASS). Set it in stacks/epdc/.env and restart the api."
+    exit 1
+  fi
+  if echo "$resp" | grep -q "X-Setup-Token"; then
+    echo ""
+    echo "The api already has a register configured. To replace it, set EPDC_SETUP_TOKEN to the"
+    echo "api's value (stacks/epdc/env-cloudflare.local) and run this again."
     exit 1
   fi
   echo "$resp" | jq -e '.status == "ok"' > /dev/null 2>&1 || exit 1
