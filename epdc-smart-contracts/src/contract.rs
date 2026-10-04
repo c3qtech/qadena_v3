@@ -9,6 +9,7 @@ use cw_storage_plus::Bound;
 use crate::error::ContractError;
 use crate::msg::{
     Attestation, AttestorsResponse, CountResponse, ExecuteMsg, HolderResponse, InstantiateMsg,
+    MigrateMsg,
     PaginatedEventsResponse, QueryMsg, QuorumRulesResponse,
 };
 use crate::state::{
@@ -40,6 +41,14 @@ pub fn instantiate(
     Ok(Response::new()
         .add_attribute("method", "instantiate")
         .add_attribute("operator", info.sender))
+}
+
+/// In-place code upgrade (the deployed instance has an admin), so fixes reach the existing register
+/// -- same address, same history -- without re-pointing the app-server.
+#[cfg_attr(not(feature = "library"), entry_point)]
+pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
+    set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+    Ok(Response::new().add_attribute("method", "migrate").add_attribute("version", CONTRACT_VERSION))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -83,7 +92,7 @@ pub fn execute(
             instrument_ref,
             holder,
             prev_holder,
-        } => execute::set_holder(deps, instrument_ref, holder, prev_holder),
+        } => execute::set_holder(deps, info, instrument_ref, holder, prev_holder),
     }
 }
 
@@ -257,6 +266,9 @@ pub mod execute {
         dsvs_doc_id: Option<String>,
         attestations: Vec<Attestation>,
     ) -> Result<Response, ContractError> {
+        // Only the operator's orchestrator writes the register. Before this, anyone could append
+        // (non-quorum) events to any instrument's history.
+        only_operator(&deps, &info)?;
         require(&id, "id")?;
         require(&instrument_ref, "instrument_ref")?;
         require(&event_type, "event_type")?;
@@ -311,10 +323,14 @@ pub mod execute {
 
     pub fn set_holder(
         deps: DepsMut,
+        info: MessageInfo,
         instrument_ref: String,
         holder: String,
         prev_holder: Option<String>,
     ) -> Result<Response, ContractError> {
+        // Holdership decides who gets paid; compare-and-set alone stopped double assignment but
+        // not a stranger taking the slot. Operator only, like append_event.
+        only_operator(&deps, &info)?;
         require(&instrument_ref, "instrument_ref")?;
         require(&holder, "holder")?;
 

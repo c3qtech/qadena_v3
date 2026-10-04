@@ -5,6 +5,10 @@ use crate::state::{AttestorRecord, RegisterEvent};
 #[cw_serde]
 pub struct InstantiateMsg {}
 
+/// Upgrades the code in place (wasmd migrate, by the contract admin). Nothing to carry over yet.
+#[cw_serde]
+pub struct MigrateMsg {}
+
 /// An attestor countersignature submitted with an event: a secp256k1
 /// signature (64-byte r||s, hex) over the raw 32-byte event digest.
 #[cw_serde]

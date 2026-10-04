@@ -265,3 +265,38 @@ fn only_operator_registers_attestors() {
     .unwrap_err();
     assert!(matches!(err, ContractError::Unauthorized {}));
 }
+
+#[test]
+fn only_operator_appends_events() {
+    let mut deps = setup();
+    let (_, digest_hex) = digest_of("event-by-a-stranger");
+    let err = execute(
+        deps.as_mut(),
+        mock_env(),
+        mock_info("someone-else", &[]),
+        ExecuteMsg::AppendEvent {
+            id: "evt-x".into(),
+            instrument_ref: "inst-A".into(),
+            event_type: "INSTRUMENT_ISSUED".into(),
+            digest: digest_hex,
+            reason_code: None,
+            dsvs_doc_id: None,
+            attestations: vec![],
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, ContractError::Unauthorized {}));
+}
+
+#[test]
+fn only_operator_sets_holder() {
+    let mut deps = setup();
+    let err = execute(
+        deps.as_mut(),
+        mock_env(),
+        mock_info("someone-else", &[]),
+        ExecuteMsg::SetHolder { instrument_ref: "inst-A".into(), holder: "thief".into(), prev_holder: None },
+    )
+    .unwrap_err();
+    assert!(matches!(err, ContractError::Unauthorized {}));
+}
