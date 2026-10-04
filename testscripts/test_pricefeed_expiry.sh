@@ -34,7 +34,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 oracle="band-protocol-oracle"
 # ENV-DEFAULTED, same reason as test_pricefeed.sh: any market that credential fees do not
@@ -82,7 +81,7 @@ echo "========================="
 echo "preflight"
 echo "========================="
 qadenad_alias status > /dev/null 2>&1 || fail "chain is not reachable -- start it first"
-qadenad_alias keys show "$oracle" --keyring-backend test > /dev/null 2>&1 \
+qadenad_alias keys show "$oracle" > /dev/null 2>&1 \
     || fail "$oracle not in the keyring -- run testscripts/setup_prerequisites.sh first"
 
 n=$(qadenad_alias query pricefeed oracles "$market" --output json 2>/dev/null | jq -r '.oracles | length')

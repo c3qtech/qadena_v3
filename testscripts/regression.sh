@@ -114,7 +114,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 # NOTE: no `set -e` here.  This script's job is to run every test and report, so a failing test must
 # not abort the runner.  Each test script has its own set -e.
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 from_genesis=false
 with_sgx=false
@@ -692,7 +691,7 @@ setup_missing() {
     [ -n "$names" ] || { echo "test_data/users.json (unreadable)"; return 0; }
 
     # One keyring read for all of them; `keys show` per user would be a subprocess each.
-    keyring=$(qadenad_alias keys list --keyring-backend test --output json 2>/dev/null \
+    keyring=$(qadenad_alias keys list --output json 2>/dev/null \
         | jq -r '.[].name' 2>/dev/null)
 
     for name in ${(f)names} al-eph1 ann-eph1 ann-eph2 victor-eph1; do
@@ -721,7 +720,7 @@ setup_missing() {
     # Its output is mixed prose and JSON (jq cannot parse it whole), so it is matched as text.
     local out
     for name in ${(f)names}; do
-        addr=$(qadenad_alias keys show "$name" -a --keyring-backend test 2>/dev/null) || continue
+        addr=$(qadenad_alias keys show "$name" -a 2>/dev/null) || continue
         [ -n "$addr" ] || continue
         out=$(qadenad_alias query qadena show-wallet "$addr" --output json 2>&1)
         if print -r -- "$out" | grep -q "walletID"; then
@@ -763,7 +762,7 @@ prerequisites_idempotent() {
 # wallet reported as empty when it simply could not be decrypted would move funds for no reason.
 enc_qdn() {
     local addr raw out
-    addr=$(qadenad_alias keys show "$1" -a --keyring-backend test 2>/dev/null) || { echo ""; return; }
+    addr=$(qadenad_alias keys show "$1" -a 2>/dev/null) || { echo ""; return; }
     [ -n "$addr" ] || { echo ""; return; }
     raw=$(qadenad_alias query qadena show-wallet "$addr" --decrypt-as "$addr" 2>/dev/null) || { echo ""; return; }
     [ -n "$raw" ] || { echo ""; return; }
@@ -847,7 +846,7 @@ replenish_funds() {
     # actually needs.
     local eph drained total_drained=0
     for eph in ann-eph1 ann-eph2; do
-        addr_of_eph=$(qadenad_alias keys show "$eph" -a --keyring-backend test 2>/dev/null) || continue
+        addr_of_eph=$(qadenad_alias keys show "$eph" -a 2>/dev/null) || continue
         [ -n "$addr_of_eph" ] || continue
         drained=0
         # Bounded: a queue this long is already an anomaly, and an unbounded loop here would spin on
@@ -872,7 +871,7 @@ replenish_funds() {
     fi
 
     # MINT IT FROM AL'S OWN TRANSPARENT BALANCE, capped by what al actually holds.
-    al_bank_qdn=$(qadenad_alias query bank balances "$(qadenad_alias keys show al -a --keyring-backend test 2>/dev/null)" \
+    al_bank_qdn=$(qadenad_alias query bank balances "$(qadenad_alias keys show al -a 2>/dev/null)" \
         --output json 2>/dev/null | jq -r '.balances[] | select(.denom=="aqdn") | .amount' 2>/dev/null)
     al_bank_qdn=$(python3 -c "print(int('${al_bank_qdn:-0}') // 10**18)" 2>/dev/null || echo 0)
 
@@ -973,7 +972,7 @@ reclaim_funds() {
     local treasury_addr acct addr have surplus result hash
     local reclaimed=0 failures=0
 
-    treasury_addr=$(qadenad_alias keys show treasury -a --keyring-backend test 2>/dev/null)
+    treasury_addr=$(qadenad_alias keys show treasury -a 2>/dev/null)
     [ -n "$treasury_addr" ] || { echo "treasury not in the keyring; nothing to reclaim into"; return 0; }
 
     # UNSHIELD BEFORE SWEEPING, so what comes out of an encrypted balance is carried to the treasury
@@ -992,9 +991,9 @@ reclaim_funds() {
     for pair in "ann ann-eph2 1000" "victor victor-eph1 1000"; do
         acct=${pair%% *}; eph=$(echo "$pair" | awk '{print $2}'); reserve=$(echo "$pair" | awk '{print $3}')
 
-        addr=$(qadenad_alias keys show "$acct" -a --keyring-backend test 2>/dev/null) || continue
+        addr=$(qadenad_alias keys show "$acct" -a 2>/dev/null) || continue
         [ -n "$addr" ] || continue
-        qadenad_alias keys show "$eph" -a --keyring-backend test > /dev/null 2>&1 || continue
+        qadenad_alias keys show "$eph" -a > /dev/null 2>&1 || continue
 
         # DRAIN THE TARGET QUEUE FIRST, before putting anything into it.
         #
@@ -1083,7 +1082,7 @@ reclaim_funds() {
     # fire again.  The per-run throwaway keys (bankscan-*, evmsrc-*, evmdst-*) hold about 570qdn
     # between them and are not worth enumerating.
     for acct in ann victor; do
-        addr=$(qadenad_alias keys show "$acct" -a --keyring-backend test 2>/dev/null) || continue
+        addr=$(qadenad_alias keys show "$acct" -a 2>/dev/null) || continue
         [ -n "$addr" ] || continue
 
         have=$(qadenad_alias query bank balances "$addr" --output json 2>/dev/null \

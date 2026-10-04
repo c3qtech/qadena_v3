@@ -34,7 +34,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 fail() {
     echo "FAILED: $1"
@@ -66,7 +65,7 @@ reason="${reason:-deployment treasury: funds providers and users by direct bank 
 if [[ "$target" == qadena1* ]]; then
     address="$target"
 else
-    address=$(qadenad_alias keys show "$target" -a --keyring-backend test 2>/dev/null) \
+    address=$(qadenad_alias keys show "$target" -a 2>/dev/null) \
         || fail "$target is neither a bech32 address nor a key in the keyring"
 fi
 [ -n "$address" ] || fail "could not resolve an address for $target"

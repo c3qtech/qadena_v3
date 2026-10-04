@@ -24,7 +24,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 cd $qadenabuild
 
@@ -84,10 +83,10 @@ echo "========================="
 echo "preflight"
 echo "========================="
 qadenad_alias status > /dev/null 2>&1 || fail "chain is not reachable -- start it first"
-qadenad_alias keys show "$dsvsprovider" -a --keyring-backend test > /dev/null 2>&1 \
+qadenad_alias keys show "$dsvsprovider" -a > /dev/null 2>&1 \
     || fail "$dsvsprovider not in the keyring -- run testscripts/setup_prerequisites.sh first"
 for w in "$sig1-eph1" "$sig2-eph1" "$outsider-eph1"; do
-    qadenad_alias keys show "$w" -a --keyring-backend test > /dev/null 2>&1 \
+    qadenad_alias keys show "$w" -a > /dev/null 2>&1 \
         || fail "$w not in the keyring -- run testscripts/setup.sh first"
 done
 printf 'Regression test document, run %s, version 1\n' "$run_id" > "$doc1"

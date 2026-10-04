@@ -34,7 +34,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 # STDERR, not stdout.  Several helpers below are called inside $( ), which captures stdout -- a
 # failure message written there disappears into the variable and set -e then kills the script with
@@ -210,7 +209,7 @@ echo "========================="
 echo "preflight"
 echo "========================="
 qadenad_alias status > /dev/null 2>&1 || fail "chain is not reachable -- start it first"
-qadenad_alias keys show treasury -a --keyring-backend test > /dev/null 2>&1 \
+qadenad_alias keys show treasury -a > /dev/null 2>&1 \
     || fail "treasury not in the keyring -- run testscripts/setup.sh first"
 
 authority=$(qadenad_alias query auth module-account gov --output json 2>/dev/null \

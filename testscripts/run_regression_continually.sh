@@ -67,7 +67,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 # NO `set -e`.  A failing run is the thing this script exists to record, not a reason to stop.
 # regression.sh returns non-zero whenever any suite fails, which is expected input here.
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 max_runs=0
 pause=0
@@ -242,7 +241,7 @@ history_file="$archive/history.tsv"
 
 treasury_qdn() {
     local addr amt
-    addr=$(qadenad_alias keys show treasury -a --keyring-backend test 2>/dev/null) || { echo ""; return; }
+    addr=$(qadenad_alias keys show treasury -a 2>/dev/null) || { echo ""; return; }
     [ -n "$addr" ] || { echo ""; return; }
     amt=$(qadenad_alias query bank balances "$addr" --output json 2>/dev/null \
         | jq -r '.balances[] | select(.denom=="aqdn") | .amount' 2>/dev/null)

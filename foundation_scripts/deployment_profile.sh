@@ -202,6 +202,42 @@ deployment_profile_load() {
         DEPLOY_PREFIX="enf"
         DEPLOY_FUND_MEMBERS="adoption-m1,adoption-m2,adoption-m3,adoption-m4,adoption-m5"
         ;;
+    epdc)
+        DEPLOY_APPSVR="foundation-epdc-appsvr"
+        DEPLOY_USERS="foundation-epdc-users"
+        DEPLOY_ADMIN="epdc-admin"
+        DEPLOY_SPONSOR_BASE="epdc-create-wallet-sponsor"
+        DEPLOY_TREASURY="epdc-treasury"
+        DEPLOY_IDENTITY_PRV="epdcidentitysrvprv"
+        DEPLOY_DSVS_PRV="epdcdsvssrvprv"
+        DEPLOY_DSVS="epdcdsvs"
+        DEPLOY_DISPLAY="e-PDC"
+        # THE EPDC-REGISTER CONTRACT.  Like ENF, e-PDC drives a CosmWasm contract from its
+        # sponsored app-server wallets: AppendEvent / RegisterAttestor / SetHolder, signed by the
+        # orchestrator pool.  Absent from the grant, every register write is rejected whole-tx (a
+        # filtered allowance does not fall back to self-payment).  On the epdc branch this was an
+        # `if DEPLOY_NAME == epdc` block in veritas_scripts/step_3.sh; main moved the lists here.
+        # NOT MsgStoreCode / MsgInstantiateContract: the operator deploys with qadenad and hands the
+        # address to POST /v1/epdc/setup_epdc.
+        DEPLOY_APPSVR_MSGS_EXTRA="/cosmwasm.wasm.v1.MsgExecuteContract"
+        # The service-provider identity, as testscripts/setup_epdc.sh onboards it.  Phone and
+        # avalue MUST differ from ekycph's and enf's (+6320000000/2000, +6320000001/2100): equal
+        # values collide on the contact and personal-info credentials when both share a chain.
+        DEPLOY_FIRSTNAME="EPDC"
+        DEPLOY_BIRTHDATE="2025-Jan-01"
+        DEPLOY_EMAIL="no-reply@epdc.ph"
+        DEPLOY_PHONE="+6320000003"
+        DEPLOY_AVALUE="2200"
+        # No "sec-" prefix: the other homes carry it from SEC PH VERITAS, the first deployment,
+        # and e-PDC has nothing to do with SEC. (The variable keeps its shared name.)
+        DEPLOY_SEC_HOME="$HOME/epdc-deployment"
+        # 01 Adoption Programs, as for ekycph and enf -- a PLACEHOLDER, not a decision: which
+        # bucket funds the e-PDC programme is the foundation's call. Pin it with an override file
+        # ($QADENA_DEPLOYMENT_DIR/epdc.env) once settled rather than editing this line.
+        DEPLOY_FUND_BUCKET="adoption"
+        DEPLOY_PREFIX="epdc"
+        DEPLOY_FUND_MEMBERS="adoption-m1,adoption-m2,adoption-m3,adoption-m4,adoption-m5"
+        ;;
     *)
         # An unknown name is NOT an error if a profile file defines it -- that is the documented
         # way to add a deployment without editing this script.  It IS an error otherwise: guessing
@@ -251,7 +287,7 @@ deployment_profile_load() {
     return 0
 }
 
-deployment_profile_list() { print -r -- "veritas ekycph enf" }
+deployment_profile_list() { print -r -- "veritas ekycph enf epdc" }
 
 # Print the profile the way a caller would set it -- used by --show and by the dev harnesses, which
 # eval it rather than duplicating the name table.

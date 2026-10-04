@@ -20,7 +20,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 # set -e after the source: setup_env.sh queries the chain for gas prices and falls back on failure
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 # the oracle that posts, and the market it posts to.  cn:eth:usd is deliberately NOT the market the
 # credential fees convert through (cn:qdn:php), so this test cannot perturb fee amounts.
@@ -92,7 +91,7 @@ echo "========================="
 echo "preflight"
 echo "========================="
 qadenad_alias status > /dev/null 2>&1 || fail "chain is not reachable -- start it first"
-qadenad_alias keys show "$oracle" --keyring-backend test > /dev/null 2>&1 \
+qadenad_alias keys show "$oracle" > /dev/null 2>&1 \
     || fail "$oracle not in the keyring -- run testscripts/setup_prerequisites.sh first"
 
 oracles_on_target=$(qadenad_alias query pricefeed oracles "$target_market" --output json 2>/dev/null | jq -r '.oracles | length')

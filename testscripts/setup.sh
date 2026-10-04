@@ -143,7 +143,7 @@ if [ -n "$prefix" ] && [ ! -f "$output_file" ]; then
     jq -c '.[]' "$usersjson" | while read -r user; do
         # Extract fields and modify as needed
         name=$(echo "$user" | jq -r '.name')$prefix
-        mnemonic=$(qadenad_alias keys mnemonic --keyring-backend test)
+        mnemonic=$(qadenad_alias keys mnemonic)
         a=$(echo "$user" | jq -r '.a')
         bf=$(echo "$user" | jq -r '.bf')$prefix
         firstname=$(echo "$user" | jq -r '.firstname')$prefix

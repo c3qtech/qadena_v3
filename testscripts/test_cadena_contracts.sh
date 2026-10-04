@@ -37,7 +37,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 cadenadir="$qadenabuild/cadena-smart-contracts"
 cli="$cadenadir/cadena_cli.sh"
@@ -64,7 +63,7 @@ qadenad_alias status > /dev/null 2>&1 || fail "chain is not reachable -- start i
 [ -f "$cadenadir/artifacts/cadena.wasm" ] || fail "missing the built contract artifact"
 [ -f "$cadenadir/cw20_base.wasm" ] || fail "missing cw20_base.wasm (the GAA token contract)"
 qadenad_alias query wasm params > /dev/null 2>&1 || fail "the wasm module is not responding"
-qadenad_alias keys show testidentitysrvprv -a --keyring-backend test > /dev/null 2>&1 \
+qadenad_alias keys show testidentitysrvprv -a > /dev/null 2>&1 \
     || fail "testidentitysrvprv missing -- run testscripts/setup_prerequisites.sh first"
 echo "chain up, artifacts present"
 

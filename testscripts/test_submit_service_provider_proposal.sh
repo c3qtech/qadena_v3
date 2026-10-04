@@ -20,10 +20,10 @@ fi
 cd $qadenabuild
 
 # check if address already exists
-address=$(qadenad_alias keys show $nodeid --output json --keyring-backend test 2> /dev/null| jq -r '.address')
+address=$(qadenad_alias keys show $nodeid --output json 2> /dev/null| jq -r '.address')
 if [ -z $address ] ; then
     echo "Address not found: $nodeid, creating one..."
-    address=`qadenad_alias keys add $nodeid --output json --keyring-backend test | jq -r '.address'`
+    address=`qadenad_alias keys add $nodeid --output json | jq -r '.address'`
 fi
 
 # modify json_proposal

@@ -504,7 +504,7 @@ if [ "$with_contracts" = "true" ]; then
     if [ -n "$existing" ]; then
         contract_json=$(qadenad_alias query wasm contract "$existing" --output json 2>/dev/null) || contract_json=""
         contract_creator=$(echo "$contract_json" | jq -r '.contract_info.creator // empty' 2>/dev/null)
-        enf_deployer=$(qadenad_alias keys show ENF -a --keyring-backend test 2>/dev/null)
+        enf_deployer=$(qadenad_alias keys show ENF -a 2>/dev/null)
 
         if [ -z "$contract_creator" ]; then
             echo "-------------------------"

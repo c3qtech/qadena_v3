@@ -35,7 +35,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 enclave_src="$qadenabuild/cmd/qadenad_enclave"
 unique_file="$enclave_src/reproducible_build_unique_id.txt"

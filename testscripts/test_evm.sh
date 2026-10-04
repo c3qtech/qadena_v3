@@ -42,7 +42,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 RPC_URL="http://localhost:8545"
 account="al"
@@ -69,8 +68,8 @@ bank_aqdn() {
 }
 
 hex_of()  { qadenad_alias debug addr "$1" 2>&1 | grep "Address hex:" | awk '{print $NF}'; }
-addr_of() { qadenad_alias keys show "$1" -a --keyring-backend test 2>/dev/null; }
-key_of()  { qadenad_alias keys unsafe-export-eth-key "$1" --keyring-backend test 2>/dev/null | head -1; }
+addr_of() { qadenad_alias keys show "$1" -a 2>/dev/null; }
+key_of()  { qadenad_alias keys unsafe-export-eth-key "$1" 2>/dev/null | head -1; }
 
 # bank_send <from> <to-addr> <amount> -- sets bank_code and bank_log from the ON-CHAIN result.
 #
@@ -126,7 +125,7 @@ command -v cast > /dev/null 2>&1 \
     || fail "cast (foundry) not found -- install from https://foundry.paradigm.xyz, or skip this test"
 
 qadenad_alias status > /dev/null 2>&1 || fail "chain is not reachable -- start it first"
-qadenad_alias keys show "$account" -a --keyring-backend test > /dev/null 2>&1 \
+qadenad_alias keys show "$account" -a > /dev/null 2>&1 \
     || fail "$account not in the keyring -- run testscripts/setup.sh first"
 
 # the EVM JSON-RPC is a separate listener from the cosmos RPC and can be disabled independently
@@ -137,7 +136,7 @@ echo "EVM JSON-RPC up, chain id $chain_id"
 
 private_key=$(qadenad_alias keys unsafe-export-eth-key "$account" 2>/dev/null) \
     || fail "could not export the eth key for $account"
-bech32=$(qadenad_alias keys show "$account" -a --keyring-backend test)
+bech32=$(qadenad_alias keys show "$account" -a)
 eth_addr=$(qadenad_alias debug addr "$bech32" 2>&1 | grep "Address hex:" | awk '{print $NF}')
 [ -n "$eth_addr" ] || fail "could not derive the eth address for $account"
 echo "$account: $bech32 -> $eth_addr"
@@ -240,7 +239,7 @@ run_id=$(date +%s)
 src="evmsrc-$run_id"
 dst="evmdst-$run_id"
 for k in "$src" "$dst"; do
-    qadenad_alias keys add "$k" --keyring-backend test > /dev/null 2>&1 || fail "could not create $k"
+    qadenad_alias keys add "$k" > /dev/null 2>&1 || fail "could not create $k"
 done
 src_addr=$(addr_of "$src"); dst_addr=$(addr_of "$dst")
 src_hex=$(hex_of "$src_addr");  dst_hex=$(hex_of "$dst_addr")

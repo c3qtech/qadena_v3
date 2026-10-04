@@ -20,7 +20,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 # suite run can target either without editing every create-wallet call.
 pioneer="${QADENA_PIONEER:-pioneer1}"
 set -e
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 cd $qadenabuild
 
 run_id=$(date +%s)
@@ -32,7 +31,7 @@ CID=$(qadenad_alias status 2>/dev/null | jq -r '.node_info.network // .NodeInfo.
 typeset -A V; typeset -A N; ord=()
 rec() { V[$1]="$2"; N[$1]="$3"; ord+=("$1"); echo ""; echo ">>> $1: $2 -- $3"; echo "" }
 die() { echo "HARNESS ERROR: $1"; exit 1 }
-addr()  { qadenad_alias keys show "$1" -a --keyring-backend test 2>/dev/null }
+addr()  { qadenad_alias keys show "$1" -a 2>/dev/null }
 bal()   { local a; a=$(qadenad_alias query bank balances "$1" --output json 2>/dev/null | jq -r '.balances[]?|select(.denom=="aqdn")|.amount'); echo "${a:-0}" }
 spend() { local a; a=$(qadenad_alias query bank spendable-balances "$1" --output json 2>/dev/null | jq -r '.balances[]?|select(.denom=="aqdn")|.amount'); echo "${a:-0}" }
 acct()  { qadenad_alias query auth account "$1" --output json 2>/dev/null }
@@ -59,12 +58,12 @@ msig_exec() {
     sq=$(echo "$j" | jq -r '.account.value.base_vesting_account.base_account.sequence // .account.value.sequence // .account.sequence // "0"')
     for k in 1 2; do
         qadenad_alias tx sign "$unsigned" --from "$lbl-k$k" --multisig "$a" \
-            --account-number "$an" --sequence "$sq" --chain-id "$CID" --keyring-backend test \
+            --account-number "$an" --sequence "$sq" --chain-id "$CID" \
             --output-document "$ev/$name-s$k.json" >/dev/null 2>&1 || true
     done
     [ -s "$ev/$name-s1.json" ] && [ -s "$ev/$name-s2.json" ] || { echo "SIGN_FAILED"; return }
     qadenad_alias tx multisign "$unsigned" "$key" "$ev/$name-s1.json" "$ev/$name-s2.json" \
-        --account-number "$an" --sequence "$sq" --chain-id "$CID" --keyring-backend test \
+        --account-number "$an" --sequence "$sq" --chain-id "$CID" \
         --output-document "$ev/$name-signed.json" >/dev/null 2>&1 || true
     [ -s "$ev/$name-signed.json" ] || { echo "MULTISIGN_FAILED"; return }
     local h=$(qadenad_alias tx broadcast "$ev/$name-signed.json" --output json 2>/dev/null | jq -r '.txhash // ""')
@@ -104,8 +103,8 @@ TRE=$(addr treasury)
 # setup: a 2-of-3 multisig holding a vesting account that is GENUINELY STILL LOCKED
 # ---------------------------------------------------------------------------------------------
 echo "--- setup: locked multisig vesting account ---"
-for k in 1 2 3; do qadenad_alias keys add "$lbl-k$k" --algo eth_secp256k1 --keyring-backend test >/dev/null 2>&1; done
-qadenad_alias keys add "$lbl-msig" --multisig "$lbl-k1,$lbl-k2,$lbl-k3" --multisig-threshold 2 --keyring-backend test >/dev/null 2>&1 \
+for k in 1 2 3; do qadenad_alias keys add "$lbl-k$k" --algo eth_secp256k1 >/dev/null 2>&1; done
+qadenad_alias keys add "$lbl-msig" --multisig "$lbl-k1,$lbl-k2,$lbl-k3" --multisig-threshold 2 >/dev/null 2>&1 \
     || die "could not build the multisig"
 MS=$(addr "$lbl-msig"); echo "multisig: $MS"
 
@@ -245,7 +244,7 @@ fi
 # -signed grant was not.
 # ---------------------------------------------------------------------------------------------
 echo ""; echo "=== N4: authz grant signed by the multisig threshold ==="
-qadenad_alias keys add "$lbl-op" --algo eth_secp256k1 --keyring-backend test >/dev/null 2>&1
+qadenad_alias keys add "$lbl-op" --algo eth_secp256k1 >/dev/null 2>&1
 OP=$(addr "$lbl-op")
 DEST=$(addr ann)
 c=$(wait_code "$(qadenad_alias tx bank send treasury "$OP" 50qdn --from treasury -y --output json "${G[@]}" 2>/dev/null | jq -r .txhash)" "n4-fund")
@@ -284,7 +283,7 @@ fi
 # that can also SPEND is unacceptable.  StakeAuthorization is meant to be exactly that separation.
 # ---------------------------------------------------------------------------------------------
 echo ""; echo "=== N5: StakeAuthorization -- delegate yes, spend no ==="
-qadenad_alias keys add "$lbl-delmgr" --algo eth_secp256k1 --keyring-backend test >/dev/null 2>&1
+qadenad_alias keys add "$lbl-delmgr" --algo eth_secp256k1 >/dev/null 2>&1
 DM=$(addr "$lbl-delmgr")
 wait_code "$(qadenad_alias tx bank send treasury "$DM" 50qdn --from treasury -y --output json "${G[@]}" 2>/dev/null | jq -r .txhash)" "n5-fund" >/dev/null
 gc=$(wait_code "$(qadenad_alias tx authz grant "$DM" delegate --allowed-validators "$VAL" \

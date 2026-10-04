@@ -43,7 +43,6 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
 set -e
 
-function qadenad_alias { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
 
 # --key-added-only runs ONE rotation and checks ONE thing: that it published exactly one new public
 # key.  Everything else here -- the previousPubKID record and the straddle cases -- is about the
@@ -158,9 +157,9 @@ if ! qadenad_alias enclave update-ss-interval-key > /dev/null 2>&1; then
 fi
 
 if [ $key_added_only -eq 0 ]; then
-    qadenad_alias keys show "$identityprovider" -a --keyring-backend test > /dev/null 2>&1 \
+    qadenad_alias keys show "$identityprovider" -a > /dev/null 2>&1 \
         || fail "$identityprovider missing -- run testscripts/setup_prerequisites.sh first"
-    qadenad_alias keys show "$sponsor" -a --keyring-backend test > /dev/null 2>&1 \
+    qadenad_alias keys show "$sponsor" -a > /dev/null 2>&1 \
         || fail "$sponsor missing -- run testscripts/setup_prerequisites.sh first"
 fi
 echo "chain up; run id $suffix"
@@ -291,7 +290,7 @@ echo "-------------------------"
 # x/dsvs builds the same expectation through its own append helper.  It delegates to the qadena
 # keeper now, but that is precisely the sort of thing that gets re-forked later, so it is worth
 # exercising rather than reasoning about.
-if qadenad_alias keys show "$dsvsprovider" -a --keyring-backend test > /dev/null 2>&1; then
+if qadenad_alias keys show "$dsvsprovider" -a > /dev/null 2>&1; then
     # Signatories come from the same seed file test_dsvs.sh reads, so they cannot drift apart.
     # victor and kelvin specifically: test_credentials.sh mutates al's contacts and removes his
     # email credential outright, which would make signing fail here for a reason that has nothing to
