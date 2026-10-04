@@ -269,6 +269,42 @@ attestor_keys() {
   echo "EPDC_ATTESTOR_KEYS='$json'"
 }
 
+# writer_addrs -- the app-server's signing pool, as a JSON array of addresses: $FROM-credential and
+# $FROM-eph1..N, exactly the wallets setup_backend hands the api (extract_ephem_keys.sh with
+# --include-base-provider-credential). $FROM itself is the operator and needs no authorization.
+# The register refuses writes from anyone else, so this list and the api's pool must agree.
+writer_addrs() {
+  local names=("$FROM-credential") i a out=()
+  for i in $(seq 1 $EPDC_EPH_COUNT); do names+=("$FROM-eph$i"); done
+  for i in "${names[@]}"; do
+    a=$(qadenad_alias keys show "$i" --address 2>/dev/null) || { echo "key $i not found" >&2; return 1; }
+    out+=("\"$a\"")
+  done
+  print -r -- "[${(j:,:)out}]"
+}
+
+# authorize_writers -- let the app-server's signing pool write the register (SetWriters).
+authorize_writers() {
+  local addrs; addrs=$(writer_addrs) || exit 1
+  tx "set_writers" tx wasm execute "$(contract_addr)" "{\"set_writers\":{\"add\":$addrs}}" || exit 1
+}
+
+# cmd_migrate -- upgrade the deployed register IN PLACE to artifacts/epdc_register.wasm: store the
+# code, then wasmd-migrate the contract (as its admin, $FROM). Same address and history, so the api
+# needs no re-setup. The writer pool is authorized in the same step, so an instance upgraded from
+# before the writer check keeps accepting the api's writes.
+cmd_migrate() {
+  local addr="$(contract_addr)"
+  [[ -n "$addr" ]] || { echo "No contract address in state -- nothing to migrate"; exit 1; }
+  local addrs; addrs=$(writer_addrs) || exit 1
+  local before=$(qadenad_alias --node $QADENA_NODE query wasm contract "$addr" -o json 2>/dev/null | jq -r '.contract_info.code_id')
+  cmd_upload
+  local code_id=$(load_state "code_id")
+  tx "migrate $addr: code $before -> $code_id" tx wasm migrate "$addr" "$code_id" "{\"writers\":$addrs}" || exit 1
+  echo "Migrated. Writers now:"
+  q '{"get_writers":{}}'
+}
+
 setup_backend() {
   local addr="$(contract_addr)"
   [[ -n "$addr" ]] || { echo "No contract address in state -- run setup/instantiate first"; exit 1; }
@@ -323,7 +359,10 @@ setup_backend() {
 case_cmd() {
   local cmd=$1; shift
   case "$cmd" in
-    setup)              setup_epdc; cmd_upload; cmd_instantiate; register_attestors; setup_backend ;;
+    setup)              setup_epdc; cmd_upload; cmd_instantiate; register_attestors; authorize_writers; setup_backend ;;
+    authorize-writers)  authorize_writers ;;
+    migrate)            cmd_migrate ;;
+    get-writers)        q '{"get_writers":{}}' ;;
     setup-epdc)         setup_epdc ;;
     upload)             cmd_upload ;;
     instantiate)        cmd_instantiate ;;
@@ -351,6 +390,7 @@ case_cmd() {
     *) echo "Usage: $0 [-n node] [-k key] [-c contract] [-a api_base] <command> [args]"
        echo "Commands: setup | setup-epdc | upload | instantiate | register-attestors | attestor-keys"
        echo "          setup-backend | contract-addr | clean"
+       echo "          authorize-writers | migrate (upgrade in place to artifacts/epdc_register.wasm) | get-writers"
        echo "          deactivate-attestor <addr>"
        echo "          get-attestors | get-quorum-rules | get-count"
        echo "          get-event <id> | get-events [start_after_seq] [limit]"

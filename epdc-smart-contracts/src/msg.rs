@@ -5,9 +5,15 @@ use crate::state::{AttestorRecord, RegisterEvent};
 #[cw_serde]
 pub struct InstantiateMsg {}
 
-/// Upgrades the code in place (wasmd migrate, by the contract admin). Nothing to carry over yet.
+/// Upgrades the code in place (wasmd migrate, by the contract admin). `writers` are authorized as
+/// register writers in the same step, so an instance whose app-server signs from a wallet pool keeps
+/// working across the upgrade that introduced the writer check.
 #[cw_serde]
-pub struct MigrateMsg {}
+#[derive(Default)]
+pub struct MigrateMsg {
+    #[serde(default)]
+    pub writers: Vec<String>,
+}
 
 /// An attestor countersignature submitted with an event: a secp256k1
 /// signature (64-byte r||s, hex) over the raw 32-byte event digest.
@@ -47,6 +53,14 @@ pub enum ExecuteMsg {
     },
     /// Compare-and-set the single holder of an instrument (BRD FR-902).
     /// Fails unless the current holder equals `prev_holder` (None = unset).
+    /// Authorize / de-authorize register writers (wallets besides the operator that may
+    /// AppendEvent and SetHolder). Operator-only.
+    SetWriters {
+        #[serde(default)]
+        add: Vec<String>,
+        #[serde(default)]
+        remove: Vec<String>,
+    },
     SetHolder {
         instrument_ref: String,
         holder: String,
@@ -82,6 +96,15 @@ pub enum QueryMsg {
     /// them; there is no message that writes them.
     #[returns(QuorumRulesResponse)]
     GetQuorumRules {},
+    /// Who may write: the operator and the authorized writers.
+    #[returns(WritersResponse)]
+    GetWriters {},
+}
+
+#[cw_serde]
+pub struct WritersResponse {
+    pub operator: String,
+    pub writers: Vec<String>,
 }
 
 #[cw_serde]

@@ -1,1 +1,1 @@
-688406d5fa63c4787b5d4d4762b57aad124fd3dcd34f5e7042fbe6fb14fa1154  epdc_register.wasm
+8169020019511e09e509f1d7748f8ed87400cf004b6ef64badac9a3ba6ff43ae  epdc_register.wasm

@@ -300,3 +300,52 @@ fn only_operator_sets_holder() {
     .unwrap_err();
     assert!(matches!(err, ContractError::Unauthorized {}));
 }
+
+#[test]
+fn authorized_writer_appends_and_sets_holder_stranger_does_not() {
+    let mut deps = setup();
+    // A writer is any valid address the operator authorizes; mock addresses validate as-is.
+    execute(deps.as_mut(), mock_env(), mock_info(OPERATOR, &[]),
+        ExecuteMsg::SetWriters { add: vec!["orchestrator-eph1".into()], remove: vec![] }).unwrap();
+
+    let (_, d) = digest_of("by-a-writer");
+    execute(deps.as_mut(), mock_env(), mock_info("orchestrator-eph1", &[]),
+        ExecuteMsg::AppendEvent { id: "w-1".into(), instrument_ref: "inst-W".into(),
+            event_type: "INSTRUMENT_ISSUED".into(), digest: d, reason_code: None, dsvs_doc_id: None,
+            attestations: vec![] }).unwrap();
+    execute(deps.as_mut(), mock_env(), mock_info("orchestrator-eph1", &[]),
+        ExecuteMsg::SetHolder { instrument_ref: "inst-W".into(), holder: "payee".into(), prev_holder: None }).unwrap();
+
+    // De-authorized, it is a stranger again.
+    execute(deps.as_mut(), mock_env(), mock_info(OPERATOR, &[]),
+        ExecuteMsg::SetWriters { add: vec![], remove: vec!["orchestrator-eph1".into()] }).unwrap();
+    let (_, d2) = digest_of("after-removal");
+    let err = execute(deps.as_mut(), mock_env(), mock_info("orchestrator-eph1", &[]),
+        ExecuteMsg::AppendEvent { id: "w-2".into(), instrument_ref: "inst-W".into(),
+            event_type: "INSTRUMENT_ISSUED".into(), digest: d2, reason_code: None, dsvs_doc_id: None,
+            attestations: vec![] }).unwrap_err();
+    assert!(matches!(err, ContractError::Unauthorized {}));
+}
+
+#[test]
+fn only_operator_manages_writers() {
+    let mut deps = setup();
+    let err = execute(deps.as_mut(), mock_env(), mock_info("someone-else", &[]),
+        ExecuteMsg::SetWriters { add: vec!["someone-else".into()], remove: vec![] }).unwrap_err();
+    assert!(matches!(err, ContractError::Unauthorized {}));
+}
+
+#[test]
+fn migrate_authorizes_the_writer_pool() {
+    let mut deps = setup();
+    crate::contract::migrate(deps.as_mut(), mock_env(),
+        crate::msg::MigrateMsg { writers: vec!["pool-1".into(), "pool-2".into()] }).unwrap();
+    let resp: crate::msg::WritersResponse =
+        from_json(query(deps.as_ref(), mock_env(), QueryMsg::GetWriters {}).unwrap()).unwrap();
+    assert_eq!(resp.writers, vec!["pool-1".to_string(), "pool-2".to_string()]);
+    let (_, d) = digest_of("pool-write");
+    execute(deps.as_mut(), mock_env(), mock_info("pool-2", &[]),
+        ExecuteMsg::AppendEvent { id: "p-1".into(), instrument_ref: "inst-P".into(),
+            event_type: "INSTRUMENT_ISSUED".into(), digest: d, reason_code: None, dsvs_doc_id: None,
+            attestations: vec![] }).unwrap();
+}

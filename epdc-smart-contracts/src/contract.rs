@@ -9,13 +9,13 @@ use cw_storage_plus::Bound;
 use crate::error::ContractError;
 use crate::msg::{
     Attestation, AttestorsResponse, CountResponse, ExecuteMsg, HolderResponse, InstantiateMsg,
-    MigrateMsg,
+    MigrateMsg, WritersResponse,
     PaginatedEventsResponse, QueryMsg, QuorumRulesResponse,
 };
 use crate::state::{
     AttestorClass, AttestorRecord, Config, RecordedAttestation, RegisterEvent, ATTESTORS,
     BY_INSTRUMENT, BY_SEQ, CONFIG, DISINTERESTED_MIN, EVENTS, EVENT_COUNT, HOLDER,
-    INSTRUMENT_COUNT, QUORUM_EVENT_TYPES, QUORUM_MIN,
+    INSTRUMENT_COUNT, QUORUM_EVENT_TYPES, QUORUM_MIN, WRITERS,
 };
 
 // version info for migration info
@@ -46,9 +46,16 @@ pub fn instantiate(
 /// In-place code upgrade (the deployed instance has an admin), so fixes reach the existing register
 /// -- same address, same history -- without re-pointing the app-server.
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
+pub fn migrate(deps: DepsMut, _env: Env, msg: MigrateMsg) -> Result<Response, ContractError> {
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
-    Ok(Response::new().add_attribute("method", "migrate").add_attribute("version", CONTRACT_VERSION))
+    for w in &msg.writers {
+        let addr = deps.api.addr_validate(w)?;
+        WRITERS.save(deps.storage, addr, &true)?;
+    }
+    Ok(Response::new()
+        .add_attribute("method", "migrate")
+        .add_attribute("version", CONTRACT_VERSION)
+        .add_attribute("writers_added", msg.writers.len().to_string()))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -88,6 +95,7 @@ pub fn execute(
             dsvs_doc_id,
             attestations,
         ),
+        ExecuteMsg::SetWriters { add, remove } => execute::set_writers(deps, info, add, remove),
         ExecuteMsg::SetHolder {
             instrument_ref,
             holder,
@@ -114,6 +122,36 @@ pub mod execute {
             return Err(ContractError::Unauthorized {});
         }
         Ok(())
+    }
+
+    /// The operator, or a wallet the operator authorized as a writer (SetWriters / migrate).
+    fn only_writer(deps: &DepsMut, info: &MessageInfo) -> Result<(), ContractError> {
+        let cfg = CONFIG.load(deps.storage)?;
+        if cfg.operator == info.sender || WRITERS.has(deps.storage, info.sender.clone()) {
+            return Ok(());
+        }
+        Err(ContractError::Unauthorized {})
+    }
+
+    pub fn set_writers(
+        deps: DepsMut,
+        info: MessageInfo,
+        add: Vec<String>,
+        remove: Vec<String>,
+    ) -> Result<Response, ContractError> {
+        only_operator(&deps, &info)?;
+        for w in &add {
+            let addr = deps.api.addr_validate(w)?;
+            WRITERS.save(deps.storage, addr, &true)?;
+        }
+        for w in &remove {
+            let addr = deps.api.addr_validate(w)?;
+            WRITERS.remove(deps.storage, addr);
+        }
+        Ok(Response::new()
+            .add_attribute("method", "set_writers")
+            .add_attribute("added", add.len().to_string())
+            .add_attribute("removed", remove.len().to_string()))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -266,9 +304,9 @@ pub mod execute {
         dsvs_doc_id: Option<String>,
         attestations: Vec<Attestation>,
     ) -> Result<Response, ContractError> {
-        // Only the operator's orchestrator writes the register. Before this, anyone could append
-        // (non-quorum) events to any instrument's history.
-        only_operator(&deps, &info)?;
+        // Only the operator and the wallets it authorized write the register. Before this, anyone
+        // could append (non-quorum) events to any instrument's history.
+        only_writer(&deps, &info)?;
         require(&id, "id")?;
         require(&instrument_ref, "instrument_ref")?;
         require(&event_type, "event_type")?;
@@ -329,8 +367,8 @@ pub mod execute {
         prev_holder: Option<String>,
     ) -> Result<Response, ContractError> {
         // Holdership decides who gets paid; compare-and-set alone stopped double assignment but
-        // not a stranger taking the slot. Operator only, like append_event.
-        only_operator(&deps, &info)?;
+        // not a stranger taking the slot. Writers only, like append_event.
+        only_writer(&deps, &info)?;
         require(&instrument_ref, "instrument_ref")?;
         require(&holder, "holder")?;
 
@@ -377,6 +415,14 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         }
         QueryMsg::GetCount {} => to_json_binary(&query::get_count(deps)?),
         QueryMsg::GetQuorumRules {} => to_json_binary(&query::get_quorum_rules()?),
+        QueryMsg::GetWriters {} => {
+            let cfg = CONFIG.load(deps.storage)?;
+            let writers = WRITERS
+                .keys(deps.storage, None, None, Order::Ascending)
+                .map(|k| k.map(|a| a.to_string()))
+                .collect::<StdResult<Vec<_>>>()?;
+            to_json_binary(&WritersResponse { operator: cfg.operator.to_string(), writers })
+        }
     }
 }
 

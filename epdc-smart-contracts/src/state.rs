@@ -132,3 +132,9 @@ pub const ATTESTORS: Map<Addr, AttestorRecord> = Map::new("attestors");
 // via SetHolder prevents double assignment; execution redirect is a later
 // phase, but the slot exists from day one so the register never migrates.
 pub const HOLDER: Map<String, String> = Map::new("holder"); // instrument_ref -> holder ref
+
+// Authorized writers: wallets besides the operator that may append events and set holders. The
+// app-server signs from a POOL of wallets (the orchestrator, its credential wallet and its
+// ephemeral signers) to parallelise, so "operator only" would refuse most of its writes; the
+// operator authorizes the pool instead (SetWriters, or MigrateMsg.writers on upgrade).
+pub const WRITERS: Map<Addr, bool> = Map::new("writers");
