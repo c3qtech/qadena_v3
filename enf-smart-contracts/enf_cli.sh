@@ -273,6 +273,11 @@ cmd_instantiate() {
 
 case_cmd() {
   local cmd=$1; shift
+  # ASK FOR THE KEYRING PASSPHRASE ONCE, UP FRONT, for commands that open keys (setup_env.sh's
+  # qadena_keyring_unlock: a no-op on a `test` keyring or when QADENA_KEYRING_PASS/_PASSFILE is
+  # set). Without it, a `file` keyring made every qadenad call prompt on its own -- several per
+  # command, and invisibly where stderr is discarded, so the script looked hung.
+  case "$cmd" in setup|setup-enf|setup-backend|upload|instantiate|register-enp|update-enp|create-entry) qadena_keyring_unlock ;; esac
   case "$cmd" in
     setup)            setup_enf; cmd_upload; cmd_instantiate ; setup_backend ;;
     setup-enf)        setup_enf ;;

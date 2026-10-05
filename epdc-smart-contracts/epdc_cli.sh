@@ -358,6 +358,11 @@ setup_backend() {
 
 case_cmd() {
   local cmd=$1; shift
+  # ASK FOR THE KEYRING PASSPHRASE ONCE, UP FRONT, for commands that open keys (setup_env.sh's
+  # qadena_keyring_unlock: a no-op on a `test` keyring or when QADENA_KEYRING_PASS/_PASSFILE is
+  # set). Without it, a `file` keyring made every qadenad call prompt on its own -- several per
+  # command, and invisibly where stderr is discarded, so the script looked hung.
+  case "$cmd" in setup|setup-epdc|upload|instantiate|register-attestors|attestor-keys|setup-backend|authorize-writers|migrate|deactivate-attestor) qadena_keyring_unlock ;; esac
   case "$cmd" in
     setup)              setup_epdc; cmd_upload; cmd_instantiate; register_attestors; authorize_writers; setup_backend ;;
     authorize-writers)  authorize_writers ;;
