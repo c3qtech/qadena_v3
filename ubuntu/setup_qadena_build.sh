@@ -527,11 +527,11 @@ if [ "$(uname -s)" = "Linux" ]; then
         tee /etc/apt/sources.list.d/docker.list > /dev/null
         apt-get update
 
-        # check if ubuntu 22 or 24
+        # check if ubuntu 22, 24 or 26
         if command -v lsb_release >/dev/null 2>&1; then
             DISTRO=$(lsb_release -is)
             VERSION=$(lsb_release -rs)
-            
+
             if [ "$DISTRO" = "Ubuntu" ]; then
                 if [ "$VERSION" = "22.04" ]; then
                     echo "Ubuntu 22.04 detected"
@@ -539,8 +539,12 @@ if [ "$(uname -s)" = "Linux" ]; then
                 elif [ "$VERSION" = "24.04" ]; then
                     echo "Ubuntu 24.04 detected"
                     VERSION_STRING=5:28.0.4-1~ubuntu.24.04~noble
+                elif [ "$VERSION" = "26.04" ]; then
+                    # Docker publishes no 28.x for resolute; 29.3.1 is the oldest build it has.
+                    echo "Ubuntu 26.04 detected"
+                    VERSION_STRING=5:29.3.1-1~ubuntu.26.04~resolute
                 else
-                    echo "Ubuntu detected, but not version 22.04 or 24.04"
+                    echo "Ubuntu detected, but not version 22.04, 24.04 or 26.04"
                 fi
             else
                 echo "Not Ubuntu"
