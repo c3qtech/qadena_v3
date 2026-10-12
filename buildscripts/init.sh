@@ -353,7 +353,13 @@ if [[ -z "$keyring_passfile" ]] \
         print -r -- "$_kp1" > "$_kp_tmp"
         unset _kp1 _kp2
         keyring_passfile="$_kp_tmp"
-        trap '[[ -n "$_kp_tmp" ]] && { shred -u "$_kp_tmp" 2>/dev/null || rm -f "$_kp_tmp"; }' EXIT INT TERM
+        # INT AND TERM MUST EXIT, not just clean up.  A zsh trap REPLACES the signal's default
+        # action, so a cleanup-only INT trap swallowed Ctrl-C: the child (ignite) died, printed
+        # "aborted" with status 0, and init.sh carried on to "Built chain" against a half-built home.
+        _kp_cleanup() { [[ -n "$_kp_tmp" ]] && { shred -u "$_kp_tmp" 2>/dev/null || rm -f "$_kp_tmp"; }; _kp_tmp="" }
+        trap '_kp_cleanup' EXIT
+        trap '_kp_cleanup; echo "   INIT ABORTED (interrupted)"; exit 130' INT
+        trap '_kp_cleanup; echo "   INIT ABORTED (terminated)"; exit 143' TERM
         echo "   using the passphrase you just typed (kept in a temporary file, shredded on exit)"
     fi
 fi
