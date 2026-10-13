@@ -19,6 +19,7 @@
 # relative to this script, which lives in the qadena_v3 repo.
 SCRIPT_DIR=$(cd "$(dirname "$0")/../scripts"; pwd)
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
+source "$SCRIPT_DIR/../scripts/deployment_keyring.sh"
 
 ENF_SCRIPT_DIR=$(cd $(dirname $0); pwd)
 STATE_FILE="./enf_state.json"
@@ -97,6 +98,12 @@ setup_enf() {
   [[ -n "$qadenatestscripts" && -x "$qadenatestscripts/grant_from_treasury.sh" ]] || {
     echo "grant_from_treasury.sh not found (qadenatestscripts=$qadenatestscripts)"; exit 1; }
 
+  # create_user.sh names the foundation fee granter by key, and that key is in the NODE keyring,
+  # not the deployment's. Unresolved, --fee-granter gets a bare name and every credential fails
+  # with "decoding bech32 failed". Pass the address instead; create_user.sh takes either.
+  local fg_addr=$(node_keyring_address "${VERITAS_FOUNDATION_APPSVR:-foundation-veritas-appsvr}")
+  [[ -n "$fg_addr" ]] && export VERITAS_FOUNDATION_APPSVR="$fg_addr"
+
   local eph_count="$ENF_EPH_COUNT"
   if qadenad_alias keys show "$name" > /dev/null 2>&1; then
     echo "$name key already exists — skipping create_user.sh"
@@ -149,9 +156,10 @@ setup_enf() {
   echo "Funding $name (and eph wallets) from treasury"
   echo "-------------------------"
   local amount="100000qdn"
-  "$qadenatestscripts/grant_from_treasury.sh" "$(qadenad_alias keys show $name --address)" "$amount"
+  # Addresses from THIS keyring; the sends signed by treasury, which only the node keyring holds.
+  node_keyring_run "$qadenatestscripts/grant_from_treasury.sh" "$(qadenad_alias keys show $name --address)" "$amount"
   for i in $(seq 1 $eph_count); do
-    "$qadenatestscripts/grant_from_treasury.sh" "$(qadenad_alias keys show $name-eph$i --address)" "$amount"
+    node_keyring_run "$qadenatestscripts/grant_from_treasury.sh" "$(qadenad_alias keys show $name-eph$i --address)" "$amount"
   done
 
   local addr=$(qadenad_alias keys show "$name" --address)
@@ -277,7 +285,10 @@ case_cmd() {
   # qadena_keyring_unlock: a no-op on a `test` keyring or when QADENA_KEYRING_PASS/_PASSFILE is
   # set). Without it, a `file` keyring made every qadenad call prompt on its own -- several per
   # command, and invisibly where stderr is discarded, so the script looked hung.
-  case "$cmd" in setup|setup-enf|setup-backend|upload|instantiate|register-enp|update-enp|create-entry) qadena_keyring_unlock ;; esac
+  # The keyring is chosen first (scripts/deployment_keyring.sh), so the prompt names the right one.
+  case "$cmd" in setup|setup-enf|setup-backend|upload|instantiate|register-enp|update-enp|create-entry)
+    deployment_keyring_select enf "$FROM" "$ENF_IDENTITY_PROVIDER"
+    qadena_keyring_unlock ;; esac
   case "$cmd" in
     setup)            setup_enf; cmd_upload; cmd_instantiate ; setup_backend ;;
     setup-enf)        setup_enf ;;

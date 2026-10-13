@@ -26,6 +26,7 @@
 
 SCRIPT_DIR=$(cd "$(dirname "$0")/../scripts"; pwd)
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
+source "$SCRIPT_DIR/../scripts/deployment_keyring.sh"
 
 EPDC_SCRIPT_DIR=$(cd $(dirname $0); pwd)
 STATE_FILE="./epdc_state.json"
@@ -116,7 +117,13 @@ setup_epdc() {
   [[ -n "$qadenatestscripts" && -x "$qadenatestscripts/grant_from_treasury.sh" ]] || {
     echo "grant_from_treasury.sh not found (qadenatestscripts=$qadenatestscripts)"; exit 1; }
   qadenad_alias keys show "$EPDC_IDENTITY_PROVIDER" > /dev/null 2>&1 || {
-    echo "identity provider '$EPDC_IDENTITY_PROVIDER' is not in the keyring -- run setup_epdc.sh's chain half first"; exit 1; }
+    echo "identity provider '$EPDC_IDENTITY_PROVIDER' is not in the keyring (${QADENA_KEYRING_DIR:-$QADENAHOME})"
+    echo "  -- run setup_epdc.sh's chain half first"; exit 1; }
+  # create_user.sh names the foundation fee granter by key, and that key is in the NODE keyring,
+  # not the deployment's. Unresolved, --fee-granter gets a bare name and every credential fails
+  # with "decoding bech32 failed". Pass the address instead; create_user.sh takes either.
+  local fg_addr=$(node_keyring_address "$VERITAS_FOUNDATION_APPSVR")
+  [[ -n "$fg_addr" ]] && export VERITAS_FOUNDATION_APPSVR="$fg_addr"
 
   local eph_count="$EPDC_EPH_COUNT"
   if qadenad_alias keys show "$name" > /dev/null 2>&1; then
@@ -165,7 +172,8 @@ setup_epdc() {
   local w
   for w in "$name" "$name-credential" $(for i in $(seq 1 $eph_count); do echo "$name-eph$i"; done); do
     qadenad_alias keys show "$w" > /dev/null 2>&1 || continue
-    "$qadenatestscripts/grant_from_treasury.sh" "$(qadenad_alias keys show $w --address)" "$amount"
+    # The address from THIS keyring; the send signed by treasury, which only the node keyring holds.
+    node_keyring_run "$qadenatestscripts/grant_from_treasury.sh" "$(qadenad_alias keys show $w --address)" "$amount"
   done
 
   local addr=$(qadenad_alias keys show "$name" --address)
@@ -362,7 +370,10 @@ case_cmd() {
   # qadena_keyring_unlock: a no-op on a `test` keyring or when QADENA_KEYRING_PASS/_PASSFILE is
   # set). Without it, a `file` keyring made every qadenad call prompt on its own -- several per
   # command, and invisibly where stderr is discarded, so the script looked hung.
-  case "$cmd" in setup|setup-epdc|upload|instantiate|register-attestors|attestor-keys|setup-backend|authorize-writers|migrate|deactivate-attestor) qadena_keyring_unlock ;; esac
+  # The keyring is chosen first (scripts/deployment_keyring.sh), so the prompt names the right one.
+  case "$cmd" in setup|setup-epdc|upload|instantiate|register-attestors|attestor-keys|setup-backend|authorize-writers|migrate|deactivate-attestor)
+    deployment_keyring_select epdc "$FROM" "$EPDC_IDENTITY_PROVIDER"
+    qadena_keyring_unlock ;; esac
   case "$cmd" in
     setup)              setup_epdc; cmd_upload; cmd_instantiate; register_attestors; authorize_writers; setup_backend ;;
     authorize-writers)  authorize_writers ;;
