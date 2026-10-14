@@ -129,6 +129,7 @@ SEC_HOME="${VERITAS_SEC_HOME:-$DEPLOY_SEC_HOME$SITE_HOME_SUFFIX}"
 COUNT=3
 FROM="bootstrap"
 REBUILD=0
+NEW_DEPLOYMENT_KEYS=0
 UNTIL=""
 # The CloudFormation template to populate alongside the env file.  Empty = skip that step; an
 # AWS-deployed site sets SITE_CF_TEMPLATE in its profile, everyone else passes --cloud-formation-template.
@@ -194,7 +195,12 @@ usage() {
     print -r -- "                      primary's checkout alone -- which builds whatever is on it,"
     print -r -- "                      not what is here.  Must be pushed to origin first."
     print -r -- "  --rebuild-chain     PURGE both fleet nodes and rebuild the chain first."
-    print -r -- "                      Destroys every wallet and credential on them."
+    print -r -- "                      Destroys every wallet and credential on them.  The deployment"
+    print -r -- "                      home is ARCHIVED (<sec-home>.pre-rebuild-<time>), and its sealed"
+    print -r -- "                      mnemonics carry over: same deployment keys on the new chain."
+    print -r -- "  --new-deployment-keys"
+    print -r -- "                      with --rebuild-chain: carry NO mnemonics over, so step_1 mints a"
+    print -r -- "                      new identity.  The app-server env must then be re-keyed."
     print -r -- "  --advertise-ip-address <ip>         what the PRIMARY tells peers to dial"
     print -r -- "                                      (reaches init.sh).  Default: the ssh host."
     print -r -- "  --joiner <user@host>   REPEATABLE.  Overrides the site's joiners entirely (the"
@@ -257,6 +263,7 @@ while [[ $# -gt 0 ]]; do
         --site)          shift 2 ;;   # pre-scanned above
         --deployment)    shift 2 ;;   # pre-scanned above
         --rebuild-chain) REBUILD=1; shift ;;
+        --new-deployment-keys) NEW_DEPLOYMENT_KEYS=1; shift ;;
         --skip-app)      SKIP_APP=1; shift ;;
         --launch-dir)    LAUNCH_DIR="$2"; shift 2 ;;
         --chain-id)      CHAIN_ID="$2"; shift 2 ;;
@@ -623,7 +630,7 @@ if (( REBUILD )); then
     if [[ -d "$SEC_HOME" ]]; then
         _existing=$(jq -r '.appsvraddr // empty' "$SEC_HOME/variables.json" 2>/dev/null || true)
         _keys=$(ls "$SEC_HOME"/keyring/keyring-*/*.info 2>/dev/null | wc -l | tr -d ' ')
-        print -r -- "  about to DELETE $SEC_HOME ($_keys key(s)${_existing:+, sponsor ${_existing:0:16}...})"
+        print -r -- "  about to clear $SEC_HOME ($_keys key(s)${_existing:+, sponsor ${_existing:0:16}...})"
         if [[ -n "$_existing" && -r "$COORD_HOME/$DEPLOY_STATE_FILE" ]]; then
             _target=$(jq -r '.appsvr // empty' "$COORD_HOME/$DEPLOY_STATE_FILE" 2>/dev/null || true)
             if [[ -n "$_target" && "$_existing" != "$_target" ]]; then
@@ -635,8 +642,24 @@ if (( REBUILD )); then
                 exit 1
             fi
         fi
-        rm -rf "$SEC_HOME"
-        print -r -- "  deleted $SEC_HOME"
+        # A NEW CHAIN, NOT A NEW DEPLOYMENT.  The sealed mnemonics ARE the deployment: its
+        # providers, its sponsor pool, every key the app-server env carries.  This was `rm -rf`,
+        # so each rebuild minted a fresh identity and every app-server had to be re-keyed -- on
+        # 2026-10-14 a c3q-mainnet rebuild deleted them and only a backup tar brought them back.
+        # Now the old home is ARCHIVED (never deleted) and only mnemonics/ carries over, which
+        # step_1 reuses (veritas_scripts/step_1.sh, "reusing sealed mnemonics").  Everything
+        # chain-bound -- keyring, variables.json, pool and pre-grant files -- starts clean.
+        # --new-deployment-keys carries nothing over, for when a fresh identity IS the intent.
+        _arch="$SEC_HOME.pre-rebuild-$(date -u +%Y%m%dT%H%M%SZ)"
+        mv "$SEC_HOME" "$_arch"
+        print -r -- "  archived $SEC_HOME -> $_arch"
+        if (( NEW_DEPLOYMENT_KEYS )); then
+            print -r -- "  --new-deployment-keys: step_1 will mint a NEW identity; re-key the app-server afterwards"
+        elif [[ -d "$_arch/mnemonics" ]]; then
+            mkdir -p "$SEC_HOME" && chmod 700 "$SEC_HOME"
+            cp -pR "$_arch/mnemonics" "$SEC_HOME/"
+            print -r -- "  kept $(ls "$SEC_HOME"/mnemonics/*.mnemonic.enc 2>/dev/null | wc -l | tr -d ' ') sealed mnemonic(s): same deployment keys on the new chain"
+        fi
     fi
     # The pioneer mnemonic must be in the clear for the bringup; unseal it here and remove it the
     # moment the chain is up -- it is the genesis validator's key.
