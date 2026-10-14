@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"cosmossdk.io/store/prefix"
 	storetypes "cosmossdk.io/store/types"
@@ -518,6 +519,24 @@ func (s *qadenaServer) privateStateTablesAreEmpty() (empty bool, nonEmpty string
 	return true, ""
 }
 
+// privateStatePageTimeout bounds one page request to one peer.  A page is at most a megabyte of
+// plaintext built from a single store version, so minutes are generous; what it must not be is
+// unbounded.
+const privateStatePageTimeout = 3 * time.Minute
+
+// peerHost reduces a peer endpoint to its host, so "tcp://10.0.0.5:26657", "10.0.0.5:26657" and
+// "10.0.0.5" compare equal.
+func peerHost(peer string) string {
+	h := strings.TrimSpace(peer)
+	if i := strings.Index(h, "://"); i >= 0 {
+		h = h[i+3:]
+	}
+	if i := strings.LastIndex(h, ":"); i >= 0 && !strings.Contains(h[:i], ":") {
+		h = h[:i]
+	}
+	return h
+}
+
 // peerQueryClient builds a chain query client aimed at one peer, the same way getSSPrivK does when
 // it goes looking for secret shares.  Endpoints may be given bare ("192.168.1.5") or complete
 // ("tcp://192.168.1.5:26657").
@@ -590,7 +609,17 @@ func (s *qadenaServer) SyncPrivateState(goCtx context.Context, in *types.MsgSync
 	}
 
 	var lastErr error
+	self := peerHost(s.getPrivateEnclaveParamsPioneerExternalIPAddress())
 	for _, peer := range in.Peers {
+		// NEVER ASK OURSELVES.  The keeper lists every pioneer that has published an address, and
+		// this call runs inside our own BeginBlock: a query to our own RPC needs the app this
+		// block is holding, so it waits forever and the node stops voting.  A state-synced joiner
+		// has not published an address yet and was never in its own list; a pioneer restored after
+		// a move to another CPU has, and sorts wherever its address falls.
+		if self != "" && peerHost(peer) == self {
+			c.LoggerInfo(logger, "private-state fetch: skipping "+peer+" -- that is this node")
+			continue
+		}
 		err := s.fetchPrivateStateFromPeer(peer, in)
 		if err != nil {
 			c.LoggerError(logger, "private-state fetch from "+peer+" failed: "+err.Error())
@@ -644,7 +673,10 @@ func (s *qadenaServer) fetchPrivateStateFromPeer(peer string, in *types.MsgSyncP
 			return err
 		}
 
-		res, err := queryClient.EnclavePrivateState(context.Background(), &types.QueryEnclavePrivateStateRequest{
+		// BOUNDED, so a peer that stops answering fails over to the next one instead of holding
+		// this node's BeginBlock -- and its vote -- until the keeper's hour-long limit.
+		pageCtx, cancel := context.WithTimeout(context.Background(), privateStatePageTimeout)
+		res, err := queryClient.EnclavePrivateState(pageCtx, &types.QueryEnclavePrivateStateRequest{
 			RemoteReport:  report,
 			EnclavePubK:   s.getPrivateEnclaveParamsEnclavePubK(),
 			Height:        in.Height,
@@ -653,6 +685,7 @@ func (s *qadenaServer) fetchPrivateStateFromPeer(peer string, in *types.MsgSyncP
 			Cursor:        cursor,
 			MaxBytes:      privateStatePageTargetBytes,
 		})
+		cancel()
 		if err != nil {
 			return err
 		}

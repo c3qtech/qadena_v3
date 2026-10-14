@@ -666,7 +666,13 @@ if (( _init_rc == 0 )) ; then
     #
     # Rewritten through a new file and the original shredded, so the plaintext blocks are
     # overwritten rather than merely unlinked from the directory entry.
-    if [[ -n "$pioneer_mnemonic" ]]; then
+    #
+    # UNCONDITIONALLY, not only with --pioneer-mnemonic.  A devnet's config.yml carries its
+    # accounts' mnemonics too, and package_release.sh refuses any config.yml that still holds one
+    # -- so a plain devnet with a joiner could never be packaged.  This working copy is regenerated
+    # from config/config.yml on every init and the keys are in the keyring by now, so nothing reads
+    # these lines again.
+    if true; then
         python3 - "$qadenabuild/config.yml" <<'PYSCRUB'
 import io, os, re, subprocess, sys
 p = sys.argv[1]

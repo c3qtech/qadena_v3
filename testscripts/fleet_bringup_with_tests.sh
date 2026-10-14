@@ -643,8 +643,9 @@ fi
 info "pioneers      ${PIONEER_PREFIX}2 .. ${PIONEER_PREFIX}$(( ${#JOINERS[@]} + 1 ))"
 
 # ---------------------------------------------------------------------------------------------
-if run_stage A0; then
-stage "A0. preflight every host BEFORE anything is stopped or moved"
+# THE ARGUMENT ARRAYS BELOW ARE DEFINED FOR EVERY RUN, not only when A0 runs: stage G uses
+# joiner_adv, conv and the advertise arrays, so a `--from D` resume that skipped A0 died at its
+# first join with "command not found: joiner_adv".
 # NOTHING DESTRUCTIVE UNTIL EVERY CHEAP CHECK HAS PASSED ON EVERY HOST.  This stage used to be the
 # archive below, which meant a joiner's ~/qadena was moved aside and THEN the primary turned out to
 # be unbuildable -- on the first run of this script that cost a 1.2G tree moved for a run that died
@@ -686,6 +687,8 @@ joiner_adv() {
         _adv_reply=(--advertise-ip-address "${ADVERTISE_JS[$_i]}")
     fi
 }
+if run_stage A0; then
+stage "A0. preflight every host BEFORE anything is stopped or moved"
 "$SCRIPT_DIR/1st_node_bringup.sh" --primary "$PRIMARY" --ref "$REF" $SGX_FLAG "${mainnet_args[@]}" "${adv_p[@]}" --only 1 \
     2>&1 | tee "$RUN_DIR/stage-A0-preflight.log"
 [[ ${pipestatus[1]} -eq 0 ]] || fail "the primary failed preflight; nothing has been changed on any host. See $RUN_DIR/stage-A0-preflight.log"

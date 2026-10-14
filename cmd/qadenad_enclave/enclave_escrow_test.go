@@ -136,3 +136,11 @@ func TestSyncInProgressHoldsParamsWrites(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, s.paramsPersisted)
 }
+
+// A restored pioneer appears in its own private-state peer list; asking itself deadlocks the block.
+func TestPeerHostNormalises(t *testing.T) {
+	for _, in := range []string{"10.0.0.5", "10.0.0.5:26657", "tcp://10.0.0.5:26657", " tcp://10.0.0.5 "} {
+		require.Equal(t, "10.0.0.5", peerHost(in), in)
+	}
+	require.NotEqual(t, peerHost("10.0.0.5"), peerHost("10.0.0.6"))
+}
