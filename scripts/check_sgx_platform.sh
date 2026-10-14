@@ -164,14 +164,12 @@ EOF
 for f in "${_sealed[@]}"; do echo "$me:     ${f#$QADENAHOME/}" >&2; done
 cat >&2 <<EOF
 $me:
-$me: Nothing has been changed.  Recovering means re-creating that state on THIS platform:
-$me:   - validator key: with enclave_config/priv_validator_key.json moved aside, signer_enclave
-$me:     re-seals config/priv_validator_key.json if a plaintext copy exists -- otherwise restore
-$me:     it from your offline backup into config/ first.
-$me:   - enclave params: re-sync from a healthy peer (qadenad enclave sync-enclave).
-$me: Back up \$QADENAHOME before touching anything.  Once the state is re-created here, accept
-$me: this platform so the check passes from now on:
-$me:     QADENA_ACCEPT_PLATFORM_CHANGE=1 $qadenascripts/check_sgx_platform.sh
+$me: Nothing has been changed.  If enclave_config/private_params_escrow.json exists, recover with
+$me:     $qadenascripts/recover_enclave_after_cpu_move.sh --seed tcp://<healthy peer>:26657
+$me: which keeps this pioneer's enclave key (restored from the escrow, re-sealed here), needs no
+$me: transaction, and re-records this platform.  It needs config/priv_validator_key.json (or your
+$me: offline copy of it) for the validator key.  Without an escrow the enclave key is gone: retire
+$me: this pioneer and re-join the machine as a new one.
 $me: ===================================================================================
 EOF
 exit 3

@@ -180,6 +180,14 @@ type qadenaServer struct {
 	// chain, which reads as "already done" when the truth is "never done".
 	paramsPersisted bool
 
+	// syncInProgress holds every params write back while SyncEnclave runs.  Its key generation and
+	// its trusted-set install both reach saveEnclaveParams -- trustEnclaveIdentity persists on every
+	// change -- and a sync that then REFUSED left freshly generated, never-registered private keys
+	// on disk over the node's real ones (observed: a refused "Already initialized" sync rewrote
+	// EnclavePrivK and SealedTableSharedSecret).  SyncEnclave writes once, at the end, when it
+	// has decided to succeed.
+	syncInProgress bool
+
 	mutex sync.RWMutex
 }
 
@@ -1745,6 +1753,19 @@ func (s *qadenaServer) saveEnclaveParamsIfChanged() bool {
 }
 
 func (s *qadenaServer) saveEnclaveParams() bool {
+	s.mutex.RLock()
+	held := s.syncInProgress
+	s.mutex.RUnlock()
+	if held {
+		c.LoggerDebug(logger, "saveEnclaveParams: held back, sync-enclave in progress")
+		return true
+	}
+	return s.writeEnclaveParams()
+}
+
+// writeEnclaveParams is the write itself, without the sync-in-progress hold.  Only SyncEnclave
+// calls it directly, once it has decided to succeed.
+func (s *qadenaServer) writeEnclaveParams() bool {
 	// Set on the way out, below, only if the write succeeds.
 	ep := storedEnclaveParams{
 		PrivateEnclaveParams: s.privateEnclaveParams,
@@ -1804,6 +1825,13 @@ func (s *qadenaServer) saveEnclaveParams() bool {
 	s.paramsPersisted = true
 
 	c.LoggerDebug(logger, "saved")
+
+	// The escrow follows every sealed write, so it is never older than the file it backs up.  A
+	// failure here does not fail the save -- the sealed file is fine -- but it is loud, because it
+	// means this node cannot survive a move to another CPU.  See enclave_escrow.go.
+	if err := s.writeEscrow(); err != nil {
+		c.LoggerError(logger, "could not write the private-params escrow -- this node will NOT survive a move to another CPU: "+err.Error())
+	}
 
 	if testSeal {
 		// save some dummy values to test for info leaks
@@ -4820,6 +4848,27 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 		c.LoggerInfo(logger, "a previous sync got as far as generating keys but never persisted them -- redoing it")
 	}
 
+	// NOTHING THIS ATTEMPT GENERATES REACHES DISK UNLESS IT SUCCEEDS.  preInitEnclave mints a fresh
+	// enclave key and SealedTableSharedSecret, and the trusted-set install below persists on every
+	// change -- so a sync that refused part-way used to leave those never-registered keys sealed on
+	// disk over the node's real ones.  Hold every write back for the duration, and on any failure
+	// drop the attempt from memory as well, so no later save (an UpdateHeight, an address change)
+	// can persist it either.
+	s.mutex.Lock()
+	s.syncInProgress = true
+	s.mutex.Unlock()
+	succeeded := false
+	defer func() {
+		s.mutex.Lock()
+		defer s.mutex.Unlock()
+		s.syncInProgress = false
+		if !succeeded {
+			s.privateEnclaveParams = PrivateEnclaveParams{}
+			s.sharedEnclaveParams = types.EncryptableSharedEnclaveParams{}
+			c.LoggerInfo(logger, "sync-enclave did not complete -- nothing it generated was written, and it is discarded from memory too")
+		}
+	}()
+
 	pwalletID, pwalletAddr, enclaveWalletID, err := s.preInitEnclave(ctx, false, in.PioneerID, in.ExternalAddress, in.PioneerArmorPrivK, in.PioneerArmorPassPhrase)
 
 	if err != nil {
@@ -4989,6 +5038,48 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 		c.LoggerDebug(logger, "fromRemoteEnclaveParams", c.PrettyPrint(fromRemoteEnclaveParams))
 	}
 
+	// IS THIS PIONEER ALREADY ON CHAIN?  Decided BEFORE anything from the seed is installed, so a
+	// refusal leaves nothing behind.  Already registered means one of two things: a node whose
+	// sealed state became unreadable -- its VM moved to another CPU -- restoring its own keys from
+	// the escrow (enclave_escrow.go), or a mistake, which is refused as it always was.
+	restoring := false
+	{
+		params2 := &types.QueryGetPioneerJarRequest{
+			PioneerID: s.getPrivateEnclaveParamsPioneerID(),
+		}
+
+		c.LoggerDebug(logger, "Checking PioneerJar", params2)
+
+		res2, err := queryClient.PioneerJar(context.Background(), params2)
+
+		validNotFound := false
+
+		st, ok := status.FromError(err)
+		if ok {
+			if st.Code() == codes.NotFound && strings.Contains(st.Message(), "not found") {
+				c.LoggerDebug(logger, "Couldn't find jar for pioneer ", s.getPrivateEnclaveParamsPioneerID())
+				validNotFound = true
+			}
+		}
+
+		if err != nil && !validNotFound {
+			c.LoggerError(logger, "unable to query the chain to find the jar for pioneer")
+			return nil, err
+		} else if err == nil {
+			if res2.GetPioneerJar().JarID != fromRemoteEnclaveParams.JarID {
+				c.LoggerError(logger, "Already initialized, and the jar is wrong! "+fromRemoteEnclaveParams.JarID+" chain value is "+res2.GetPioneerJar().JarID)
+				return nil, types.ErrGenericEnclave
+			}
+			if err := s.restoreFromEscrow(queryClient, in.PioneerID, pwalletID, &fromRemoteEnclaveParams, seedHeight); err != nil {
+				c.LoggerError(logger, "Already initialized: pioneer "+in.PioneerID+" is registered on chain, and its keys cannot be restored from the escrow: "+err.Error())
+				c.LoggerError(logger, "    nothing was written.  A node whose sealed state is unreadable (moved to another CPU) needs")
+				c.LoggerError(logger, "    "+s.escrowPath()+" from before the move.")
+				return nil, types.ErrGenericEnclave
+			}
+			restoring = true
+		}
+	}
+
 	// copy from fromRemoteEnclaveParams to enclaveParams
 
 	s.setSharedEnclaveParamsJarInfo(fromRemoteEnclaveParams.JarID, fromRemoteEnclaveParams.JarPubK, fromRemoteEnclaveParams.JarPrivK, fromRemoteEnclaveParams.JarArmorPrivK)
@@ -5017,38 +5108,15 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 	// intentionally don't store the shares, they're private to a specific enclave
 	// do not store the SSIntervalPrivKCache
 
+	// A RESTORED PIONEER IS ALREADY REGISTERED: its keys are the ones on chain, so there is nothing
+	// to broadcast.  No transaction is the point -- a moved node holding most of the stake is
+	// exactly when the chain cannot commit one.
+	if restoring {
+		c.LoggerInfo(logger, "sync-enclave: pioneer "+in.PioneerID+" RESTORED from the escrow -- same enclave key as on chain, re-sealed for this CPU; no registration needed")
+		return s.finishSyncEnclave(&succeeded)
+	}
+
 	// Here's where we add the pioneer's public keys, the pioneer-jar binding, interval public key
-
-	params2 := &types.QueryGetPioneerJarRequest{
-		PioneerID: s.getPrivateEnclaveParamsPioneerID(),
-	}
-
-	c.LoggerDebug(logger, "Checking PioneerJar", params2)
-
-	res2, err := queryClient.PioneerJar(context.Background(), params2)
-
-	validNotFound := false
-
-	st, ok := status.FromError(err)
-	if ok {
-		if st.Code() == codes.NotFound && strings.Contains(st.Message(), "not found") {
-			c.LoggerDebug(logger, "Couldn't find jar for pioneer ", s.getPrivateEnclaveParamsPioneerID())
-			validNotFound = true
-		}
-	}
-
-	if err != nil && !validNotFound {
-		c.LoggerError(logger, "unable to query the chain to find the jar for pioneer")
-		return nil, err
-	} else if err == nil {
-		if res2.GetPioneerJar().JarID == s.getSharedEnclaveParamsJarID() {
-			c.LoggerError(logger, "Already initialized, this is an error.")
-			return nil, types.ErrGenericEnclave
-		} else {
-			c.LoggerError(logger, "Already initialized, and the jar is wrong! "+s.getSharedEnclaveParamsJarID()+" chain value is "+res2.GetPioneerJar().JarID)
-			return nil, types.ErrGenericEnclave
-		}
-	}
 
 	c.LoggerInfo(logger, "Ok, going to initialize")
 
@@ -5185,6 +5253,12 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 		return nil, err
 	}
 
+	return s.finishSyncEnclave(&succeeded)
+}
+
+// finishSyncEnclave commits what the sync installed and seals the params -- the one write a sync
+// makes, and only once it has decided to succeed.
+func (s *qadenaServer) finishSyncEnclave(succeeded *bool) (*types.SyncEnclaveReply, error) {
 	// commit db
 	//
 	// This commit deliberately gets NO qmeta/hv/ entry and NO PreparedHeight stamp: it happens
@@ -5209,12 +5283,13 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 		c.LoggerError(logger, "Couldn't cast multistore to commitstore")
 	}
 
-	// seal it
-	status := s.saveEnclaveParams()
+	// seal it -- directly, past the hold this sync placed on every other write
+	status := s.writeEnclaveParams()
 	if !status {
 		c.LoggerError(logger, "couldn't save enclave parms")
 		return &types.SyncEnclaveReply{Status: false}, nil
 	}
+	*succeeded = true
 
 	return &types.SyncEnclaveReply{Status: true}, nil
 }
