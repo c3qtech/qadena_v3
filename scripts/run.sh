@@ -59,6 +59,13 @@ if [[ $EXT_ADDR == "" ]] ; then
     exit 1
 fi
 
+# SEALED STATE ON THE CPU THAT WROTE IT.  A cloud VM moved to another host (Azure deallocate,
+# resize, redeploy) cannot unseal anything, and the enclaves would only say "message authentication
+# failed" after the node was up.  Refuse here, with the reason, before any process starts.
+if [[ -z $EXTERNAL_ENCLAVE ]] ; then
+    $qadenascripts/check_sgx_platform.sh || exit $?
+fi
+
 $qadenascripts/check_upgrade_enclave.sh
 RET=$?
 if [ $RET -ne 0 ] ; then

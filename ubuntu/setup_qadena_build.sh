@@ -127,6 +127,9 @@ if [ "$(uname -m)" = "x86_64" ]; then
     apt update
     rm -f /etc/sgx_default_qcnl.conf
     apt install -y libsgx-dcap-default-qpl
+    # QE_ID / CPUSVN for scripts/check_sgx_platform.sh, which refuses to start a node whose sealed
+    # state was written on a different CPU (a cloud VM moved to another host).
+    apt install -y sgx-pck-id-retrieval-tool
 
     # DEVICE ACCESS FOR THE BUILD USER -- this is what makes running the node as root unnecessary.
     #
