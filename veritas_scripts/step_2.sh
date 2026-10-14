@@ -283,30 +283,44 @@ echo "-------------------------"
 echo "Setting up $identityprovidername provider"
 echo "-------------------------"
 
-$qadenaproviderscripts/setup_provider_base.sh $identityprovidername identity --pioneer $pioneer --treasury $treasuryname --provider-mnemonic $identityprovidermnemonic --provider-amount $provideramount --count $count "${feegrant_args[@]}"
-
-# load proposal id from identity.proposal_id
-identityproposal_id=$(cat $qadenaproviderscripts/proposals/$identityprovidername.proposal_id)
-
-# NOT waited to VOTING_PERIOD in sponsored mode: with no SEC deposit the proposal sits in
-# DEPOSIT_PERIOD until QFI deposits -- blocking here would deadlock SEC (waiting for a status
-# only QFI can cause) against QFI (waiting for the ids this step has not yet printed).
-if [ "${VERITAS_FUND_MODE:-}" != "foundation-sponsored" ]; then
-    $qadenaproviderscripts/query_service_provider_proposal.sh $identityproposal_id --wait --status "PROPOSAL_STATUS_VOTING_PERIOD"
-fi
-
+$qadenaproviderscripts/setup_provider_base.sh $identityprovidername identity --pioneer $pioneer --treasury $treasuryname --provider-mnemonic $identityprovidermnemonic --provider-amount $provideramount --count $count "${feegrant_args[@]}" --no-proposal
 
 # setup dsvs provider
 echo "-------------------------"
 echo "Setting up  $dsvsprovidername provider"
 echo "-------------------------"
 
-$qadenaproviderscripts/setup_provider_base.sh $dsvsprovidername dsvs --pioneer $pioneer --treasury $treasuryname --provider-mnemonic $dsvsprovidermnemonic --provider-amount $provideramount --count $count "${feegrant_args[@]}"
+$qadenaproviderscripts/setup_provider_base.sh $dsvsprovidername dsvs --pioneer $pioneer --treasury $treasuryname --provider-mnemonic $dsvsprovidermnemonic --provider-amount $provideramount --count $count "${feegrant_args[@]}" --no-proposal
 
-# load proposal id from dsvssrvprv.proposal_id
+# BOTH PROPOSALS TOGETHER, AFTER EVERY WALLET EXISTS.  A sponsored proposal is submitted with
+# 20,000 QDN against the 50,000 expedited minimum, so it waits in DEPOSIT_PERIOD for QFI's top-up --
+# 300s on the test clock, after which the chain DELETES it.  Each provider used to propose at the
+# end of its own setup, so the identity proposal's window ran through all of the DSVS provider's
+# wallet work.  The 2026-09-24 launch cleared it by 6s and 3s (old chain's tx index); the
+# 2026-10-14 rebuild, driven from a Mac 200ms from the chain, took 8m21s and lost both proposals.
+# Submitted back to back, the two are seconds apart and QFI's top-up follows immediately.
+#
+# The id files are removed first: a submission that fails must not leave the PREVIOUS run's id
+# for after_step_2 to find -- that is a "proposal N: NOT FOUND" pointing at the wrong cause.
+submit_provider_proposal() {   # submit_provider_proposal <providername> <serviceProviderType>
+    rm -f "$qadenaproviderscripts/proposals/$1.proposal_id"
+    $qadenaproviderscripts/submit_service_provider_proposal.sh $treasuryname $1 add_service_provider_proposal $2 $pioneer
+    [ -s "$qadenaproviderscripts/proposals/$1.proposal_id" ] \
+        || { echo "FAILED: no proposal id was recorded for $1 -- see the submission output above"; exit 1; }
+}
+echo "-------------------------"
+echo "Submitting both provider proposals"
+echo "-------------------------"
+submit_provider_proposal $identityprovidername identity
+submit_provider_proposal $dsvsprovidername dsvs
+identityproposal_id=$(cat $qadenaproviderscripts/proposals/$identityprovidername.proposal_id)
 dsvsproposal_id=$(cat $qadenaproviderscripts/proposals/$dsvsprovidername.proposal_id)
 
+# NOT waited to VOTING_PERIOD in sponsored mode: with no SEC deposit the proposal sits in
+# DEPOSIT_PERIOD until QFI deposits -- blocking here would deadlock SEC (waiting for a status
+# only QFI can cause) against QFI (waiting for the ids this step has not yet printed).
 if [ "${VERITAS_FUND_MODE:-}" != "foundation-sponsored" ]; then
+    $qadenaproviderscripts/query_service_provider_proposal.sh $identityproposal_id --wait --status "PROPOSAL_STATUS_VOTING_PERIOD"
     $qadenaproviderscripts/query_service_provider_proposal.sh $dsvsproposal_id --wait --status "PROPOSAL_STATUS_VOTING_PERIOD"
 fi
 

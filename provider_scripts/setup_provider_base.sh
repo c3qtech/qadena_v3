@@ -15,6 +15,9 @@ unset serviceProviderType
 # --fee-granter to switch to toll-free, where the wallets are granted fees and hold nothing.
 feegranter=""
 
+# Set by --no-proposal: set the provider up but leave the governance proposal to the caller.
+no_proposal=0
+
 # The message types a VERITAS provider/signer wallet broadcasts.  MUST stay in step with the same
 # list in veritas_scripts/step_3.sh and with the app-server's allowlist -- a type missing from any
 # one of the three fails closed at the operation that needs it, not at grant time.
@@ -186,8 +189,17 @@ while [[ $# -gt 0 ]]; do
             count="$2"
             shift 2
             ;;
+        # SET UP, DO NOT PROPOSE.  A sponsored proposal is submitted below the expedited minimum
+        # and waits 300s (test clock) for the foundation's top-up; a caller setting up a SECOND
+        # provider in between can outlast that window, and the chain deletes the proposal.
+        # veritas_scripts/step_2.sh passes this for both providers and submits the two proposals
+        # back to back once every wallet exists.
+        --no-proposal)
+            no_proposal=1
+            shift 1
+            ;;
         --help)
-            echo "Usage: $0 <providername> <serviceProviderType> (e.g. identity, finance) [--pioneer <pioneer>] [--treasury <treasury>] [--provider-mnemonic <providermnemonic>] [--provider-amount <provideramount>] [--count <count>]"
+            echo "Usage: $0 <providername> <serviceProviderType> (e.g. identity, finance) [--pioneer <pioneer>] [--treasury <treasury>] [--provider-mnemonic <providermnemonic>] [--provider-amount <provideramount>] [--count <count>] [--no-proposal]"
             exit 0
             ;;
         --*) # Handle unknown options
@@ -398,6 +410,11 @@ if [ $count -gt 0 ]; then
             qadenad_alias query wait-tx $tx_hash --timeout 30s
         fi
     done
+fi
+
+if [ "$no_proposal" -eq 1 ]; then
+    echo "--no-proposal: $providername is set up; its proposal is left to the caller"
+    exit 0
 fi
 
 $qadenaproviderscripts/submit_service_provider_proposal.sh $treasury $providername add_service_provider_proposal $serviceProviderType $pioneer
