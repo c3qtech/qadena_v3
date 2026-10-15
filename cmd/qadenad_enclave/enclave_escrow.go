@@ -235,6 +235,22 @@ func (s *qadenaServer) noteEscrowSSKey() {
 			return
 		}
 	}
+	// ONLY A KEY OTHERS CAN REBUILD.  A restore cannot use this node's own share -- it decrypts only
+	// with the key being recovered -- so a key whose OTHER owners cannot reach its threshold would
+	// leave the escrow openable only by luck (some enclave happening to hold it cached).  The first
+	// interval key of a chain is exactly that: minted while the genesis pioneer was the only
+	// addressable owner.  Keep the previous escrow until a rotation produces a key that qualifies.
+	if cur, _ := currentEscrowSSKey(); cur != pubKID {
+		if others, need, ok := s.escrowKeyOthers(pubKID); !ok {
+			if !escrowKeyWarned[pubKID] {
+				escrowKeyWarned[pubKID] = true
+				c.LoggerInfo(logger, "escrow: NOT moving to SS interval key "+pubKID+" -- "+strconv.Itoa(others)+
+					" other owner(s), "+strconv.Itoa(need)+" needed to rebuild it without this node; "+
+					map[bool]string{true: "keeping the escrow on " + cur, false: "no escrow yet -- this node cannot survive a CPU move until a rotation mints a key other pioneers own"}[cur != ""])
+			}
+			return
+		}
+	}
 	if !setEscrowSSKey(pubKID, pubK) || !s.paramsPersisted {
 		return
 	}
@@ -244,6 +260,27 @@ func (s *qadenaServer) noteEscrowSSKey() {
 		return
 	}
 	c.LoggerInfo(logger, "private-params escrow written to SS interval key "+pubKID)
+}
+
+// escrowKeyWarned limits the "not moving" note to once per key; noteEscrowSSKey runs every block.
+// Execution thread only, like its caller.
+var escrowKeyWarned = map[string]bool{}
+
+// escrowKeyOthers reports how many owners of pubKID other than this node there are, how many shares
+// rebuilding it takes, and whether the others alone suffice.
+func (s *qadenaServer) escrowKeyOthers(pubKID string) (others, need int, ok bool) {
+	owners, found := s.getOwners(pubKID)
+	if !found {
+		return 0, 1, false
+	}
+	me := s.getPrivateEnclaveParamsPioneerID()
+	for _, o := range owners.PioneerIDs {
+		if o != me {
+			others++
+		}
+	}
+	need = getThreshold(len(owners.PioneerIDs))
+	return others, need, others >= need && others > 0
 }
 
 // writeEscrow refreshes the escrow from the current params, to the current SS interval key.  Called

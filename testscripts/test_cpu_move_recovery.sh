@@ -103,6 +103,23 @@ check_seed() {   # wallet expected label
 H="/home/alvillarica/qadena"
 
 if (( FROM <= 1 )); then
+phase "0. an SS key the OTHER pioneers own, for the escrow"
+# The chain's first interval key was minted while the primary was the only addressable pioneer, so
+# only it owns that key -- and a restore cannot use the restoring node's own share.  The escrow
+# writer refuses such a key; rotate once so there is one the seed also owns.  (debug-only command;
+# on a real fleet the 555-block rotation does this.)
+onz "$PRIMARY" "qadenad_alias enclave update-ss-interval-key" > "$OUT/rotate.log" 2>&1 || die "could not force an SS key rotation ($OUT/rotate.log)"
+esc_key=""
+for i in {1..24}; do
+    sleep 5
+    esc_key=$(ssh alvillarica@$PRIMARY "jq -r .SSPubKID $H/enclave_config/private_params_escrow.json 2>/dev/null")
+    [[ -n "$esc_key" && "$esc_key" != null ]] || continue
+    owners=$(onz "$PRIMARY" "qadenad_alias query qadena show-public-key $esc_key transaction -o json" 2>/dev/null | jq -r '[.publicKey.shares[]?.pioneerID] | join(",")')
+    [[ "$owners" == *,* ]] && break
+done
+[[ "$owners" == *,* ]] && pass "the escrow is on SS key $esc_key, owned by $owners" \
+    || die "the escrow never moved to a key with more than one owner (key ${esc_key:-none}, owners ${owners:-?})"
+
 phase "1. baseline: provision, protect, request recovery, users sign"
 # A DEPLOYMENT PROFILE FIRST: setup_provider_base.sh refuses an empty app-server allow-list, and
 # setup_prerequisites.sh does not load one itself.
@@ -202,9 +219,20 @@ wait_height_past "$PRIMARY" $(( h_seed + 5 )) && pass "the primary is producing"
 hc=$(( $(height_of "$SEED") - 1 ))
 a1=$(apphash_at "$PRIMARY" $hc); a2=$(apphash_at "$SEED" $hc)
 [[ -n "$a1" && "$a1" == "$a2" ]] && pass "app hashes agree at $hc ($a1)" || fail "app hash mismatch at $hc: $a1 vs $a2"
-ssh alvillarica@$PRIMARY "grep -h -E 'RESTORED from the escrow|restored pioneer|private state|private tables|via=escrow-restore|escrow: gathering' $H/logs/recover_enclave.*.log $H/logs/qadena.log 2>/dev/null | tail -8" > "$OUT/restore-lines.log"
+# The recovery log in full (it is small); only the tail of the node log.
+ssh alvillarica@$PRIMARY "grep -h -E 'RESTORED from the escrow|restored pioneer|via=escrow-restore|escrow: gathering|ss-whohas' $H/logs/recover_enclave.*.log 2>/dev/null; grep -h -E 'private state|private tables' $H/logs/qadena.log 2>/dev/null | tail -6" > "$OUT/restore-lines.log"
 grep -q "RESTORED from the escrow" "$OUT/restore-lines.log" && pass "enclave log: restored from the escrow, no registration tx" || fail "no restore line in the enclave log ($OUT/restore-lines.log)"
-grep -q "via=escrow-restore" "$OUT/restore-lines.log" && pass "enclave log: the SS key was rebuilt from the other owners' shares during the halt" || fail "no escrow-restore reconstruction in the enclave log ($OUT/restore-lines.log)"
+# FROM SHARES, NOT FROM SOMEONE'S CACHE.  WHO-HAS (a peer holding the whole key cached) also opens
+# the escrow, and an earlier run passed that way while asking zero owners -- proving nothing about
+# the threshold path.  Require the gather to have reached at least one other owner and not to
+# have needed the rescue.
+if grep -q "escrow: gathering SS key .* from [1-9][0-9]* owner" "$OUT/restore-lines.log" \
+   && grep -q "rebuilt via=escrow-restore" "$OUT/restore-lines.log" \
+   && ! grep -q "RESCUED.*via=escrow-restore" "$OUT/restore-lines.log"; then
+    pass "enclave log: the SS key was rebuilt from another owner's share during the halt"
+else
+    fail "the SS key was not rebuilt from owner shares ($OUT/restore-lines.log)"
+fi
 fi
 
 if (( FROM <= 5 )); then
