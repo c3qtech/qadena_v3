@@ -3615,6 +3615,10 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 		s.saveEnclaveParamsIfChanged()
 	}
 
+	// Keep the escrow written to the CURRENT SS interval key -- here, because finding that key reads
+	// the block store, and this is the execution thread.  See enclave_escrow.go.
+	s.noteEscrowSSKey()
+
 	if setChainPosition(in.Height, in.IsLive) {
 		if in.IsLive {
 			c.LoggerInfo(logger, "chain is LIVE at height "+strconv.FormatInt(in.Height, 10)+" -- trust changes now apply")
@@ -5070,7 +5074,7 @@ func (s *qadenaServer) SyncEnclave(ctx context.Context, in *types.MsgSyncEnclave
 				c.LoggerError(logger, "Already initialized, and the jar is wrong! "+fromRemoteEnclaveParams.JarID+" chain value is "+res2.GetPioneerJar().JarID)
 				return nil, types.ErrGenericEnclave
 			}
-			if err := s.restoreFromEscrow(queryClient, in.PioneerID, pwalletID, &fromRemoteEnclaveParams, seedHeight); err != nil {
+			if err := s.restoreFromEscrow(queryClient, in.PioneerID, pwalletID, allOwners, bootstrapAddrs, seedHeight); err != nil {
 				c.LoggerError(logger, "Already initialized: pioneer "+in.PioneerID+" is registered on chain, and its keys cannot be restored from the escrow: "+err.Error())
 				c.LoggerError(logger, "    nothing was written.  A node whose sealed state is unreadable (moved to another CPU) needs")
 				c.LoggerError(logger, "    "+s.escrowPath()+" from before the move.")

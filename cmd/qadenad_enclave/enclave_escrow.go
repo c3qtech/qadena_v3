@@ -21,17 +21,23 @@ package main
 // chain, which a moved node holding most of the stake is the reason there is not -- and everything
 // encrypted to the old EnclavePubK would be lost for good anyway.
 //
-// So every write of the sealed params also writes those fields here, encrypted under a key derived
-// from the JAR private key.  That key is held by every enclave in the trusted set and by nothing
-// else, and arrives at a recovering node only through sync-enclave from a seed running its own
-// measurement -- the same attested channel, and the same trust boundary, the jar and regulator
-// private keys already cross.  The blob itself is not CPU-bound, so ordinary file backups carry it.
+// WHAT IT IS ENCRYPTED TO: THE CURRENT SS INTERVAL KEY.  The secret must be one that NEVER leaves
+// the enclaves.  The jar key does not qualify -- the regulator is to be given it, and with it every
+// node's escrow, i.e. every enclave's identity key.  The SS interval key does: it exists only as
+// Shamir shares held by owner enclaves (encrypted on chain to each owner's enclave key) and as
+// reconstructions cached inside enclaves.  So the escrow is as Shamir-protected as the data the
+// interval key protects, and opening it takes a threshold of that key's owners, each of which
+// attests the requester before releasing a share.
+//
+// Hybrid, not plain ECIES: a fresh AES-256-GCM data key encrypts the fields, with the clear header
+// bound in as associated data, and only that data key is ECIES-wrapped to the SS public key.  ECIES
+// alone would leave the header unauthenticated.  Writing needs only the PUBLIC key, which every
+// enclave caches; no private key is reconstructed to write an escrow.
 //
 // WHAT IS DELIBERATELY NOT HERE:
 //
-//   - SS shares.  Every trusted enclave can open every escrow blob, so escrowed shares would let one
-//     enclave collect a threshold of them.  A recovered node has none until a re-share; its own
-//     getSSPrivK still works by gathering from the other owners.
+//   - SS shares.  They come back from the chain: each PublicKey row carries every owner's share
+//     encrypted to that owner's EnclavePubK, which this escrow restores.
 //   - The pioneer key.  The operator supplies it to sync-enclave again, exactly as at first join.
 //   - The trusted set and every other shared field.  Restoring them from a snapshot would be a
 //     rollback; the seed supplies the current ones.
@@ -39,31 +45,29 @@ package main
 // FRESHNESS.  A blob is a snapshot, so restoring it is a rollback of what it holds.  The watermark is
 // therefore taken as max(escrowed, the seed's attested height), never the escrowed value alone, and
 // the EnclavePubK is checked against the one the CHAIN records for this pioneer before anything is
-// installed -- a stale or substituted blob for another key is refused.
+// installed -- a stale or substituted blob for another key is refused.  The SS public key named in
+// the header is checked against the chain too, so a forged header cannot steer the restore to a
+// key of the attacker's choosing.
 
 import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strconv"
-
-	"golang.org/x/crypto/hkdf"
+	"sync"
 
 	c "github.com/c3qtech/qadena_v3/x/qadena/common"
 	"github.com/c3qtech/qadena_v3/x/qadena/types"
 )
 
 const (
-	escrowVersion  = 1
+	escrowVersion  = 2
 	escrowFileName = "private_params_escrow.json"
-	escrowHKDFInfo = "qadena private-params escrow v1"
 )
 
 // escrowedPrivateParams is the plaintext inside the blob: the enclave-born fields of
@@ -78,42 +82,51 @@ type escrowedPrivateParams struct {
 	PioneerIsValidator       bool
 }
 
-// escrowFile is what lands on disk.  PioneerID, JarID and EnclavePubK are in the clear so a restore
-// can refuse the wrong blob before decrypting, and so an operator can see whose it is; all three are
-// public on chain anyway.  They are also bound into the AEAD, so they cannot be edited.
+// escrowFile is what lands on disk.  Everything outside the two encrypted fields is public on chain
+// anyway, in the clear so a restore can refuse the wrong blob -- and find the right SS key --
+// before doing any work, and authenticated as associated data so none of it can be edited.
 type escrowFile struct {
 	Version     int
 	PioneerID   string
-	JarID       string
 	EnclavePubK string
+	SSPubKID    string // the SS interval key the data key is wrapped to
+	SSPubK      string
+	WrappedKey  []byte // ECIES(SSPubK, data key)
 	Nonce       []byte
-	Ciphertext  []byte
+	Ciphertext  []byte // AES-256-GCM(data key, fields)
+}
+
+// escrowSSKey is the SS interval key new escrows are written to: the current one, recorded on the
+// execution thread by UpdateHeight (noteEscrowSSKey), because finding it reads the block store.
+// writeEscrow runs wherever the params are saved, so it reads this snapshot instead.
+var escrowSSKey struct {
+	mu           sync.Mutex
+	pubKID, pubK string
+}
+
+func currentEscrowSSKey() (pubKID, pubK string) {
+	escrowSSKey.mu.Lock()
+	defer escrowSSKey.mu.Unlock()
+	return escrowSSKey.pubKID, escrowSSKey.pubK
+}
+
+func setEscrowSSKey(pubKID, pubK string) (changed bool) {
+	escrowSSKey.mu.Lock()
+	defer escrowSSKey.mu.Unlock()
+	changed = escrowSSKey.pubKID != pubKID
+	escrowSSKey.pubKID, escrowSSKey.pubK = pubKID, pubK
+	return changed
 }
 
 func (s *qadenaServer) escrowPath() string {
 	return s.HomePath + "/enclave_config/" + escrowFileName
 }
 
-func escrowKey(jarPrivK string) ([]byte, error) {
-	if jarPrivK == "" {
-		return nil, errors.New("no jar private key: nothing to derive the escrow key from")
-	}
-	key := make([]byte, 32)
-	if _, err := io.ReadFull(hkdf.New(sha256.New, []byte(jarPrivK), nil, []byte(escrowHKDFInfo)), key); err != nil {
-		return nil, err
-	}
-	return key, nil
-}
-
 func escrowAAD(f *escrowFile) []byte {
-	return []byte(fmt.Sprintf("qadena-escrow|%d|%s|%s|%s", f.Version, f.PioneerID, f.JarID, f.EnclavePubK))
+	return []byte(fmt.Sprintf("qadena-escrow|%d|%s|%s|%s|%s", f.Version, f.PioneerID, f.EnclavePubK, f.SSPubKID, f.SSPubK))
 }
 
-func escrowAEAD(jarPrivK string) (cipher.AEAD, error) {
-	key, err := escrowKey(jarPrivK)
-	if err != nil {
-		return nil, err
-	}
+func newGCM(key []byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -121,9 +134,20 @@ func escrowAEAD(jarPrivK string) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-// sealEscrow encrypts p for the fleet whose jar key is jarPrivK.
-func sealEscrow(p escrowedPrivateParams, jarID, jarPrivK string) ([]byte, error) {
-	aead, err := escrowAEAD(jarPrivK)
+// sealEscrow encrypts p so that only an enclave holding the SS interval key ssPubKID can read it.
+func sealEscrow(p escrowedPrivateParams, ssPubKID, ssPubK string) ([]byte, error) {
+	if ssPubKID == "" || ssPubK == "" {
+		return nil, errors.New("no SS interval key to write the escrow to")
+	}
+	dataKey := make([]byte, 32)
+	if _, err := rand.Read(dataKey); err != nil {
+		return nil, err
+	}
+	wrapped := c.BEncrypt(ssPubK, dataKey)
+	if len(wrapped) == 0 {
+		return nil, fmt.Errorf("could not wrap the data key to SS key %s", ssPubKID)
+	}
+	aead, err := newGCM(dataKey)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +155,10 @@ func sealEscrow(p escrowedPrivateParams, jarID, jarPrivK string) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	f := escrowFile{Version: escrowVersion, PioneerID: p.PioneerID, JarID: jarID, EnclavePubK: p.EnclavePubK}
+	f := escrowFile{
+		Version: escrowVersion, PioneerID: p.PioneerID, EnclavePubK: p.EnclavePubK,
+		SSPubKID: ssPubKID, SSPubK: ssPubK, WrappedKey: wrapped,
+	}
 	f.Nonce = make([]byte, aead.NonceSize())
 	if _, err := rand.Read(f.Nonce); err != nil {
 		return nil, err
@@ -140,8 +167,8 @@ func sealEscrow(p escrowedPrivateParams, jarID, jarPrivK string) ([]byte, error)
 	return json.Marshal(f)
 }
 
-// openEscrow decrypts a blob, refusing one that belongs to another pioneer or another jar.
-func openEscrow(b []byte, pioneerID, jarID, jarPrivK string) (*escrowedPrivateParams, error) {
+// readEscrowHeader parses a blob and checks it is this pioneer's, without decrypting anything.
+func readEscrowHeader(b []byte, pioneerID string) (*escrowFile, error) {
 	var f escrowFile
 	if err := json.Unmarshal(b, &f); err != nil {
 		return nil, fmt.Errorf("escrow is not readable JSON: %w", err)
@@ -152,19 +179,32 @@ func openEscrow(b []byte, pioneerID, jarID, jarPrivK string) (*escrowedPrivatePa
 	if f.PioneerID != pioneerID {
 		return nil, fmt.Errorf("escrow belongs to pioneer %q, not %q", f.PioneerID, pioneerID)
 	}
-	if f.JarID != jarID {
-		return nil, fmt.Errorf("escrow was written under jar %q, the seed's jar is %q", f.JarID, jarID)
+	if f.SSPubKID == "" || f.SSPubK == "" || len(f.WrappedKey) == 0 {
+		return nil, errors.New("escrow names no SS interval key")
 	}
-	aead, err := escrowAEAD(jarPrivK)
+	return &f, nil
+}
+
+// openEscrow decrypts a blob with the reconstructed SS interval private key.
+func openEscrow(f *escrowFile, ssPrivK string) (*escrowedPrivateParams, error) {
+	// The key must be the one the header names, or the unwrap below is meaningless.
+	if got, err := derivePubKBase64(ssPrivK); err != nil || got != f.SSPubK {
+		return nil, errors.New("the SS private key does not match the key the escrow was written to")
+	}
+	dataKey := c.BDecrypt(ssPrivK, f.WrappedKey)
+	if len(dataKey) != 32 {
+		return nil, errors.New("could not unwrap the escrow's data key")
+	}
+	aead, err := newGCM(dataKey)
 	if err != nil {
 		return nil, err
 	}
 	if len(f.Nonce) != aead.NonceSize() {
 		return nil, errors.New("escrow nonce has the wrong length")
 	}
-	plain, err := aead.Open(nil, f.Nonce, f.Ciphertext, escrowAAD(&f))
+	plain, err := aead.Open(nil, f.Nonce, f.Ciphertext, escrowAAD(f))
 	if err != nil {
-		return nil, fmt.Errorf("escrow does not decrypt under the seed's jar key: %w", err)
+		return nil, fmt.Errorf("escrow does not decrypt: %w", err)
 	}
 	var p escrowedPrivateParams
 	if err := json.Unmarshal(plain, &p); err != nil {
@@ -180,9 +220,36 @@ func openEscrow(b []byte, pioneerID, jarID, jarPrivK string) (*escrowedPrivatePa
 	return &p, nil
 }
 
-// writeEscrow refreshes the escrow from the current params.  Called after every successful sealed
-// write, so the blob is never older than the sealed file it backs up.  Silent when the node has
-// nothing to escrow yet (no pioneer, no enclave key, or no jar key to encrypt under).
+// noteEscrowSSKey records the current SS interval key and, when it has changed, re-writes the
+// escrow to it.  EXECUTION THREAD ONLY: it reads the block store.  Called every block from
+// UpdateHeight; the lookup is two point reads, and the write happens only on a change -- the first
+// interval key after init or join, and each rotation after that.
+func (s *qadenaServer) noteEscrowSSKey() {
+	pubKID, _, _, found := s.getIntervalPublicKeyId(types.SSNodeID, types.SSNodeType)
+	if !found || pubKID == "" {
+		return
+	}
+	pubK, ok := s.getPubKCache(pubKID)
+	if !ok || pubK == "" {
+		if pubK, ok = s.getPublicKey(pubKID, types.TransactionPubKType); !ok || pubK == "" {
+			return
+		}
+	}
+	if !setEscrowSSKey(pubKID, pubK) || !s.paramsPersisted {
+		return
+	}
+	if err := s.writeEscrow(); err != nil {
+		c.LoggerError(logger, "could not re-write the private-params escrow to SS key "+pubKID+
+			" -- this node will NOT survive a move to another CPU: "+err.Error())
+		return
+	}
+	c.LoggerInfo(logger, "private-params escrow written to SS interval key "+pubKID)
+}
+
+// writeEscrow refreshes the escrow from the current params, to the current SS interval key.  Called
+// after every successful sealed write and on every SS key change.  Silent when there is nothing to
+// escrow yet (no pioneer or enclave key) or no SS key known yet -- noteEscrowSSKey writes it as soon
+// as one is.
 func (s *qadenaServer) writeEscrow() error {
 	s.mutex.RLock()
 	p := escrowedPrivateParams{
@@ -194,14 +261,17 @@ func (s *qadenaServer) writeEscrow() error {
 		TrustHeightHighWaterMark: s.privateEnclaveParams.TrustHeightHighWaterMark,
 		PioneerIsValidator:       s.privateEnclaveParams.PioneerIsValidator,
 	}
-	jarID := s.sharedEnclaveParams.JarID
-	jarPrivK := s.sharedEnclaveParams.JarPrivK
 	s.mutex.RUnlock()
 
-	if p.PioneerID == "" || p.EnclavePrivK == "" || jarPrivK == "" {
+	if p.PioneerID == "" || p.EnclavePrivK == "" {
 		return nil
 	}
-	b, err := sealEscrow(p, jarID, jarPrivK)
+	ssPubKID, ssPubK := currentEscrowSSKey()
+	if ssPubKID == "" {
+		c.LoggerDebug(logger, "escrow: no SS interval key known yet; written once one is")
+		return nil
+	}
+	b, err := sealEscrow(p, ssPubKID, ssPubK)
 	if err != nil {
 		return err
 	}
@@ -219,14 +289,22 @@ func (s *qadenaServer) readEscrow() ([]byte, error) {
 }
 
 // restoreFromEscrow installs this pioneer's own enclave-born keys from the escrow, for a node whose
-// sealed params can no longer be opened.  remote is the seed's shared params, just received over
-// the attested sync-enclave channel and not yet installed; the escrow key derives from its jar key.
+// sealed params can no longer be opened.  Runs inside SyncEnclave, after the seed's shared params
+// and owner map have been received but before anything is installed; owners and bootstrapAddrs are
+// what the seed sent.
+//
+// THE SS KEY IS GATHERED HERE, AS ANY ENCLAVE GATHERS ONE: shares are fetched from the key's owners
+// over attested queries -- no transaction, so this works while the chain is halted -- encrypted to
+// the temporary enclave key preInitEnclave minted for this sync.  This node cannot contribute a share
+// of its own: decrypting its share needs the very key it is recovering.
 //
 // Fail-closed at every step, and it touches the params only once every check has passed:
-//   - the blob must name this pioneer and the seed's jar, and decrypt under the jar key;
+//   - the blob must name this pioneer, and the SS public key it names must be the chain's;
 //   - its EnclavePubK must be the one the CHAIN records for this pioneer -- a blob from an earlier
-//     registration, or another node's, is refused rather than installed.
-func (s *qadenaServer) restoreFromEscrow(queryClient types.QueryClient, pioneerID string, pwalletID string, remote *types.EncryptableSharedEnclaveParams, seedHeight int64) error {
+//     registration, or another node's, is refused rather than installed;
+//   - the gathered SS key must derive to the named public key, and the blob must authenticate.
+func (s *qadenaServer) restoreFromEscrow(queryClient types.QueryClient, pioneerID string, pwalletID string,
+	owners *types.EncryptableEnclaveSSOwnerMap, bootstrapAddrs map[string]string, seedHeight int64) error {
 	b, err := s.readEscrow()
 	if err != nil {
 		return fmt.Errorf("cannot read %s: %w", s.escrowPath(), err)
@@ -234,20 +312,39 @@ func (s *qadenaServer) restoreFromEscrow(queryClient types.QueryClient, pioneerI
 	if b == nil {
 		return fmt.Errorf("there is no escrow at %s", s.escrowPath())
 	}
-	p, err := openEscrow(b, pioneerID, remote.JarID, remote.JarPrivK)
+	f, err := readEscrowHeader(b, pioneerID)
 	if err != nil {
 		return err
 	}
 
-	res, err := queryClient.PublicKey(context.Background(), &types.QueryGetPublicKeyRequest{
-		PubKID:   pwalletID,
-		PubKType: types.EnclavePubKType,
+	// Both public keys against the chain, BEFORE any network work: cheap, and it means a stale or
+	// forged blob is refused without asking peers for anything.
+	encRes, err := queryClient.PublicKey(context.Background(), &types.QueryGetPublicKeyRequest{
+		PubKID: pwalletID, PubKType: types.EnclavePubKType,
 	})
 	if err != nil {
 		return fmt.Errorf("cannot read this pioneer's enclave key from the chain (pubKID %s): %w", pwalletID, err)
 	}
-	if pk := res.GetPublicKey(); pk.PubK != p.EnclavePubK {
+	if pk := encRes.GetPublicKey(); pk.PubK != f.EnclavePubK {
 		return fmt.Errorf("the escrowed enclave key is not the one the chain records for %s -- the escrow is stale or not this node's", pioneerID)
+	}
+	ssRes, err := queryClient.PublicKey(context.Background(), &types.QueryGetPublicKeyRequest{
+		PubKID: f.SSPubKID, PubKType: types.TransactionPubKType,
+	})
+	if err != nil {
+		return fmt.Errorf("cannot read SS interval key %s from the chain: %w", f.SSPubKID, err)
+	}
+	if pk := ssRes.GetPublicKey(); pk.PubK != f.SSPubK {
+		return fmt.Errorf("the escrow names SS key %s with a public key the chain does not record", f.SSPubKID)
+	}
+
+	ssPrivK, err := s.gatherEscrowSSKey(pioneerID, f.SSPubKID, f.SSPubK, owners, bootstrapAddrs)
+	if err != nil {
+		return err
+	}
+	p, err := openEscrow(f, ssPrivK)
+	if err != nil {
+		return err
 	}
 
 	// THE ENCLAVE KEY IN THE KEYRING TOO.  preInitEnclave created a fresh one under the same name;
@@ -268,10 +365,74 @@ func (s *qadenaServer) restoreFromEscrow(queryClient types.QueryClient, pioneerI
 	s.advanceTrustHeightHighWaterMark(p.TrustHeightHighWaterMark, 1)
 	s.advanceTrustHeightHighWaterMark(seedHeight, 1)
 
-	c.LoggerInfo(logger, "restored pioneer "+pioneerID+" from the escrow: enclave key matches the chain; trust watermark "+
+	// Re-escrow to the same key on the final save; noteEscrowSSKey moves it to the current key on
+	// the first block after start.
+	setEscrowSSKey(f.SSPubKID, f.SSPubK)
+
+	c.LoggerInfo(logger, "restored pioneer "+pioneerID+" from the escrow (SS key "+f.SSPubKID+
+		"): enclave key matches the chain; trust watermark "+
 		strconv.FormatInt(s.getPrivateEnclaveParamsTrustHeightHighWaterMark(), 10)+
 		" (escrowed "+strconv.FormatInt(p.TrustHeightHighWaterMark, 10)+", seed "+strconv.FormatInt(seedHeight, 10)+")")
-	c.LoggerInfo(logger, "    this node holds NO secret-sharing shares now (they are never escrowed); its keys are still")
-	c.LoggerInfo(logger, "    reconstructible from the other owners, but a re-share is needed to restore the margin")
 	return nil
+}
+
+// gatherEscrowSSKey reconstructs the SS interval key an escrow was written to, from the owner map
+// and peer addresses the seed sent.  planSSReconstruct cannot be used: it reads owners and addresses
+// from the block store, which a standalone enclave mid-sync has not got, and it consults the seed's
+// address map only once the chain position is known.  The job is built from the seed's data
+// instead; runSSReconstruct then does exactly what it does for any gather, integrity check included.
+func (s *qadenaServer) gatherEscrowSSKey(me, ssPubKID, ssPubK string,
+	owners *types.EncryptableEnclaveSSOwnerMap, bootstrapAddrs map[string]string) (string, error) {
+	var ownerIDs []string
+	if owners != nil {
+		if o, ok := owners.Pioneers[ssPubKID]; ok && o != nil {
+			ownerIDs = o.PioneerIDs
+		}
+	}
+	if len(ownerIDs) == 0 {
+		return "", fmt.Errorf("the seed lists no owners for SS key %s", ssPubKID)
+	}
+	job := &ssReconstructJob{
+		pubKID:   ssPubKID,
+		owners:   reorderPioneerIDs(ownerIDs, me),
+		me:       me,
+		nodes:    make(map[string]string),
+		fallback: make(map[string]string),
+	}
+	job.threshold = getThreshold(len(job.owners))
+	ownerSet := make(map[string]bool, len(ownerIDs))
+	for _, o := range ownerIDs {
+		ownerSet[o] = true
+	}
+	for p, ip := range bootstrapAddrs {
+		if p == me || ip == "" {
+			continue
+		}
+		if ownerSet[p] {
+			job.nodes[p] = "tcp://" + ip + ":26657"
+		} else if len(job.fallback) < effectiveProbeCap() {
+			job.fallback[p] = "tcp://" + ip + ":26657"
+		}
+	}
+	// This node is an owner but cannot contribute: its share decrypts only with the key being
+	// recovered.  So the threshold must come from the OTHER owners.
+	if len(job.nodes) < job.threshold {
+		c.LoggerError(logger, "escrow: SS key "+ssPubKID+" needs "+strconv.Itoa(job.threshold)+
+			" share(s) but the seed knows addresses for only "+strconv.Itoa(len(job.nodes))+
+			" other owner(s) -- trying anyway, then asking non-owners who has it")
+	}
+	// The integrity check in runSSReconstruct verifies against the cached public key.  This one was
+	// just checked against the chain, so it is the right thing to cache.
+	if _, cached := s.getPubKCache(ssPubKID); !cached {
+		s.setPubKCache(ssPubKID, ssPubK)
+	}
+	c.LoggerInfo(logger, "escrow: gathering SS key "+ssPubKID+" from "+strconv.Itoa(len(job.nodes))+
+		" owner(s), threshold "+strconv.Itoa(job.threshold))
+	privK := s.runSSReconstruct(job, "escrow-restore")
+	if privK == "" {
+		return "", fmt.Errorf("could not reconstruct SS key %s: fewer than %d of its other owners answered", ssPubKID, job.threshold)
+	}
+	c.LoggerInfo(logger, "escrow: SS key "+ssPubKID+" rebuilt via=escrow-restore (threshold "+
+		strconv.Itoa(job.threshold)+", "+strconv.Itoa(len(job.nodes))+" other owner(s) asked)")
+	return privK, nil
 }

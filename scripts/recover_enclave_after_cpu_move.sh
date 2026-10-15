@@ -13,18 +13,19 @@
 #   1. moves enclave_config/, enclave_data/ and enclave_secrets/ into a dated backup directory --
 #      nothing is deleted -- keeping the private-params ESCROW, which is not CPU-bound;
 #   2. starts the enclave alone and runs sync-enclave against --seed.  The seed hands over the shared
-#      params over an attested channel; the enclave opens the escrow with the jar key they carry,
-#      checks the escrowed enclave key against the one the CHAIN records for this pioneer, and
-#      re-seals it all for this CPU.  No transaction is sent, so this works while the chain is
-#      halted -- which it is, if this node holds most of the stake;
+#      params and the SS owner map over an attested channel.  The escrow is encrypted to an SS
+#      interval key, so the enclave gathers that key's shares from its OTHER owners (attested
+#      queries, no transaction), opens the escrow, checks the escrowed enclave key against the one
+#      the CHAIN records for this pioneer, and re-seals it all for this CPU.  Nothing is broadcast,
+#      so this works while the chain is halted -- which it is, if this node holds most of the stake;
 #   3. re-records this platform for check_sgx_platform.sh.
 # On the next start, the validator key is re-sealed from config/priv_validator_key.json by
-# signer_enclave, and the chain finds an enclave with no private state on a chain with history and
-# fetches it from a peer (the case-F private-state transfer) before executing a block.
+# signer_enclave, the chain re-delivers this node's SS shares (each PublicKey row carries them
+# encrypted to the enclave key just restored), and the enclave, holding no private state on a chain
+# with history, fetches it from a peer (the case-F transfer) before executing a block.
 #
-# WHAT IT DOES NOT RESTORE: this node's secret-sharing shares.  They are never escrowed (any trusted
-# enclave can open an escrow, so escrowed shares would defeat the threshold).  The node still
-# reconstructs keys from the other owners; a re-share restores the margin.
+# NEEDS ENOUGH OF THE SS KEY'S OTHER OWNERS REACHABLE: one, below four owners; the Shamir threshold
+# above that.  This node's own share cannot count -- it decrypts only with the key being recovered.
 #
 # REQUIRES: enclave_config/private_params_escrow.json, written by a build that has the escrow, from
 # before the move; config/priv_validator_key.json (or your offline copy of it) for a validator; and

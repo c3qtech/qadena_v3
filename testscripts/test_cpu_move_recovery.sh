@@ -34,7 +34,7 @@
 # exercise CPU-bound sealing.  See enclave_escrow.go.
 
 SCRIPT_DIR="${0:A:h}"
-PRIMARY="" SEED="" REPO="qv3" FROM=1 PASSFILE=""
+PRIMARY="" SEED="" REPO="qv3" FROM=1 PASSFILE="" HALT_SECONDS=900
 while (( $# )); do
     case "$1" in
         --primary) PRIMARY="$2"; shift 2 ;;
@@ -42,6 +42,7 @@ while (( $# )); do
         --repo)    REPO="$2"; shift 2 ;;
         --from)    FROM="$2"; shift 2 ;;
         --keyring-passfile) PASSFILE="$2"; shift 2 ;;
+        --halt-seconds) HALT_SECONDS="$2"; shift 2 ;;
         *) echo "unknown argument $1" >&2; exit 2 ;;
     esac
 done
@@ -153,6 +154,26 @@ h1=$(height_of "$SEED")
 # sealed file so the enclave and the signer fail exactly where SGX would.
 ssh alvillarica@$PRIMARY "cd $H/enclave_config && for f in enclave_params_*.json priv_validator_key.json; do printf 'MOVED' | dd of=\$f bs=1 count=5 conv=notrunc 2>/dev/null; done; sha256sum enclave_params_*.json" > "$OUT/broken.sha" || die "could not break the sealed files"
 pass "sealed files corrupted (as a new CPU would see them)"
+
+# THE ESCROW MUST NOT DEPEND ON THE JAR KEY -- the regulator is to be given it.  It names the SS
+# interval key it is wrapped to, and nothing else.
+ssk=$(ssh alvillarica@$PRIMARY "jq -r '[.Version, .SSPubKID, (has(\"JarID\"))] | @tsv' $H/enclave_config/private_params_escrow.json")
+[[ "$(print -r -- "$ssk" | cut -f1)" == 2 && -n "$(print -r -- "$ssk" | cut -f2)" && "$(print -r -- "$ssk" | cut -f3)" == false ]] \
+    && pass "the escrow is wrapped to SS interval key $(print -r -- "$ssk" | cut -f2) and carries no jar reference" \
+    || fail "the escrow is not an SS-keyed v2 escrow: $ssk"
+
+# THE HALTED-CHAIN CASE, AS IT HAPPENED ON c3q-mainnet: hours down, not seconds.  The restore needs
+# the OTHER owners' enclaves to serve SS shares while no block arrives; restarting the seed during the
+# halt also covers an enclave that has never been told the chain's position.
+on "$SEED" "$H/scripts/stop_qadena.sh" > "$OUT/seed-stop.log" 2>&1
+ssh -o BatchMode=yes alvillarica@$SEED "$H/scripts/start_qadena.sh > /tmp/cpu_move_seed_start.log 2>&1 < /dev/null"
+sleep 20
+hs=$(height_of "$SEED")
+[[ -n "$hs" ]] && pass "the seed restarted during the halt and answers at height $hs" || die "the seed did not come back after its restart"
+print -r -- "  ....  holding the chain halted for ${HALT_SECONDS}s"
+sleep "$HALT_SECONDS"
+hs2=$(height_of "$SEED")
+[[ "$hs2" == "$hs" ]] && pass "still halted after ${HALT_SECONDS}s (height $hs2)" || fail "the chain moved during the halt ($hs -> $hs2)"
 fi
 
 if (( FROM <= 3 )); then
@@ -181,8 +202,9 @@ wait_height_past "$PRIMARY" $(( h_seed + 5 )) && pass "the primary is producing"
 hc=$(( $(height_of "$SEED") - 1 ))
 a1=$(apphash_at "$PRIMARY" $hc); a2=$(apphash_at "$SEED" $hc)
 [[ -n "$a1" && "$a1" == "$a2" ]] && pass "app hashes agree at $hc ($a1)" || fail "app hash mismatch at $hc: $a1 vs $a2"
-ssh alvillarica@$PRIMARY "grep -h -E 'RESTORED from the escrow|restored pioneer|private state|private tables' $H/logs/recover_enclave.*.log $H/logs/qadena.log 2>/dev/null | tail -8" > "$OUT/restore-lines.log"
+ssh alvillarica@$PRIMARY "grep -h -E 'RESTORED from the escrow|restored pioneer|private state|private tables|via=escrow-restore|escrow: gathering' $H/logs/recover_enclave.*.log $H/logs/qadena.log 2>/dev/null | tail -8" > "$OUT/restore-lines.log"
 grep -q "RESTORED from the escrow" "$OUT/restore-lines.log" && pass "enclave log: restored from the escrow, no registration tx" || fail "no restore line in the enclave log ($OUT/restore-lines.log)"
+grep -q "via=escrow-restore" "$OUT/restore-lines.log" && pass "enclave log: the SS key was rebuilt from the other owners' shares during the halt" || fail "no escrow-restore reconstruction in the enclave log ($OUT/restore-lines.log)"
 fi
 
 if (( FROM <= 5 )); then

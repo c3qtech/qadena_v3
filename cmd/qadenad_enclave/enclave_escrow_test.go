@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"testing"
 
+	ecies "github.com/ecies/go/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,52 +22,96 @@ func testEscrowParams() escrowedPrivateParams {
 	}
 }
 
-func TestEscrowRoundTrip(t *testing.T) {
-	p := testEscrowParams()
-	b, err := sealEscrow(p, "jar1", "jar-privk")
+// testSSKey returns a fresh SS-interval-style key pair in the formats the enclave uses: the private
+// key as 32-byte hex, the public key as base64 of the compressed point.
+func testSSKey(t *testing.T) (privK, pubK string) {
+	t.Helper()
+	k, err := ecies.GenerateKey()
 	require.NoError(t, err)
-
-	got, err := openEscrow(b, "pioneer1", "jar1", "jar-privk")
+	privK = hex.EncodeToString(k.Bytes())
+	pubK, err = derivePubKBase64(privK)
 	require.NoError(t, err)
-	require.Equal(t, p, *got)
+	return privK, pubK
 }
 
-// The blob is readable by every enclave holding the jar key, so it must refuse to be read as
-// anything but what it is: this pioneer's, under this jar.
-func TestEscrowRefusesTheWrongBlob(t *testing.T) {
-	b, err := sealEscrow(testEscrowParams(), "jar1", "jar-privk")
+func sealAndHeader(t *testing.T, ssPubKID, ssPubK string) (*escrowFile, []byte) {
+	t.Helper()
+	b, err := sealEscrow(testEscrowParams(), ssPubKID, ssPubK)
 	require.NoError(t, err)
+	f, err := readEscrowHeader(b, "pioneer1")
+	require.NoError(t, err)
+	return f, b
+}
 
-	_, err = openEscrow(b, "pioneer2", "jar1", "jar-privk")
+func TestEscrowRoundTrip(t *testing.T) {
+	ssPriv, ssPub := testSSKey(t)
+	f, _ := sealAndHeader(t, "ss-key-1", ssPub)
+	require.Equal(t, "ss-key-1", f.SSPubKID)
+
+	got, err := openEscrow(f, ssPriv)
+	require.NoError(t, err)
+	require.Equal(t, testEscrowParams(), *got)
+}
+
+// The blob must refuse to be read as anything but what it is: this pioneer's, under this SS key.
+func TestEscrowRefusesTheWrongBlob(t *testing.T) {
+	_, ssPub := testSSKey(t)
+	_, b := sealAndHeader(t, "ss-key-1", ssPub)
+
+	_, err := readEscrowHeader(b, "pioneer2")
 	require.ErrorContains(t, err, "belongs to pioneer")
 
-	_, err = openEscrow(b, "pioneer1", "jar2", "jar-privk")
-	require.ErrorContains(t, err, "jar")
-
-	_, err = openEscrow(b, "pioneer1", "jar1", "another-jar-privk")
-	require.ErrorContains(t, err, "does not decrypt")
+	f, err := readEscrowHeader(b, "pioneer1")
+	require.NoError(t, err)
+	otherPriv, _ := testSSKey(t)
+	_, err = openEscrow(f, otherPriv)
+	require.ErrorContains(t, err, "does not match")
 }
 
 // The clear header is bound into the AEAD: editing it -- say, to make a stale blob claim the key the
 // chain now records -- breaks decryption rather than passing the on-chain comparison.
 func TestEscrowHeaderIsAuthenticated(t *testing.T) {
-	b, err := sealEscrow(testEscrowParams(), "jar1", "jar-privk")
-	require.NoError(t, err)
+	ssPriv, ssPub := testSSKey(t)
+	_, b := sealAndHeader(t, "ss-key-1", ssPub)
 
-	var f escrowFile
-	require.NoError(t, json.Unmarshal(b, &f))
-	f.EnclavePubK = "a-different-pubk"
-	edited, err := json.Marshal(f)
-	require.NoError(t, err)
-	_, err = openEscrow(edited, "pioneer1", "jar1", "jar-privk")
+	edit := func(mut func(*escrowFile)) *escrowFile {
+		var f escrowFile
+		require.NoError(t, json.Unmarshal(b, &f))
+		mut(&f)
+		return &f
+	}
+
+	_, err := openEscrow(edit(func(f *escrowFile) { f.EnclavePubK = "a-different-pubk" }), ssPriv)
 	require.ErrorContains(t, err, "does not decrypt")
 
-	require.NoError(t, json.Unmarshal(b, &f))
-	f.Ciphertext[0] ^= 1
-	edited, err = json.Marshal(f)
-	require.NoError(t, err)
-	_, err = openEscrow(edited, "pioneer1", "jar1", "jar-privk")
+	_, err = openEscrow(edit(func(f *escrowFile) { f.SSPubKID = "ss-key-2" }), ssPriv)
 	require.ErrorContains(t, err, "does not decrypt")
+
+	_, err = openEscrow(edit(func(f *escrowFile) { f.Ciphertext[0] ^= 1 }), ssPriv)
+	require.ErrorContains(t, err, "does not decrypt")
+}
+
+// THE REASON FOR THE SS KEY.  The regulator is to be given the jar private key; nothing about the
+// escrow may depend on it.  A node with no jar key at all still escrows, and no jar key opens it.
+func TestEscrowDoesNotUseTheJarKey(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	withSealedParamsDir(t, s)
+	setUpEscrowableParams(s)
+	s.setSharedEnclaveParamsJarInfo("", "", "", "")
+
+	ssPriv, ssPub := testSSKey(t)
+	setEscrowSSKey("ss-key-1", ssPub)
+	t.Cleanup(func() { setEscrowSSKey("", "") })
+
+	require.True(t, s.saveEnclaveParams())
+	b, err := os.ReadFile(s.escrowPath())
+	require.NoError(t, err)
+	require.NotContains(t, string(b), "jar", "the escrow must not reference the jar")
+
+	f, err := readEscrowHeader(b, "pioneer1")
+	require.NoError(t, err)
+	_, err = openEscrow(f, ssPriv)
+	require.NoError(t, err)
 }
 
 func setUpEscrowableParams(s *qadenaServer) {
@@ -75,7 +121,6 @@ func setUpEscrowableParams(s *qadenaServer) {
 	s.setPrivateEnclaveParamsSealedTableSharedSecret(p.SealedTableSharedSecret)
 	s.setPrivateEnclaveParamsPioneerIsValidator(true)
 	s.advanceTrustHeightHighWaterMark(p.TrustHeightHighWaterMark, 1)
-	s.setSharedEnclaveParamsJarInfo("jar1", "jar-pubk", "jar-privk", "jar-armor")
 }
 
 // Every sealed write refreshes the escrow, so it is never older than the file it backs up.
@@ -83,31 +128,34 @@ func TestSaveEnclaveParamsWritesEscrow(t *testing.T) {
 	s := newTestEnclaveServer(t)
 	withSealedParamsDir(t, s)
 	setUpEscrowableParams(s)
+	ssPriv, ssPub := testSSKey(t)
+	setEscrowSSKey("ss-key-1", ssPub)
+	t.Cleanup(func() { setEscrowSSKey("", "") })
 
 	require.True(t, s.saveEnclaveParams())
-
-	b, err := os.ReadFile(s.escrowPath())
-	require.NoError(t, err)
-	got, err := openEscrow(b, "pioneer1", "jar1", "jar-privk")
-	require.NoError(t, err)
-	require.Equal(t, testEscrowParams(), *got)
+	open := func() *escrowedPrivateParams {
+		b, err := os.ReadFile(s.escrowPath())
+		require.NoError(t, err)
+		f, err := readEscrowHeader(b, "pioneer1")
+		require.NoError(t, err)
+		p, err := openEscrow(f, ssPriv)
+		require.NoError(t, err)
+		return p
+	}
+	require.Equal(t, testEscrowParams(), *open())
 
 	// and it follows a later change
 	s.advanceTrustHeightHighWaterMark(9000, 1)
 	require.True(t, s.saveEnclaveParams())
-	b, err = os.ReadFile(s.escrowPath())
-	require.NoError(t, err)
-	got, err = openEscrow(b, "pioneer1", "jar1", "jar-privk")
-	require.NoError(t, err)
-	require.Equal(t, int64(9000), got.TrustHeightHighWaterMark)
+	require.Equal(t, int64(9000), open().TrustHeightHighWaterMark)
 }
 
-// Nothing to encrypt under yet: no file, and no error.
-func TestEscrowSkippedWithoutJarKey(t *testing.T) {
+// No SS key known yet: no file and no error.  noteEscrowSSKey writes it once one is.
+func TestEscrowSkippedWithoutSSKey(t *testing.T) {
 	s := newTestEnclaveServer(t)
 	withSealedParamsDir(t, s)
 	setUpEscrowableParams(s)
-	s.setSharedEnclaveParamsJarInfo("", "", "", "")
+	setEscrowSSKey("", "")
 
 	require.True(t, s.saveEnclaveParams())
 	_, err := os.Stat(s.escrowPath())
@@ -121,6 +169,9 @@ func TestSyncInProgressHoldsParamsWrites(t *testing.T) {
 	s := newTestEnclaveServer(t)
 	path := withSealedParamsDir(t, s)
 	setUpEscrowableParams(s)
+	_, ssPub := testSSKey(t)
+	setEscrowSSKey("ss-key-1", ssPub)
+	t.Cleanup(func() { setEscrowSSKey("", "") })
 
 	s.syncInProgress = true
 	require.True(t, s.saveEnclaveParams(), "a held write is not a failure")
