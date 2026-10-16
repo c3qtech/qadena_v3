@@ -34,7 +34,8 @@
 # exercise CPU-bound sealing.  See enclave_escrow.go.
 
 SCRIPT_DIR="${0:A:h}"
-PRIMARY="" SEED="" REPO="qv3" FROM=1 PASSFILE="" HALT_SECONDS=900
+PRIMARY="" SEED="" REPO="qv3" FROM=1 PASSFILE="" HALT_SECONDS=900 EXPECT_OWNERS=2
+ALSO_STOP=() PEERS=()
 while (( $# )); do
     case "$1" in
         --primary) PRIMARY="$2"; shift 2 ;;
@@ -43,6 +44,13 @@ while (( $# )); do
         --from)    FROM="$2"; shift 2 ;;
         --keyring-passfile) PASSFILE="$2"; shift 2 ;;
         --halt-seconds) HALT_SECONDS="$2"; shift 2 ;;
+        # Stopped together with the primary: makes a halt on a fleet where the primary alone is not
+        # a third of the stake, and leaves the restore one owner short.  Repeatable.
+        --also-stop) ALSO_STOP+=("$2"); shift 2 ;;
+        # Other running nodes, compared for app hashes.  Repeatable.
+        --peer) PEERS+=("$2"); shift 2 ;;
+        # How many pioneers must own the escrow's SS key.  4+ gives threshold 2 -- a real combine.
+        --expect-owners) EXPECT_OWNERS="$2"; shift 2 ;;
         *) echo "unknown argument $1" >&2; exit 2 ;;
     esac
 done
@@ -108,17 +116,29 @@ phase "0. an SS key the OTHER pioneers own, for the escrow"
 # only it owns that key -- and a restore cannot use the restoring node's own share.  The escrow
 # writer refuses such a key; rotate once so there is one the seed also owns.  (debug-only command;
 # on a real fleet the 555-block rotation does this.)
+# A pioneer becomes an owner candidate only once it has PUBLISHED an address (first proposed block
+# after bonding), so rotating before every joiner has would mint a key that leaves some out.
+for i in {1..60}; do
+    naddr=$(onz "$PRIMARY" "qadenad_alias query qadena list-interval-public-key-id --limit 5000 -o json" 2>/dev/null \
+        | jq '[.intervalPublicKeyID[]? | select(.nodeType=="pioneer" and .externalIPAddress!="")] | length' 2>/dev/null)
+    (( ${naddr:-0} >= EXPECT_OWNERS )) && break
+    sleep 5
+done
+(( ${naddr:-0} >= EXPECT_OWNERS )) && pass "$naddr pioneers have published addresses" \
+    || die "only ${naddr:-0} pioneers published addresses; $EXPECT_OWNERS needed"
 onz "$PRIMARY" "qadenad_alias enclave update-ss-interval-key" > "$OUT/rotate.log" 2>&1 || die "could not force an SS key rotation ($OUT/rotate.log)"
-esc_key=""
+esc_key="" nowners=0
 for i in {1..24}; do
     sleep 5
     esc_key=$(ssh alvillarica@$PRIMARY "jq -r .SSPubKID $H/enclave_config/private_params_escrow.json 2>/dev/null")
     [[ -n "$esc_key" && "$esc_key" != null ]] || continue
     owners=$(onz "$PRIMARY" "qadenad_alias query qadena show-public-key $esc_key transaction -o json" 2>/dev/null | jq -r '[.publicKey.shares[]?.pioneerID] | join(",")')
-    [[ "$owners" == *,* ]] && break
+    nowners=$(print -r -- "$owners" | tr ',' '\n' | grep -c .)
+    (( nowners >= EXPECT_OWNERS )) && break
 done
-[[ "$owners" == *,* ]] && pass "the escrow is on SS key $esc_key, owned by $owners" \
-    || die "the escrow never moved to a key with more than one owner (key ${esc_key:-none}, owners ${owners:-?})"
+(( nowners >= EXPECT_OWNERS )) && pass "the escrow is on SS key $esc_key, owned by $owners ($nowners owners)" \
+    || die "the escrow never moved to a key with $EXPECT_OWNERS+ owners (key ${esc_key:-none}, owners ${owners:-?})"
+print -r -- "$nowners" > "$OUT/nowners"
 
 phase "1. baseline: provision, protect, request recovery, users sign"
 # A DEPLOYMENT PROFILE FIRST: setup_provider_base.sh refuses an empty app-server allow-list, and
@@ -164,6 +184,10 @@ pubk_before=$(ssh alvillarica@$PRIMARY "jq -r .EnclavePubK $H/enclave_config/pri
 print -r -- "$pubk_before" > "$OUT/pubk_before"
 h0=$(height_of "$SEED")
 on "$PRIMARY" "$H/scripts/stop_qadena.sh" > "$OUT/stop.log" 2>&1
+for x in "${ALSO_STOP[@]}"; do
+    on "$x" "$H/scripts/stop_qadena.sh" > "$OUT/stop-$x.log" 2>&1
+    pass "also stopped $x -- one fewer owner to rebuild the SS key from"
+done
 sleep 15
 h1=$(height_of "$SEED")
 (( h1 - h0 <= 2 )) && pass "the chain halted with the primary down (seed height $h0 -> $h1)" || print -r -- "  note  the seed kept producing blocks ($h0 -> $h1): the primary is not a majority here"
@@ -220,7 +244,7 @@ hc=$(( $(height_of "$SEED") - 1 ))
 a1=$(apphash_at "$PRIMARY" $hc); a2=$(apphash_at "$SEED" $hc)
 [[ -n "$a1" && "$a1" == "$a2" ]] && pass "app hashes agree at $hc ($a1)" || fail "app hash mismatch at $hc: $a1 vs $a2"
 # The recovery log in full (it is small); only the tail of the node log.
-ssh alvillarica@$PRIMARY "grep -h -E 'RESTORED from the escrow|restored pioneer|via=escrow-restore|escrow: gathering|ss-whohas' $H/logs/recover_enclave.*.log 2>/dev/null; grep -h -E 'private state|private tables' $H/logs/qadena.log 2>/dev/null | tail -6" > "$OUT/restore-lines.log"
+ssh alvillarica@$PRIMARY "grep -h -E 'RESTORED from the escrow|restored pioneer|via=escrow-restore|escrow: gathering|ss-whohas|RECONSTRUCTED' $H/logs/recover_enclave.*.log 2>/dev/null; grep -h -E 'private state|private tables' $H/logs/qadena.log 2>/dev/null | tail -6" > "$OUT/restore-lines.log"
 grep -q "RESTORED from the escrow" "$OUT/restore-lines.log" && pass "enclave log: restored from the escrow, no registration tx" || fail "no restore line in the enclave log ($OUT/restore-lines.log)"
 # FROM SHARES, NOT FROM SOMEONE'S CACHE.  WHO-HAS (a peer holding the whole key cached) also opens
 # the escrow, and an earlier run passed that way while asking zero owners -- proving nothing about
@@ -232,6 +256,15 @@ if grep -q "escrow: gathering SS key .* from [1-9][0-9]* owner" "$OUT/restore-li
     pass "enclave log: the SS key was rebuilt from another owner's share during the halt"
 else
     fail "the SS key was not rebuilt from owner shares ($OUT/restore-lines.log)"
+fi
+# A REAL SHAMIR COMBINE when the key has 4+ owners: threshold 2, both shares from OTHER owners.
+if (( $(cat "$OUT/nowners" 2>/dev/null || print 0) >= 4 )); then
+    if grep -q "escrow: gathering SS key .* threshold 2" "$OUT/restore-lines.log" \
+       && grep -q "RECONSTRUCTED .*via=escrow-restore shares=2/2" "$OUT/restore-lines.log"; then
+        pass "the SS key was COMBINED from 2 other owners' shares (threshold 2)"
+    else
+        fail "no threshold-2 combine in the restore log ($OUT/restore-lines.log)"
+    fi
 fi
 fi
 
@@ -246,6 +279,22 @@ check_seed recover-jill "$jillmnemonic" "after the move: pre-move user share + p
 hc=$(( $(height_of "$SEED") - 1 ))
 a1=$(apphash_at "$PRIMARY" $hc); a2=$(apphash_at "$SEED" $hc)
 [[ -n "$a1" && "$a1" == "$a2" ]] && pass "app hashes still agree at $hc after post-move txs" || fail "app hash mismatch at $hc: $a1 vs $a2"
+
+for x in "${ALSO_STOP[@]}"; do
+    ssh -o BatchMode=yes alvillarica@$x "$H/scripts/start_qadena.sh > /tmp/cpu_move_restart.log 2>&1 < /dev/null"
+done
+if (( ${#ALSO_STOP} )); then
+    target=$(height_of "$SEED")
+    for x in "${ALSO_STOP[@]}"; do
+        wait_height_past "$x" "$target" && pass "$x came back and caught up past $target" || fail "$x did not catch up past $target"
+    done
+fi
+hc=$(( $(height_of "$SEED") - 2 ))
+ref=$(apphash_at "$SEED" $hc)
+for x in "$PRIMARY" "${PEERS[@]}" "${ALSO_STOP[@]}"; do
+    a=$(apphash_at "$x" $hc)
+    [[ -n "$a" && "$a" == "$ref" ]] && pass "$x agrees with the seed at $hc" || fail "$x disagrees at $hc: ${a:-none} vs $ref"
+done
 fi
 
 print -r -- ""
