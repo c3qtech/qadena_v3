@@ -11153,6 +11153,10 @@ func main() {
 
 	if !cs.loadEnclaveParams() {
 		c.LoggerInfo(logger, "Enclave params could not be loaded, but this is ok if the enclave has not yet been initialized.")
+	} else {
+		// Pick up which SS key the escrow on disk is wrapped to, so saves in this process keep it
+		// fresh even while the chain's current key does not qualify.  See enclave_escrow.go.
+		cs.seedEscrowSSKeyFromDisk()
 	}
 
 	var lis net.Listener

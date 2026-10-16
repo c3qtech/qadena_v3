@@ -195,3 +195,38 @@ func TestPeerHostNormalises(t *testing.T) {
 	}
 	require.NotEqual(t, peerHost("10.0.0.5"), peerHost("10.0.0.6"))
 }
+
+// THE RESTART GAP.  A fresh process must pick up the SS key the escrow on disk uses, so its saves keep
+// refreshing it -- and must not adopt an escrow written for another enclave key.
+func TestEscrowSSKeySeededFromDiskAtStartup(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	withSealedParamsDir(t, s)
+	setUpEscrowableParams(s)
+	_, ssPub := testSSKey(t)
+	setEscrowSSKey("ss-key-1", ssPub)
+	t.Cleanup(func() { setEscrowSSKey("", "") })
+	require.True(t, s.saveEnclaveParams())
+
+	// "restart": the in-memory record is gone
+	setEscrowSSKey("", "")
+	s.seedEscrowSSKeyFromDisk()
+	id, pub := currentEscrowSSKey()
+	require.Equal(t, "ss-key-1", id)
+	require.Equal(t, ssPub, pub)
+
+	// a later save refreshes it without any SS key lookup
+	s.advanceTrustHeightHighWaterMark(7777, 1)
+	require.True(t, s.saveEnclaveParams())
+	b, err := os.ReadFile(s.escrowPath())
+	require.NoError(t, err)
+	f, err := readEscrowHeader(b, "pioneer1")
+	require.NoError(t, err)
+	require.Equal(t, "ss-key-1", f.SSPubKID)
+
+	// an escrow for a different enclave key is not adopted
+	setEscrowSSKey("", "")
+	s.setPrivateEnclaveParamsEnclaveInfo("armor", "other-privk", "other-pubk")
+	s.seedEscrowSSKeyFromDisk()
+	id, _ = currentEscrowSSKey()
+	require.Equal(t, "", id)
+}

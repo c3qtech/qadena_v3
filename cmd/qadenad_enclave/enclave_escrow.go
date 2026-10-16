@@ -283,6 +283,37 @@ func (s *qadenaServer) escrowKeyOthers(pubKID string) (others, need int, ok bool
 	return others, need, others >= need && others > 0
 }
 
+// seedEscrowSSKeyFromDisk records the SS key the existing escrow is wrapped to, at startup.
+//
+// The record is in memory only, so a restarted process used to begin with none: until the chain's
+// current key qualified, no save refreshed the escrow (it lagged further each time), and the log
+// claimed there was no escrow at all while a valid one sat on disk.  Seeding from the file's own
+// header closes that -- and makes the first block after a start a no-op instead of a rewrite.
+//
+// Only a header that matches THIS node's params is trusted: same pioneer, same enclave key.  The
+// header is public data from our own file, and every field in it is bound into the AEAD, so a
+// tampered one fails at the next restore rather than here.
+func (s *qadenaServer) seedEscrowSSKeyFromDisk() {
+	b, err := s.readEscrow()
+	if err != nil || b == nil {
+		if err != nil {
+			c.LoggerError(logger, "escrow: cannot read "+s.escrowPath()+": "+err.Error())
+		}
+		return
+	}
+	f, err := readEscrowHeader(b, s.getPrivateEnclaveParamsPioneerID())
+	if err != nil {
+		c.LoggerError(logger, "escrow: the escrow on disk is not usable ("+err.Error()+"); it will be replaced once an SS key qualifies")
+		return
+	}
+	if f.EnclavePubK != s.getPrivateEnclaveParamsEnclavePubK() {
+		c.LoggerError(logger, "escrow: the escrow on disk is for a different enclave key; it will be replaced once an SS key qualifies")
+		return
+	}
+	setEscrowSSKey(f.SSPubKID, f.SSPubK)
+	c.LoggerInfo(logger, "escrow: on disk, wrapped to SS interval key "+f.SSPubKID)
+}
+
 // writeEscrow refreshes the escrow from the current params, to the current SS interval key.  Called
 // after every successful sealed write and on every SS key change.  Silent when there is nothing to
 // escrow yet (no pioneer or enclave key) or no SS key known yet -- noteEscrowSSKey writes it as soon
