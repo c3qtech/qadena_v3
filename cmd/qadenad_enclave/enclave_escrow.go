@@ -235,18 +235,11 @@ func (s *qadenaServer) noteEscrowSSKey() {
 			return
 		}
 	}
-	// ONLY A KEY OTHERS CAN REBUILD.  A restore cannot use this node's own share -- it decrypts only
-	// with the key being recovered -- so a key whose OTHER owners cannot reach its threshold would
-	// leave the escrow openable only by luck (some enclave happening to hold it cached).  The first
-	// interval key of a chain is exactly that: minted while the genesis pioneer was the only
-	// addressable owner.  Keep the previous escrow until a rotation produces a key that qualifies.
 	if cur, _ := currentEscrowSSKey(); cur != pubKID {
-		if others, need, ok := s.escrowKeyOthers(pubKID); !ok {
+		if move, why := s.escrowKeyDecision(cur, pubKID); !move {
 			if !escrowKeyWarned[pubKID] {
 				escrowKeyWarned[pubKID] = true
-				c.LoggerInfo(logger, "escrow: NOT moving to SS interval key "+pubKID+" -- "+strconv.Itoa(others)+
-					" other owner(s), "+strconv.Itoa(need)+" needed to rebuild it without this node; "+
-					map[bool]string{true: "keeping the escrow on " + cur, false: "no escrow yet -- this node cannot survive a CPU move until a rotation mints a key other pioneers own"}[cur != ""])
+				c.LoggerInfo(logger, "escrow: NOT moving to SS interval key "+pubKID+" -- "+why)
 			}
 			return
 		}
@@ -312,6 +305,47 @@ func (s *qadenaServer) seedEscrowSSKeyFromDisk() {
 	}
 	setEscrowSSKey(f.SSPubKID, f.SSPubK)
 	c.LoggerInfo(logger, "escrow: on disk, wrapped to SS interval key "+f.SSPubKID)
+}
+
+// escrowKeyDecision says whether the escrow should move from SS key cur ("" if none) to candidate.
+//
+// ONLY A KEY OTHERS CAN REBUILD.  A restore cannot use this node's own share -- it decrypts only with
+// the key being recovered -- so a key whose OTHER owners cannot reach its threshold would leave the
+// escrow openable only by luck (some enclave happening to hold it cached).  The first interval key of
+// a chain is exactly that: minted while the genesis pioneer was the only addressable owner.
+//
+// NEVER TO A WEAKER KEY.  Moving to the newest key is the default because its owners were drawn from
+// pioneers that answered at minting, while an old key's owners are frozen and can only go stale.  But
+// a thin fleet tops a new key up with silent pioneers, so a newer key can have FEWER spare owners than
+// the one the escrow is on.  Spare = other owners - threshold.
+func (s *qadenaServer) escrowKeyDecision(cur, candidate string) (move bool, why string) {
+	others, need, ok := s.escrowKeyOthers(candidate)
+	if !ok {
+		why = strconv.Itoa(others) + " other owner(s), " + strconv.Itoa(need) + " needed to rebuild it without this node; "
+		if cur != "" {
+			return false, why + "keeping the escrow on " + cur
+		}
+		return false, why + "no escrow yet -- this node cannot survive a CPU move until a rotation mints a key other pioneers own"
+	}
+	if cur != "" {
+		if curSpare, known := s.escrowKeySpare(cur); known {
+			if newSpare := others - need; newSpare < curSpare {
+				return false, strconv.Itoa(newSpare) + " spare owner(s) against " + strconv.Itoa(curSpare) +
+					" on " + cur + "; keeping the escrow where it is"
+			}
+		}
+	}
+	return true, ""
+}
+
+// escrowKeySpare is how many of pubKID's other owners could be lost with the key still rebuildable
+// without this node.  ok is false when this enclave has no owners record for it.
+func (s *qadenaServer) escrowKeySpare(pubKID string) (spare int, ok bool) {
+	if _, found := s.getOwners(pubKID); !found {
+		return 0, false
+	}
+	others, need, _ := s.escrowKeyOthers(pubKID)
+	return others - need, true
 }
 
 // writeEscrow refreshes the escrow from the current params, to the current SS interval key.  Called

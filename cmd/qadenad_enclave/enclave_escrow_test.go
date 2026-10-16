@@ -230,3 +230,40 @@ func TestEscrowSSKeySeededFromDiskAtStartup(t *testing.T) {
 	id, _ = currentEscrowSSKey()
 	require.Equal(t, "", id)
 }
+
+// Which SS key the escrow may move to: one other owners can rebuild, and never a weaker one.
+func TestEscrowKeyDecision(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	withSealedParamsDir(t, s)
+	setUpEscrowableParams(s) // this node is pioneer1
+
+	own := func(key string, owners ...string) { require.True(t, s.setOwnersAndShare(key, owners, "")) }
+	own("solo", "pioneer1")                                     // others 0, need 1
+	own("pair", "pioneer1", "pioneer2")                         // others 1, need 1 -> spare 0
+	own("four", "pioneer1", "pioneer2", "pioneer3", "pioneer4") // others 3, need 2 -> spare 1
+	own("three", "pioneer1", "pioneer2", "pioneer3")            // others 2, need 1 -> spare 1
+
+	move, why := s.escrowKeyDecision("", "solo")
+	require.False(t, move, "only this node owns it")
+	require.Contains(t, why, "no escrow yet")
+
+	move, why = s.escrowKeyDecision("pair", "solo")
+	require.False(t, move)
+	require.Contains(t, why, "keeping the escrow on pair")
+
+	move, _ = s.escrowKeyDecision("", "pair")
+	require.True(t, move, "first qualifying key")
+
+	move, _ = s.escrowKeyDecision("pair", "four")
+	require.True(t, move, "more spare owners")
+
+	move, _ = s.escrowKeyDecision("four", "three")
+	require.True(t, move, "equal spare owners: newer owners are fresher")
+
+	move, why = s.escrowKeyDecision("four", "pair")
+	require.False(t, move, "fewer spare owners")
+	require.Contains(t, why, "0 spare owner(s) against 1")
+
+	move, _ = s.escrowKeyDecision("unknown-key", "pair")
+	require.True(t, move, "no record of the current key's owners: take the qualifying one")
+}
