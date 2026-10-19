@@ -57,17 +57,21 @@ SCRIPT_DIR="${0:A:h}"
 FLEET_NAME="fleet-upgrade"
 source "$SCRIPT_DIR/fleet_lib.sh"
 
-PRIMARY=""; JOINERS=(); RUN_DIR=""; QUIESCE_ARG="--quiesce"
+PRIMARY=""; JOINERS=(); RUN_DIR=""; QUIESCE_ARG="--quiesce"; KEYRING_PASSFILE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --primary)   PRIMARY="$2"; shift 2 ;;
         --joiner)    JOINERS+=("$2"); shift 2 ;;
         --run-dir)   RUN_DIR="$2"; shift 2 ;;
+        # PASSED STRAIGHT THROUGH to upgrade_fleet.sh, which stages it for the run and removes it
+        # on exit.  Required on a `file`-keyring fleet: the governance step signs a vote.
+        --keyring-passfile) KEYRING_PASSFILE="$2"; shift 2 ;;
         --quiesce-immediate) QUIESCE_ARG="--quiesce-immediate"; shift ;;
         --help)
             print "Usage: test_fleet_upgrade.sh --primary <[user@]host> [--joiner <[user@]host>]..."
             print "                             [--run-dir <dir>] [--quiesce-immediate]"
+            print "                             [--keyring-passfile <file>]"
             print ""
             print "  Bumps the enclave identity and both versions on the primary, commits that"
             print "  temporarily, rolls the release to EVERY node by governance, and asserts each"
@@ -235,7 +239,8 @@ stage "C. roll it to every node by governance"
 # checkout carries the bump.
 node_args=()
 for h in "${ALL[@]}"; do node_args+=(--node "$h"); done
-"$SCRIPT_DIR/upgrade_fleet.sh" "${node_args[@]}" --build-from "$PRIMARY" "$QUIESCE_ARG" \
+kp_arg=(); [[ -n "$KEYRING_PASSFILE" ]] && kp_arg=(--keyring-passfile "$KEYRING_PASSFILE")
+"$SCRIPT_DIR/upgrade_fleet.sh" "${node_args[@]}" --build-from "$PRIMARY" "$QUIESCE_ARG" "${kp_arg[@]}" \
     2>&1 | tee "$RUN_DIR/stage-C-upgrade.log" | while read -r l; do info "$l"; done
 [[ ${pipestatus[1]} -eq 0 ]] || fail "the roll failed -- see $RUN_DIR/stage-C-upgrade.log"
 

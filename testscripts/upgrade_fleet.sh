@@ -41,6 +41,11 @@
 #                      whether real attestation is verified.  Be explicit on a mixed fleet.
 #   --package-out DIR  where to stage the package on the build host.  Default /tmp/pkg.
 #   --build-wait N     seconds to allow the build.  Default 3600.
+#   --keyring-passfile FILE  LOCAL path whose first line is the node keyring passphrase.  Needed
+#                      whenever the fleet runs keyring-backend `file`, because the governance step
+#                      SIGNS and ssh forwards no environment.  Copied to every host at 0600 for
+#                      the run and removed on exit; the passphrase itself never reaches a command
+#                      line.  Without it nothing is staged and the roll behaves as it always did.
 #   --allow-dirty      permit a build from a tree with uncommitted changes.  Off by default:
 #                      the artefact would match no commit, and nobody could later say what was
 #                      deployed.
@@ -255,7 +260,7 @@ setopt ERR_EXIT PIPE_FAIL
 
 NODES=(); ARCHIVE=""; NEW_UNIQUE=""; NEW_SIGNER=""; WAIT_SECS=1800; DRY=0
 BUILD_FROM=""; REPO_DIR="qv3"; SGX_MODE="auto"; PKG_OUT="/tmp/pkg"; BUILD_WAIT=3600; ALLOW_DIRTY=0
-CHAIN_ONLY=0; QUIESCE=0; QUIESCE_NOW=0
+CHAIN_ONLY=0; QUIESCE=0; QUIESCE_NOW=0; KEYRING_PASSFILE=""
 BUILD_PATH='export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH;'
 
 while (( $# )); do
@@ -266,6 +271,7 @@ while (( $# )); do
         --signer)     NEW_SIGNER="$2"; shift 2 ;;
         --wait-secs)  WAIT_SECS="$2"; shift 2 ;;
         --build-from) BUILD_FROM="$2"; shift 2 ;;
+        --keyring-passfile) KEYRING_PASSFILE="$2"; shift 2 ;;
         --repo)       REPO_DIR="$2"; shift 2 ;;
         --build-sgx)  SGX_MODE="sgx"; shift ;;
         --no-sgx)     SGX_MODE="nosgx"; shift ;;
@@ -308,6 +314,41 @@ rsh()  { local h="$1"; shift
          ssh -o ConnectTimeout=10 -o BatchMode=yes "$h" \
              "bash -lc $(printf '%q' "if [ -r \"$REMOTE_PASSFILE\" ]; then export QADENA_KEYRING_PASSFILE=\"$REMOTE_PASSFILE\"; fi; $*")" }
 run()  { local h="$1"; shift; if (( DRY )); then print -- "    [dry-run] $h: $*"; else rsh "$h" "$@"; fi }
+
+# --keyring-passfile: SUPPLY THE PASSPHRASE FOR THE RUN, AND TAKE IT AWAY AFTER.
+#
+# Before this the only way a `file`-backend node could unlock during a roll was a passphrase file
+# left on it permanently -- which is how the fleets ended up carrying ~/.qadena-keyring-pass, and
+# which also goes stale the moment a fleet is rebuilt under a different passphrase (it then feeds a
+# valid-looking WRONG one, and the backend reports "too many failed passphrase attempts" without
+# naming the cause).  The operator's LOCAL file is copied to each host at 0600 for the duration and
+# removed on every exit path -- the same shape 1st_node_bringup.sh uses.
+#
+# The passphrase never reaches a command line, so it is in no host's `ps`: only the PATH is, and
+# $HOME is expanded on the node.  Without the flag nothing is staged and nothing is exported,
+# leaving the previous behaviour exactly as it was.
+if [[ -n "$KEYRING_PASSFILE" ]]; then
+    [[ -f "$KEYRING_PASSFILE" ]] || die "--keyring-passfile $KEYRING_PASSFILE does not exist"
+    REMOTE_PASSFILE="\$HOME/.qadena-upgrade-keyring-pass"
+    # THE BUILD HOST TOO WHEN IT IS NOT ALSO A NODE: it runs the build and package steps, which
+    # read the keyring on a `file` fleet.
+    kp_hosts=("${NODES[@]}")
+    [[ -n "$BUILD_FROM" ]] && (( ! ${NODES[(Ie)$BUILD_FROM]} )) && kp_hosts+=("$BUILD_FROM")
+    kp_cleanup() {
+        local h
+        for h in "${kp_hosts[@]}"; do
+            ssh -o ConnectTimeout=10 -o BatchMode=yes "$h" 'rm -f "$HOME/.qadena-upgrade-keyring-pass"' 2>/dev/null || true
+        done
+    }
+    trap kp_cleanup EXIT INT TERM
+    for _kph in "${kp_hosts[@]}"; do
+        scp -q "$KEYRING_PASSFILE" "${_kph}:.qadena-upgrade-keyring-pass" \
+            || die "$_kph: could not stage the keyring passphrase"
+        ssh -o ConnectTimeout=10 -o BatchMode=yes "$_kph" \
+            'chmod 600 "$HOME/.qadena-upgrade-keyring-pass"' 2>/dev/null || true
+    done
+    say "keyring passphrase staged on ${#kp_hosts} host(s) for this run; removed on exit"
+fi
 
 height_of() { rsh "$1" '~/qadena/bin/qadenad status 2>/dev/null' 2>/dev/null \
                 | tr ',' '\n' | grep -oE '"latest_block_height":"[0-9]+"' | grep -oE '[0-9]+' | head -1 }
