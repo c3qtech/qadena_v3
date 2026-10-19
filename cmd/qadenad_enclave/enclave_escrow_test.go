@@ -312,3 +312,29 @@ func TestStaleGenerationFillsOnlyAMissingShareForTheSameOwners(t *testing.T) {
 	withChainPosition(t, 0, false)
 	require.False(t, s.setOwnersAndShare("k2", owners, ""), "an empty delivery fills nothing")
 }
+
+// THE LAZY-PATH BUG.  The restore caches the SS key it rebuilt while the TEMPORARY sealed-table
+// secret is still in place; privK cache rows are looked up under that secret, so swapping in the
+// escrowed one orphaned the row and the first block rebuilt the key inside block execution.
+func TestInstallEscrowedKeepsTheRebuiltSSKeyCached(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	withSealedParamsDir(t, s)
+	setUpEscrowableParams(s)
+	s.setPrivateEnclaveParamsSealedTableSharedSecret([]byte("temporary-secret-from-preinit-32"))
+
+	ssPriv, _ := testSSKey(t)
+	s.setPrivKCache("ss-key-1", ssPriv) // what runSSReconstruct does during the gather
+
+	p := testEscrowParams() // carries a different SealedTableSharedSecret
+	s.installEscrowed(&p, "ss-key-1", ssPriv)
+
+	require.Equal(t, p.SealedTableSharedSecret, s.getPrivateEnclaveParamsSealedTableSharedSecret())
+	got, found := s.getPrivKCache("ss-key-1")
+	require.True(t, found, "the rebuilt SS key must be findable under the restored secret")
+	require.Equal(t, ssPriv, got)
+
+	// and the orphan under the temporary secret is gone
+	s.setPrivateEnclaveParamsSealedTableSharedSecret([]byte("temporary-secret-from-preinit-32"))
+	_, found = s.getPrivKCache("ss-key-1")
+	require.False(t, found, "no orphaned copy left under the temporary secret")
+}

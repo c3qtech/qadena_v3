@@ -296,6 +296,14 @@ if custody_ok "$cust_after"; then
 else
     fail "share custody NOT restored: $cust_after (before the move: $cust_before)"
 fi
+# NO LAZY REBUILD OF THE ESCROW'S KEY.  The restore rebuilds that key; if the node then has to rebuild it
+# again inside block execution (the LAZY path -- network I/O in consensus, a fork when peers do not
+# answer), the restore's cached copy was lost.  It was: cached under the temporary sealed-table
+# secret, unfindable once the escrowed one was installed.
+esc_key_now=$(ssh alvillarica@$PRIMARY "jq -r .SSPubKID $H/enclave_config/private_params_escrow.json")
+nlazy=$(ssh alvillarica@$PRIMARY "sed 's/\x1b\[[0-9;]*m//g' $H/logs/qadena.log | grep -c 'LAZY PATH pubKID=$esc_key_now'")
+(( ${nlazy:-1} == 0 )) && pass "the restored node did not rebuild the escrow's SS key inside block execution" \
+    || fail "the restored node rebuilt SS key $esc_key_now on the LAZY path $nlazy time(s) -- the restore's cached copy was lost"
 # A REAL SHAMIR COMBINE when the key has 4+ owners: threshold 2, both shares from OTHER owners.
 if (( $(cat "$OUT/nowners" 2>/dev/null || print 0) >= 4 )); then
     if grep -q "escrow: gathering SS key .* threshold 2" "$OUT/restore-lines.log" \

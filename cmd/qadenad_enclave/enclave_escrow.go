@@ -457,9 +457,7 @@ func (s *qadenaServer) restoreFromEscrow(queryClient types.QueryClient, pioneerI
 		return fmt.Errorf("cannot import the escrowed enclave key into the keyring: %w", err)
 	}
 
-	s.setPrivateEnclaveParamsEnclaveInfo(p.EnclaveArmorPrivK, p.EnclavePrivK, p.EnclavePubK)
-	s.setPrivateEnclaveParamsSealedTableSharedSecret(p.SealedTableSharedSecret)
-	s.setPrivateEnclaveParamsPioneerIsValidator(p.PioneerIsValidator)
+	s.installEscrowed(p, f.SSPubKID, ssPrivK)
 
 	// THE WATERMARK NEVER COMES BACK LOWER THAN THE PRESENT.  The escrow is a snapshot, so its mark
 	// may be old; the seed's attested height is current.  advance is monotonic, so taking both gives
@@ -476,6 +474,25 @@ func (s *qadenaServer) restoreFromEscrow(queryClient types.QueryClient, pioneerI
 		strconv.FormatInt(s.getPrivateEnclaveParamsTrustHeightHighWaterMark(), 10)+
 		" (escrowed "+strconv.FormatInt(p.TrustHeightHighWaterMark, 10)+", seed "+strconv.FormatInt(seedHeight, 10)+")")
 	return nil
+}
+
+// installEscrowed puts the escrowed fields in place and re-caches the SS key the restore rebuilt.
+//
+// THE RE-CACHE IS THE POINT.  privK cache rows are looked up by MustSealStable(pubKID) -- sealed with
+// SealedTableSharedSecret.  The gather ran BEFORE this install, so runSSReconstruct cached the key
+// under the TEMPORARY secret preInitEnclave minted for this sync.  Swapping in the escrowed secret
+// made that row unfindable (an orphaned, encrypted copy), and the restored node's first block that
+// needed the key rebuilt it on the LAZY PATH -- network I/O inside block execution, which fails as
+// a fork when peers do not answer.  So: drop the orphan while the temporary secret still finds it,
+// swap, and cache the key again under the real secret.
+func (s *qadenaServer) installEscrowed(p *escrowedPrivateParams, ssPubKID, ssPrivK string) {
+	s.removePrivKCache(ssPubKID)
+	s.setPrivateEnclaveParamsEnclaveInfo(p.EnclaveArmorPrivK, p.EnclavePrivK, p.EnclavePubK)
+	s.setPrivateEnclaveParamsSealedTableSharedSecret(p.SealedTableSharedSecret)
+	s.setPrivateEnclaveParamsPioneerIsValidator(p.PioneerIsValidator)
+	if ssPrivK != "" {
+		s.setPrivKCache(ssPubKID, ssPrivK)
+	}
 }
 
 // gatherEscrowSSKey reconstructs the SS interval key an escrow was written to, from the owner map
