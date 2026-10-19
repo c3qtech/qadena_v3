@@ -32,7 +32,9 @@ import (
 	"os"
 	"sort"
 
+	tmdb "github.com/cosmos/cosmos-db"
 	"github.com/edgelesssys/ego/ecrypto"
+	tmdbopt "github.com/syndtr/goleveldb/leveldb/opt"
 )
 
 // report prints which fields were recovered, and how big they are.  Never their contents.
@@ -62,9 +64,82 @@ func report(section string, raw json.RawMessage) {
 	}
 }
 
+// probeStore opens an enclave LevelDB read-only and asks, of real rows: are these VALUES
+// product-key sealed, and can THIS binary open them?  Counts only -- no value is ever printed.
+//
+// Point it at a COPY of enclave_data / enclave_secrets, not the live directory, so a running node
+// is never disturbed.
+func probeStore(dbDir, name, prefix string, limit int) {
+	opts := tmdbopt.Options{ReadOnly: true}
+	db, err := tmdb.NewGoLevelDBWithOpts(name, dbDir, &opts)
+	if err != nil {
+		fmt.Printf("  %-28s cannot open %s/%s.db: %v\n", prefix, dbDir, name, err)
+		return
+	}
+	defer db.Close()
+
+	it, err := db.Iterator([]byte(prefix), prefixEnd([]byte(prefix)))
+	if err != nil {
+		fmt.Printf("  %-28s cannot iterate: %v\n", prefix, err)
+		return
+	}
+	defer it.Close()
+
+	var rows, opened, plaintext, failed int
+	for ; it.Valid() && rows < limit; it.Next() {
+		rows++
+		v := it.Value()
+		if _, uerr := ecrypto.Unseal(v, nil); uerr == nil {
+			opened++
+			continue
+		}
+		// Not openable by us.  Is it simply not sealed at all?
+		if json.Valid(v) || (len(v) > 0 && v[0] < 0x80 && bytes.ContainsRune(v, '{')) {
+			plaintext++
+		} else {
+			failed++
+		}
+	}
+	verdict := "no rows found"
+	if rows > 0 {
+		verdict = fmt.Sprintf("%d row(s): %d OPENED by this binary, %d look unsealed, %d sealed-but-not-openable",
+			rows, opened, plaintext, failed)
+	}
+	fmt.Printf("  %-34s %s\n", prefix, verdict)
+}
+
+func prefixEnd(p []byte) []byte {
+	end := make([]byte, len(p))
+	copy(end, p)
+	for i := len(end) - 1; i >= 0; i-- {
+		end[i]++
+		if end[i] != 0 {
+			return end[:i+1]
+		}
+	}
+	return nil
+}
+
 func main() {
-	params := flag.String("params", "", "path to enclave_params_<uid>.json (required)")
+	params := flag.String("params", "", "path to enclave_params_<uid>.json (required unless -store-only)")
+	secretsDir := flag.String("enclave-secrets", "", "path to a COPY of enclave_secrets -- probe its sealed VALUES")
+	storeOnly := flag.Bool("store-only", false, "skip the params file; probe stores only")
 	flag.Parse()
+
+	if *secretsDir != "" {
+		fmt.Println("sealprobe: probing STORE values (counts only, nothing printed)")
+		fmt.Printf("enclave_secrets (%s):\n", *secretsDir)
+		probeStore(*secretsDir, "secrets", "Enclave/SSIntervalShares/value/", 50)
+		probeStore(*secretsDir, "secrets", "Enclave/SSIntervalPrivK/value/", 50)
+		probeStore(*secretsDir, "secrets", "Enclave/SSIntervalOwners/value/", 50)
+		fmt.Println("  NOTE: enclave_data is IAVL-framed, so raw rows there are tree nodes rather than")
+		fmt.Println("        logical values; its sealed values come from the same MustSeal call path.")
+		fmt.Println()
+	}
+
+	if *storeOnly {
+		return
+	}
 
 	if *params == "" {
 		fmt.Fprintln(os.Stderr, "sealprobe: -params <path to enclave_params_<uid>.json> is required")
