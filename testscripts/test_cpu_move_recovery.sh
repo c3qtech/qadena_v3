@@ -133,6 +133,23 @@ rm -f /tmp/cust_o.json /tmp/cust_s.json'
 }
 custody_ok() { [[ "$1" == owned=* && "$1" == *" missing=" ]] }
 
+# DOUBLE-SIGN PROTECTION.  signer_height: the last height the node's signer recorded signing.
+signer_height() { ssh -o BatchMode=yes "alvillarica@$1" "jq -r '.height | tonumber' $H/enclave_data/signer_state.json 2>/dev/null" }
+val_addr() { status_of "$1" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["validator_info"]["address"])' 2>/dev/null }
+# signed_at <addr> <height>: did that validator's signature make it into the commit for <height>?
+signed_at() { ssh -o BatchMode=yes "alvillarica@$SEED" "curl -s --max-time 5 'localhost:26657/commit?height=$2'" \
+    | python3 -c 'import sys,json;s=json.load(sys.stdin)["result"]["signed_header"]["commit"]["signatures"];print("yes" if any(x.get("validator_address")==sys.argv[1] for x in s) else "no")' "$1" 2>/dev/null }
+# signs_again <host> <after-height>: the node's signature appears in a commit above <after-height>.
+signs_again() {
+    local addr; addr=$(val_addr "$1"); local i h
+    for i in {1..30}; do
+        h=$(( $(height_of "$SEED") - 1 ))
+        (( h > $2 )) && [[ "$(signed_at "$addr" "$h")" == yes ]] && { print -r -- "$h"; return 0 }
+        sleep 3
+    done
+    return 1
+}
+
 if [[ -n "$CUSTODY_ONLY" ]]; then
     c=$(share_custody "$CUSTODY_ONLY")
     print -r -- "$CUSTODY_ONLY: $c"
@@ -215,6 +232,10 @@ cust_before=$(share_custody "$PRIMARY")
 custody_ok "$cust_before" && pass "share custody before the move: $cust_before" || fail "share custody already incomplete before the move: $cust_before"
 h0=$(height_of "$SEED")
 on "$PRIMARY" "$H/scripts/stop_qadena.sh" > "$OUT/stop.log" 2>&1
+sh_before=$(signer_height "$PRIMARY")
+[[ -n "$sh_before" && "$sh_before" != null ]] && pass "the primary's signer recorded signing up to height $sh_before" \
+    || fail "the primary has no double-sign state (enclave_data/signer_state.json)"
+print -r -- "$sh_before" > "$OUT/signer_before"
 for x in "${ALSO_STOP[@]}"; do
     on "$x" "$H/scripts/stop_qadena.sh" > "$OUT/stop-$x.log" 2>&1
     pass "also stopped $x -- one fewer owner to rebuild the SS key from"
@@ -264,6 +285,10 @@ if (( FROM <= 4 )); then
 phase "4. recover from the escrow, restart, chain resumes"
 on "$PRIMARY" "$H/scripts/recover_enclave_after_cpu_move.sh --seed tcp://$SEED:26657 --yes" > "$OUT/recover.log" 2>&1 \
     && pass "recover_enclave_after_cpu_move.sh succeeded" || die "recovery failed ($OUT/recover.log)"
+sh_after=$(signer_height "$PRIMARY")
+[[ -n "$sh_after" && "$sh_after" == "$(cat $OUT/signer_before 2>/dev/null)" ]] \
+    && pass "the signer's double-sign state was carried across the restore (height $sh_after)" \
+    || fail "double-sign state NOT carried across: before ${$(cat $OUT/signer_before 2>/dev/null):-?}, after ${sh_after:-missing}"
 pubk_after=$(ssh alvillarica@$PRIMARY "jq -r .EnclavePubK $H/enclave_config/private_params_escrow.json")
 [[ "$pubk_after" == "$(cat $OUT/pubk_before 2>/dev/null)" ]] && pass "enclave key unchanged across the move" || fail "enclave key changed: $pubk_after"
 # Redirected to a file and never piped: start_qadena.sh leaks descriptors to the node.
@@ -274,6 +299,9 @@ wait_height_past "$PRIMARY" $(( h_seed + 5 )) && pass "the primary is producing"
 hc=$(( $(height_of "$SEED") - 1 ))
 a1=$(apphash_at "$PRIMARY" $hc); a2=$(apphash_at "$SEED" $hc)
 [[ -n "$a1" && "$a1" == "$a2" ]] && pass "app hashes agree at $hc ($a1)" || fail "app hash mismatch at $hc: $a1 vs $a2"
+hsig=$(signs_again "$PRIMARY" "$(cat $OUT/signer_before 2>/dev/null || print 0)") \
+    && pass "the restored primary's signature is in the commit for height $hsig" \
+    || fail "the restored primary is not signing commits"
 # The recovery log in full (it is small); only the tail of the node log.
 ssh alvillarica@$PRIMARY "grep -h -E 'RESTORED from the escrow|restored pioneer|via=escrow-restore|escrow: gathering|ss-whohas|RECONSTRUCTED' $H/logs/recover_enclave.*.log 2>/dev/null; grep -h -E 'private state|private tables' $H/logs/qadena.log 2>/dev/null | tail -6" > "$OUT/restore-lines.log"
 grep -q "RESTORED from the escrow" "$OUT/restore-lines.log" && pass "enclave log: restored from the escrow, no registration tx" || fail "no restore line in the enclave log ($OUT/restore-lines.log)"
@@ -336,6 +364,22 @@ if (( ${#ALSO_STOP} )); then
         wait_height_past "$x" "$target" && pass "$x came back and caught up past $target" || fail "$x did not catch up past $target"
     done
 fi
+# A LIVE RESTART must come back signing.  The identical-re-sign case (crash after signing, before
+# the WAL) is the one the old, switched-off check would have stalled on.
+if (( ${#PEERS} )); then
+    rp="${PEERS[1]}"
+    on "$rp" "$H/scripts/stop_qadena.sh" > "$OUT/restart-stop-$rp.log" 2>&1
+    hr=$(height_of "$SEED")
+    ssh -o BatchMode=yes alvillarica@$rp "$H/scripts/start_qadena.sh > /tmp/cpu_move_live_restart.log 2>&1 < /dev/null"
+    hsig=$(signs_again "$rp" "$hr") && pass "$rp restarted on a live chain and is signing again (commit $hsig)" \
+        || fail "$rp did not sign again after a live restart"
+fi
+# NO REFUSED SIGNATURES anywhere.  A refusal is the protection working, but in this run nothing
+# should ever ask for one; seeing any means something tried to sign at or behind its last state.
+for x in "$PRIMARY" "$SEED" "${PEERS[@]}" "${ALSO_STOP[@]}"; do
+    nref=$(ssh -o BatchMode=yes "alvillarica@$x" "grep -h 'REFUSING to sign' $H/logs/qadena.log 2>/dev/null | wc -l | tr -d ' '")
+    (( ${nref:-0} == 0 )) && pass "$x refused no signatures" || fail "$x refused $nref signature(s) -- see 'REFUSING to sign' in its log"
+done
 hc=$(( $(height_of "$SEED") - 2 ))
 ref=$(apphash_at "$SEED" $hc)
 for x in "$PRIMARY" "${PEERS[@]}" "${ALSO_STOP[@]}"; do

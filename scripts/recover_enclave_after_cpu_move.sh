@@ -11,7 +11,8 @@
 #
 # WHAT IT DOES, with the node stopped:
 #   1. moves enclave_config/, enclave_data/ and enclave_secrets/ into a dated backup directory --
-#      nothing is deleted -- keeping the private-params ESCROW, which is not CPU-bound;
+#      nothing is deleted -- keeping the two things in them that are not CPU-bound: the private-
+#      params ESCROW and the signer's double-sign state (enclave_data/signer_state.json);
 #   2. starts the enclave alone and runs sync-enclave against --seed.  The seed hands over the shared
 #      params and the SS owner map over an attested channel.  The escrow is encrypted to an SS
 #      interval key, so the enclave gathers that key's shares from its OTHER owners (attested
@@ -93,6 +94,20 @@ for d in enclave_config enclave_data enclave_secrets; do
 done
 mkdir -p "$QADENAHOME/enclave_config"
 cp -p "$backup/enclave_config/private_params_escrow.json" "$escrow" || fail "could not put the escrow back"
+
+# THE VALIDATOR'S DOUBLE-SIGN STATE COMES ACROSS TOO.  signer_state.json records the last height,
+# round and step the signer signed, and the signer refuses anything at or behind it.  It is plain
+# JSON, not sealed, so the move did not touch it -- dropping it with the rest of enclave_data/ would
+# restart double-sign protection from nothing on the very node most likely to have signed
+# something just before it went down.
+if [[ -f "$backup/enclave_data/signer_state.json" ]]; then
+    mkdir -p "$QADENAHOME/enclave_data"
+    cp -p "$backup/enclave_data/signer_state.json" "$QADENAHOME/enclave_data/signer_state.json" \
+        || fail "could not carry the signer's double-sign state across"
+    echo "$me: carried the signer's double-sign state across ($(jq -r '.height' "$QADENAHOME/enclave_data/signer_state.json" 2>/dev/null) last signed)"
+else
+    echo "$me: WARNING: no enclave_data/signer_state.json to carry across -- the signer starts double-sign protection from nothing" >&2
+fi
 
 restore_layout() {
     echo "$me: restoring the original layout from $backup" >&2

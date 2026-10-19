@@ -16,17 +16,16 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sync"
 	"time"
 
 	tmcrypto "github.com/cometbft/cometbft/crypto"
 	"github.com/cometbft/cometbft/crypto/ed25519"
 	"github.com/cometbft/cometbft/libs/protoio"
 	p2pconn "github.com/cometbft/cometbft/p2p/conn"
+	"github.com/cometbft/cometbft/privval"
 	cryptoproto "github.com/cometbft/cometbft/proto/tendermint/crypto"
 	cmproto "github.com/cometbft/cometbft/proto/tendermint/privval"
 	typesproto "github.com/cometbft/cometbft/proto/tendermint/types"
-	"github.com/cometbft/cometbft/types"
 	"github.com/edgelesssys/ego/ecrypto"
 	"github.com/edgelesssys/ego/enclave"
 )
@@ -45,11 +44,6 @@ type PrivValidatorKey struct {
 }
 
 // signer state file (double-sign protection)
-type SignerState struct {
-	Height int64 `json:"height"`
-	Round  int32 `json:"round"`
-	Step   int8  `json:"step"`
-}
 
 //go:embed test_unique_id.txt
 var uniqueID string
@@ -61,8 +55,6 @@ var signerID string
 var version string
 
 var (
-	stateFile = "signer_state.json"
-	stateLock sync.Mutex
 
 	// Enclave variables (similar to enclave.go)
 	realEnclave = false
@@ -249,22 +241,6 @@ func loadKey(homePath string) (ed25519.PrivKey, tmcrypto.PubKey, error) {
 	return priv, pub, nil
 }
 
-// load signer state
-func loadState() SignerState {
-	var st SignerState
-	data, err := ioutil.ReadFile(stateFile)
-	if err == nil {
-		_ = json.Unmarshal(data, &st)
-	}
-	return st
-}
-
-// save signer state
-func saveState(st SignerState) {
-	data, _ := json.MarshalIndent(st, "", "  ")
-	_ = ioutil.WriteFile(stateFile, data, 0600)
-}
-
 func main() {
 	// Command line arguments
 	homePath := flag.String("home", ".", "Path to the home directory for keys and state files")
@@ -320,13 +296,15 @@ func main() {
 	secretKeyPath := filepath.Join(*homePath, "enclave_data", "secret_connection.key")
 	stateFilePath := filepath.Join(*homePath, "enclave_data", "signer_state.json")
 
-	// Update global state file path
-	stateFile = stateFilePath
-
 	priv, pub, err := loadKey(*homePath)
 	if err != nil {
 		log.Fatalf("Error loading validator key: %v", err)
 	}
+	pv, note, err := loadPrivValidator(priv, stateFilePath)
+	if err != nil {
+		log.Fatalf("double-sign protection: %v", err)
+	}
+	log.Printf("double-sign protection: %s", note)
 	log.Printf("Loaded validator key, address: %X\n", pub.Address())
 
 	// Load or generate secret connection key for P2P encryption
@@ -371,7 +349,7 @@ func main() {
 	// CometBFT remote signer.  A signer that genuinely cannot reach the node still gives up after
 	// maxRetries and exits non-zero, so a real failure is still loud, and SIGINT still exits 20.
 	for {
-		if !dialAndServe(*remoteAddr, secretConnKey, priv, pub, maxRetries) {
+		if !dialAndServe(*remoteAddr, secretConnKey, pv, pub, maxRetries) {
 			return
 		}
 		log.Printf("connection to %s closed -- redialing (the node's listener is already waiting for us)", *remoteAddr)
@@ -380,7 +358,7 @@ func main() {
 
 // dialAndServe connects once and serves until the connection closes.  Returns true if the caller
 // should redial, false if it should stop trying.
-func dialAndServe(remoteAddr string, secretConnKey ed25519.PrivKey, priv ed25519.PrivKey, pub tmcrypto.PubKey, maxRetries int) bool {
+func dialAndServe(remoteAddr string, secretConnKey ed25519.PrivKey, pv *privval.FilePV, pub tmcrypto.PubKey, maxRetries int) bool {
 	var conn net.Conn
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -402,7 +380,7 @@ func dialAndServe(remoteAddr string, secretConnKey ed25519.PrivKey, priv ed25519
 			}
 
 			log.Printf("Established secret connection with %X", secretConn.RemotePubKey().Address())
-			handleConnection(secretConn, priv, pub)
+			handleConnection(secretConn, pv, pub)
 			return true
 		}
 
@@ -421,7 +399,7 @@ func dialAndServe(remoteAddr string, secretConnKey ed25519.PrivKey, priv ed25519
 	return false
 }
 
-func handleConnection(conn net.Conn, priv ed25519.PrivKey, pub tmcrypto.PubKey) {
+func handleConnection(conn net.Conn, pv *privval.FilePV, pub tmcrypto.PubKey) {
 	defer func() {
 		log.Printf("Closing connection to %s", conn.RemoteAddr())
 		conn.Close()
@@ -458,100 +436,42 @@ func handleConnection(conn net.Conn, priv ed25519.PrivKey, pub tmcrypto.PubKey) 
 			sendMsg(conn, resp)
 
 		case *cmproto.Message_SignVoteRequest:
-			if debug {
-				log.Println("SignVoteRequest ", sum.SignVoteRequest.Vote)
-			}
 			vote := sum.SignVoteRequest.Vote
 			chainID := sum.SignVoteRequest.ChainId
 			if debug {
-				log.Printf("Chain ID: %s", chainID)
+				log.Println("SignVoteRequest ", vote)
 			}
-			/*
-				if !canSign(vote.Height, vote.Round, int8(vote.Type)) {
-					log.Printf("Refusing to sign duplicate HRS: %d/%d/%d\n", vote.Height, vote.Round, vote.Type)
-					continue
-				}
-			*/
-			// Sign canonical bytes with chain ID (like CometBFT does)
-			signBytes := types.VoteSignBytes(chainID, vote)
-			sig, err := priv.Sign(signBytes)
-			if err != nil {
-				log.Printf("Error signing vote: %v", err)
-				continue
-			}
-			vote.Signature = sig
-			vote.ValidatorAddress = pub.Address()
-
-			// Handle vote extensions for precommit votes (CometBFT v0.38+)
-			if vote.Type == typesproto.PrecommitType {
-				// Check if BlockID is nil (zero)
-				isNilBlockID := types.ProtoBlockIDIsNil(&vote.BlockID)
-
-				if !isNilBlockID {
-					// For non-nil precommit votes, extension signature is required
-					// Ensure extension exists (even if empty)
-					if vote.Extension == nil {
-						vote.Extension = []byte{}
-					}
-
-					// Sign vote extension
-					extSignBytes := types.VoteExtensionSignBytes(chainID, vote)
-					extSig, err := priv.Sign(extSignBytes)
-					if err != nil {
-						log.Printf("Error signing vote extension: %v", err)
-						continue
-					}
-					vote.ExtensionSignature = extSig
-					if debug {
-						log.Printf("Signed vote extension for non-nil precommit vote")
-					}
-				} else {
-					// For nil precommit votes, extension signature must NOT be present
-					vote.Extension = nil
-					vote.ExtensionSignature = nil
-					if debug {
-						log.Printf("Nil precommit vote - no extension signature")
-					}
-				}
-			}
-			saveState(SignerState{Height: vote.Height, Round: vote.Round, Step: int8(vote.Type)})
-			resp := &cmproto.Message{
-				Sum: &cmproto.Message_SignedVoteResponse{
-					SignedVoteResponse: &cmproto.SignedVoteResponse{Vote: *vote},
-				},
+			// Double-sign protection and vote extensions both live in signVote (signer_state.go):
+			// CometBFT's own FilePV rules, state on disk before the signature leaves.
+			var resp *cmproto.Message
+			if err := signVote(pv, chainID, vote); err != nil {
+				log.Printf("REFUSING to sign vote H/R/type %d/%d/%v: %v", vote.Height, vote.Round, vote.Type, err)
+				resp = &cmproto.Message{Sum: &cmproto.Message_SignedVoteResponse{SignedVoteResponse: &cmproto.SignedVoteResponse{
+					Vote: typesproto.Vote{}, Error: &cmproto.RemoteSignerError{Code: 0, Description: err.Error()},
+				}}}
+			} else {
+				vote.ValidatorAddress = pub.Address()
+				resp = &cmproto.Message{Sum: &cmproto.Message_SignedVoteResponse{SignedVoteResponse: &cmproto.SignedVoteResponse{Vote: *vote}}}
 			}
 			sendMsg(conn, resp)
 
 		case *cmproto.Message_SignProposalRequest:
-			if debug {
-				log.Println("SignProposalRequest ", sum.SignProposalRequest.Proposal)
-			}
 			prop := sum.SignProposalRequest.Proposal
 			chainID := sum.SignProposalRequest.ChainId
 			if debug {
-				log.Printf("Chain ID: %s", chainID)
+				log.Println("SignProposalRequest ", prop)
 			}
-			/*
-				if !canSign(prop.Height, prop.Round, 2) { // step=2 for proposals
-					log.Printf("Refusing to sign duplicate proposal HRS: %d/%d\n", prop.Height, prop.Round)
-					continue
-				}
-			*/
-			// Sign canonical bytes with chain ID (like CometBFT does)
-			signBytes := types.ProposalSignBytes(chainID, prop)
-			sig, err := priv.Sign(signBytes)
-			if err != nil {
-				log.Printf("Error signing proposal: %v", err)
-				continue
-			}
-			prop.Signature = sig
-			saveState(SignerState{Height: prop.Height, Round: prop.Round, Step: 2})
-			resp := &cmproto.Message{
-				Sum: &cmproto.Message_SignedProposalResponse{
-					SignedProposalResponse: &cmproto.SignedProposalResponse{Proposal: *prop},
-				},
+			var resp *cmproto.Message
+			if err := signProposal(pv, chainID, prop); err != nil {
+				log.Printf("REFUSING to sign proposal H/R %d/%d: %v", prop.Height, prop.Round, err)
+				resp = &cmproto.Message{Sum: &cmproto.Message_SignedProposalResponse{SignedProposalResponse: &cmproto.SignedProposalResponse{
+					Proposal: typesproto.Proposal{}, Error: &cmproto.RemoteSignerError{Code: 0, Description: err.Error()},
+				}}}
+			} else {
+				resp = &cmproto.Message{Sum: &cmproto.Message_SignedProposalResponse{SignedProposalResponse: &cmproto.SignedProposalResponse{Proposal: *prop}}}
 			}
 			sendMsg(conn, resp)
+
 		case *cmproto.Message_PingRequest:
 			if debug {
 				log.Printf("PingRequest from %s", conn.RemoteAddr())
@@ -565,21 +485,6 @@ func handleConnection(conn net.Conn, priv ed25519.PrivKey, pub tmcrypto.PubKey) 
 			}
 		}
 	}
-}
-
-// double-sign protection
-func canSign(height int64, round int32, step int8) bool {
-	stateLock.Lock()
-	defer stateLock.Unlock()
-
-	st := loadState()
-	// Reject signing if we've already signed this H/R/S
-	if height < st.Height ||
-		(height == st.Height && round < st.Round) ||
-		(height == st.Height && round == st.Round && step <= st.Step) {
-		return false
-	}
-	return true
 }
 
 func sendMsg(conn net.Conn, msg *cmproto.Message) {
