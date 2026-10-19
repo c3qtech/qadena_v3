@@ -32,9 +32,10 @@ import (
 	"os"
 	"sort"
 
-	tmdb "github.com/cosmos/cosmos-db"
 	"github.com/edgelesssys/ego/ecrypto"
-	tmdbopt "github.com/syndtr/goleveldb/leveldb/opt"
+	"github.com/syndtr/goleveldb/leveldb"
+	leveldbopt "github.com/syndtr/goleveldb/leveldb/opt"
+	leveldbutil "github.com/syndtr/goleveldb/leveldb/util"
 )
 
 // report prints which fields were recovered, and how big they are.  Never their contents.
@@ -69,43 +70,58 @@ func report(section string, raw json.RawMessage) {
 //
 // Point it at a COPY of enclave_data / enclave_secrets, not the live directory, so a running node
 // is never disturbed.
-func probeStore(dbDir, name, prefix string, limit int) {
-	opts := tmdbopt.Options{ReadOnly: true}
-	db, err := tmdb.NewGoLevelDBWithOpts(name, dbDir, &opts)
+// probeStore opens an enclave LevelDB read-only and asks, of real rows: are these VALUES
+// product-key sealed, and can THIS binary open them?  Counts only -- no value is ever printed.
+//
+// Pure-Go goleveldb on purpose: the cosmos-db wrapper drags in a cgo path whose symbols ego's libc
+// does not provide (ego-oesign: "symbol not found: qsort_r"), so the probe would not sign.
+//
+// Point it at a COPY of enclave_secrets, not the live directory, so a running node is never
+// disturbed.
+func probeStore(dbPath, prefix string, limit int) {
+	db, err := leveldb.OpenFile(dbPath, &leveldbopt.Options{ReadOnly: true})
 	if err != nil {
-		fmt.Printf("  %-28s cannot open %s/%s.db: %v\n", prefix, dbDir, name, err)
+		fmt.Printf("  %-34s cannot open %s: %v\n", prefix, dbPath, err)
 		return
 	}
 	defer db.Close()
 
-	it, err := db.Iterator([]byte(prefix), prefixEnd([]byte(prefix)))
-	if err != nil {
-		fmt.Printf("  %-28s cannot iterate: %v\n", prefix, err)
-		return
-	}
-	defer it.Close()
+	it := db.NewIterator(leveldbutil.BytesPrefix([]byte(prefix)), nil)
+	defer it.Release()
 
-	var rows, opened, plaintext, failed int
-	for ; it.Valid() && rows < limit; it.Next() {
+	var rows, opened, unsealed, failed int
+	for it.Next() && rows < limit {
 		rows++
 		v := it.Value()
 		if _, uerr := ecrypto.Unseal(v, nil); uerr == nil {
 			opened++
 			continue
 		}
-		// Not openable by us.  Is it simply not sealed at all?
-		if json.Valid(v) || (len(v) > 0 && v[0] < 0x80 && bytes.ContainsRune(v, '{')) {
-			plaintext++
+		// Not openable by us.  Is it simply not sealed at all?  A protobuf row that parses as
+		// readable bytes is the unsealed case -- the owners table is written that way.
+		if len(v) > 0 && (json.Valid(v) || bytes.ContainsRune(v, '{') || isMostlyPrintable(v)) {
+			unsealed++
 		} else {
 			failed++
 		}
 	}
 	verdict := "no rows found"
 	if rows > 0 {
-		verdict = fmt.Sprintf("%d row(s): %d OPENED by this binary, %d look unsealed, %d sealed-but-not-openable",
-			rows, opened, plaintext, failed)
+		verdict = fmt.Sprintf("%2d row(s): %2d OPENED by this binary, %2d unsealed, %2d sealed-but-not-openable",
+			rows, opened, unsealed, failed)
 	}
 	fmt.Printf("  %-34s %s\n", prefix, verdict)
+}
+
+// isMostlyPrintable is a rough "this is not ciphertext" test for the control rows.
+func isMostlyPrintable(b []byte) bool {
+	n := 0
+	for _, c := range b {
+		if c >= 0x20 && c < 0x7f {
+			n++
+		}
+	}
+	return n*2 > len(b)
 }
 
 func prefixEnd(p []byte) []byte {
@@ -122,16 +138,16 @@ func prefixEnd(p []byte) []byte {
 
 func main() {
 	params := flag.String("params", "", "path to enclave_params_<uid>.json (required unless -store-only)")
-	secretsDir := flag.String("enclave-secrets", "", "path to a COPY of enclave_secrets -- probe its sealed VALUES")
+	secretsDir := flag.String("enclave-secrets", "", "path to a COPY of enclave_secrets/secrets.db -- probe its sealed VALUES")
 	storeOnly := flag.Bool("store-only", false, "skip the params file; probe stores only")
 	flag.Parse()
 
 	if *secretsDir != "" {
 		fmt.Println("sealprobe: probing STORE values (counts only, nothing printed)")
 		fmt.Printf("enclave_secrets (%s):\n", *secretsDir)
-		probeStore(*secretsDir, "secrets", "Enclave/SSIntervalShares/value/", 50)
-		probeStore(*secretsDir, "secrets", "Enclave/SSIntervalPrivK/value/", 50)
-		probeStore(*secretsDir, "secrets", "Enclave/SSIntervalOwners/value/", 50)
+		probeStore(*secretsDir, "Enclave/SSIntervalShares/value/", 50)
+		probeStore(*secretsDir, "Enclave/SSIntervalPrivK/value/", 50)
+		probeStore(*secretsDir, "Enclave/SSIntervalOwners/value/", 50)
 		fmt.Println("  NOTE: enclave_data is IAVL-framed, so raw rows there are tree nodes rather than")
 		fmt.Println("        logical values; its sealed values come from the same MustSeal call path.")
 		fmt.Println()
