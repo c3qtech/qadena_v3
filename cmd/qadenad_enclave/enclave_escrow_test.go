@@ -1,9 +1,10 @@
 package main
 
 import (
-	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	ecies "github.com/ecies/go/v2"
@@ -28,7 +29,10 @@ func testSSKey(t *testing.T) (privK, pubK string) {
 	t.Helper()
 	k, err := ecies.GenerateKey()
 	require.NoError(t, err)
-	privK = hex.EncodeToString(k.Bytes())
+	// %064x, NOT hex(k.Bytes()): Bytes drops leading zero bytes, so 1 key in 256 came out 31 bytes
+	// long and the 32-byte scalar check rejected it -- a flaky test, the same shape as the
+	// GenerateSharedSecret bug.
+	privK = fmt.Sprintf("%064x", k.D)
 	pubK, err = derivePubKBase64(privK)
 	require.NoError(t, err)
 	return privK, pubK
@@ -106,7 +110,12 @@ func TestEscrowDoesNotUseTheJarKey(t *testing.T) {
 	require.True(t, s.saveEnclaveParams())
 	b, err := os.ReadFile(s.escrowPath())
 	require.NoError(t, err)
-	require.NotContains(t, string(b), "jar", "the escrow must not reference the jar")
+	// FIELD NAMES, not the raw bytes: random base64 contains "jar" now and then.
+	var fields map[string]any
+	require.NoError(t, json.Unmarshal(b, &fields))
+	for name := range fields {
+		require.NotContains(t, strings.ToLower(name), "jar", "the escrow must not reference the jar")
+	}
 
 	f, err := readEscrowHeader(b, "pioneer1")
 	require.NoError(t, err)
@@ -266,4 +275,40 @@ func TestEscrowKeyDecision(t *testing.T) {
 
 	move, _ = s.escrowKeyDecision("unknown-key", "pair")
 	require.True(t, move, "no record of the current key's owners: take the qualifying one")
+}
+
+// PLAN ITEM 1a.  A restored node gets owner records from the seed stamped at the seed's height with
+// no shares; the chain then delivers its shares stamped 0.  The share must land -- and nothing else
+// may get past the generation guard.
+func TestStaleGenerationFillsOnlyAMissingShareForTheSameOwners(t *testing.T) {
+	s := newTestEnclaveServer(t)
+	withSealedParamsDir(t, s)
+	setUpEscrowableParams(s)
+	owners := []string{"pioneer1", "pioneer2", "pioneer3", "pioneer4"}
+
+	withChainPosition(t, 441, true)
+	require.True(t, s.setOwnersAndShare("k", owners, ""), "the seed's record, no share")
+
+	withChainPosition(t, 0, false)
+	reordered := []string{"pioneer4", "pioneer3", "pioneer2", "pioneer1"}
+	require.True(t, s.setOwnersAndShare("k", reordered, "share-x"), "same owners, empty slot: filled")
+	got, found := s.getShare("k")
+	require.True(t, found)
+	require.Equal(t, "share-x", got)
+	rec, _ := s.getOwners("k")
+	require.Equal(t, int64(441), rec.Generation, "the owner record is not rewound")
+	require.Equal(t, owners, rec.PioneerIDs)
+
+	require.False(t, s.setOwnersAndShare("k", owners, "share-y"), "a held share is not replaced by older news")
+	got, _ = s.getShare("k")
+	require.Equal(t, "share-x", got)
+
+	require.False(t, s.setOwnersAndShare("k", owners[:2], "share-z"), "a different owner list is still refused")
+	rec, _ = s.getOwners("k")
+	require.Equal(t, owners, rec.PioneerIDs)
+
+	withChainPosition(t, 441, true)
+	require.True(t, s.setOwnersAndShare("k2", owners, ""))
+	withChainPosition(t, 0, false)
+	require.False(t, s.setOwnersAndShare("k2", owners, ""), "an empty delivery fills nothing")
 }

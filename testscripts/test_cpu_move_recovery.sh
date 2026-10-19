@@ -35,7 +35,7 @@
 
 SCRIPT_DIR="${0:A:h}"
 PRIMARY="" SEED="" REPO="qv3" FROM=1 PASSFILE="" HALT_SECONDS=900 EXPECT_OWNERS=2
-ALSO_STOP=() PEERS=()
+ALSO_STOP=() PEERS=() CUSTODY_ONLY=""
 while (( $# )); do
     case "$1" in
         --primary) PRIMARY="$2"; shift 2 ;;
@@ -51,9 +51,12 @@ while (( $# )); do
         --peer) PEERS+=("$2"); shift 2 ;;
         # How many pioneers must own the escrow's SS key.  4+ gives threshold 2 -- a real combine.
         --expect-owners) EXPECT_OWNERS="$2"; shift 2 ;;
+        # Only report a node's SS share custody and exit: owned / held / missing.
+        --check-custody) CUSTODY_ONLY="$2"; shift 2 ;;
         *) echo "unknown argument $1" >&2; exit 2 ;;
     esac
 done
+[[ -n "$CUSTODY_ONLY" ]] && { PRIMARY="${PRIMARY:-$CUSTODY_ONLY}"; SEED="${SEED:-$CUSTODY_ONLY}"; }
 [[ -n "$PRIMARY" && -n "$SEED" ]] || { echo "usage: $0 --primary <host> --seed <host> [--from <phase>]" >&2; exit 2 }
 
 source "$SCRIPT_DIR/setup_mnemonic.sh"
@@ -109,6 +112,32 @@ check_seed() {   # wallet expected label
 }
 
 H="/home/alvillarica/qadena"
+
+# share_custody <host> -- "owned=N held=M missing=<ids>" for the SS keys whose owner list names that
+# node's pioneer.  An owner listed on chain with no share is custody silently lost: the key survives
+# one fewer departure, and peers asking that node for a share get nothing.  Values never leave the
+# host; only counts and key IDs are printed.
+share_custody() {
+    # The node's INSTALLED scripts, not a checkout: joiners have none.
+    ssh -o BatchMode=yes "alvillarica@$1" 'cd '"$H"' && p=$(jq -r .pioneer_id config/node_params.json)
+zsh -c "source ./scripts/setup_env.sh >/dev/null 2>&1
+qadenad_alias enclave export-private-state --section EnclaveSSOwnersMap 2>/dev/null > /tmp/cust_o.json
+qadenad_alias enclave export-private-state --section EnclaveSSShareMap  2>/dev/null > /tmp/cust_s.json"
+jq -r --arg p "$p" --slurpfile s /tmp/cust_s.json "
+  (.EnclaveSSOwnersMap.Pioneers // {}) | to_entries
+  | map(select(.value.PioneerIDs | index(\$p)))
+  | map({k: .key, held: ((\$s[0].EnclaveSSShareMap[.key] // \"\") != \"\")})
+  | \"owned=\" + (length|tostring) + \" held=\" + (map(select(.held))|length|tostring)
+    + \" missing=\" + (map(select(.held|not)|.k)|join(\",\"))" /tmp/cust_o.json
+rm -f /tmp/cust_o.json /tmp/cust_s.json'
+}
+custody_ok() { [[ "$1" == owned=* && "$1" == *" missing=" ]] }
+
+if [[ -n "$CUSTODY_ONLY" ]]; then
+    c=$(share_custody "$CUSTODY_ONLY")
+    print -r -- "$CUSTODY_ONLY: $c"
+    custody_ok "$c" && exit 0 || exit 1
+fi
 
 if (( FROM <= 1 )); then
 phase "0. an SS key the OTHER pioneers own, for the escrow"
@@ -182,6 +211,8 @@ phase "2. move: stop the primary and make its sealed state unreadable"
 pubk_before=$(ssh alvillarica@$PRIMARY "jq -r .EnclavePubK $H/enclave_config/private_params_escrow.json" 2>/dev/null)
 [[ -n "$pubk_before" && "$pubk_before" != null ]] && pass "the primary has an escrow (enclave key ${pubk_before[1,16]}...)" || die "no escrow on the primary -- is it running this branch?"
 print -r -- "$pubk_before" > "$OUT/pubk_before"
+cust_before=$(share_custody "$PRIMARY")
+custody_ok "$cust_before" && pass "share custody before the move: $cust_before" || fail "share custody already incomplete before the move: $cust_before"
 h0=$(height_of "$SEED")
 on "$PRIMARY" "$H/scripts/stop_qadena.sh" > "$OUT/stop.log" 2>&1
 for x in "${ALSO_STOP[@]}"; do
@@ -256,6 +287,14 @@ if grep -q "escrow: gathering SS key .* from [1-9][0-9]* owner" "$OUT/restore-li
     pass "enclave log: the SS key was rebuilt from another owner's share during the halt"
 else
     fail "the SS key was not rebuilt from owner shares ($OUT/restore-lines.log)"
+fi
+# SHARE CUSTODY CAME BACK.  The checks above all passed on a run that silently lost two shares (plan
+# item 1a), because nothing looked.  Every key the node owned must have its share again.
+cust_after=$(share_custody "$PRIMARY")
+if custody_ok "$cust_after"; then
+    pass "share custody after the restore: $cust_after"
+else
+    fail "share custody NOT restored: $cust_after (before the move: $cust_before)"
 fi
 # A REAL SHAMIR COMBINE when the key has 4+ owners: threshold 2, both shares from OTHER owners.
 if (( $(cat "$OUT/nowners" 2>/dev/null || print 0) >= 4 )); then

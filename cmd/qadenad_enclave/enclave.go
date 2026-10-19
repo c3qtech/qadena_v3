@@ -6932,6 +6932,25 @@ func (s *qadenaServer) setOwnersAndShare(pubKID string, owners []string, share s
 	c.LoggerDebug(logger, "setOwnersAndShare", pubKID)
 	generation, _, _ := currentChainPosition()
 	if prev, had := s.getOwners(pubKID); had && generation < prev.Generation {
+		// FILLING AN EMPTY SLOT IS NOT A REWIND.  The generation guard exists to stop history
+		// replacing the CURRENT owner list.  But a share for the same key and the same owner list is
+		// the same share whenever it arrives -- the polynomial is fixed by the owner list -- so
+		// storing one where we hold none cannot rewind anything, and the owner record is left as
+		// it is.  This is the restored-node case (plan item 1a): sync-enclave installs the seed's
+		// owner records stamped at the seed's height, WITHOUT shares, and the chain's store push
+		// that delivers our shares runs before the chain position is known, stamped 0.  Refusing
+		// it left a restored owner listed on every key it owned and holding no share for any.
+		if share != "" && sameOwnerSet(prev.PioneerIDs, owners) {
+			if held, found := s.getShare(pubKID); !found || held == "" {
+				shareString := types.EnclaveStoreString{S: share}
+				store := s.secrets(EnclaveSSIntervalSharesKeyPrefix)
+				store.Set(s.MustSealStable(EnclaveKeyKey(pubKID)), s.MustSeal(s.Cdc.MustMarshal(&shareString)))
+				c.LoggerInfo(logger, "ss-reshare: FILLED missing share pubKID="+pubKID+
+					" owners="+strconv.Itoa(len(owners))+" (generation "+strconv.FormatInt(generation, 10)+
+					" < stored "+strconv.FormatInt(prev.Generation, 10)+", same owner list, no share held)")
+				return true
+			}
+		}
 		msg := "ss-reshare: STALE pubKID=" + pubKID +
 			" generation=" + strconv.FormatInt(generation, 10) + " < stored=" + strconv.FormatInt(prev.Generation, 10) +
 			" owners " + strconv.Itoa(len(prev.PioneerIDs)) + "->" + strconv.Itoa(len(owners)) +
@@ -6958,6 +6977,23 @@ func (s *qadenaServer) setOwnersAndShare(pubKID string, owners []string, share s
 	b = s.Cdc.MustMarshal(&ownerArray)
 	store.Set(EnclaveKeyKey(pubKID), b)
 	return true
+}
+
+// sameOwnerSet compares two owner lists as sets.  Order is not part of what a share means.
+func sameOwnerSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]bool, len(a))
+	for _, x := range a {
+		seen[x] = true
+	}
+	for _, x := range b {
+		if !seen[x] {
+			return false
+		}
+	}
+	return len(seen) == len(a)
 }
 
 func (s *qadenaServer) SetPublicKey(ctx context.Context, in *types.PublicKey) (*types.SetPublicKeyReply, error) {
