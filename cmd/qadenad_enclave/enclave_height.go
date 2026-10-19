@@ -51,7 +51,13 @@ const (
 	// a store stamped with a LOWER version than this refuses to run (chains are rebuilt from
 	// genesis rather than migrated), and a HIGHER version means the operator is running an old
 	// binary against a newer node's data, which must also refuse rather than mangle it.
-	enclaveSchemaVersion uint32 = 1
+	//
+	// 1 -> 2: row VALUES stopped being SGX product-key sealed and are now AES-256-GCM under a
+	// subkey of SealedTableSharedSecret, and the params file moved from the product key to the
+	// UNIQUE key (see enclave_value_seal.go).  A schema-1 store's values cannot be opened by this
+	// binary at all, which is why the refusal above is the whole migration story: rebuild from
+	// genesis.  That is a deliberate choice -- mainnet is launched from scratch on this format.
+	enclaveSchemaVersion uint32 = 2
 
 	qmetaSchemaKey          = "qmeta/schema"
 	qmetaConfirmedHeightKey = "qmeta/confirmed_height"

@@ -100,16 +100,29 @@ func startWebServer(port string) {
 	}
 }
 
-// Encryption/decryption functions (similar to enclave.go)
-func sealWithProductKey(b []byte) (ret []byte, err error) {
+// sealValidatorKey seals the validator key with the SGX UNIQUE key (MRENCLAVE), not the product
+// key.  Under the product key any binary signed with the repo's private.pem could open it -- the
+// same exposure cmd/sealprobe demonstrated against the chain enclave's params on real hardware.
+//
+// BE HONEST ABOUT WHAT THIS BUYS TODAY: very little, because the PLAINTEXT key is still sitting at
+// config/priv_validator_key.json and is never deleted.  Anyone who can read the sealed file can
+// read the plaintext beside it.  Unique-sealing only becomes a real gain once that plaintext is
+// gone, which needs either a signer handover (there is none -- the signer has no params, no
+// trusted set and no chain access, so nothing to anchor one against) or a documented
+// offline-backup-and-restore policy.  Keeping the plaintext is what makes loadKey's fallback below
+// possible, and that fallback is what stops a rebuilt signer from stranding a validator.
+func sealValidatorKey(b []byte) (ret []byte, err error) {
 	if realEnclave {
-		ret, err = ecrypto.SealWithProductKey(b, nil)
+		ret, err = ecrypto.SealWithUniqueKey(b, nil)
 		if err != nil {
 			log.Printf("sealing error: %v", err)
 			return
 		}
 	} else {
-		ret = append([]byte(signerID), b...)
+		// Debug builds have no SGX: mirror the real policy by tagging with the MEASUREMENT, so a
+		// rebuild that changes uniqueID exercises the same fall-back-to-plaintext path it would on
+		// hardware.
+		ret = append([]byte(uniqueID), b...)
 		err = nil
 	}
 	return
@@ -152,92 +165,98 @@ func loadOrGenerateSecretKey(path string) ed25519.PrivKey {
 	return key
 }
 
-// load validator key with encryption support
+// loadKey returns the validator's consensus key, preferring the sealed copy and falling back to
+// the plaintext one.
+//
+// THE RULE: the signer must work whenever the unencrypted key is present.
+//
+// The sealed copy at enclave_config/priv_validator_key.json is bound to one MEASUREMENT (it is
+// sealed with the SGX unique key) and to one CPU.  So it is UNREADABLE in two ordinary situations:
+// the first start of any rebuilt signer, and a node whose VM moved to another host.  Treating that
+// as fatal -- which this used to do -- stops the signer, and a validator that cannot load its key
+// cannot sign, so the node halts.  config/priv_validator_key.json is the authority and is never
+// deleted, so the right answer is to re-seal from it and carry on.
+//
+// Order:
+//  1. sealed file opens            -> use it
+//  2. sealed file will not open    -> say so loudly, fall through
+//  3. plaintext present            -> parse, seal for THIS measurement, replace the stale sealed
+//     copy, use it
+//  4. neither                      -> fail, naming both paths and the remedy
 func loadKey(homePath string) (ed25519.PrivKey, tmcrypto.PubKey, error) {
 	unencryptedPath := filepath.Join(homePath, "config", "priv_validator_key.json")
 	encryptedPath := filepath.Join(homePath, "enclave_config", "priv_validator_key.json")
 
-	if debug {
-		log.Printf("Checking for encrypted key at: %s", encryptedPath)
-	}
-
-	// First try to load encrypted version
-	if encryptedData, err := ioutil.ReadFile(encryptedPath); err == nil {
-		if debug {
-			log.Printf("Found encrypted key, attempting to decrypt")
-		}
-
-		// Decrypt the data
-		decryptedData, err := unseal(encryptedData)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to decrypt key file: %w", err)
-		}
-
-		// Parse the decrypted JSON
+	// fromJSON turns either file's contents into a usable key pair.
+	fromJSON := func(raw []byte) (ed25519.PrivKey, tmcrypto.PubKey, error) {
 		var key PrivValidatorKey
-		if err := json.Unmarshal(decryptedData, &key); err != nil {
-			return nil, nil, fmt.Errorf("failed to unmarshal decrypted key json: %w", err)
+		if err := json.Unmarshal(raw, &key); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal key json: %w", err)
 		}
-
 		privBytes, err := base64.StdEncoding.DecodeString(key.PrivKey.Value)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to decode privkey: %w", err)
 		}
-
 		var priv ed25519.PrivKey = privBytes
-		pub := priv.PubKey()
-		if debug {
-			log.Printf("Successfully loaded encrypted key")
+		return priv, priv.PubKey(), nil
+	}
+
+	// 1 and 2.
+	if sealed, err := ioutil.ReadFile(encryptedPath); err == nil {
+		plain, uerr := unseal(sealed)
+		if uerr == nil {
+			priv, pub, perr := fromJSON(plain)
+			if perr != nil {
+				return nil, nil, perr
+			}
+			if debug {
+				log.Printf("Loaded the sealed validator key from %s", encryptedPath)
+			}
+			return priv, pub, nil
 		}
+		log.Printf("NOTE: %s exists but this build cannot open it (%v)", encryptedPath, uerr)
+		log.Printf("      falling back to the plaintext key and re-sealing.  Expected after an enclave")
+		log.Printf("      rebuild or a move to another CPU -- the seal is bound to both.")
+	}
+
+	// 3.
+	raw, err := ioutil.ReadFile(unencryptedPath)
+	if err != nil {
+		// 4.  Name both paths: an operator seeing only one of them cannot tell which to restore.
+		return nil, nil, fmt.Errorf("no validator key this signer can use: %s could not be opened and %s is absent (%w).  "+
+			"Restore the plaintext key from your offline backup into config/ and start again", encryptedPath, unencryptedPath, err)
+	}
+
+	priv, pub, perr := fromJSON(raw)
+	if perr != nil {
+		return nil, nil, perr
+	}
+
+	// WHICH KEY DID WE JUST ADOPT?  This is the only line that would reveal an operator having
+	// replaced the plaintext with a DIFFERENT validator key.  That failure is availability -- the
+	// chain rejects an unknown validator and the node gets jailed -- not equivocation, but it is
+	// worth being able to see at a glance.
+	log.Printf("Loaded the plaintext validator key from %s, address: %X", unencryptedPath, pub.Address())
+
+	// Re-seal for THIS measurement, replacing any stale copy.
+	sealed, serr := sealValidatorKey(raw)
+	if serr != nil {
+		// Not fatal: the key is loaded and the node can sign.  Only the at-rest copy is missing,
+		// and the next start will try again.
+		log.Printf("Warning: failed to seal the validator key: %v", serr)
 		return priv, pub, nil
 	}
-
-	if debug {
-		log.Printf("No encrypted key found, checking for unencrypted key at: %s", unencryptedPath)
+	enclaveConfigDir := filepath.Join(homePath, "enclave_config")
+	if err := os.MkdirAll(enclaveConfigDir, 0755); err != nil {
+		log.Printf("Warning: failed to create %s: %v", enclaveConfigDir, err)
+		return priv, pub, nil
 	}
-
-	// Try to load unencrypted version
-	unencryptedData, err := ioutil.ReadFile(unencryptedPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to read key file from both encryptedPath=%s and unencryptedPath=%s: %w", encryptedPath, unencryptedPath, err)
-	}
-
-	if debug {
-		log.Printf("Found unencrypted key, loading and encrypting")
-	}
-
-	// Parse the unencrypted JSON
-	var key PrivValidatorKey
-	if err := json.Unmarshal(unencryptedData, &key); err != nil {
-		return nil, nil, fmt.Errorf("failed to unmarshal key json: %w", err)
-	}
-
-	// Create encrypted version and save it
-	encryptedData, err := sealWithProductKey(unencryptedData)
-	if err != nil {
-		log.Printf("Warning: failed to encrypt key: %v", err)
+	// 0600, not 0644: it is a validator key, sealed or not.
+	if err := os.WriteFile(encryptedPath, sealed, 0600); err != nil {
+		log.Printf("Warning: failed to save the sealed validator key: %v", err)
 	} else {
-		// Ensure enclave_config directory exists
-		enclaveConfigDir := filepath.Join(homePath, "enclave_config")
-		if err := os.MkdirAll(enclaveConfigDir, 0755); err != nil {
-			log.Printf("Warning: failed to create enclave_config directory: %v", err)
-		} else {
-			// Save encrypted version
-			if err := os.WriteFile(encryptedPath, encryptedData, 0644); err != nil {
-				log.Printf("Warning: failed to save encrypted key: %v", err)
-			} else if debug {
-				log.Printf("Successfully saved encrypted key to: %s", encryptedPath)
-			}
-		}
+		log.Printf("Sealed the validator key for this measurement at %s", encryptedPath)
 	}
-
-	privBytes, err := base64.StdEncoding.DecodeString(key.PrivKey.Value)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to decode privkey: %w", err)
-	}
-
-	var priv ed25519.PrivKey = privBytes
-	pub := priv.PubKey()
 	return priv, pub, nil
 }
 

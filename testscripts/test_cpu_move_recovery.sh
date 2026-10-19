@@ -305,6 +305,16 @@ hsig=$(signs_again "$PRIMARY" "$(cat $OUT/signer_before 2>/dev/null || print 0)"
 # The recovery log in full (it is small); only the tail of the node log.
 ssh alvillarica@$PRIMARY "grep -h -E 'RESTORED from the escrow|restored pioneer|via=escrow-restore|escrow: gathering|ss-whohas|RECONSTRUCTED' $H/logs/recover_enclave.*.log 2>/dev/null; grep -h -E 'private state|private tables' $H/logs/qadena.log 2>/dev/null | tail -6" > "$OUT/restore-lines.log"
 grep -q "RESTORED from the escrow" "$OUT/restore-lines.log" && pass "enclave log: restored from the escrow, no registration tx" || fail "no restore line in the enclave log ($OUT/restore-lines.log)"
+# THE STORES SURVIVE THE MOVE NOW.  Row values are AES-GCM under SealedTableSharedSecret, which the
+# escrow restores, so nothing in enclave_data/enclave_secrets is CPU-bound and the recovery script
+# no longer moves them aside.  The node must therefore come back case A -- if it instead reports no
+# private state and refetches from a peer (case F), the simplification has regressed.
+if grep -q "enclave holds no private state" "$OUT/restore-lines.log" \
+   || grep -q "imported private state at height" "$OUT/restore-lines.log"; then
+    fail "the restored node refetched private state from a peer -- it should have kept its own ($OUT/restore-lines.log)"
+else
+    pass "the restored node kept its own private state (no case-F refetch)"
+fi
 # FROM SHARES, NOT FROM SOMEONE'S CACHE.  WHO-HAS (a peer holding the whole key cached) also opens
 # the escrow, and an earlier run passed that way while asking zero owners -- proving nothing about
 # the threshold path.  Require the gather to have reached at least one other owner and not to
@@ -319,11 +329,17 @@ fi
 # SHARE CUSTODY CAME BACK.  The checks above all passed on a run that silently lost two shares (plan
 # item 1a), because nothing looked.  Every key the node owned must have its share again.
 cust_after=$(share_custody "$PRIMARY")
-if custody_ok "$cust_after"; then
-    pass "share custody after the restore: $cust_after"
+if [[ "$cust_after" == "$cust_before" ]] && custody_ok "$cust_after"; then
+    pass "share custody unchanged across the move: $cust_after"
 else
-    fail "share custody NOT restored: $cust_after (before the move: $cust_before)"
+    fail "share custody changed across the move: before '$cust_before', after '$cust_after'"
 fi
+# AND IT SURVIVED RATHER THAN BEING REBUILT.  The shares are sealed under the restored secret, so
+# they should simply still be there; a FILLED line means they were lost and re-delivered by the
+# chain instead, which is the old behaviour.
+nfill=$(ssh -o BatchMode=yes "alvillarica@$PRIMARY" "sed 's/\x1b\[[0-9;]*m//g' $H/logs/qadena.log 2>/dev/null | grep -c 'FILLED missing share'")
+(( ${nfill:-1} == 0 )) && pass "shares survived the move intact (no refill needed)" \
+    || fail "the node had to refill $nfill share(s) -- they did not survive the move"
 # NO LAZY REBUILD OF THE ESCROW'S KEY.  The restore rebuilds that key; if the node then has to rebuild it
 # again inside block execution (the LAZY path -- network I/O in consensus, a fork when peers do not
 # answer), the restore's cached copy was lost.  It was: cached under the temporary sealed-table

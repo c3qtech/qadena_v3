@@ -482,13 +482,15 @@ func TestSecretTablesAreStillSealed(t *testing.T) {
 	require.NotContains(t, rawDump, "Enclave/SSIntervalShares/value/pubkid-secret", "the share's key is stored unsealed")
 	require.NotContains(t, rawDump, "Enclave/SSIntervalPrivK/value/pubkid-secret", "the privK's key is stored unsealed")
 
-	// VALUES: in simulation MustSeal degrades to prefixing with the signer id, so the plaintext
-	// IS readable here -- by design, and the reason a debug enclave must never hold real data.
-	// What this test can still prove, and the regression it exists to catch, is that the value
-	// went THROUGH MustSeal at all: a dropped seal would store the bare protobuf, with no
-	// prefix.  Under --realenclave the same call is ecrypto.SealWithProductKey and the value is
-	// genuinely encrypted; that cannot be asserted from a simulation build.
-	require.Contains(t, rawDump, signerID+"\n", "the SS share/privK values did not go through MustSeal")
+	// VALUES ARE NOW GENUINELY ENCRYPTED, EVEN IN SIMULATION, so this can assert the real property
+	// instead of a proxy for it.  MustSeal used to degrade to a signerID prefix on a debug build,
+	// leaving the plaintext readable, and the strongest thing this test could say was "it went
+	// through MustSeal at all".  Values are AES-256-GCM under a subkey of SealedTableSharedSecret
+	// now (enclave_value_seal.go), which does not depend on SGX -- so the plaintext must be gone
+	// here too, and a dropped seal shows up as the marker reappearing.
+	require.NotContains(t, rawDump, "SHARE-PLAINTEXT-MARKER", "the SS share value is stored in the clear")
+	require.NotContains(t, rawDump, "PRIVK-PLAINTEXT-MARKER", "the privK value is stored in the clear")
+	require.Contains(t, rawDump, valueSealMagic, "the SS share/privK values did not go through MustSeal")
 
 	// and they still read back correctly through the accessors
 	share, found := s.getShare("pubkid-secret")
@@ -513,9 +515,11 @@ func TestSecretTablesAreStillSealed(t *testing.T) {
 		treeDump += string(tit.Value())
 	}
 	tit.Close()
-	// same simulation caveat as above: assert the seal was APPLIED, not that the result is
-	// opaque -- only a real SGX build makes it opaque
-	require.Contains(t, treeDump, signerID+"\n", "the AML window did not go through MustSeal")
+	// As above, this can now assert the real property rather than a proxy: the AML window's values
+	// are AES-GCM under a subkey of SealedTableSharedSecret, so the destination wallet must not be
+	// readable from a raw tree dump even in simulation.
+	require.NotContains(t, treeDump, "DEST-PLAINTEXT-MARKER", "the AML window is stored in the clear")
+	require.Contains(t, treeDump, valueSealMagic, "the AML window did not go through MustSeal")
 }
 
 // TestOutboxSuspiciousTransactionRoundTrip covers the one genuinely new thing this branch WRITES

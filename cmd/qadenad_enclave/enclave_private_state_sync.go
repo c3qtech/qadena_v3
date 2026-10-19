@@ -14,11 +14,17 @@ package main
 // The receiver's store therefore begins at H and cannot roll back below its join height, which is
 // exactly the chain's own semantics after a state-sync.
 //
-// WHY IT CANNOT BE A BYTE COPY.  MustSeal derives from the product key, which per ego is bound to
-// the enclave AND THE CPU, and MustSealStable derives from SealedTableSharedSecret, minted per node
-// at preInitEnclave and never transmitted.  A sealed row is meaningless on another machine in both
-// directions, so the only possible shape is unseal-at-source / re-seal-at-destination -- which is
-// why the payload is plaintext in flight and must be encrypted to the receiver's enclave key.
+// WHY IT CANNOT BE A BYTE COPY.  Both halves of a row are keyed to SealedTableSharedSecret -- the
+// KEY through MustSealStable, the VALUE through a subkey of it (enclave_value_seal.go) -- and that
+// secret is minted per node at preInitEnclave and never transmitted.  A sealed row is therefore
+// meaningless on another NODE in both directions, so the only possible shape is
+// unseal-at-source / re-seal-at-destination, which is why the payload is plaintext in flight and
+// must be encrypted to the receiver's enclave key.
+//
+// Note it is no longer bound to the CPU.  Values used to be sealed with the SGX product key, so a
+// row could not even survive a move to another machine by the same node; now only the params file
+// is SGX-sealed, and the escrow restores the secret, so a node that moves keeps its own rows.  That
+// changes nothing here -- this transfer is between DIFFERENT nodes, which never share the secret.
 //
 // Re-sealing costs nothing to implement because the import writes through the ordinary setters,
 // which already seal with THIS node's secrets.

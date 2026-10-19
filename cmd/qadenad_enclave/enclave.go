@@ -449,9 +449,14 @@ func (s *qadenaServer) SealWithUniqueKey(b []byte) (ret []byte, err error) {
 	return
 }
 
+// MustSeal / MustUnseal protect ROW VALUES.  They are NOT SGX sealing any more -- see
+// enclave_value_seal.go for why, and for the key hierarchy they sit in.  The one SGX seal left is
+// the params file (writeEnclaveParams, unique key); everything here hangs off a secret inside it.
+//
+// Identical in debug and real-enclave builds, deliberately: a debug node's values used to be a
+// plaintext protobuf behind a signerID prefix, and are now genuinely encrypted.
 func (s *qadenaServer) MustSeal(b []byte) (ret []byte) {
-	var err error
-	ret, err = s.SealWithProductKey(b)
+	ret, err := s.sealValue(b)
 	if err != nil {
 		panic("Could not seal " + err.Error())
 	}
@@ -459,12 +464,18 @@ func (s *qadenaServer) MustSeal(b []byte) (ret []byte) {
 }
 
 func (s *qadenaServer) MustUnseal(b []byte) (ret []byte) {
-	var err error
-	ret, err = s.Unseal(b)
+	ret, err := s.openValue(b)
 	if err != nil {
-		panic("Could not seal " + err.Error())
+		panic("Could not unseal " + err.Error())
 	}
 	return
+}
+
+// tryUnseal is MustUnseal without the panic, for the one caller that treats an unreadable row as a
+// miss rather than a fault: getPrivKCache, whose value is reconstructible from peers (see the
+// rationale there).  Everywhere else a value that will not open IS a fault and should say so.
+func (s *qadenaServer) tryUnseal(b []byte) (ret []byte, err error) {
+	return s.openValue(b)
 }
 
 // encrypting at different times will generate the same ciphertext
@@ -1792,10 +1803,16 @@ func (s *qadenaServer) writeEnclaveParams() bool {
 	plaintext := append([]byte(nil), b...)
 
 	c.LoggerDebug(logger, "sealing with product key (encrypting)")
-	b, err = s.SealWithProductKey(b)
+	// THE UNIQUE KEY, NOT THE PRODUCT KEY.  This file is the root of the whole key hierarchy -- it
+	// holds SealedTableSharedSecret, which seals every row key and (via a derived subkey) every row
+	// value.  Under the product key any binary signed with the repo's private.pem could open it,
+	// which cmd/sealprobe demonstrated on real SGX.  Under the unique key only THIS measurement can,
+	// so a foreign build gets nothing and the governance gate in UpgradeEnclave becomes real: the
+	// handover is now the only way params reach a new measurement.
+	b, err = s.SealWithUniqueKey(b)
 
 	if testSeal {
-		b2, err = s.SealWithProductKey(b2)
+		b2, err = s.SealWithUniqueKey(b2)
 	}
 
 	if err != nil {
@@ -7511,11 +7528,11 @@ func (s *qadenaServer) getPrivKCache(pubKID string) (privK string, found bool) {
 		//
 		// Logged at ERROR, not swallowed: an unreadable cache entry is still a real event worth
 		// explaining, and it names the key so the reconstruct that follows can be tied to it.
-		plain, uerr := s.Unseal(b)
+		plain, uerr := s.tryUnseal(b)
 		if uerr != nil {
 			c.LoggerError(logger, "getPrivKCache: cached privk for "+pubKID+" cannot be unsealed ("+
 				uerr.Error()+") -- treating it as absent so it can be reconstructed from peers; "+
-				"this is expected if the enclave's product sealing key changed")
+				"this is expected if this node's SealedTableSharedSecret changed")
 			return "", false
 		}
 		s.Cdc.MustUnmarshal(plain, &privKString)

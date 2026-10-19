@@ -10,9 +10,10 @@
 # Sealing is bound to the physical CPU, so every sealed file this node wrote is now unreadable.
 #
 # WHAT IT DOES, with the node stopped:
-#   1. moves enclave_config/, enclave_data/ and enclave_secrets/ into a dated backup directory --
-#      nothing is deleted -- keeping the two things in them that are not CPU-bound: the private-
-#      params ESCROW and the signer's double-sign state (enclave_data/signer_state.json);
+#   1. moves ONLY the sealed params file (enclave_config/enclave_params_<uid>.json) into a dated
+#      backup directory -- nothing is deleted.  That file is the one thing a CPU move actually
+#      breaks: it is sealed with the SGX unique key, bound to this build AND this CPU.  The stores
+#      stay put (see below);
 #   2. starts the enclave alone and runs sync-enclave against --seed.  The seed hands over the shared
 #      params and the SS owner map over an attested channel.  The escrow is encrypted to an SS
 #      interval key, so the enclave gathers that key's shares from its OTHER owners (attested
@@ -20,10 +21,17 @@
 #      the CHAIN records for this pioneer, and re-seals it all for this CPU.  Nothing is broadcast,
 #      so this works while the chain is halted -- which it is, if this node holds most of the stake;
 #   3. re-records this platform for check_sgx_platform.sh.
-# On the next start, the validator key is re-sealed from config/priv_validator_key.json by
-# signer_enclave, the chain re-delivers this node's SS shares (each PublicKey row carries them
-# encrypted to the enclave key just restored), and the enclave, holding no private state on a chain
-# with history, fetches it from a peer (the case-F transfer) before executing a block.
+#
+# WHY THE STORES STAY.  enclave_data/ and enclave_secrets/ hold row keys that are stable-sealed and
+# row values that are AES-GCM -- both under SealedTableSharedSecret, a software key the escrow
+# restores.  Nothing there is CPU-bound any more, so the private tables and this node's SS shares
+# are readable again as soon as the escrow opens.  This script used to move all three directories
+# aside, which discarded usable state and forced a needless refetch of the private tables from a
+# peer.  signer_state.json rides along inside enclave_data/, so the double-sign watermark is kept
+# without copying anything.
+#
+# On the next start the node comes back with its own private state (case A, not case F), and
+# signer_enclave re-seals the validator key from config/priv_validator_key.json by itself.
 #
 # NEEDS ENOUGH OF THE SS KEY'S OTHER OWNERS REACHABLE: one, below four owners; the Shamir threshold
 # above that.  This node's own share cannot count -- it decrypts only with the key being recovered.
@@ -80,8 +88,8 @@ $me:
   pioneer        $PIONEER (advertises $ADVERTISE)
   seed           $SEED
   escrow         $escrow (enclave key $(jq -r '.EnclavePubK' "$escrow" | cut -c1-16)...)
-  moved aside to $backup:
-                 enclave_config/  enclave_data/  enclave_secrets/
+  moved aside    $backup/enclave_config/enclave_params_*.json  (sealed to the old CPU)
+  kept in place  enclave_data/  enclave_secrets/  (not CPU-bound; the escrow restores their key)
 EOF
 if (( ! ASSUME_YES )); then
     read "REPLY?Proceed? (y/n) " || exit 1
@@ -89,31 +97,34 @@ if (( ! ASSUME_YES )); then
 fi
 
 mkdir -p "$backup" || fail "cannot create $backup"
-for d in enclave_config enclave_data enclave_secrets; do
-    [[ -e "$QADENAHOME/$d" ]] && { mv "$QADENAHOME/$d" "$backup/$d" || fail "could not move $d aside"; }
-done
-mkdir -p "$QADENAHOME/enclave_config"
-cp -p "$backup/enclave_config/private_params_escrow.json" "$escrow" || fail "could not put the escrow back"
 
-# THE VALIDATOR'S DOUBLE-SIGN STATE COMES ACROSS TOO.  signer_state.json records the last height,
-# round and step the signer signed, and the signer refuses anything at or behind it.  It is plain
-# JSON, not sealed, so the move did not touch it -- dropping it with the rest of enclave_data/ would
-# restart double-sign protection from nothing on the very node most likely to have signed
-# something just before it went down.
-if [[ -f "$backup/enclave_data/signer_state.json" ]]; then
-    mkdir -p "$QADENAHOME/enclave_data"
-    cp -p "$backup/enclave_data/signer_state.json" "$QADENAHOME/enclave_data/signer_state.json" \
-        || fail "could not carry the signer's double-sign state across"
-    echo "$me: carried the signer's double-sign state across ($(jq -r '.height' "$QADENAHOME/enclave_data/signer_state.json" 2>/dev/null) last signed)"
-else
-    echo "$me: WARNING: no enclave_data/signer_state.json to carry across -- the signer starts double-sign protection from nothing" >&2
-fi
+# ONLY THE PARAMS FILE MOVES ASIDE.  It is the single thing a CPU move actually breaks: it is sealed
+# with the SGX unique key, which is bound to BOTH this build and this CPU.
+#
+# enclave_data/ and enclave_secrets/ STAY.  Their row keys are stable-sealed and their row values
+# are AES-GCM, both under SealedTableSharedSecret -- a software key that the escrow restores (see
+# cmd/qadenad_enclave/enclave_value_seal.go).  None of it is CPU-bound any more, so the private
+# tables AND this node's SS shares are readable again the moment the escrow is opened.  This used to
+# move all three directories aside, which threw away perfectly good state and forced the node to
+# refetch its private tables from a peer (the case-F transfer) for no reason.
+#
+# enclave_data/signer_state.json stays with them, so the double-sign watermark is preserved without
+# the copy-back this script used to need.  The sealed validator key stays too: it cannot be opened
+# on this CPU either, but signer_enclave now falls back to config/priv_validator_key.json and
+# re-seals, so there is nothing to do by hand.
+params_moved=0
+for f in "$QADENAHOME"/enclave_config/enclave_params_*.json(N); do
+    mkdir -p "$backup/enclave_config"
+    mv "$f" "$backup/enclave_config/${f:t}" || fail "could not move ${f:t} aside"
+    echo "$me: moved aside ${f:t} (sealed to the old CPU)"
+    params_moved=1
+done
+(( params_moved )) || echo "$me: no sealed params file to move aside (already recovered?)"
 
 restore_layout() {
     echo "$me: restoring the original layout from $backup" >&2
-    rm -rf "$QADENAHOME/enclave_config" "$QADENAHOME/enclave_data" "$QADENAHOME/enclave_secrets"
-    for d in enclave_config enclave_data enclave_secrets; do
-        [[ -e "$backup/$d" ]] && mv "$backup/$d" "$QADENAHOME/$d"
+    for f in "$backup"/enclave_config/enclave_params_*.json(N); do
+        mv "$f" "$QADENAHOME/enclave_config/${f:t}" 2>/dev/null
     done
 }
 

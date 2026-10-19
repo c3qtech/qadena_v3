@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -130,4 +133,87 @@ func TestNoStateFileIsANewValidator(t *testing.T) {
 	require.NoError(t, signVote(pv, testChain, testVote(1, 0, typesproto.PrevoteType, 0xAA, time.Unix(1700000000, 0).UTC())))
 	_, err = os.Stat(path)
 	require.NoError(t, err, "the state is on disk once something is signed")
+}
+
+// writeValidatorKeyFiles lays out a home the way a node has one: plaintext in config/, optionally a
+// sealed copy in enclave_config/.
+func writeValidatorKeyFiles(t *testing.T, sealedBody []byte) (home string, priv ed25519.PrivKey) {
+	t.Helper()
+	home = t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "config"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "enclave_config"), 0755))
+
+	priv = ed25519.GenPrivKey()
+	var k PrivValidatorKey
+	k.Address = "ADDR"
+	k.PubKey.Type = "tendermint/PubKeyEd25519"
+	k.PubKey.Value = base64.StdEncoding.EncodeToString(priv.PubKey().Bytes())
+	k.PrivKey.Type = "tendermint/PrivKeyEd25519"
+	k.PrivKey.Value = base64.StdEncoding.EncodeToString(priv[:])
+	raw, err := json.Marshal(k)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(home, "config", "priv_validator_key.json"), raw, 0600))
+
+	if sealedBody != nil {
+		require.NoError(t, os.WriteFile(filepath.Join(home, "enclave_config", "priv_validator_key.json"), sealedBody, 0600))
+	}
+	return home, priv
+}
+
+// THE RULE: the signer must work whenever the unencrypted key is present.  A sealed copy this build
+// cannot open -- which is every rebuilt signer's first start, and every node whose VM moved -- must
+// fall back and re-seal rather than stop the validator dead.
+func TestLoadKeyFallsBackToPlaintextWhenTheSealedCopyIsUnreadable(t *testing.T) {
+	// A sealed blob from some other measurement: the debug seal tags with uniqueID, so this is not ours.
+	home, priv := writeValidatorKeyFiles(t, []byte("someOtherMeasurement{\"not\":\"ours\"}"))
+
+	got, pub, err := loadKey(home)
+	require.NoError(t, err, "an unreadable sealed key must not be fatal while the plaintext is there")
+	require.Equal(t, priv[:], got[:])
+	require.Equal(t, priv.PubKey().Address(), pub.Address())
+
+	// and it re-sealed for THIS measurement, replacing the stale copy
+	resealed, rerr := os.ReadFile(filepath.Join(home, "enclave_config", "priv_validator_key.json"))
+	require.NoError(t, rerr)
+	require.True(t, bytes.HasPrefix(resealed, []byte(uniqueID)), "the sealed copy was not rewritten for this measurement")
+
+	info, serr := os.Stat(filepath.Join(home, "enclave_config", "priv_validator_key.json"))
+	require.NoError(t, serr)
+	require.Equal(t, os.FileMode(0600), info.Mode().Perm(), "a validator key must not be world-readable")
+}
+
+// First start on a fresh node: no sealed copy at all, seal it from the plaintext.
+func TestLoadKeySealsFromPlaintextOnFirstStart(t *testing.T) {
+	home, priv := writeValidatorKeyFiles(t, nil)
+	got, _, err := loadKey(home)
+	require.NoError(t, err)
+	require.Equal(t, priv[:], got[:])
+	sealed, rerr := os.ReadFile(filepath.Join(home, "enclave_config", "priv_validator_key.json"))
+	require.NoError(t, rerr)
+	require.True(t, bytes.HasPrefix(sealed, []byte(uniqueID)))
+}
+
+// A readable sealed copy is used as-is.
+func TestLoadKeyUsesAReadableSealedCopy(t *testing.T) {
+	home, priv := writeValidatorKeyFiles(t, nil)
+	_, _, err := loadKey(home) // first start seals it
+	require.NoError(t, err)
+
+	// remove the plaintext: the sealed copy alone must now suffice
+	require.NoError(t, os.Remove(filepath.Join(home, "config", "priv_validator_key.json")))
+	got, _, err := loadKey(home)
+	require.NoError(t, err)
+	require.Equal(t, priv[:], got[:])
+}
+
+// Neither usable: fail, and name both paths so the operator knows what to restore.
+func TestLoadKeyFailsClearlyWhenNeitherIsUsable(t *testing.T) {
+	home, _ := writeValidatorKeyFiles(t, []byte("someOtherMeasurement{\"not\":\"ours\"}"))
+	require.NoError(t, os.Remove(filepath.Join(home, "config", "priv_validator_key.json")))
+
+	_, _, err := loadKey(home)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "enclave_config")
+	require.Contains(t, err.Error(), "config/priv_validator_key.json")
+	require.Contains(t, err.Error(), "offline backup")
 }
