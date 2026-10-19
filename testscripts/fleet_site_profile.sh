@@ -204,7 +204,7 @@ fleet_site_profile_load() {
         # cosmetic: it is what stops anything signed here replaying elsewhere, and what stops
         # anything signed on a testnet replaying here.
         #
-        # SITE_TEST_GOV_TIMINGS=1 keeps the "fast"" governance clock, for the early stages of mainnet
+        # SITE_TEST_GOV_TIMINGS=1 keeps the "fast" governance clock, for the early stages of mainnet
         #
         # SITE_ZERO_INCENTIVES=0 keeps the wallet endowment real.  A test fleet zeroes it because
         # the endowment is a SECOND funding source, which makes a missing fee grant look like
@@ -219,15 +219,6 @@ fleet_site_profile_load() {
         # accepts forged ones for the life of the chain, silently.  On a mainnet that is the whole
         # trust model gone.
         SITE_CHAIN_ID="qadena_482-1"
-        # 0, AND IT CANNOT BE 1 HERE.  fill_launch_config.py refuses --test-gov-timings together
-        # with the mainnet chain-id -- a five-minute governance clock on the id that IS EIP-155
-        # replay protection is a testnet wearing the production network's identity -- and
-        # veritas_full_setup.sh refuses the pair before it mints anything.  So 1 does not merely
-        # build the wrong chain, it builds nothing.
-        #
-        # It also contradicts the chain that is already running: .229 reports voting_period 72h0m0s
-        # and expedited 6h0m0s, i.e. it was built with 0.  This read 1 after the rename to
-        # c3q-mainnet, which would have refused every run against a fleet that is already live.
         # SHORT CLOCK ON THE MAINNET ID, DELIBERATELY.  This pair is refused by default in both
         # veritas_full_setup.sh and fill_launch_config.py, because it is normally a mistake: the
         # chain-id IS EIP-155 replay protection, so a short-clock chain sharing mainnet's id makes
@@ -237,9 +228,17 @@ fleet_site_profile_load() {
         # real timings are voted in.  SITE_ALLOW_TEST_GOV_ON_MAINNET is what makes the refusal step
         # aside; both layers still print the warning on every run.
         #
-        # NOTE the live chain was built with 0 (.229 reports voting_period 72h0m0s), so this takes
-        # effect only on a --rebuild-chain.  To move the RUNNING chain to a short clock instead,
-        # scripts/gov_rebalance_and_slow.sh --only gov takes --voting-period/--expedited-period.
+        # MEASURED 2026-10-19 against the live joiner, because the note that stood here was stale
+        # and said the opposite: the running chain reports chain-id qadena_482-1 with
+        # voting_period 300s, max_deposit_period 300s, quorum 0.40.  So the short clock is what the
+        # live fleet HAS, not merely what a rebuild would give it -- the previous claim ("built
+        # with 0 ... reports 72h0m0s") is no longer true of the chain in front of you.  Which route
+        # it took (a --rebuild-chain under this profile, or gov_rebalance_and_slow.sh afterwards)
+        # is not recorded anywhere, and the two are indistinguishable from the outside.
+        #
+        # These values shape a chain BUILT from this profile.  To move an ALREADY-RUNNING chain's
+        # clock, scripts/gov_rebalance_and_slow.sh --only gov takes --voting-period and
+        # --expedited-period.
         SITE_TEST_GOV_TIMINGS=1
         SITE_ALLOW_TEST_GOV_ON_MAINNET=1
         SITE_ZERO_INCENTIVES=0
