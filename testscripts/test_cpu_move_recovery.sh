@@ -198,7 +198,15 @@ onz "$PRIMARY" "source ./foundation_scripts/deployment_profile.sh >/dev/null 2>&
 # granter foundation-veritas-appsvr, a key a devnet keyring does not have ("decoding bech32
 # failed"), and the treasury's grant to the provider does not cover MsgCreateCredential.  A granter
 # equal to the payer makes the SDK charge the payer, and on a devnet the provider holds its own QDN.
-for u in victor al ann jill; do
+# AND THE ORDER IS A DEPENDENCY ORDER, NOT A PREFERENCE.  protect-key resolves EVERY partner named
+# in test_data/users.json through the nameservice and ABORTS on the first one it cannot resolve --
+# it does not skip ahead to collect `required` of them.  So a partner must already be provisioned.
+# victor is a partner of ann, al and jill; ann (+63288888802) is also a partner of al.  The old
+# order `victor al ann jill` therefore broke al on 2026-10-19: ann had no name binding yet, so his
+# protect-key died on her phone number -- "Couldn't convert from bech32 format +63288888802",
+# FindSubWallet 'phone'/'email' failed -- even though pioneer1 and victor alone already met his
+# threshold of 2.  That surfaced only as "1 errors" from a step the test deliberately tolerates.
+for u in victor ann al jill; do
     onz "$PRIMARY" "source ./foundation_scripts/deployment_profile.sh >/dev/null 2>&1 && deployment_profile_load veritas && VERITAS_FOUNDATION_APPSVR=testidentitysrvprv ./testscripts/setup.sh --specific-user $u" > "$OUT/setup-$u.log" 2>&1 \
         || print -r -- "  note  setup.sh --specific-user $u did not finish ($OUT/setup-$u.log); continuing -- the seed-phrase checks below are the verdict"
 done
