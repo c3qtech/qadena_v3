@@ -1,0 +1,16 @@
+{
+    "exe": "sealprobe",
+    "key": "../qadenad_enclave/private.pem",
+    "debug": false,
+    "heapSize": 256,
+    "productID": 1,
+    "securityVersion": 2,
+    "mounts": [
+        {
+            "source": "/home",
+            "target": "/home",
+            "type": "hostfs",
+            "readOnly": true
+        }
+    ]
+}
