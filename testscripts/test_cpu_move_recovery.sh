@@ -242,7 +242,13 @@ for x in "${ALSO_STOP[@]}"; do
 done
 sleep 15
 h1=$(height_of "$SEED")
-(( h1 - h0 <= 2 )) && pass "the chain halted with the primary down (seed height $h0 -> $h1)" || print -r -- "  note  the seed kept producing blocks ($h0 -> $h1): the primary is not a majority here"
+if (( h1 - h0 <= 2 )); then
+    CHAIN_HALTED=1
+    pass "the chain halted with the primary down (seed height $h0 -> $h1)"
+else
+    CHAIN_HALTED=0
+    print -r -- "  note  the seed kept producing blocks ($h0 -> $h1): the primary is not a majority here"
+fi
 # A new CPU cannot open anything sealed on the old one.  Corrupt the debug seal prefix of every
 # sealed file so the enclave and the signer fail exactly where SGX would.
 ssh alvillarica@$PRIMARY "cd $H/enclave_config && for f in enclave_params_*.json priv_validator_key.json; do printf 'MOVED' | dd of=\$f bs=1 count=5 conv=notrunc 2>/dev/null; done; sha256sum enclave_params_*.json" > "$OUT/broken.sha" || die "could not break the sealed files"
@@ -263,10 +269,21 @@ ssh -o BatchMode=yes alvillarica@$SEED "$H/scripts/start_qadena.sh > /tmp/cpu_mo
 sleep 20
 hs=$(height_of "$SEED")
 [[ -n "$hs" ]] && pass "the seed restarted during the halt and answers at height $hs" || die "the seed did not come back after its restart"
-print -r -- "  ....  holding the chain halted for ${HALT_SECONDS}s"
-sleep "$HALT_SECONDS"
-hs2=$(height_of "$SEED")
-[[ "$hs2" == "$hs" ]] && pass "still halted after ${HALT_SECONDS}s (height $hs2)" || fail "the chain moved during the halt ($hs -> $hs2)"
+# ONLY MEANINGFUL IF THE CHAIN ACTUALLY HALTED, and line 245 has already decided that.  With four
+# evenly-staked pioneers, stopping one CANNOT stop consensus -- that is correct chain behaviour, not
+# a regression.  Failing here contradicted the note above, and spent ${HALT_SECONDS}s proving the
+# chain still works before doing it (observed 2026-10-19: 66 PASS, this the only FAIL, 529 -> 835).
+# The restore below is exercised either way; a live chain only means the enclave comes back to a
+# MOVING tip instead of a frozen one, which is the harder case, not the weaker one.
+if (( ${CHAIN_HALTED:-0} )); then
+    print -r -- "  ....  holding the chain halted for ${HALT_SECONDS}s"
+    sleep "$HALT_SECONDS"
+    hs2=$(height_of "$SEED")
+    [[ "$hs2" == "$hs" ]] && pass "still halted after ${HALT_SECONDS}s (height $hs2)" || fail "the chain moved during the halt ($hs -> $hs2)"
+else
+    print -r -- "  skip  the primary is not a majority here, so there is no halt to hold -- the"
+    print -r -- "        restore is still exercised, against a chain that keeps producing"
+fi
 fi
 
 if (( FROM <= 3 )); then

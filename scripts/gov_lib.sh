@@ -13,11 +13,27 @@
 # The failure mode governs the design: a proposal that cannot reach quorum does not ERROR, it TIMES
 # OUT.  So these scripts check reachability BEFORE submitting, and poll to a terminal state after.
 
-# qadenad, addressed directly.  NOT the qadenad_alias from setup_env.sh: that is a zsh alias, and
-# aliases are resolved at PARSE time, so it is undefined inside any function or `zsh -c` string that
-# was parsed before setup_env.sh was sourced.  That silently produced "command not found" inside
-# scripts that had sourced it successfully.
-qq() { "$qadenabin/qadenad" --home "$QADENAHOME" "$@" }
+# qadenad, addressed through setup_env.sh's wrapper WHEN THERE IS ONE.
+#
+# THE OLD COMMENT HERE WAS STALE AND IT COST A FLEET UPGRADE.  It said qadenad_alias "is a zsh
+# alias, and aliases are resolved at PARSE time, so it is undefined inside any function".  It is a
+# FUNCTION (setup_env.sh), and functions resolve at CALL time, so calling it from in here is fine.
+#
+# Addressing qadenad directly skips the two things that wrapper exists to add: --keyring-backend,
+# and feeding the passphrase for the `file` backend.  So every key-touching call made through qq
+# prompted, found no tty, and failed.  have_key() then reported the key ABSENT rather than locked --
+# `'pioneer1' is NOT in this node's keyring`, printed on a node whose keyring holds pioneer1 --
+# and the upgrade died after building and staging the enclave on every node (2026-10-19).  The vote
+# itself would have failed the same way.
+#
+# Falls back to the direct call when setup_env.sh was not sourced, so nothing that worked stops.
+qq() {
+    if (( $+functions[qadenad_alias] )); then
+        qadenad_alias "$@"
+    else
+        "$qadenabin/qadenad" --home "$QADENAHOME" "$@"
+    fi
+}
 
 # THIS NODE'S OWN OPERATOR KEY.
 #
