@@ -73,7 +73,7 @@ fleet_site_profile_load() {
     # SITE_TEST_CHAIN_CONFIG is still read below as a default for both, so an existing site file
     # setting it keeps working.
     SITE_CHAIN_ID=""; SITE_TEST_GOV_TIMINGS=""; SITE_ZERO_INCENTIVES=""; SITE_SGX=""
-    SITE_ALLOW_TEST_GOV_ON_MAINNET=""
+    SITE_ALLOW_TEST_GOV_ON_MAINNET=""; SITE_EPH_COUNT=""
     SITE_TEST_CHAIN_CONFIG=""
 
     case "$_s" in
@@ -243,6 +243,11 @@ fleet_site_profile_load() {
         SITE_ALLOW_TEST_GOV_ON_MAINNET=1
         SITE_ZERO_INCENTIVES=0
         SITE_SGX=1
+        # 30, THE "REAL RUN" NUMBER, SAID ONCE HERE INSTEAD OF TYPED EVERY TIME.  This is the only
+        # site that wants it, and until now nothing could express it: veritas_full_setup.sh hard-set
+        # COUNT=3 and its help said "30 for a real run", so a forgotten --count 30 produced a fleet
+        # 27 ephemeral wallets per user short -- with no error, because 3 is a perfectly valid count.
+        SITE_EPH_COUNT=30
         # VISIBLE, AND INSIDE THE LAUNCH DIRECTORY -- not a dotfile in $HOME like the other two
         # sites.  This is a throwaway testnet whose passphrase is generated rather than chosen, so
         # it wants to be findable next to the chain it unlocks.  veritas_full_setup.sh mints it on
@@ -410,6 +415,13 @@ fleet_site_profile_load() {
     : ${SITE_TEST_GOV_TIMINGS:=${SITE_TEST_CHAIN_CONFIG:-1}}
     : ${SITE_ZERO_INCENTIVES:=${SITE_TEST_CHAIN_CONFIG:-1}}
     : ${SITE_SGX:=0}
+    # EPHEMERAL WALLETS PER USER.  3 is the test default and is what every site got before this
+    # field existed, so adding it changed no site's behaviour.  It lives here rather than only as
+    # veritas_full_setup.sh's --count because the one site where the number matters is the one that
+    # could not say so: its help has always read "default 3; 30 for a real run", which left a real
+    # run correct only if the operator remembered to type --count 30, and silently short by 27
+    # wallets per user if they did not.  A site that knows it is real now says it once.
+    : ${SITE_EPH_COUNT:=3}
     : ${SITE_ALLOW_TEST_GOV_ON_MAINNET:=0}
     : ${SITE_ENV_FILE_NAME:=env-sponsored-test}
     : ${SITE_NODE_GRANTER:=nodeops}
@@ -422,7 +434,7 @@ fleet_site_profile_print() {
     local _v
     for _v in NAME PRIMARY JOINER PASSFILE LAUNCH_DIR ADVERTISE_P ADVERTISE_J \
               HOME_SUFFIX ENV_FILE_NAME JOINER_VALIDATOR ALLOW_UNVERIFIED_AGREEMENT NODE_GRANTER \
-              CHAIN_ID TEST_GOV_TIMINGS ZERO_INCENTIVES SGX ALLOW_TEST_GOV_ON_MAINNET CF_ENV; do
+              CHAIN_ID TEST_GOV_TIMINGS ZERO_INCENTIVES SGX ALLOW_TEST_GOV_ON_MAINNET EPH_COUNT CF_ENV; do
         print -r -- "SITE_$_v=${(P)${:-SITE_$_v}}"
     done
     # THE ARRAYS TOO, because SITE_JOINER alone shows only the FIRST of them -- and "--show says

@@ -126,7 +126,11 @@ COORD_HOME="$LAUNCH_DIR/coord"
 # on staging.  The suffix is not cosmetic: the rebuild stage DELETES this directory, and staging
 # once shared ~/sec-veritas with the M1/M2 fleet and wiped its keys and mnemonics.
 SEC_HOME="${VERITAS_SEC_HOME:-$DEPLOY_SEC_HOME$SITE_HOME_SUFFIX}"
-COUNT=3
+# FROM THE SITE, NOT HARD-CODED.  This was COUNT=3 with a help line reading "30 for a real run",
+# which made a real run correct only when the operator remembered to type --count 30 -- and silently
+# 27 wallets per user short when they did not, since 3 is a valid count and nothing checks it.
+# The site that knows it is real now carries the number (SITE_EPH_COUNT); --count still overrides.
+COUNT="$SITE_EPH_COUNT"
 FROM="bootstrap"
 REBUILD=0
 NEW_DEPLOYMENT_KEYS=0
@@ -174,7 +178,9 @@ usage() {
     print -r -- "  --node <rpc>        the chain RPC.  Default: derived from --primary"
     print -r -- "                      (tcp://<primary-host>:26657), or \$QADENA_NODE, or"
     print -r -- "                      tcp://localhost:26657 when there is no --primary."
-    print -r -- "  --count <n>         ephemeral wallets per user (default 3; 30 for a real run)"
+    print -r -- "  --count <n>         ephemeral wallets per user.  Defaults to the SITE's"
+    print -r -- "                      SITE_EPH_COUNT (3 on the test sites, 30 on c3q-mainnet),"
+    print -r -- "                      so a real run no longer depends on remembering this flag."
     print -r -- "  --coord-home <dir>  foundation keyring (default $COORD_HOME)"
     print -r -- "  --sec-home <dir>    the deployment's directory (default $SEC_HOME)"
     print -r -- "  --from <stage>      resume: bootstrap|prepare|step1|delegate|step2|approve|step3|pool|verify|app"
