@@ -448,6 +448,13 @@ if [ "$eph_count" -eq 1 ]; then
             fi
             run_cmd "qadenad_alias tx qadena create-wallet $username-eph2 $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic=\"$usermnemonic\" --eph-account-index \"2\" --accept-credential-types $acceptcredentialtypes --yes"
         fi
+        # GRANTED HERE, NOT IN THE LOOP ABOVE.  eph2/3/4 are created AFTER that loop has already
+        # run, so it cannot cover them -- and the bind below signs AS eph2 under
+        # $USER_FEE_GRANTER_FLAG.  Without its own allowance the grant that create-wallet left is
+        # too narrow and the bind fails with "message does not exist in allowed messages".
+        # grant_user_fees self-gates on the fund mode and re-grants cleanly (it revokes first),
+        # so this is safe on the resume path where the wallet already existed.
+        grant_user_fees "$username-eph2"
         banner "$username Bind phone nameservice to $username-eph2"
         run_cmd "qadenad_alias tx nameservice bind-credential $username phone-contact-info --from $username-eph2 $USER_FEE_GRANTER_FLAG --yes"
     else
@@ -474,6 +481,8 @@ if [ "$eph_count" -eq 1 ]; then
             fi
             run_cmd "qadenad_alias tx qadena create-wallet $username-eph3 $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic=\"$usermnemonic\" --eph-account-index \"3\" --require-sender-credential-types $requiresendertypes --yes"
         fi
+        # Same reason as eph2 above: created after the grant loop, signs the bind below.
+        grant_user_fees "$username-eph3"
         banner "$username Bind email nameservice to $username-eph3"
         run_cmd "qadenad_alias tx nameservice bind-credential $username email-contact-info --from $username-eph3 $USER_FEE_GRANTER_FLAG --yes"
     else 
@@ -500,6 +509,10 @@ if [ "$eph_count" -eq 1 ]; then
             fi
             run_cmd "qadenad_alias tx qadena create-wallet $username-eph4 $pioneer $createwalletsponsor --link-to-real-wallet $username --account-mnemonic=\"$usermnemonic\" --eph-account-index \"4\" --accept-password=\"$acceptpassword\" --yes"
         fi
+        # eph4 signs nothing in THIS script, but it is created after the grant loop like eph2/3,
+        # so without this it is a wallet that looks created and cannot transact -- the exact
+        # failure grant_user_fees' own error text warns about.
+        grant_user_fees "$username-eph4"
     fi
 
 fi
