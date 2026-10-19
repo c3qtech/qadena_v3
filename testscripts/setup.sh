@@ -257,7 +257,18 @@ fi
 # Three at a time keeps most of the wall-clock win -- per-user work that does NOT touch the shared
 # accounts still overlaps -- while keeping the queue at those accounts short enough for the retry
 # budget to absorb.  Raise it on a fast box; set it to 1 to serialise completely.
-: ${QADENA_SETUP_PARALLEL:=3}
+# STDIN IS CLOSED ON EVERY BACKGROUND CHILD (< /dev/null), and that is load-bearing rather than
+# tidiness.  This loop is fed by `jq ... | while read -r user`, so the children inherit the PIPE as
+# their stdin and can consume the users still queued in it.  It never showed while all eleven were
+# launched in one burst -- nothing had time to read -- but the moment a drain waits mid-loop the
+# children get 40+ seconds to eat the rest of the list, and setup silently processes three users
+# and declares itself done.
+#
+# ONE AT A TIME BY DEFAULT.  Three still raced: all three of the first batch died with "fee
+# allowance already exists", which is grant_as_foundation's revoke losing to a concurrent one on
+# the sponsor's sequence.  The grant path cannot tolerate ANY concurrency on that account, so the
+# honest default is serial.  Raise it only if the shared-account work is made contention-free.
+: ${QADENA_SETUP_PARALLEL:=1}
 
 # drain_pids -- wait on everything launched so far, recording failures, then clear the list.
 # Called mid-loop to cap concurrency, and once at the end for the remainder.
@@ -310,9 +321,9 @@ jq -c '.[]' "$usersjson" | while read -r user; do
     else
     echo "Processing user: $name"
         if [ "$no_log" = "true" ]; then
-            $qadenaproviderscripts/create_user.sh "$name" "$mnemonic" "$pioneer" "$serviceprovider" "$firstname" "$middlename" "$lastname" "$birthdate" "$citizenship" "$residency" "$gender" "$email" "$phone" "$a" "$bf" "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" "$eph_count" "$createwalletsponsor" &
+            $qadenaproviderscripts/create_user.sh "$name" "$mnemonic" "$pioneer" "$serviceprovider" "$firstname" "$middlename" "$lastname" "$birthdate" "$citizenship" "$residency" "$gender" "$email" "$phone" "$a" "$bf" "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" "$eph_count" "$createwalletsponsor" < /dev/null &
         else
-            $qadenaproviderscripts/create_user.sh "$name" "$mnemonic" "$pioneer" "$serviceprovider" "$firstname" "$middlename" "$lastname" "$birthdate" "$citizenship" "$residency" "$gender" "$email" "$phone" "$a" "$bf" "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" "$eph_count" "$createwalletsponsor" > logs/"$name".log 2>&1 &
+            $qadenaproviderscripts/create_user.sh "$name" "$mnemonic" "$pioneer" "$serviceprovider" "$firstname" "$middlename" "$lastname" "$birthdate" "$citizenship" "$residency" "$gender" "$email" "$phone" "$a" "$bf" "$identityprovider" "$acceptcredentialtypes" "$acceptpassword" "$requiresendertypes" "$eph_count" "$createwalletsponsor" > logs/"$name".log 2>&1 < /dev/null &
         fi
 
         pid_list+=($!)  # Store process ID
@@ -380,9 +391,9 @@ else
         else
             echo "Setting up user recovery: $name"
             if [ "$no_log" = "true" ]; then
-                $qadenatestscripts/setup_user_recovery.sh "$name" "$mnemonic" "$required" "$partners" &
+                $qadenatestscripts/setup_user_recovery.sh "$name" "$mnemonic" "$required" "$partners" < /dev/null &
             else
-                $qadenatestscripts/setup_user_recovery.sh "$name" "$mnemonic" "$required" "$partners" >> logs/"$name".log 2>&1 &
+                $qadenatestscripts/setup_user_recovery.sh "$name" "$mnemonic" "$required" "$partners" >> logs/"$name".log 2>&1 < /dev/null &
             fi
 
             pid_list+=($!)  # Store process ID
