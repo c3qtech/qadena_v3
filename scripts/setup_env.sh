@@ -234,9 +234,9 @@ sec_mnemonic() {
 #                      which cost a whole SGX fleet upgrade on 2026-10-19: it built the enclave,
 #                      staged it on every node, and then could not sign its own vote
 #   enf_cli.sh         "too many failed passphrase attempts"
-//
+#
 # None of those name the real cause, and each one sent somebody looking somewhere else.
-//
+#
 # This is deliberately the NON-PROMPTING half only: it fires when QADENA_KEYRING_PASSFILE is set
 # and does nothing otherwise, so sourcing setup_env.sh can never block on a prompt or change
 # behaviour for a caller that supplies nothing.  A script that WANTS to prompt still calls

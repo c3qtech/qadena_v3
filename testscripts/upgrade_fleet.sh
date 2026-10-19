@@ -294,7 +294,19 @@ done
 say()  { print -- "$(date '+%H:%M:%S')  $*" }
 step() { print ""; print -- "=== $* ===" }
 die()  { print -u2 "FAIL: $*"; exit 1 }
-rsh()  { local h="$1"; shift; ssh -o ConnectTimeout=10 -o BatchMode=yes "$h" "bash -lc $(printf '%q' "$*")" }
+# THE KEYRING PASSPHRASE HAS TO CROSS THE SSH BOUNDARY.  With the `file` backend every key access
+# prompts, and ssh forwards no environment, so a remote step that SIGNS -- gov_software_upgrade.sh
+# -- died with "'qfi-pioneer1' is NOT in this node's keyring (backend: file)" even though the local
+# driver had QADENA_KEYRING_PASSFILE set.  setup_env.sh already turns this variable into a
+# passphrase; it just never reached the node.
+#
+# The passphrase NEVER goes on the command line (it would show in the remote `ps`): only the PATH
+# of a 0600 file the operator staged on that node.  Self-limiting -- no file, no export, and the
+# behaviour is exactly what it was before.
+: ${REMOTE_PASSFILE:=\$HOME/.qadena-keyring-pass}   # $HOME is expanded ON THE NODE, not here
+rsh()  { local h="$1"; shift
+         ssh -o ConnectTimeout=10 -o BatchMode=yes "$h" \
+             "bash -lc $(printf '%q' "if [ -r \"$REMOTE_PASSFILE\" ]; then export QADENA_KEYRING_PASSFILE=\"$REMOTE_PASSFILE\"; fi; $*")" }
 run()  { local h="$1"; shift; if (( DRY )); then print -- "    [dry-run] $h: $*"; else rsh "$h" "$@"; fi }
 
 height_of() { rsh "$1" '~/qadena/bin/qadenad status 2>/dev/null' 2>/dev/null \
