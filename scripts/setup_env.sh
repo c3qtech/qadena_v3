@@ -223,6 +223,30 @@ sec_mnemonic() {
     return 1
 }
 
+# AUTO-LOAD A PASSFILE THE MOMENT setup_env.sh IS SOURCED, when one is named.
+#
+# qadena_keyring_unlock has always been able to do this, but it has to be CALLED, and most scripts
+# never call it -- only the veritas steps and a couple of others do.  Everything else inherits a
+# `file` keyring with no passphrase and fails in whatever way its first key access happens to fail:
+#
+#   regression.sh      "treasury key 'treasury' not found in the keyring"
+#   gov_software_upgrade.sh  "'qfi-pioneer1' is NOT in this node's keyring (backend: file)" --
+#                      which cost a whole SGX fleet upgrade on 2026-10-19: it built the enclave,
+#                      staged it on every node, and then could not sign its own vote
+#   enf_cli.sh         "too many failed passphrase attempts"
+//
+# None of those name the real cause, and each one sent somebody looking somewhere else.
+//
+# This is deliberately the NON-PROMPTING half only: it fires when QADENA_KEYRING_PASSFILE is set
+# and does nothing otherwise, so sourcing setup_env.sh can never block on a prompt or change
+# behaviour for a caller that supplies nothing.  A script that WANTS to prompt still calls
+# qadena_keyring_unlock itself.
+if [ "${QADENA_KEYRING_BACKEND:-}" = "file" ] && [ -z "${QADENA_KEYRING_PASS:-}" ] \
+   && [ -n "${QADENA_KEYRING_PASSFILE:-}" ] && [ -r "${QADENA_KEYRING_PASSFILE}" ]; then
+    QADENA_KEYRING_PASS=$(head -1 "$QADENA_KEYRING_PASSFILE")
+    export QADENA_KEYRING_PASS
+fi
+
 qadena_keyring_unlock() {
     [ "$QADENA_KEYRING_BACKEND" = "file" ] || return 0
     [ -z "${QADENA_KEYRING_PASS:-}" ] || return 0

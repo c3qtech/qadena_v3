@@ -239,6 +239,49 @@ if [ -n "$prefix" ]; then
     usersjson=$output_file
 fi
 
+# HOW MANY USERS AT A TIME.  Every create_user.sh signs from the SAME small set of accounts -- the
+# create-wallet sponsor (funding and fee grants) and the identity provider (credentials) -- and each
+# of those has ONE account sequence on chain.  Forking all eleven at once puts eleven processes in a
+# race for one sequence number; the client retries with backoff (x/qadena/client/tx/tx.go), but that
+# budget is finite and under full contention some users exhaust it and die with "max retries
+# exceeded".  A DIFFERENT SUBSET FAILS EACH RUN, which is the signature of contention rather than a
+# bug in any one user.
+#
+# IT GOT MUCH WORSE WHEN THE NODE KEYRING MOVED FROM 'test' TO 'file' (02ee7e7c, 2026-09-09).  The
+# file backend wraps every key with PBES2-HMAC-SHA256 at 8192 PBKDF2 iterations
+# (99designs/keyring/file.go:134), so every key read, every signature and every `keys add` now costs
+# a KDF where it used to cost a file read.  Eleven users of that in parallel saturate the box: each
+# transaction takes longer, the stale-sequence window widens, and the retry budget runs out.  The
+# last all-green regression on this fleet (2026-09-02) predates that migration by a week.
+#
+# Three at a time keeps most of the wall-clock win -- per-user work that does NOT touch the shared
+# accounts still overlaps -- while keeping the queue at those accounts short enough for the retry
+# budget to absorb.  Raise it on a fast box; set it to 1 to serialise completely.
+: ${QADENA_SETUP_PARALLEL:=3}
+
+# drain_pids -- wait on everything launched so far, recording failures, then clear the list.
+# Called mid-loop to cap concurrency, and once at the end for the remainder.
+drain_pids() {
+    local pid ret
+    for pid in $pid_list; do
+        wait $pid
+        ret=$?
+        if [[ $ret -ne 0 ]]; then
+            errors=$((errors + 1))
+            echo "❌ Error: ${pids[$pid]}"
+            if [ "$no_log" != "true" ]; then
+                mv logs/"${pids[$pid]}".log logs/"${pids[$pid]}_error.log"
+            fi
+        else
+            echo "✅ ${pids[$pid]} finished successfully."
+        fi
+    done
+    pid_list=()
+}
+
+# Wait for all processes to finish and capture errors
+errors=0
+
 # Load users.json and iterate through each user
 jq -c '.[]' "$usersjson" | while read -r user; do
     # if not the specific user and $user matches specific user
@@ -276,30 +319,19 @@ jq -c '.[]' "$usersjson" | while read -r user; do
 
         # map the pid to the user name
         pids[$!]=$name
-    fi
-done
-
-# Wait for all processes to finish and capture errors
-errors=0
-
-# Wait for all processes to finish
-echo "Waiting for user setups to finish..."
-for pid in $pid_list; do
-    wait $pid
-    ret=$?
-
-    if [[ $ret -ne 0 ]]; then
-        errors=$((errors + 1))  # Capture failure count
-        echo "❌ Error: ${pids[$pid]}"  # Correct array syntax for Zsh
-
-        if [ "$no_log" != "true" ]; then
-            # Rename the log file correctly
-            mv logs/"${pids[$pid]}".log logs/"${pids[$pid]}_error.log"
+        # Cap concurrency so the shared accounts never have more than
+        # QADENA_SETUP_PARALLEL writers queued on their one account sequence.
+        if (( ${#pid_list} >= QADENA_SETUP_PARALLEL )); then
+            drain_pids
         fi
-    else 
-        echo "✅ ${pids[$pid]} finished successfully."
     fi
 done
+
+
+
+# Drain whatever is still running (the loop above already drained each full batch).
+echo "Waiting for user setups to finish..."
+drain_pids
 
 # Check if any errors occurred
 if [[ $errors -gt 0 ]]; then
