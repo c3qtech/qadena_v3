@@ -96,7 +96,23 @@ id=$(gov_proposal_id_of_tx "$hash")
 [[ -n "$id" ]] || die "could not read the proposal id from tx $hash"
 say "proposal id: $id"
 
-gov_tx "deposit" tx gov deposit "$id" 1000qdn --from "${voters[1]}" > /dev/null || die "deposit failed"
+# ONLY IF IT IS STILL IN DEPOSIT PERIOD, and that is normally not the case.  The template deposits
+# 100000qdn at submit -- ten times this chain's 10000qdn minimum -- so the proposal is already open
+# for voting by the time this line runs, and the extra deposit buys nothing.
+#
+# It also COSTS, which is how it surfaced: the proposer has just paid that 100000qdn, so on a
+# launch-shaped fleet whose pioneer is funded for operations rather than governance it is left
+# holding ~100qdn, and this died with "insufficient funds" -- aborting the roll over a top-up that
+# a proposal already in VOTING_PERIOD did not need (M1-M4, 2026-10-20: balance 99.99qdn, and the
+# run never reached the vote).
+#
+# If the proposal really IS short, this still tops up and still fails loudly when it cannot.
+status=$(qq query gov proposal "$id" --output json 2>/dev/null | jq -r '.proposal.status // empty')
+if [[ "$status" == "PROPOSAL_STATUS_DEPOSIT_PERIOD" ]]; then
+    gov_tx "deposit" tx gov deposit "$id" 1000qdn --from "${voters[1]}" > /dev/null || die "deposit failed"
+else
+    say "deposit: not needed -- proposal $id is already ${status:-open}"
+fi
 for v in "${voters[@]}"; do
     gov_tx "vote from $v" tx gov vote "$id" yes --from "$v" > /dev/null || die "vote from $v failed"
 done
