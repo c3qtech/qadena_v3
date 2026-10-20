@@ -895,7 +895,14 @@ fi
 # So: submit and vote on the primary with --no-wait, collect a vote from every other node, and
 # only then wait.  A node that cannot vote is reported and skipped rather than failing the roll --
 # it may legitimately hold no bonded key -- but if the proposal then misses quorum the wait says so.
-gov_out=$(run "${NODES[1]}" "~/qadena/scripts/gov_software_upgrade.sh --plan $PLAN --margin 180 --no-wait $encl_args" 2>&1) \
+# THE MARGIN HAS TO COVER PROMOTION, NOT JUST THE VOTE.  The plan height is computed as
+# voting_period + margin, and the vote eats the voting period -- so 180s left only 180s for a
+# quorum promotion round-trip that does not reliably finish in that time (M1-M4, 2026-10-20: still
+# unvalidated 360s after the trigger).  A chain-only roll promotes nothing and keeps the old value.
+# Pushing the height further out costs nothing when promotion is quick.
+gov_margin=180
+[[ -n "$encl_args" ]] && gov_margin=900
+gov_out=$(run "${NODES[1]}" "~/qadena/scripts/gov_software_upgrade.sh --plan $PLAN --margin $gov_margin --no-wait $encl_args" 2>&1) \
     || { print -r -- "$gov_out" | while read -r l; do say "    $l"; done
          die "the governance step failed on ${NODES[1]} -- if the proposal passed but late, cancel the plan (see gov_software_upgrade.sh --help)" }
 print -r -- "$gov_out" | while read -r l; do say "    $l"; done
@@ -931,8 +938,25 @@ if [[ -n "$encl_args" ]]; then
         sleep 6
     done
     st=$(identity_status "$NEW_UNIQUE") || true
-    [[ "$st" == "active" ]] || die "$NEW_UNIQUE is '$st', not active -- the swap at H would start an enclave the chain refuses.  CANCEL THE PLAN (MsgCancelUpgrade) before the height."
-    say "  $NEW_UNIQUE active"
+    if [[ "$st" == "active" ]]; then
+        say "  $NEW_UNIQUE active"
+    else
+        # NOT FATAL, AND THE OLD MESSAGE HERE WAS WRONG TWICE OVER.  It said the swap "would start an
+        # enclave the chain refuses" and told the operator to cancel the plan.  Neither holds: the
+        # swap is authorised by the enclave TRUSTED SET via the handover route -- the old enclave
+        # hands its sealed params to the measurement named in --upgrade-from-enclave-unique-id -- and
+        # never consults this chain row (docs/ENCLAVE-THREAT-MODEL.md, "the five ways trust is
+        # gained").  The chain's `active` flag gates something else: the chain's own verification of
+        # enclave-signed messages.  Promoting late costs a window where those are rejected; it does
+        # not stop the swap.
+        #
+        # Failing here threw away a GOOD upgrade (M1-M4, 2026-10-20): the roll reported "the roll
+        # failed", advised cancelling a healthy plan, and the fleet swapped correctly anyway and
+        # promoted minutes later.  The verdict belongs at 2k, which can actually see the outcome.
+        say "  $NEW_UNIQUE is '${st:-unknown}', not active yet -- promotion is by enclave quorum and"
+        say "    completes on its own schedule.  The swap does not wait for it (handover trust route),"
+        say "    so continuing; 2k decides.  Until it promotes, enclave-signed messages may be rejected."
+    fi
 fi
 
 step "2j. wait for the swap height"
@@ -980,6 +1004,34 @@ for n in "${NODES[@]}"; do
         || die "$n: not live after the swap (h $h0->$h1, catching_up=$cu)"
     say "  $n advancing ($h0 -> $h1, caught up)"
 done
+
+# THE IDENTITY VERDICT BELONGS HERE, not at 2i.  2i runs while the promotion is still racing the
+# plan height and cannot tell "late" from "never"; by this point the fleet is up and the question
+# has an answer.  Promotion is by enclave quorum and needs peers that have finished swapping, so
+# give it a real window rather than asking once.
+if [[ -n "$encl_args" ]]; then
+    step "2k2. the new measurement must be active on chain"
+    st=""
+    for i in {40..1}; do
+        st=$(identity_status "$NEW_UNIQUE") || true
+        [[ "$st" == "active" ]] && break
+        sleep 15
+    done
+    if [[ "$st" == "active" ]]; then
+        say "  $NEW_UNIQUE active"
+    else
+        # NOW it is fatal: the fleet runs a measurement the chain will not vouch for, so every
+        # enclave-signed message stays rejected until somebody intervenes.  The binaries are fine
+        # and the chain is producing -- this is not a reason to roll back, it is a reason to find
+        # out why the quorum did not promote.
+        die "$NEW_UNIQUE is '${st:-unknown}', not active, 10 minutes after the swap.  The fleet is
+       running it (the handover authorised that), but the CHAIN will not vouch for it, so
+       enclave-signed messages are rejected until it promotes.  Check validateEnclaveIdentities on
+       the proposer and that a quorum of pioneers is addressable:
+         qadenad q qadena list-enclave-identity
+         scripts/qadena_status.sh"
+    fi
+fi
 
 step "final: ROLL COMPLETE (via governance)"
 say "every node swapped to $PLAN at height $plan_h in the same block"
