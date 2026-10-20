@@ -5,6 +5,7 @@ import (
 
 	"cosmossdk.io/store/prefix"
 	"github.com/cosmos/cosmos-sdk/runtime"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/c3qtech/qadena_v3/x/qadena/types"
 )
@@ -43,6 +44,39 @@ func (k Keeper) GetParkedExternalAddress(ctx context.Context, pubKID string) (va
 
 	k.cdc.MustUnmarshal(b, &val)
 	return val, true
+}
+
+// PioneerHasDeparted reports whether a pioneer has been out of the bonded set long enough that it
+// may be dropped from the owner set of SS interval keys it already holds.
+//
+// THIS IS THE ONLY DEFINITION OF "DEPARTED", and every caller must use it rather than testing
+// parkedness directly: dropping an owner is a consensus action, so the answer has to be derived
+// from chain state the same way on every node, at the same height.  Parked-ness alone is NOT that
+// answer -- parking fires on any bonded->unbonding transition, including a downtime jail that
+// resolves in minutes, and a pioneer that returns still physically holds its shares.
+//
+// Three ways this says "no", each deliberate:
+//
+//	grace == 0        the feature is OFF.  Params written before field 30 unmarshal zero, and so
+//	                  does an empty param store, so an existing chain keeps today's behaviour
+//	                  until governance sets the field.  Reading 0 as "drop immediately" would
+//	                  change owner sets on upgrade, at a height replay cannot account for.
+//	not parked        bonded, or never parked.  The ordinary case.
+//	ParkedHeight == 0 parked before the field existed.  Treated as not-yet-departed rather than
+//	                  "parked at genesis": the latter would make every pre-existing parked
+//	                  pioneer instantly departed the moment this ships, which is exactly the
+//	                  silent mass re-share this grace period exists to prevent.  Such an entry
+//	                  gets a real height the next time its validator unbonds.
+func (k Keeper) PioneerHasDeparted(ctx context.Context, pubKID string) bool {
+	grace := k.GetParams(ctx).SsDepartureGrace
+	if grace == 0 {
+		return false
+	}
+	parked, found := k.GetParkedExternalAddress(ctx, pubKID)
+	if !found || parked.ParkedHeight == 0 {
+		return false
+	}
+	return sdk.UnwrapSDKContext(ctx).BlockHeight()-parked.ParkedHeight >= int64(grace)
 }
 
 // RemoveParkedExternalAddress drops one parked address, after a restore has consumed it.

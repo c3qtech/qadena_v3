@@ -176,9 +176,20 @@ func (k Keeper) parkPioneerExternalAddress(ctx context.Context, valAddr sdk.ValA
 		return
 	}
 
+	// THE HEIGHT IS THE SS DEPARTURE CLOCK, and it is recorded here because here is the only place
+	// that knows when the pioneer left the bonded set.  Params.SsDepartureGrace blocks after this,
+	// the SS audit may drop this pioneer from the owner sets of keys it already holds; before that
+	// it is merely away, and a re-bond deletes this entry and resets the clock (see
+	// restorePioneerExternalAddress).  A height rather than a timestamp because dropping an owner
+	// is a consensus action -- every node must agree on when the grace expired.
+	//
+	// The guard above is what keeps this honest across repeated jail cycles: a second transition
+	// while already parked returns early, so this records the FIRST departure and a flapping
+	// validator cannot keep pushing its own deadline back.
 	k.SetParkedExternalAddress(ctx, types.ParkedExternalAddress{
 		PubKID:            pubKID,
 		ExternalIPAddress: row.ExternalIPAddress,
+		ParkedHeight:      sdk.UnwrapSDKContext(ctx).BlockHeight(),
 	})
 
 	parked := row.ExternalIPAddress

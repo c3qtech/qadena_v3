@@ -408,6 +408,12 @@ message MsgPioneerUpdatePublicKey {
   // proof the sender HOLDS the key it is re-sharing, verified against the stored row's pubK.
   bytes possessionSig   = 5;
   bytes remoteReport    = 6;
+  // The generation this re-share expects to replace: accepted only if it equals the stored row's
+  // (compare-and-swap).  See PublicKey.generation -- it is the replay and ordering guard that the
+  // proper-superset rule used to provide for free, and it is covered by the attested string so it
+  // cannot be edited in flight.  A pre-field-7 message reads 0, which matches a never-re-shared
+  // row and is therefore accepted exactly once, as it was before this field existed.
+  uint64 expectedGeneration = 7;
 }
 
 message MsgPioneerUpdatePublicKeyResponse {}

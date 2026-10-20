@@ -136,9 +136,10 @@ var (
 	// surfaces in review rather than as an unexplained refusal later.
 	ErrScannedContractCodeIDMismatch = sdkerrors.Register(ModuleName, 1163, "Whitelist codeID does not match the address; use the contract's current code ID, or 0 for a non-contract")
 
-	// A re-share must strictly GROW the owner set: equal or shrunken sets are rejected so a re-share
-	// can never destroy a held share by omission, never lower the Shamir threshold, and a replayed
-	// re-share fails idempotently instead of applying twice.
+	// RETIRED AS A GATE, KEPT AS A CODE.  A re-share used to have to strictly GROW the owner set.
+	// That is no longer the rule -- see ErrOwnerStillEligible -- but the code stays registered
+	// because it appears in the history of chains already running, and re-using 1164 for a
+	// different meaning would make those records say something they did not mean.
 	ErrNotOwnerSuperset = sdkerrors.Register(ModuleName, 1164, "re-share owner set must be a proper superset of the current owners")
 
 	// The possession signature did not verify against the STORED row's public key.  Only an enclave
@@ -157,4 +158,18 @@ var (
 	// The shared rows (SS, Jar, Regulator) have no per-node owner to compare against, so the
 	// weaker-but-real check is that the sender is a registered pioneer at all.
 	ErrCreatorNotPioneer = sdkerrors.Register(ModuleName, 1167, "creator is not a registered pioneer")
+
+	// A re-share dropped an owner the chain does not consider DEPARTED.  Replaces the
+	// proper-superset rule (1164): an owner may now be removed, but only once its validator has
+	// been out of the bonded set for Params.SsDepartureGrace blocks.  Dropping a live owner would
+	// destroy a held share by omission -- the receiving enclave overwrites what it holds -- and
+	// dropping one on a node-local liveness opinion would fork, since nodes would disagree about
+	// which owner set is valid.
+	ErrOwnerStillEligible = sdkerrors.Register(ModuleName, 1168, "re-share dropped an owner that has not departed")
+
+	// The re-share named a generation other than the stored row's.  Now that an owner set can
+	// shrink, the superset rule no longer rejects replays for free: a stale re-share would revert
+	// the owner list and install shares from a split that no longer matches the key, which is
+	// silent data loss rather than a lost update (shares from two Split calls combine to garbage).
+	ErrStaleGeneration = sdkerrors.Register(ModuleName, 1169, "re-share expected a different generation of this key")
 )

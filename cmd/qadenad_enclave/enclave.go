@@ -2712,6 +2712,7 @@ var maxSSAuditScan = 256
 type ssReshareCandidate struct {
 	pubKID    string
 	oldOwners []string
+	generation uint64
 }
 
 // ssResharePlan is the audit's output: which keys to re-share this tick, plus the enclave pubKs
@@ -2731,11 +2732,11 @@ type ssResharePlan struct {
 // would look repaired locally and never retry.  The chain row is what peers see; a failed
 // broadcast leaves it unchanged, stays deficient, and is retried next tick.
 // Reads CacheCtx -- execution thread only.
-func (s *qadenaServer) getPublicKeyRowOwners(pubKID string, pubKType string) (owners []string, found bool) {
+func (s *qadenaServer) getPublicKeyRowOwners(pubKID string, pubKType string) (owners []string, generation uint64, found bool) {
 	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.PublicKeyKeyPrefix))
 	b := store.Get(types.PublicKeyKey(pubKID, pubKType))
 	if b == nil {
-		return nil, false
+		return nil, 0, false
 	}
 	var pk types.PublicKey
 	s.Cdc.MustUnmarshal(b, &pk)
@@ -2743,7 +2744,10 @@ func (s *qadenaServer) getPublicKeyRowOwners(pubKID string, pubKType string) (ow
 	for _, share := range pk.Shares {
 		owners = append(owners, share.PioneerID)
 	}
-	return owners, true
+	// THE GENERATION RIDES BACK WITH THE OWNERS because the re-share that follows must name the
+	// one it was computed against: the chain compare-and-swaps on it, so a candidate built from a
+	// row that has since moved is refused rather than silently reverting it.
+	return owners, pk.Generation, true
 }
 
 // planSSReshare is the AUDIT.  Runs on the execution thread (reads CacheCtx via
@@ -2819,7 +2823,7 @@ func (s *qadenaServer) planSSReshare(plan *ssRotationPlan) *ssResharePlan {
 		}
 		audited++
 
-		chainOwners, found := s.getPublicKeyRowOwners(pubKID, types.TransactionPubKType)
+		chainOwners, chainGeneration, found := s.getPublicKeyRowOwners(pubKID, types.TransactionPubKType)
 		if !found {
 			c.LoggerDebug(logger, "ss-reshare: CANDIDATE pubKID="+pubKID+" deficient=false reason=no-chain-row")
 			continue
@@ -2871,7 +2875,7 @@ func (s *qadenaServer) planSSReshare(plan *ssRotationPlan) *ssResharePlan {
 		c.LoggerInfo(logger, "ss-reshare: CANDIDATE pubKID="+pubKID+
 			" owners="+strconv.Itoa(len(chainOwners))+" target="+strconv.Itoa(target)+
 			" deficient=true eligible=true")
-		deficient = append(deficient, ssReshareCandidate{pubKID: pubKID, oldOwners: chainOwners})
+		deficient = append(deficient, ssReshareCandidate{pubKID: pubKID, oldOwners: chainOwners, generation: chainGeneration})
 	}
 
 	// No post-hoc rate limit is needed: the loop above stops at maxSSResharesPerRotation, and the
@@ -2984,14 +2988,34 @@ func (s *qadenaServer) reshareSSIntervalKeys(plan *ssRotationPlan, rplan *ssResh
 				newOwners = append(newOwners, a)
 			}
 		}
-		if len(newOwners) <= len(cand.oldOwners) {
-			// Nothing to add (the chain would reject a non-superset anyway).
-			c.LoggerDebug(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+" skipped: no growth possible")
+		if len(newOwners) == len(cand.oldOwners) && sameOwnerSet(newOwners, cand.oldOwners) {
+			// Nothing would change.  (Previously "no growth possible": a shrink is legal now, so
+			// the test is whether the SET moved, not whether it got bigger.)
+			c.LoggerDebug(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+" skipped: owner set unchanged")
 			continue
 		}
 
 		oldThreshold := getThreshold(len(cand.oldOwners))
 		newThreshold := getThreshold(len(newOwners))
+
+		// A RE-SHARE MUST NEVER LOWER THE THRESHOLD.  getThreshold is a step function (0-3 -> 1,
+		// 4-6 -> 2, ...), so shrinking an owner set can cross a boundary downwards -- and at
+		// threshold 1 there is no secret sharing at all: addSSShare hands every owner the WHOLE
+		// key.  Letting a departure quietly convert a split key into N plaintext copies would be a
+		// custody downgrade nobody asked for and nobody would see.
+		//
+		// Refusing is the right answer rather than clamping: the fleet is too small to hold this
+		// key at its current threshold, which is an operator problem with an operator fix (add a
+		// pioneer).  Leave the owner set alone and say so loudly.  The departed owner stays listed
+		// -- overstated custody, which the audit's own log now reports -- but overstating is
+		// recoverable and silently un-splitting the key is not.
+		if newThreshold < oldThreshold {
+			c.LoggerError(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+
+				" REFUSED: would lower the Shamir threshold "+strconv.Itoa(oldThreshold)+"->"+strconv.Itoa(newThreshold)+
+				" (owners "+strconv.Itoa(len(cand.oldOwners))+"->"+strconv.Itoa(len(newOwners))+
+				").  The fleet is too small to re-share this key without weakening it; add a pioneer.")
+			continue
+		}
 		c.LoggerInfo(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+
 			" owners "+strconv.Itoa(len(cand.oldOwners))+"->"+strconv.Itoa(len(newOwners))+
 			" threshold "+strconv.Itoa(oldThreshold)+"->"+strconv.Itoa(newThreshold)+
@@ -3063,6 +3087,7 @@ func (s *qadenaServer) reshareSSIntervalKeys(plan *ssRotationPlan, rplan *ssResh
 			types.TransactionPubKType,
 			sharesJSON,
 			hex.EncodeToString(sig),
+			strconv.FormatUint(cand.generation, 10),
 		}, "|"))
 		if rerr != nil {
 			c.LoggerError(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+" skipped: remote report failed: "+rerr.Error())
@@ -3070,7 +3095,7 @@ func (s *qadenaServer) reshareSSIntervalKeys(plan *ssRotationPlan, rplan *ssResh
 		}
 
 		msgs = append(msgs, types.NewMsgPioneerUpdatePublicKey(
-			pwalletAddr.String(), cand.pubKID, types.TransactionPubKType, gShares, sig, report))
+			pwalletAddr.String(), cand.pubKID, types.TransactionPubKType, gShares, sig, report, cand.generation))
 		emitted++
 		c.LoggerInfo(logger, "ss-reshare: EMITTED pubKID="+cand.pubKID+
 			" shares="+strconv.Itoa(len(gShares))+

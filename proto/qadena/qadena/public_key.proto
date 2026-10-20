@@ -6,10 +6,28 @@ option go_package = "github.com/c3qtech/qadena_v3/x/qadena/types";
 import "qadena/qadena/share.proto";
 
 message PublicKey {
-  string pubKID = 1; 
-  string pubKType = 2;  
+  string pubKID = 1;
+  string pubKType = 2;
   string pubK = 3;
   repeated Share shares = 4;
   bytes remoteReport = 5;
+
+  // How many times this key's owner set has been re-shared.  0 at mint, +1 on every accepted
+  // PioneerUpdatePublicKey.
+  //
+  // THIS IS THE REPLAY AND ORDERING GUARD, and it exists because the rule it replaces was doing
+  // that job as a side effect.  While owner sets could only GROW, "the new set must strictly
+  // contain the stored one" made a replay impossible for free: a resubmitted message named a set
+  // equal to the stored one and failed the strictness test.  Once a departed owner may be
+  // dropped, that is no longer true -- a stale re-share naming an owner set the chain has since
+  // moved past would otherwise apply, reverting the owner list AND installing shares from a split
+  // that no longer matches the key.  Shares from two different Split calls combine to garbage, so
+  // that is silent data loss, not a lost update.
+  //
+  // The message carries the generation it expects to replace and is accepted only if it equals
+  // this one (compare-and-swap).  Ordering between two re-shares emitted close together is then
+  // decided by the chain, not by arrival order.  The expected generation is covered by the
+  // attested string, so it cannot be edited in flight.
+  uint64 generation = 6;
 }
 

@@ -151,6 +151,31 @@ message Params {
   // the change at a height that replay can follow.
   bool release_address_on_unbond = 28;
 
+  // How long a pioneer must stay parked before it counts as DEPARTED and may be dropped from the
+  // owner set of SS interval keys it already holds.  In BLOCKS, measured against
+  // ParkedExternalAddress.parkedHeight.
+  //
+  // WHY A GRACE PERIOD AT ALL.  Parking fires on ANY bonded->unbonding transition -- a deliberate
+  // unbond, a downtime jail, a tombstone, or simply being pushed out of max_validators -- and a
+  // downtime jail is routine and usually brief.  Excluding on the instant would be wrong three
+  // ways: dropping a jailed pioneer RECOVERS NOTHING (it still physically holds its shares, so
+  // removal only matters if it never returns); shrink-then-regrow costs two full re-shares of
+  // every affected key against a budget of maxSSResharesPerRotation, so one flapping node starves
+  // keys that are genuinely under-owned; and AfterValidatorBonded already restores the address on
+  // re-bond, so the common case resolves itself if simply left alone.
+  //
+  // IT DOES NOT GOVERN THE OTHER DEPARTURE PATH.  A validator REMOVED outright -- unbonding
+  // finished, no delegations left -- is definitively gone and is treated as departed with no
+  // grace; see AfterValidatorRemoved.  This field is only about the ambiguous case.
+  //
+  // ZERO MEANS DISABLED, not "no grace": an unset or pre-field-30 params object must not silently
+  // start dropping owners on an existing chain, for the same replay reason field 28 documents.
+  // DefaultParams sets a few rotations' worth, which is long enough that a restart-and-unjail
+  // never costs a re-share and short enough that custody is not overstated for days.  The chain's
+  // unbonding period is the principled upper bound but is typically three weeks, far too slow to
+  // be useful as a default.
+  uint64 ss_departure_grace = 30;
+
   // Governance's half of the enclave trust policy.  A BLOCK rather than a bare field so the knobs
   // that follow (attestation age, rollback freeze) are additive and do not each claim a Params
   // number of their own.

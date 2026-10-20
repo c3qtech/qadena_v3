@@ -8,14 +8,15 @@ import (
 
 var _ sdk.Msg = &MsgPioneerUpdatePublicKey{}
 
-func NewMsgPioneerUpdatePublicKey(creator string, pubKID string, pubKType string, shares []*Share, possessionSig []byte, remoteReport []byte) *MsgPioneerUpdatePublicKey {
+func NewMsgPioneerUpdatePublicKey(creator string, pubKID string, pubKType string, shares []*Share, possessionSig []byte, remoteReport []byte, expectedGeneration uint64) *MsgPioneerUpdatePublicKey {
 	return &MsgPioneerUpdatePublicKey{
-		Creator:       creator,
-		PubKID:        pubKID,
-		PubKType:      pubKType,
-		Shares:        shares,
-		PossessionSig: possessionSig,
-		RemoteReport:  remoteReport,
+		Creator:            creator,
+		PubKID:             pubKID,
+		PubKType:           pubKType,
+		Shares:             shares,
+		PossessionSig:      possessionSig,
+		RemoteReport:       remoteReport,
+		ExpectedGeneration: expectedGeneration,
 	}
 }
 

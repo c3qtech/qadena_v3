@@ -30,6 +30,22 @@ func NewParams() Params {
 		// has already been bitten by once).  Such a chain turns it on by governance, which records
 		// the change in state at a height, where replay can follow it.
 		ReleaseAddressOnUnbond: true,
+
+		// FOUR ROTATIONS (keyUpdateFrequency is 555 blocks), which is the grace a pioneer gets
+		// between its validator leaving the bonded set and the SS audit being allowed to drop it
+		// from the owner sets of keys it already holds.
+		//
+		// Sized against what it has to tolerate, not picked round: a downtime jail plus a restart
+		// plus an unjail is minutes, while the audit only looks once per rotation and re-shares at
+		// most maxSSResharesPerRotation keys when it does.  Less than a couple of rotations and a
+		// node that blips between two audits can still lose ownership it never actually abandoned;
+		// much more and the fleet spends days reporting custody it does not have.
+		//
+		// The same zero-value rule as the field above applies and is why this is not simply read
+		// from the proto: a chain whose stored params predate field 30 unmarshals 0, which the
+		// keeper reads as DISABLED rather than "no grace at all".  That is the safe direction --
+		// an old chain keeps today's behaviour until governance sets this deliberately.
+		SsDepartureGrace: 4 * 555,
 	}
 }
 
