@@ -345,6 +345,39 @@ func reportMemStats() {
 
 var keyUpdateFrequency int64 = 555
 
+// THE LAST BLOCK CONTEXT THE ENCLAVE WAS TOLD ABOUT, for the DEBUG audit only.
+//
+// The real rotation tick takes its height and grace from the block it runs in -- UpdateHeight's
+// in.Height and in.SsDepartureGrace.  A forced `audit-ss-keys` has no block of its own, and used
+// to pass 0/0 on the grounds that a shrink "must be grounded".  The effect of 0/0 is stronger than
+// intended: PioneerHasDeparted reads grace 0 as DISABLED and returns false for everyone, so the
+// forced audit could never select a stale key, and the departure path had no way to be exercised
+// on a debug enclave at all.  Measured on M1-M6 with a genuinely departed pioneer and the grace
+// elapsed: audited=5 selected=0.
+//
+// Remembering what the last UpdateHeight carried gives the forced audit the SAME grounding the
+// tick has -- a real chain height and the chain's real parameter, both set by consensus -- rather
+// than inventing either.  It is still refused outright on a real enclave.
+var (
+	lastBlockCtxMu  sync.Mutex
+	lastSeenHeight  int64
+	lastSeenSSGrace uint64
+)
+
+func rememberBlockContext(height int64, grace uint64) {
+	lastBlockCtxMu.Lock()
+	defer lastBlockCtxMu.Unlock()
+	lastSeenHeight, lastSeenSSGrace = height, grace
+}
+
+// lastBlockContext returns (0, 0) until the first UpdateHeight arrives, which keeps the old
+// no-shrink behaviour for an audit forced before the enclave has seen a block.
+func lastBlockContext() (int64, uint64) {
+	lastBlockCtxMu.Lock()
+	defer lastBlockCtxMu.Unlock()
+	return lastSeenHeight, lastSeenSSGrace
+}
+
 var unvalidatedEnclaveIdentitiesCheckCounter int64 = 1
 
 var SupportsUnixDomainSockets bool = true
@@ -2364,9 +2397,12 @@ func (s *qadenaServer) AuditSSKeys(ctx context.Context, in *types.MsgAuditSSKeys
 	}
 
 	plan := s.planSSRotation()
-	// 0/0 for the same reason as UpdateSSIntervalKey: no block context, so no shrink proposed.
-	rplan := s.planSSReshare(plan, 0, 0)
-	msgs := s.reshareSSIntervalKeys(plan, rplan, 0, 0)
+	// THE LAST BLOCK'S CONTEXT, not 0/0.  Both values come from consensus via UpdateHeight, so a
+	// shrink proposed here is grounded in exactly what the real tick would have used; 0/0 merely
+	// made the departure path untestable.  See lastBlockContext.
+	height, grace := lastBlockContext()
+	rplan := s.planSSReshare(plan, height, grace)
+	msgs := s.reshareSSIntervalKeys(plan, rplan, height, grace)
 
 	reply := &types.AuditSSKeysReply{
 		Status:   true,
@@ -2845,6 +2881,10 @@ func (s *qadenaServer) planSSReshare(plan *ssRotationPlan, height int64, graceBl
 	}
 
 	audited, deficientCount := 0, 0
+	// Keys this sweep found with no margin left, or none at all -- see the UNRECOVERABLE
+	// and AT RISK branches below.  Carried onto the summary so a watcher does not have to
+	// correlate per-key lines to notice the fleet is losing custody it cannot rebuild.
+	atRisk := 0
 	lastSeen := cursor
 	sweptToEnd := false
 	deficient := make([]ssReshareCandidate, 0, maxSSResharesPerRotation)
@@ -2888,6 +2928,43 @@ func (s *qadenaServer) planSSReshare(plan *ssRotationPlan, height int64, graceBl
 				" owners="+strconv.Itoa(len(chainOwners))+" departed="+strconv.Itoa(len(gone))+
 				" effective="+strconv.Itoa(len(chainOwners)-len(gone))+
 				" stale=true -- the row overstates custody by "+strconv.Itoa(len(gone)))
+
+			// RECOVERABILITY, WHICH IS A DIFFERENT QUESTION FROM CUSTODY ACCURACY.
+			//
+			// The line above says the row names more owners than really hold the key.  This says
+			// whether enough of them are left to REBUILD it, and that is the one that ends in
+			// permanent data loss.  The threshold is derived from the LISTED owner count, so it
+			// does not fall as owners depart -- a key listing four owners needs two shares whether
+			// four are running or one is.  Departures eat the margin silently:
+			//
+			//	4 listed, 3 live, needs 2   margin 1
+			//	4 listed, 2 live, needs 2   margin 0 -- one more departure is fatal
+			//	4 listed, 1 live, needs 2   GONE, and the row still claims four owners
+			//
+			// Nothing else in this file notices that progression.  The threshold-drop refusal
+			// below declines to act on exactly these keys, so without this warning the slide is
+			// invisible until a gather fails against a key nobody can reconstruct any more.
+			//
+			// ERROR, not Info, and for both cases: by the time margin is zero the operator's only
+			// remedy -- bring a departed node back, or add a pioneer before the next one goes --
+			// needs lead time they will not get from a line that reads like bookkeeping.
+			need := getThreshold(len(chainOwners))
+			live := len(chainOwners) - len(gone)
+			switch {
+			case live < need:
+				atRisk++
+				c.LoggerError(logger, "ss-reshare: UNRECOVERABLE pubKID="+pubKID+
+					" live="+strconv.Itoa(live)+" needs="+strconv.Itoa(need)+
+					" -- fewer owners are left than shares are required to rebuild this key."+
+					"  Any data encrypted to it can no longer be read.  A departed node that still"+
+					" holds its sealed state can restore this by re-bonding; otherwise the key is lost.")
+			case live == need:
+				atRisk++
+				c.LoggerError(logger, "ss-reshare: AT RISK pubKID="+pubKID+
+					" live="+strconv.Itoa(live)+" needs="+strconv.Itoa(need)+
+					" -- no margin left: one more departure makes this key unrecoverable."+
+					"  Add a pioneer, or bring a departed one back, BEFORE the next node leaves.")
+			}
 		}
 		var rebuild *ssReconstructJob
 		privK, cached := s.getPrivKCache(pubKID)
@@ -2987,6 +3064,7 @@ func (s *qadenaServer) planSSReshare(plan *ssRotationPlan, height int64, graceBl
 		" fromIdx="+strconv.Itoa(startIdx)+
 		" sweep="+sweep+
 		" deficient="+strconv.Itoa(deficientCount)+
+		" atRisk="+strconv.Itoa(atRisk)+
 		" selected="+strconv.Itoa(len(rplan.keys))+
 		" cap="+strconv.Itoa(maxSSResharesPerRotation))
 	return rplan
@@ -3108,23 +3186,46 @@ func (s *qadenaServer) reshareSSIntervalKeys(plan *ssRotationPlan, rplan *ssResh
 		oldThreshold := getThreshold(len(cand.oldOwners))
 		newThreshold := getThreshold(len(newOwners))
 
-		// A RE-SHARE MUST NEVER LOWER THE THRESHOLD.  getThreshold is a step function (0-3 -> 1,
-		// 4-6 -> 2, ...), so shrinking an owner set can cross a boundary downwards -- and at
-		// threshold 1 there is no secret sharing at all: addSSShare hands every owner the WHOLE
-		// key.  Letting a departure quietly convert a split key into N plaintext copies would be a
-		// custody downgrade nobody asked for and nobody would see.
+		// THE THRESHOLD TRACKS THE OWNER COUNT, IN BOTH DIRECTIONS, AND THERE IS NO GUARD HERE.
 		//
-		// Refusing is the right answer rather than clamping: the fleet is too small to hold this
-		// key at its current threshold, which is an operator problem with an operator fix (add a
-		// pioneer).  Leave the owner set alone and say so loudly.  The departed owner stays listed
-		// -- overstated custody, which the audit's own log now reports -- but overstating is
-		// recoverable and silently un-splitting the key is not.
+		// An earlier version refused any re-share that would lower the threshold, on the grounds
+		// that threshold 1 is not a weak split but NO split -- addSSShare hands every owner the
+		// whole key -- so a departure could quietly un-split a key.  That reasoning was wrong in
+		// three ways, and the refusal is gone rather than replaced:
+		//
+		//  1. IT COULD NOT PREVENT WHAT IT WAS AIMED AT.  Refusing does not hold the key at its
+		//     old threshold; it declines to act while live owners drain away underneath.  The
+		//     threshold is derived from the LISTED count, which does not fall as owners depart, so
+		//     a key reading "4 owners, needs 2" can reach one live owner and be unrecoverable with
+		//     the row still claiming four.  Measured on M1-M6: `selected=4 emitted=0` at 2 live.
+		//
+		//  2. REFUSING COSTS MORE THAN WEAKENING.  Dropping to threshold 1 costs defence in depth
+		//     -- one enclave compromise yields a key rather than a share -- and needs an actual
+		//     SGX break to matter, since the material is sealed (enclave_value_seal.go).  Refusing
+		//     costs the key itself, permanently, and needs only nodes retiring.
+		//
+		//  3. THE CURVE IS THE POLICY.  getThreshold already balances availability against
+		//     confidentiality at each fleet size, and it leaves margin >= 1 at every count from 2
+		//     up, so tracking it symmetrically can never strand a key.  Holding a threshold the
+		//     fleet has outgrown DOWNWARD does the opposite: an 11-owner key ratcheted to 4 would
+		//     sit at margin 1 on a 5-node fleet, one loss from unrecoverable, where the curve
+		//     would have said 2.  Keeping a threshold sized for a fleet that no longer exists is
+		//     not conservative, it is fragile.
+		//
+		// Storing a per-key threshold to hold 2-of-3 across a 4->3 shrink was considered and
+		// rejected: it buys exactly one state, in a regime the curve already calls too small to
+		// split, at the cost of a new field, a migration, and three call sites that must agree.
+		// See docs/SS-THRESHOLD-PROPOSAL.md.
+		//
+		// What IS still true is that un-splitting is irreversible: the owners that receive a whole
+		// key keep it even after the fleet regrows and the key is re-split.  That is a real cost,
+		// it is logged at ERROR below, and the operational answer is not to run below four owners.
 		if newThreshold < oldThreshold {
-			c.LoggerError(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+
-				" REFUSED: would lower the Shamir threshold "+strconv.Itoa(oldThreshold)+"->"+strconv.Itoa(newThreshold)+
-				" (owners "+strconv.Itoa(len(cand.oldOwners))+"->"+strconv.Itoa(len(newOwners))+
-				").  The fleet is too small to re-share this key without weakening it; add a pioneer.")
-			continue
+			c.LoggerError(logger, "ss-reshare: UNSPLIT pubKID="+cand.pubKID+
+				" threshold "+strconv.Itoa(oldThreshold)+"->"+strconv.Itoa(newThreshold)+
+				" (owners "+strconv.Itoa(len(cand.oldOwners))+"->"+strconv.Itoa(len(newOwners))+")"+
+				" -- the fleet is too small to keep this key split, so every remaining owner now"+
+				" receives the WHOLE key.  They keep it even if the fleet regrows.  Add a pioneer.")
 		}
 		c.LoggerInfo(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+
 			" owners "+strconv.Itoa(len(cand.oldOwners))+"->"+strconv.Itoa(len(newOwners))+
@@ -3755,6 +3856,9 @@ func (s *qadenaServer) InitEnclave(ctx context.Context, in *types.MsgInitEnclave
 
 func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeight) (*types.UpdateHeightReply, error) {
 	c.LoggerDebug(logger, "UpdateHeight "+c.PrettyPrint(in))
+
+	// Consensus-supplied block context, kept for the debug audit -- see lastBlockContext.
+	rememberBlockContext(in.Height, in.SsDepartureGrace)
 
 	// Remember where the chain is and whether we are watching it happen or replaying it.  Every
 	// trust decision below consults these two: an attestation's age is measured against the height,
