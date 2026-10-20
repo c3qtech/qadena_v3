@@ -99,6 +99,16 @@ if [[ -n "$COORD_HOME" ]]; then
     if [[ -n "$KEYRING_PASSFILE" ]]; then
         [[ -r "$KEYRING_PASSFILE" ]] || { print -u2 "cannot read --keyring-passfile $KEYRING_PASSFILE"; exit 1 }
         QADENA_KEYRING_PASS=$(head -1 "$KEYRING_PASSFILE")
+        # NON-EMPTY, NOT MERELY READABLE.  An empty passphrase is indistinguishable from a WRONG
+        # one downstream -- both end in "too many failed passphrase attempts" and an empty result
+        # -- and worse, it silently fails lk's -n test, so the pipe is never fed and the command
+        # sits on a prompt with nothing to answer it.  Measured: 0 copies and 1 wrong copy produce
+        # byte-identical failures, while 1, 2, 16 and 64 correct copies are all equivalent (the
+        # first is consumed, the rest take SIGPIPE).  So the count never mattered; emptiness does.
+        [[ -n "$QADENA_KEYRING_PASS" ]] || {
+            print -u2 -r -- "--keyring-passfile $KEYRING_PASSFILE is readable but its first line is empty"
+            exit 1
+        }
         export QADENA_KEYRING_PASS
     fi
 fi
