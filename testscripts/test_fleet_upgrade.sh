@@ -130,7 +130,15 @@ BASE_CHAIN_VER=$(rsh_user "$PRIMARY" "cat $REPO/cmd/qadenad/version.txt" | tr -d
 BASE_ENCL_VER=$(rsh_user "$PRIMARY" "cat $REPO/cmd/qadenad_enclave/version.txt" | tr -d '\r')
 info "chain version $BASE_CHAIN_VER   enclave version $BASE_ENCL_VER"
 
-dirty=$(rsh_user "$PRIMARY" "git -C $REPO status --porcelain | wc -l" | tr -d '[:space:]')
+# THE ONE GENERATED PATH IS EXEMPT, exactly as 1st_node_bringup.sh exempts it.  `ignite chain init`
+# rewrites docs/static/openapi.yml nondeterministically on every build, so it is dirty on every host
+# after every build -- i.e. on any fleet that was just brought up, which is the NORMAL state for a
+# machine about to be upgraded, not an unusual one.  Letting the restore's `reset --hard` discard it
+# is correct rather than merely tolerable: the committed copy is authoritative and the regenerated
+# one is build noise (1st_node_bringup.sh explains why committing it would be actively wrong).
+# Any OTHER modified file still fails, because the reset really would take it.
+dirty=$(rsh_user "$PRIMARY" "git -C $REPO status --porcelain" | tr -d '\r' \
+            | grep -vE '^[ MARCD?!]{1,2} docs/static/openapi\.yml$' | grep -c . || true)
 [[ "$dirty" == "0" ]] \
     || fail "$REPO on $PRIMARY has uncommitted work. The bump is committed on top of HEAD and reset afterwards, which would take that work with it -- commit or stash it first."
 ORIG_HEAD=$(rsh_user "$PRIMARY" "git -C $REPO rev-parse HEAD" | tr -d '\r')

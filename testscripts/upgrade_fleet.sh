@@ -602,7 +602,14 @@ if [[ -n "$BUILD_FROM" ]]; then
     # A DIRTY TREE BREAKS THE PREMISE.  "What is checked in is what gets rolled out" is only true
     # if the tree IS what is checked in; otherwise the artefact matches no commit and afterwards
     # nobody can say what was deployed.  --allow-dirty for a deliberate one-off.
-    DIRTY=$(rsh "$BUILD_FROM" "cd $RD && git status --porcelain 2>/dev/null | head -20") || true
+    # EXEMPT THE ONE GENERATED PATH, as 1st_node_bringup.sh does.  `ignite chain init` rewrites
+    # docs/static/openapi.yml nondeterministically on every build, so a freshly brought-up build
+    # host is ALWAYS dirty by exactly this one file -- and refusing it here turns the normal state
+    # of a just-rebuilt fleet into "commit them, or pass --allow-dirty", pushing the operator
+    # toward a flag that disables the check for every other file too.  Everything else still stops
+    # the roll, which is the property worth keeping: the artefact must match a commit.
+    DIRTY=$(rsh "$BUILD_FROM" "cd $RD && git status --porcelain 2>/dev/null | head -20" \
+                | grep -vE '^[ MARCD?!]{1,2} docs/static/openapi\.yml$') || true
     if [[ -n "$DIRTY" ]]; then
         print "$DIRTY" | while read -r l; do say "    $l"; done
         (( ALLOW_DIRTY )) || die "$BUILD_FROM:$RD has uncommitted changes -- commit them, or pass --allow-dirty to roll a tree that matches no commit"
