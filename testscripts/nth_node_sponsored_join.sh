@@ -103,12 +103,21 @@ if [[ -n "$COORD_HOME" ]]; then
     fi
 fi
 # Feeds the passphrase when the backend needs one; zsh builtins, so it never reaches `ps`.
+# KEEP THE ERROR, DO NOT SWALLOW IT.  This used to end both branches with 2>/dev/null, which threw
+# away the only evidence of why a lookup failed -- and the caller then reported the loss as "not a
+# key in this keyring", a sentence that is true of a missing key, a keyring that would not open,
+# and an I/O error alike.  Measured on 2026-10-20: the third sponsored join of a six-node deploy
+# failed there after two identical ones succeeded, and the same lookup then worked seven times in
+# a row, so the run had destroyed the one fact that would have explained it.
+LK_ERR=$(mktemp)
+trap 'rm -f "$LK_ERR"' EXIT INT TERM
 lk() {
+    : > "$LK_ERR"
     if [[ "$LK_BACKEND" == "file" && -n "${QADENA_KEYRING_PASS:-}" ]]; then
         { repeat 16 print -r -- "$QADENA_KEYRING_PASS" } 2>/dev/null \
-            | "$QBIN" --home "$HOME_DIR" --keyring-backend "$LK_BACKEND" "$@" 2>/dev/null
+            | "$QBIN" --home "$HOME_DIR" --keyring-backend "$LK_BACKEND" "$@" 2>"$LK_ERR"
     else
-        "$QBIN" --home "$HOME_DIR" --keyring-backend "$LK_BACKEND" "$@" 2>/dev/null
+        "$QBIN" --home "$HOME_DIR" --keyring-backend "$LK_BACKEND" "$@" 2>"$LK_ERR"
     fi
 }
 ph() { ssh -o ConnectTimeout=15 "$PRIMARY" "bash -lc $(printf '%q' "\$HOME/qadena/bin/qadenad --home \$HOME/qadena $* --node tcp://localhost:26657")" 2>/dev/null | tr -d '\r' }
@@ -117,7 +126,20 @@ ph() { ssh -o ConnectTimeout=15 "$PRIMARY" "bash -lc $(printf '%q' "\$HOME/qaden
 # granter with `keys show` ON THE PRIMARY, and the primary does not hold bucket keys -- an address
 # is the only form that works there.
 GADDR=$(lk keys show "$GRANTER" -a)
-[[ "$GADDR" == qadena1* ]] || { print -u2 "'$GRANTER' is not a key in this keyring"; exit 1 }
+if [[ "$GADDR" != qadena1* ]]; then
+    print -u2 "could not resolve granter '$GRANTER' in $HOME_DIR (backend $LK_BACKEND)"
+    [[ -s "$LK_ERR" ]] && { print -u2 "  qadenad said:"; sed 's/^/    /' "$LK_ERR" >&2 }
+    # WHICH OF THE TWO IS IT.  A missing key and an unopenable keyring are different problems with
+    # different fixes -- rename vs passphrase -- and an empty `keys show` cannot tell them apart.
+    # Asking the keyring to LIST itself separates them: a keyring that lists is one that opened.
+    if lk keys list --output json > /dev/null; then
+        print -u2 "  the keyring OPENED but holds no '$GRANTER' -- check the name against: $HOME_DIR"
+    else
+        print -u2 "  the keyring DID NOT OPEN -- passphrase, permissions or I/O, not a missing key."
+        print -u2 "  This is the branch to suspect when the same lookup worked moments ago."
+    fi
+    exit 1
+fi
 # Checked HERE as well as in the sponsor script, because failing now costs nothing and failing
 # later costs a minted pioneer name -- the chain keeps those forever, even after the node is wiped.
 [[ -n "$(lk keys show "$GRANTER" --output json | jq -r '.pubkey | fromjson? // . | .threshold // empty')" ]] \
