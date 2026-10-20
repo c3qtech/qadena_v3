@@ -528,9 +528,20 @@ fi
 # and on debug builds the identity IS the embedded string.  Never `qadenad_enclave --unique-id` on
 # SGX: it returns the embedded debug placeholder, which does not describe a signed enclave.
 
-rsh_user "$PRIMARY" 'print $HOME' >/dev/null 2>&1 || fail "cannot ssh to $PRIMARY"
+# SAY WHY THE SSH FAILED, DO NOT JUST SAY IT DID.  These used to end >/dev/null 2>&1, so a
+# refused key, an unknown host, a timeout, a full disk on the far side and a wrong username all
+# arrived as the same four words -- and this is the PREFLIGHT, the place a run is most likely to
+# stop and the place an operator has least context.  `2>&1 >/dev/null` keeps stderr and drops
+# stdout, which is the opposite of what the old order did.
+ssh_or_fail() {
+    local host="$1" what="$2" err
+    if ! err=$(rsh_user "$host" 'print $HOME' 2>&1 >/dev/null); then
+        fail "cannot ssh to $what $host${err:+ -- ssh said: ${err//$'\n'/ | }}"
+    fi
+}
+ssh_or_fail "$PRIMARY" "primary"
 for j in "${JOINERS[@]}"; do
-    rsh_user "$j" 'print $HOME' >/dev/null 2>&1 || fail "cannot ssh to joiner $j"
+    ssh_or_fail "$j" "joiner"
 done
 PHOME=$(rsh_user "$PRIMARY" 'print $HOME' | tr -d '\r')
 
@@ -870,8 +881,17 @@ auto_wants_state() {
     local j r n=1
     for j in "${JOINERS[@]}"; do
         n=$(( n + 1 ))
-        r=$("$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" \
-                --pioneer "${PIONEER_PREFIX}${n}" --resolve-sync 2>/dev/null) || return 0
+        # CONSERVATIVE, BUT NOT SILENT.  Falling back to state-sync when the probe fails is
+        # deliberate (above).  Discarding the reason was not: the operator then sees the fleet
+        # choose the slow path with no hint that anything went wrong, and a probe that is broken
+        # for every joiner looks identical to one that answered "state" for every joiner.
+        if ! r=$("$SCRIPT_DIR/nth_node_bringup.sh" --primary "$PRIMARY" --joiner "$j" \
+                --pioneer "${PIONEER_PREFIX}${n}" --resolve-sync 2>"$RUN_DIR/resolve-sync-${j##*@}.err"); then
+            info "  could not resolve the sync mode for $j -- assuming state-sync (the safe default)"
+            [[ -s "$RUN_DIR/resolve-sync-${j##*@}.err" ]] \
+                && sed 's/^/    /' "$RUN_DIR/resolve-sync-${j##*@}.err" | head -5
+            return 0
+        fi
         [[ "$r" == state ]] && return 0
     done
     return 1
