@@ -392,15 +392,25 @@ else
     echo "    node running: $([[ $node_running -eq 1 ]] && echo yes || echo no)"
 
     if [[ -n "$new_unique" && -n "$cur_unique" ]]; then
-        # SEALING USES THE PRODUCT KEY, derived from MRSIGNER.  A different signer unseals nothing
-        # this node stored, so the upgrade would appear to succeed and leave every wallet,
-        # credential and scan-window record unreadable -- with the chain still producing blocks.
-        if [[ "$cur_signer" != "$new_signer" ]]; then
-            fail "MRSIGNER differs.
-       installed: $cur_signer
-       package:   $new_signer
-       A different signer cannot unseal this node's sealed state.  Refusing."
-        fi
+        # MRSIGNER IS NO LONGER A SEALING INPUT FOR THE CHAIN ENCLAVE, so there is deliberately no
+        # signer check here any more.  It used to refuse outright, on the grounds that "a different
+        # signer unseals nothing this node stored" -- true while everything was sealed with the
+        # PRODUCT key (MRSIGNER + productID), and false since the sealing split: row values are
+        # AES-GCM under the ferried SealedTableSharedSecret, and the params are sealed to the
+        # MEASUREMENT and carried across by the upgrade handover.  Nothing the chain enclave stores
+        # is reachable from MRSIGNER.
+        #
+        # What covers the two things that guard was standing in for:
+        #   - a store written BEFORE the split is still product-sealed, and initSchema refuses it
+        #     outright (schema 1 vs 2) -- so it can never be opened by this binary regardless;
+        #   - peer attestation validates signerID PER MEASUREMENT, not against a fixed value
+        #     (enclave_grpc_client.go: GetEnclaveIdentity(uniqueID) then SignerID == signerID),
+        #     and the upgrade registers --unique-id and --signer-id in the SAME proposal, so a
+        #     changed MRSIGNER arrives already paired with its identity row.
+        #
+        # Refusing here instead blocked a legitimate roll (signer051 -> signer052, M1-M4
+        # 2026-10-20) for a reason that had stopped being true.  $cur_signer/$new_signer are still
+        # read and reported above; they are output, not a gate.
         if [[ "$cur_unique" == "$new_unique" ]]; then
             echo "    the same enclave is already installed; no enclave upgrade to perform"
         elif [[ "$cur_version" == "$new_version" ]]; then
@@ -409,6 +419,45 @@ else
             fail "package enclave version $new_version equals the installed one, but the measurement
        differs.  check_upgrade_enclave.sh compares VERSIONS, so this would install and never
        upgrade.  Bump cmd/qadenad_enclave/version.txt and rebuild."
+        fi
+    fi
+
+    # THE SIGNER ENCLAVE IS THE ONE THAT CANNOT RECOVER ON ITS OWN, and until now nothing checked
+    # it here at all -- the manifest check above proves the staged binary measures what the package
+    # claims, which is a different question from whether THIS node can still read its key.
+    #
+    # signer_enclave seals the validator key with the UNIQUE key (SealWithUniqueKey), so a new
+    # measurement cannot open the sealed copy, full stop.  loadKey then falls back to the plaintext
+    # config/priv_validator_key.json, adopts it, and re-seals for the new measurement.  With that
+    # file present a measurement change is routine; without it the signer exits with "no validator
+    # key this signer can use" and the validator is stranded -- after the swap, when the chain is
+    # already expecting it to sign.
+    #
+    # There is no handover for the signer (it has no params, no chain access and no trusted set),
+    # so the plaintext key is the ONLY recovery path.  Hence: block on the measurement changing,
+    # and only when that file is missing.
+    cur_signer_encl="$qadenabin/signer_enclave"
+    new_signer_encl="$stage/bin/signer_enclave"
+    if [[ -f "$new_signer_encl" && -x "$cur_signer_encl" ]]; then
+        cur_signer_uniq=$(read_unique "$cur_signer_encl")
+        new_signer_uniq=$(read_unique "$new_signer_encl")
+        # NO OPINION WITHOUT BOTH IDS.  An unreadable binary is not evidence of danger, and the
+        # chain-enclave block above tolerates the same gap rather than guessing.
+        if [[ -n "$cur_signer_uniq" && -n "$new_signer_uniq" && "$cur_signer_uniq" != "$new_signer_uniq" ]]; then
+            if [[ -f "$QADENAHOME/config/priv_validator_key.json" ]]; then
+                echo "    signer_enclave measurement changes ${cur_signer_uniq:0:16} -> ${new_signer_uniq:0:16};"
+                echo "      the sealed key cannot follow it, so the signer will re-seal from"
+                echo "      $QADENAHOME/config/priv_validator_key.json on its next start"
+            else
+                fail "signer_enclave measurement differs and there is no plaintext validator key to recover from.
+       installed: $cur_signer_uniq
+       package:   $new_signer_uniq
+       The sealed key at $QADENAHOME/enclave_config/priv_validator_key.json is bound to the
+       INSTALLED measurement and the new signer cannot open it.  There is no handover for the
+       signer, so without $QADENAHOME/config/priv_validator_key.json it would start with no
+       validator key at all and this validator would stop signing.
+       Restore the plaintext key from your offline backup into config/ and run this again."
+            fi
         fi
     fi
 fi
