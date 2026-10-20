@@ -107,11 +107,14 @@ say "proposal id: $id"
 # run never reached the vote).
 #
 # If the proposal really IS short, this still tops up and still fails loudly when it cannot.
-status=$(qq query gov proposal "$id" --output json 2>/dev/null | jq -r '.proposal.status // empty')
-if [[ "$status" == "PROPOSAL_STATUS_DEPOSIT_PERIOD" ]]; then
+# NOT `status`: it is a READ-ONLY special variable in zsh (an alias for $?), and assigning to it
+# aborts the script -- "read-only variable: status", which is how the first version of this check
+# died after submitting proposal 4.
+prop_status=$(qq query gov proposal "$id" --output json 2>/dev/null | jq -r '.proposal.status // empty')
+if [[ "$prop_status" == "PROPOSAL_STATUS_DEPOSIT_PERIOD" ]]; then
     gov_tx "deposit" tx gov deposit "$id" 1000qdn --from "${voters[1]}" > /dev/null || die "deposit failed"
 else
-    say "deposit: not needed -- proposal $id is already ${status:-open}"
+    say "deposit: not needed -- proposal $id is already ${prop_status:-open}"
 fi
 for v in "${voters[@]}"; do
     gov_tx "vote from $v" tx gov vote "$id" yes --from "$v" > /dev/null || die "vote from $v failed"
