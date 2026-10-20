@@ -886,8 +886,39 @@ if [[ -n "$NEW_UNIQUE" && "$NEW_UNIQUE" != "$live_uniq" ]]; then
 else
     say "  chain-only ($live_uniq unchanged): no identity message"
 fi
-run "${NODES[1]}" "~/qadena/scripts/gov_software_upgrade.sh --plan $PLAN --margin 180 $encl_args" \
-    || die "the governance step failed on ${NODES[1]} -- if the proposal passed but late, cancel the plan (see gov_software_upgrade.sh --help)"
+# THE VOTE IS A FLEET-WIDE ACT, NOT THE PRIMARY'S ALONE.  Each node holds only its OWN operator
+# key, so the primary can cast exactly one vote -- and the treasury-stake tie-break routinely puts
+# the quorum-sized holding on some OTHER node (measured: qfi-pioneer3 at 78% while the primary's
+# qfi-pioneer1 had 7.35%, M1-M4 on 2026-10-20; the same shape put 85.3% on qfi-mainnet's pioneer2).
+# Submitting on the primary and waiting there therefore watched a proposal it could never pass.
+#
+# So: submit and vote on the primary with --no-wait, collect a vote from every other node, and
+# only then wait.  A node that cannot vote is reported and skipped rather than failing the roll --
+# it may legitimately hold no bonded key -- but if the proposal then misses quorum the wait says so.
+gov_out=$(run "${NODES[1]}" "~/qadena/scripts/gov_software_upgrade.sh --plan $PLAN --margin 180 --no-wait $encl_args" 2>&1) \
+    || { print -r -- "$gov_out" | while read -r l; do say "    $l"; done
+         die "the governance step failed on ${NODES[1]} -- if the proposal passed but late, cancel the plan (see gov_software_upgrade.sh --help)" }
+print -r -- "$gov_out" | while read -r l; do say "    $l"; done
+PROP_ID=$(print -r -- "$gov_out" | grep -oE '^PROPOSAL_ID=[0-9]+' | head -1 | cut -d= -f2)
+[[ -n "$PROP_ID" ]] || die "could not read the proposal id from the governance step on ${NODES[1]}"
+
+if (( ${#NODES} > 1 )); then
+    step "2h2. collect votes from the other $(( ${#NODES} - 1 )) node(s) on proposal $PROP_ID"
+    for n in "${NODES[@]:1}"; do
+        if run "$n" "~/qadena/scripts/gov_vote.sh $PROP_ID yes" >/dev/null 2>&1; then
+            say "  $n voted yes"
+        else
+            say "  $n could not vote (no bonded key, or already voted) -- continuing"
+        fi
+    done
+fi
+
+# gov_wait_proposal, NOT gov_proposal_status.sh: the latter reports the status ONCE and exits
+# non-zero unless it has already passed, so calling it here would fail instantly on a proposal
+# that is still in its voting period -- which it always is, a second after the votes are cast.
+step "2h3. wait for proposal $PROP_ID"
+run "${NODES[1]}" "zsh -c 'source ~/qadena/scripts/setup_env.sh >/dev/null 2>&1; source ~/qadena/scripts/gov_lib.sh; gov_wait_proposal $PROP_ID 780'" \
+    || die "proposal $PROP_ID did not pass.  If it PASSED LATE, or the chain has passed the plan height, the plan is dead weight -- cancel it (see gov_software_upgrade.sh --help)"
 
 if [[ -n "$encl_args" ]]; then
     step "2i. promote $NEW_UNIQUE to active BEFORE the height"

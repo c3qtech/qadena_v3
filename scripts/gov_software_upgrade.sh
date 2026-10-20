@@ -28,7 +28,7 @@ SCRIPT_DIR="${0:A:h}"
 source "$SCRIPT_DIR/setup_env.sh" > /dev/null 2>&1
 source "$SCRIPT_DIR/gov_lib.sh"
 
-PLAN=""; HEIGHT=""; MARGIN=180; UNIQUE=""; SIGNER=""; EXPEDITED=0; VOTERS=""
+PLAN=""; HEIGHT=""; MARGIN=180; UNIQUE=""; SIGNER=""; EXPEDITED=0; VOTERS=""; NO_WAIT=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --plan)      PLAN="$2"; shift 2 ;;
@@ -38,6 +38,7 @@ while [[ $# -gt 0 ]]; do
         --signer-id) SIGNER="$2"; shift 2 ;;
         --expedited) EXPEDITED=1; shift ;;
         --voters)    VOTERS="$2"; shift 2 ;;
+        --no-wait)   NO_WAIT=1; shift ;;
         --help)      sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "gov_software_upgrade.sh: unknown option $1" >&2; exit 1 ;;
     esac
@@ -119,6 +120,19 @@ fi
 for v in "${voters[@]}"; do
     gov_tx "vote from $v" tx gov vote "$id" yes --from "$v" > /dev/null || die "vote from $v failed"
 done
+
+# --no-wait: SUBMIT AND VOTE HERE, THEN HAND BACK, because this node may not be able to finish the
+# job.  Each node holds only its OWN operator key, so when the quorum-sized stake sits elsewhere --
+# which is the normal outcome of the treasury-stake tie-break, measured at 78% on a node that was
+# not the primary (M1-M4, 2026-10-20) -- no amount of waiting here will make the proposal pass.
+# upgrade_fleet.sh collects the remaining votes from the other nodes and does the waiting itself.
+#
+# The id goes out in a parseable form on purpose: it is what the caller must hand to gov_vote.sh.
+if (( NO_WAIT )); then
+    print -r -- "PROPOSAL_ID=$id"
+    say "--no-wait: submitted and voted locally; the caller collects the other votes and waits"
+    exit 0
+fi
 
 # For an UPGRADE the wait cannot be optional: the height clock is running.  If quorum needs other
 # operators, say exactly what they must run and keep waiting.
