@@ -576,6 +576,28 @@ message MsgUpdateHeight {
   // It must never reach a value that lands in the EndBlock drains or the store accumulators, which
   // are consensus state and must be identical on every node.
   repeated string permittedTcbStatuses = 5;
+
+  // Params.ss_departure_grace: how long a pioneer must have been out of the bonded set before the
+  // SS audit may propose dropping it from an owner set.  Stamped per call by the keeper, like
+  // permittedTcbStatuses above and for the same reason -- the enclave holds no cached Params and
+  // must not take a policy decision from the client, and a governance change then takes effect
+  // without restarting a node.
+  //
+  // The enclave needs it because it is the only component that can PROPOSE a re-share: it alone
+  // holds the key and can re-split it.  The departure height itself travels on the pioneer row
+  // (IntervalPublicKeyID.departedHeight), which is mirrored; this is the other half of the same
+  // arithmetic.
+  //
+  // ZERO MEANS "PROPOSE NO SHRINK", never "no grace" -- the same rule the two fields above state,
+  // for the same rolling-upgrade reason: an older keeper does not set this, and a new enclave
+  // paired with one must not start dropping owners because the field came back empty.
+  //
+  // TRUSTING THE HOST HERE IS SAFE IN ONE DIRECTION, as with permittedTcbStatuses, though the
+  // direction differs.  The CHAIN is authoritative -- it re-checks every drop against its own
+  // params -- so a host lying SMALL only makes its enclave propose shrinks the chain will refuse,
+  // costing that node a rejected message; lying LARGE only makes it propose later than it could.
+  // Neither discloses anything, and neither can widen what the chain accepts.
+  uint64 ssDepartureGrace = 6;
 }
 
 message MsgScanTransactions {

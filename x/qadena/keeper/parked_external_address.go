@@ -61,22 +61,26 @@ func (k Keeper) GetParkedExternalAddress(ctx context.Context, pubKID string) (va
 //	                  does an empty param store, so an existing chain keeps today's behaviour
 //	                  until governance sets the field.  Reading 0 as "drop immediately" would
 //	                  change owner sets on upgrade, at a height replay cannot account for.
-//	not parked        bonded, or never parked.  The ordinary case.
-//	ParkedHeight == 0 parked before the field existed.  Treated as not-yet-departed rather than
-//	                  "parked at genesis": the latter would make every pre-existing parked
-//	                  pioneer instantly departed the moment this ships, which is exactly the
-//	                  silent mass re-share this grace period exists to prevent.  Such an entry
-//	                  gets a real height the next time its validator unbonds.
+//	no row / height 0 bonded, never parked, or parked before the field existed.  The last is
+//	                  treated as not-yet-departed rather than "departed at genesis": the latter
+//	                  would make every pre-existing parked pioneer instantly departed the moment
+//	                  this ships, which is exactly the silent mass re-share this grace exists to
+//	                  prevent.  Such a row gets a real height the next time its validator unbonds.
+//
+// READ FROM THE PIONEER ROW, not from the parked-address store, because the ENCLAVE must reach
+// the same verdict and only the row is mirrored to it (see IntervalPublicKeyID.departedHeight).
+// One fact, one home: a height kept in both places could disagree, and the two readers would then
+// disagree about whose shares are valid.
 func (k Keeper) PioneerHasDeparted(ctx context.Context, pubKID string) bool {
 	grace := k.GetParams(ctx).SsDepartureGrace
 	if grace == 0 {
 		return false
 	}
-	parked, found := k.GetParkedExternalAddress(ctx, pubKID)
-	if !found || parked.ParkedHeight == 0 {
+	row, found := k.GetIntervalPublicKeyIDByPubKID(ctx, pubKID)
+	if !found || row.DepartedHeight == 0 {
 		return false
 	}
-	return sdk.UnwrapSDKContext(ctx).BlockHeight()-parked.ParkedHeight >= int64(grace)
+	return sdk.UnwrapSDKContext(ctx).BlockHeight()-row.DepartedHeight >= int64(grace)
 }
 
 // RemoveParkedExternalAddress drops one parked address, after a restore has consumed it.

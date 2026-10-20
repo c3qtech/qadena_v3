@@ -2296,7 +2296,10 @@ func (s *qadenaServer) UpdateSSIntervalKey(ctx context.Context, in *types.MsgUpd
 	// plans inside UpdateHeight.  The AUDIT RUNS HERE TOO -- a forced rotation must exercise the
 	// same coupling as the real tick, or the E2E test forces rotations and audits nothing.
 	plan := s.planSSRotation()
-	if !s.updateSSIntervalKey(plan, s.planSSReshare(plan)) {
+	// 0/0: a forced rotation is a DEBUG affordance with no block context and no params stamped on
+	// it, and "propose no shrink" is the safe reading of that absence -- a drop must be grounded
+	// in the chain's own grace, never in a developer command's silence.
+	if !s.updateSSIntervalKey(plan, s.planSSReshare(plan, 0, 0), 0, 0) {
 		c.LoggerError(logger, "couldn't update SS interval key")
 	}
 
@@ -2361,8 +2364,9 @@ func (s *qadenaServer) AuditSSKeys(ctx context.Context, in *types.MsgAuditSSKeys
 	}
 
 	plan := s.planSSRotation()
-	rplan := s.planSSReshare(plan)
-	msgs := s.reshareSSIntervalKeys(plan, rplan)
+	// 0/0 for the same reason as UpdateSSIntervalKey: no block context, so no shrink proposed.
+	rplan := s.planSSReshare(plan, 0, 0)
+	msgs := s.reshareSSIntervalKeys(plan, rplan, 0, 0)
 
 	reply := &types.AuditSSKeysReply{
 		Status:   true,
@@ -2713,6 +2717,10 @@ type ssReshareCandidate struct {
 	pubKID    string
 	oldOwners []string
 	generation uint64
+	// rebuild is set when this key was selected because an owner DEPARTED but we do not hold the
+	// privK.  Planned here, on the execution thread (planSSReconstruct requires it); RUN later, in
+	// the detached executor, because it is network I/O.
+	rebuild *ssReconstructJob
 }
 
 // ssResharePlan is the audit's output: which keys to re-share this tick, plus the enclave pubKs
@@ -2759,7 +2767,42 @@ func (s *qadenaServer) getPublicKeyRowOwners(pubKID string, pubKType string) (ow
 // That is the whole predicate (user decision): every key converges to an owner set the size of
 // the fleet, capped.  Monotone (owner sets only grow -- the chain's proper-superset rule), and
 // quiescent (once owners == target nothing is deficient until the fleet grows again).
-func (s *qadenaServer) planSSReshare(plan *ssRotationPlan) *ssResharePlan {
+
+// departedOwners returns the subset of owners the CHAIN has marked as departed -- validator out
+// of the bonded set for at least graceBlocks -- using IntervalPublicKeyID.departedHeight, which
+// the chain stamps and mirrors to us.
+//
+// THE CHAIN IS THE AUTHORITY AND THIS IS ONLY A PROPOSAL.  PioneerUpdatePublicKey re-derives the
+// same verdict from its own params and refuses any drop it disagrees with, so being wrong here
+// costs a rejected message, never an illegitimate drop.  That is why reading the grace off the
+// UpdateHeight call is safe: a host that understates it only makes its own proposals bounce.
+//
+// grace 0 means PROPOSE NOTHING: an older keeper does not send the field, and a chain that has
+// not opted in has it unset.  Neither may start dropping owners.
+func (s *qadenaServer) departedOwners(owners []string, height int64, graceBlocks uint64) map[string]bool {
+	out := map[string]bool{}
+	if graceBlocks == 0 || height == 0 {
+		return out
+	}
+	store := prefix.NewStore(s.CacheCtx.KVStore(s.StoreKey), types.KeyPrefix(types.IntervalPublicKeyIDKeyPrefix))
+	for _, owner := range owners {
+		b := store.Get(types.IntervalPublicKeyIDKey(owner, types.PioneerNodeType))
+		if b == nil {
+			continue
+		}
+		var row types.IntervalPublicKeyID
+		s.Cdc.MustUnmarshal(b, &row)
+		if row.DepartedHeight == 0 {
+			continue
+		}
+		if height-row.DepartedHeight >= int64(graceBlocks) {
+			out[owner] = true
+		}
+	}
+	return out
+}
+
+func (s *qadenaServer) planSSReshare(plan *ssRotationPlan, height int64, graceBlocks uint64) *ssResharePlan {
 	target := len(plan.pioneers)
 	if cap := effectiveShareCap(); target > cap {
 		target = cap
@@ -2828,21 +2871,57 @@ func (s *qadenaServer) planSSReshare(plan *ssRotationPlan) *ssResharePlan {
 			c.LoggerDebug(logger, "ss-reshare: CANDIDATE pubKID="+pubKID+" deficient=false reason=no-chain-row")
 			continue
 		}
-		if len(chainOwners) >= target {
+		// TWO REASONS TO SELECT A KEY NOW, not one.  "deficient" asks whether the owner COUNT is
+		// below target -- the fleet grew.  "stale" asks whether any listed owner has DEPARTED --
+		// the fleet shrank.  A key can look perfectly healthy by count while every owner named on
+		// it is gone, which is precisely the overstated custody this work exists to fix, so a
+		// count-only predicate can never notice it.
+		gone := s.departedOwners(chainOwners, height, graceBlocks)
+		if len(chainOwners) >= target && len(gone) == 0 {
 			c.LoggerDebug(logger, "ss-reshare: CANDIDATE pubKID="+pubKID+
 				" owners="+strconv.Itoa(len(chainOwners))+" target="+strconv.Itoa(target)+
-				" deficient=false reason=not-deficient")
+				" deficient=false stale=false reason=not-deficient")
 			continue
 		}
+		if len(gone) > 0 {
+			c.LoggerInfo(logger, "ss-reshare: CANDIDATE pubKID="+pubKID+
+				" owners="+strconv.Itoa(len(chainOwners))+" departed="+strconv.Itoa(len(gone))+
+				" effective="+strconv.Itoa(len(chainOwners)-len(gone))+
+				" stale=true -- the row overstates custody by "+strconv.Itoa(len(gone)))
+		}
+		var rebuild *ssReconstructJob
 		privK, cached := s.getPrivKCache(pubKID)
 		if !cached || !isPrivKHex(privK) {
-			// v1 NEVER reconstructs in order to re-share: the audit stays cheap, and proposer
-			// rotation means any proposer that ever held the key heals it.  (v2: reconstruct-
-			// then-re-share.)
+			// v2: RECONSTRUCT IN ORDER TO RE-SHARE, but only for a STALE key.
+			//
+			// v1 never reconstructed here, on the grounds that the audit stays cheap and proposer
+			// rotation means any proposer that ever held the key eventually heals it.  That
+			// reasoning holds for a merely DEFICIENT key -- waiting costs nothing but time, and
+			// the key is safe meanwhile.
+			//
+			// It does NOT hold once an owner has departed.  Waiting for a proposer that happens
+			// to hold the key is waiting for one of a set that is SHRINKING, and the whole point
+			// of the departure work is that those owners may never come back.  So a stale key is
+			// worth the network round-trip; a deficient one still is not.
+			if len(gone) == 0 {
+				c.LoggerInfo(logger, "ss-reshare: CANDIDATE pubKID="+pubKID+
+					" owners="+strconv.Itoa(len(chainOwners))+" target="+strconv.Itoa(target)+
+					" deficient=true eligible=false reason=no-privk")
+				continue
+			}
+			// PLANNED HERE, RUN LATER.  planSSReconstruct reads the owners table and the peer
+			// addresses and must run on the execution thread; runSSReconstruct dials peers and
+			// must not.
+			job, ok := s.planSSReconstruct(pubKID)
+			if !ok {
+				c.LoggerError(logger, "ss-reshare: CANDIDATE pubKID="+pubKID+
+					" stale=true eligible=false reason=cannot-plan-reconstruct -- the departed"+
+					" owner stays listed and custody stays overstated until this key can be rebuilt")
+				continue
+			}
+			rebuild = job
 			c.LoggerInfo(logger, "ss-reshare: CANDIDATE pubKID="+pubKID+
-				" owners="+strconv.Itoa(len(chainOwners))+" target="+strconv.Itoa(target)+
-				" deficient=true eligible=false reason=no-privk")
-			continue
+				" stale=true eligible=true reason=will-reconstruct-then-reshare")
 		}
 		deficientCount++
 
@@ -2875,7 +2954,7 @@ func (s *qadenaServer) planSSReshare(plan *ssRotationPlan) *ssResharePlan {
 		c.LoggerInfo(logger, "ss-reshare: CANDIDATE pubKID="+pubKID+
 			" owners="+strconv.Itoa(len(chainOwners))+" target="+strconv.Itoa(target)+
 			" deficient=true eligible=true")
-		deficient = append(deficient, ssReshareCandidate{pubKID: pubKID, oldOwners: chainOwners, generation: chainGeneration})
+		deficient = append(deficient, ssReshareCandidate{pubKID: pubKID, oldOwners: chainOwners, generation: chainGeneration, rebuild: rebuild})
 	}
 
 	// No post-hoc rate limit is needed: the loop above stops at maxSSResharesPerRotation, and the
@@ -2916,7 +2995,7 @@ func (s *qadenaServer) planSSReshare(plan *ssRotationPlan) *ssResharePlan {
 // reshareSSIntervalKeys executes the audit's plan: for each selected key, RE-SHARE (never rekey)
 // to the grown owner set and emit one MsgPioneerUpdatePublicKey.  Runs on the same detached
 // goroutine as the rotation; everything it needs from the block store arrived in the plans.
-func (s *qadenaServer) reshareSSIntervalKeys(plan *ssRotationPlan, rplan *ssResharePlan) []sdk.Msg {
+func (s *qadenaServer) reshareSSIntervalKeys(plan *ssRotationPlan, rplan *ssResharePlan, height int64, graceBlocks uint64) []sdk.Msg {
 	msgs := make([]sdk.Msg, 0, len(rplan.keys))
 	if len(rplan.keys) == 0 {
 		return msgs
@@ -2939,6 +3018,24 @@ func (s *qadenaServer) reshareSSIntervalKeys(plan *ssRotationPlan, rplan *ssResh
 		// RE-SHARE, NOT REKEY -- start from the cached key and PROVE it is the chain's key
 		// before anything else happens.
 		privK, ok := s.getPrivKCache(cand.pubKID)
+		if (!ok || !isPrivKHex(privK)) && cand.rebuild != nil {
+			// RECONSTRUCT-THEN-RE-SHARE.  Planned on the execution thread, run HERE because it
+			// dials peers.  Only stale keys get this far without a cached privK -- see the plan.
+			c.LoggerInfo(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+
+				" reconstructing from "+strconv.Itoa(len(cand.rebuild.owners))+
+				" owner(s), threshold "+strconv.Itoa(cand.rebuild.threshold))
+			privK = s.runSSReconstruct(cand.rebuild, "reshare")
+			ok = isPrivKHex(privK)
+			if !ok {
+				// The surviving owners could not between them rebuild the key.  Say so plainly:
+				// this is the failure the departure work exists to get ahead of, and it means the
+				// key is at or past the edge of recoverable.
+				c.LoggerError(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+
+					" skipped: could not reconstruct from the surviving owners -- custody of this"+
+					" key is at risk and a re-share cannot repair it")
+				continue
+			}
+		}
 		if !ok || !isPrivKHex(privK) {
 			c.LoggerError(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+" skipped: privK no longer cached")
 			continue
@@ -2955,17 +3052,30 @@ func (s *qadenaServer) reshareSSIntervalKeys(plan *ssRotationPlan, rplan *ssResh
 			continue
 		}
 
-		// newOwners = oldOwners ∪ {self} ∪ random additions from the fleet, up to target.
-		// The old owners MUST all be present (the chain enforces a proper superset) and get fresh
-		// shares like everyone else -- shares from two Split calls combine to garbage, so partial
-		// distribution is never valid.
+		// newOwners = (oldOwners MINUS departed) ∪ {self} ∪ random additions, up to target.
+		//
+		// Every RETAINED owner must be present and gets a fresh share like everyone else: shares
+		// from two Split calls combine to garbage, so partial distribution is never valid.  What
+		// changed is that the old set is no longer carried wholesale -- an owner the chain has
+		// marked departed is left out, which is the entire point of the departure work.  The
+		// chain re-derives that verdict from its own params and refuses any drop it disagrees
+		// with, so this proposes and never decides.
+		departed := s.departedOwners(cand.oldOwners, height, graceBlocks)
 		inSet := make(map[string]bool, target)
 		newOwners := make([]string, 0, target)
 		for _, o := range cand.oldOwners {
+			if departed[o] {
+				continue
+			}
 			if !inSet[o] {
 				inSet[o] = true
 				newOwners = append(newOwners, o)
 			}
+		}
+		if len(departed) > 0 {
+			c.LoggerInfo(logger, "ss-reshare: RESHARE pubKID="+cand.pubKID+
+				" dropping "+strconv.Itoa(len(departed))+" departed owner(s), retaining "+
+				strconv.Itoa(len(newOwners)))
 		}
 		if me != "" && !inSet[me] && len(newOwners) < target {
 			inSet[me] = true
@@ -3731,9 +3841,9 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 				// getAddressPublishedPioneers' CacheCtx iteration on a goroutine racing block
 				// execution -- see ssRotationPlan for the history of this exact bug.
 				plan := s.planSSRotation()
-				rplan := s.planSSReshare(plan)
+				rplan := s.planSSReshare(plan, in.Height, in.SsDepartureGrace)
 				go func() {
-					if !s.updateSSIntervalKey(plan, rplan) {
+					if !s.updateSSIntervalKey(plan, rplan, in.Height, in.SsDepartureGrace) {
 						c.LoggerError(logger, "failed updateSSIntervalKey()")
 					}
 					// Health report, not a decision: names the pioneers that did not answer, so an
@@ -3795,7 +3905,7 @@ func (s *qadenaServer) UpdateHeight(ctx context.Context, in *types.MsgUpdateHeig
 	return &types.UpdateHeightReply{Status: true}, nil
 }
 
-func (s *qadenaServer) updateSSIntervalKey(plan *ssRotationPlan, rplan *ssResharePlan) bool {
+func (s *qadenaServer) updateSSIntervalKey(plan *ssRotationPlan, rplan *ssResharePlan, height int64, graceBlocks uint64) bool {
 	c.LoggerDebug(logger, "updateSSIntervalKey")
 
 	c.LoggerDebug(logger, "Going to create a new SS share")
@@ -3816,7 +3926,7 @@ func (s *qadenaServer) updateSSIntervalKey(plan *ssRotationPlan, rplan *ssReshar
 	// (a rotation failure sinks this tick's re-shares) costs one tick of delay, and the audit
 	// predicate reads the chain row, so anything sunk stays deficient and is retried.
 	if rplan != nil {
-		msgs = append(msgs, s.reshareSSIntervalKeys(plan, rplan)...)
+		msgs = append(msgs, s.reshareSSIntervalKeys(plan, rplan, height, graceBlocks)...)
 	}
 
 	flagSet := RootCmd.Flags()

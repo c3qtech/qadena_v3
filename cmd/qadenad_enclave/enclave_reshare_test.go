@@ -240,7 +240,7 @@ func TestReshareAuditPredicate(t *testing.T) {
 			}
 
 			plan := s.planSSRotation()
-			rplan := s.planSSReshare(plan)
+			rplan := s.planSSReshare(plan, 0, 0)
 
 			isSelected := false
 			for _, cand := range rplan.keys {
@@ -285,8 +285,8 @@ func TestReshareProducerEmitsValidGrowth(t *testing.T) {
 	s.setPubKCache("grow-k", pubK)
 
 	plan := s.planSSRotation()
-	rplan := s.planSSReshare(plan)
-	msgs := s.reshareSSIntervalKeys(plan, rplan)
+	rplan := s.planSSReshare(plan, 0, 0)
+	msgs := s.reshareSSIntervalKeys(plan, rplan, 0, 0)
 	require.Len(t, msgs, 1, "the one deficient key must be re-shared")
 
 	m, ok := msgs[0].(*types.MsgPioneerUpdatePublicKey)
@@ -437,7 +437,7 @@ func TestAuditRateLimitsAndBoundsItsScan(t *testing.T) {
 	seedKeys(t, s, 300, 3) // 300 deficient keys, fleet of 3
 
 	plan := s.planSSRotation()
-	rplan := s.planSSReshare(plan)
+	rplan := s.planSSReshare(plan, 0, 0)
 
 	require.Len(t, rplan.keys, maxSSResharesPerRotation,
 		"a 300-key backlog must yield exactly one tick's worth of work")
@@ -470,7 +470,7 @@ func TestAuditScanIsBoundedWhenNothingIsDeficient(t *testing.T) {
 		s.setPrivKCache(id, keyHex(k))
 	}
 
-	rplan := s.planSSReshare(s.planSSRotation())
+	rplan := s.planSSReshare(s.planSSRotation(), 0, 0)
 	require.Empty(t, rplan.keys, "nothing is deficient")
 	require.LessOrEqual(t, rplan.audited, maxSSAuditScan,
 		"an uncapped quiescent scan is an unbounded stall on block execution")
@@ -491,7 +491,7 @@ func TestAuditCursorCoversEveryKeyWithinOneSweep(t *testing.T) {
 	runs := 0
 	for runs < 20 {
 		runs++
-		rplan := s.planSSReshare(plan)
+		rplan := s.planSSReshare(plan, 0, 0)
 		scanned += rplan.audited
 		if s.getSSAuditCursor() == "" {
 			break // the sweep reached the end and reset
@@ -511,7 +511,7 @@ func TestAuditCursorIsStableUnderInsertion(t *testing.T) {
 	seedKeys(t, s, 300, 3)
 	plan := s.planSSRotation()
 
-	s.planSSReshare(plan)
+	s.planSSReshare(plan, 0, 0)
 	cur := s.getSSAuditCursor()
 	require.NotEmpty(t, cur, "the first run must leave a cursor")
 
@@ -525,7 +525,7 @@ func TestAuditCursorIsStableUnderInsertion(t *testing.T) {
 	}
 	require.Equal(t, cur, s.getSSAuditCursor(), "insertion must not move the cursor")
 
-	rplan := s.planSSReshare(plan)
+	rplan := s.planSSReshare(plan, 0, 0)
 	for _, cand := range rplan.keys {
 		require.Greater(t, cand.pubKID, cur,
 			"the run after an insertion must not go backwards behind the cursor")
@@ -565,7 +565,7 @@ func TestAuditCursorAdvancesByTheRateLimitWhenEverythingIsDeficient(t *testing.T
 	seedKeys(t, s, 300, 3) // all deficient
 	plan := s.planSSRotation()
 
-	rplan := s.planSSReshare(plan)
+	rplan := s.planSSReshare(plan, 0, 0)
 	require.Len(t, rplan.keys, maxSSResharesPerRotation)
 	require.LessOrEqual(t, rplan.audited, maxSSResharesPerRotation+4,
 		"a fully deficient table must stop as soon as it has a tick's work, not scan to the cap")
@@ -577,7 +577,7 @@ func TestAuditCursorStartsEmpty(t *testing.T) {
 	s, _ := newSSTestServer(t, "p0")
 	require.Empty(t, s.getSSAuditCursor())
 	seedHealthyKeys(t, s, 10, 3)
-	s.planSSReshare(s.planSSRotation())
+	s.planSSReshare(s.planSSRotation(), 0, 0)
 	require.Equal(t, "", s.getSSAuditCursor(),
 		"a table smaller than the cap is swept in one run, which completes and resets the cursor")
 }

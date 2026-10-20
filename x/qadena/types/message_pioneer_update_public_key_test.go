@@ -22,7 +22,7 @@ func TestMsgPioneerUpdatePublicKeyValidateBasic(t *testing.T) {
 
 	base := func() *MsgPioneerUpdatePublicKey {
 		return NewMsgPioneerUpdatePublicKey(good, "pubkid", "transaction",
-			[]*Share{validShare("p1"), validShare("p2")}, sig, []byte("report"))
+			[]*Share{validShare("p1"), validShare("p2")}, sig, []byte("report"), 0)
 	}
 
 	require.NoError(t, base().ValidateBasic())

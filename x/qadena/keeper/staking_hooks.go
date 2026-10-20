@@ -176,24 +176,26 @@ func (k Keeper) parkPioneerExternalAddress(ctx context.Context, valAddr sdk.ValA
 		return
 	}
 
-	// THE HEIGHT IS THE SS DEPARTURE CLOCK, and it is recorded here because here is the only place
-	// that knows when the pioneer left the bonded set.  Params.SsDepartureGrace blocks after this,
-	// the SS audit may drop this pioneer from the owner sets of keys it already holds; before that
-	// it is merely away, and a re-bond deletes this entry and resets the clock (see
-	// restorePioneerExternalAddress).  A height rather than a timestamp because dropping an owner
-	// is a consensus action -- every node must agree on when the grace expired.
-	//
-	// The guard above is what keeps this honest across repeated jail cycles: a second transition
-	// while already parked returns early, so this records the FIRST departure and a flapping
-	// validator cannot keep pushing its own deadline back.
 	k.SetParkedExternalAddress(ctx, types.ParkedExternalAddress{
 		PubKID:            pubKID,
 		ExternalIPAddress: row.ExternalIPAddress,
-		ParkedHeight:      sdk.UnwrapSDKContext(ctx).BlockHeight(),
 	})
 
 	parked := row.ExternalIPAddress
 	row.ExternalIPAddress = ""
+
+	// THE DEPARTURE CLOCK, STAMPED ON THE ROW THE ENCLAVE CAN SEE (see the field's comment).
+	//
+	// GATED ON THE GRACE BEING CONFIGURED, and that gate is about REPLAY, not about taste.  This
+	// row is chain state and therefore in the app hash: a node replaying an existing chain's
+	// history with this binary must write exactly the bytes the old binary wrote, or it diverges
+	// at the first block where a validator ever unbonded.  SsDepartureGrace is 0 on every chain
+	// that predates it -- pre-field params unmarshal zero -- so those chains keep writing the old
+	// bytes, and a chain opts in by governance at a height replay can follow.  Same reasoning the
+	// ReleaseAddressOnUnbond field documents at length.
+	if k.GetParams(ctx).SsDepartureGrace != 0 {
+		row.DepartedHeight = sdkctx.BlockHeight()
+	}
 	// The full-service accessor, not a bare store write: it carries PreviousPubKID (a same-PubKID
 	// rewrite keeps the existing pointer -- the DeactivateServiceProvider branch), maintains the
 	// ByPubKID index, feeds the store-hash accumulator, and forwards the row to the local enclave
@@ -264,6 +266,13 @@ func (k Keeper) restorePioneerExternalAddress(ctx context.Context, valAddr sdk.V
 	}
 
 	row.ExternalIPAddress = parked.ExternalIPAddress
+	// THE CLOCK RESETS BY BEING CLEARED, not by being remembered.  A pioneer that comes back has
+	// not departed, and a LATER unbond must get a full grace of its own rather than inheriting the
+	// remainder of this one -- otherwise a validator flapping faster than the grace would
+	// eventually be dropped despite never having been away for long.  Unconditional, unlike the
+	// stamp: clearing a field that is already 0 writes the same bytes either way, so this needs no
+	// replay gate.
+	row.DepartedHeight = 0
 	k.SetIntervalPublicKeyID(ctx, row)
 	k.RemoveParkedExternalAddress(ctx, pubKID)
 

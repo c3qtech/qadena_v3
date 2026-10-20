@@ -1152,6 +1152,7 @@ func (k Keeper) EnclaveBeginBlock(sdkCtx sdk.Context) {
 			IsLive:               time.Since(header.Time) <= enclaveLiveBlockWindow,
 			ExternalAddress:      NodeExternalAddress(),
 			PermittedTcbStatuses: c.TCBPolicyFromParams(k.GetParams(sdkCtx)).Names(),
+			SsDepartureGrace:     k.GetParams(sdkCtx).SsDepartureGrace,
 		})
 	}
 }

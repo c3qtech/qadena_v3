@@ -21,5 +21,27 @@ message IntervalPublicKeyID {
   // message, so every validator computes the same value and no caller can nominate a key of its
   // choosing.
   string previousPubKID = 8;
+
+  // The block height at which this pioneer's validator left the bonded set, or 0 while it is in.
+  // Written by the staking hooks beside the address they clear, and cleared again when the
+  // validator re-bonds.
+  //
+  // WHY IT LIVES ON THE MIRRORED ROW rather than beside the parked address.  Dropping a departed
+  // pioneer from an SS key's owner set needs TWO parties to agree: the chain validates the drop,
+  // but the ENCLAVE is the only thing that can propose one, because it alone holds the key and
+  // can re-split it.  The enclave sees this row -- the prefix is in mirroredStores, so it arrives
+  // live on every write, survives a restart as ordinary chain state, and is seeded in bulk to a
+  // node that joined later.  The parked-address store is deliberately NOT mirrored, so a height
+  // kept only there would be invisible to the one component that has to act on it, and the
+  // enclave would be left timing the absence itself -- an observation a restart forgets.
+  //
+  // IT DOES NOT ANSWER "IS THIS PIONEER ADDRESSABLE".  externalIPAddress still does, alone.  That
+  // separation is why putting this here does not reintroduce the contradiction the parked store
+  // was kept out of the mirror to avoid: this field says WHEN it left, never WHETHER it is here.
+  //
+  // ZERO IS "NOT DEPARTED", and it is also what a row written before this field existed
+  // unmarshals as -- the two must mean the same thing or an upgrade would make every historical
+  // row read as departed at genesis.
+  int64 departedHeight = 9;
 }
 

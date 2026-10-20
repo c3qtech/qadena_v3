@@ -31,11 +31,18 @@ func setGrace(t *testing.T, k keeper.Keeper, ctx sdk.Context, blocks uint64) {
 	require.NoError(t, k.SetParams(ctx, params))
 }
 
+// park puts the pioneer in the state the hook leaves behind: row present, address cleared, and
+// the departure height stamped on the ROW (which is what both the chain and the enclave read).
 func park(k keeper.Keeper, ctx sdk.Context, atHeight int64) {
+	k.SetIntervalPublicKeyID(ctx, types.IntervalPublicKeyID{
+		PubKID:         testValPubKID(),
+		NodeID:         "pioneer-hook-test",
+		NodeType:       types.PioneerNodeType,
+		DepartedHeight: atHeight,
+	})
 	k.SetParkedExternalAddress(ctx, types.ParkedExternalAddress{
 		PubKID:            testValPubKID(),
 		ExternalIPAddress: "1.2.3.4:26656",
-		ParkedHeight:      atHeight,
 	})
 }
 
@@ -104,9 +111,9 @@ func TestParkRecordsTheHeightAndReBondResetsTheClock(t *testing.T) {
 	at500 := ctx.WithBlockHeight(500)
 	require.NoError(t, h.AfterValidatorBeginUnbonding(at500, nil, testValAddr))
 
-	parked, found := k.GetParkedExternalAddress(at500, testValPubKID())
+	row, found := k.GetIntervalPublicKeyIDByPubKID(at500, testValPubKID())
 	require.True(t, found)
-	require.Equal(t, int64(500), parked.ParkedHeight, "the hook must stamp the height it parked at")
+	require.Equal(t, int64(500), row.DepartedHeight, "the hook must stamp the height it parked at")
 
 	// Still inside the grace, the pioneer re-bonds: the entry goes, so the clock cannot carry over
 	// into a later unbond.
@@ -114,15 +121,18 @@ func TestParkRecordsTheHeightAndReBondResetsTheClock(t *testing.T) {
 	require.False(t, k.PioneerHasDeparted(at560, testValPubKID()))
 	require.NoError(t, h.AfterValidatorBonded(at560, nil, testValAddr))
 	_, found = k.GetParkedExternalAddress(at560, testValPubKID())
-	require.False(t, found, "a restore consumes the parked entry, which is what resets the clock")
+	require.False(t, found, "a restore consumes the parked entry")
+	row, found = k.GetIntervalPublicKeyIDByPubKID(at560, testValPubKID())
+	require.True(t, found)
+	require.Zero(t, row.DepartedHeight, "and clears the departure height, which is what resets the clock")
 
 	// It leaves again much later.  The grace is measured from THIS departure, so a height that
 	// would have been past the deadline of the first one is not past this one's.
 	at2000 := ctx.WithBlockHeight(2_000)
 	require.NoError(t, h.AfterValidatorBeginUnbonding(at2000, nil, testValAddr))
-	parked, found = k.GetParkedExternalAddress(at2000, testValPubKID())
+	row, found = k.GetIntervalPublicKeyIDByPubKID(at2000, testValPubKID())
 	require.True(t, found)
-	require.Equal(t, int64(2_000), parked.ParkedHeight)
+	require.Equal(t, int64(2_000), row.DepartedHeight)
 	require.False(t, k.PioneerHasDeparted(ctx.WithBlockHeight(2_050), testValPubKID()),
 		"the second departure gets a full grace of its own, not the remainder of the first")
 	require.True(t, k.PioneerHasDeparted(ctx.WithBlockHeight(2_100), testValPubKID()))
@@ -140,9 +150,29 @@ func TestRepeatedUnbondingDoesNotRestartTheGrace(t *testing.T) {
 	require.NoError(t, h.AfterValidatorBeginUnbonding(ctx.WithBlockHeight(500), nil, testValAddr))
 	require.NoError(t, h.AfterValidatorBeginUnbonding(ctx.WithBlockHeight(590), nil, testValAddr))
 
-	parked, found := k.GetParkedExternalAddress(ctx, testValPubKID())
+	row, found := k.GetIntervalPublicKeyIDByPubKID(ctx, testValPubKID())
 	require.True(t, found)
-	require.Equal(t, int64(500), parked.ParkedHeight, "the FIRST departure sets the clock")
+	require.Equal(t, int64(500), row.DepartedHeight, "the FIRST departure sets the clock")
 	require.True(t, k.PioneerHasDeparted(ctx.WithBlockHeight(600), testValPubKID()),
 		"600 is 100 past the first departure, so the grace has elapsed despite the second transition")
+}
+
+// THE REPLAY GATE.  This row is chain state and therefore in the app hash, so a node replaying an
+// existing chain's history with this binary must write exactly the bytes the old binary wrote.
+// Every chain predating SsDepartureGrace has it at 0, so with the grace unset the hook must leave
+// the row byte-identical -- no stamp.  Without this the first historical unbond would diverge.
+func TestParkDoesNotStampTheHeightWhenTheGraceIsUnset(t *testing.T) {
+	k, ctx, h := setupHooks(t)
+	enableRelease(t, k, ctx)
+	setGrace(t, k, ctx, 0) // a chain that has not opted in
+	seedPioneerRow(k, ctx, "1.2.3.4:26656")
+
+	at500 := ctx.WithBlockHeight(500)
+	require.NoError(t, h.AfterValidatorBeginUnbonding(at500, nil, testValAddr))
+
+	row, found := k.GetIntervalPublicKeyIDByPubKID(at500, testValPubKID())
+	require.True(t, found)
+	require.Zero(t, row.DepartedHeight,
+		"with the grace unset the hook must write the pre-upgrade bytes: no departure height")
+	require.Empty(t, row.ExternalIPAddress, "parking itself still happens -- only the stamp is gated")
 }

@@ -77,12 +77,24 @@ fleet_site_profile_load() {
     SITE_TEST_CHAIN_CONFIG=""
 
     case "$_s" in
-    M1-M4|m1-m4)
-        # The Parallels fleet on this machine.  M1 is the primary and the only builder; M2 joins.
-        # NAMED FOR THE MACHINES, not "local": every site is local to somebody, and the fleet is
-        # referred to as M1/M2 everywhere else.  Lowercase is accepted so the capitals are optional.
+    M1-M6|m1-m6|M1-M4|m1-m4)
+        # The Parallels fleet on this machine.  M1 is the primary and the only builder; the rest
+        # join.  NAMED FOR THE MACHINES, not "local": every site is local to somebody, and the
+        # fleet is referred to as M1/M2 everywhere else.  Lowercase is accepted so the capitals
+        # are optional.
+        #
+        # M1-M4 IS KEPT AS AN ALIAS, not as a second site.  The fleet grew to six on 2026-10-20 and
+        # the old name is in run logs, scripts and people's fingers; pointing it at the same six
+        # machines is better than leaving it to select a stale four-node subset of a fleet that no
+        # longer looks like that.
+        #
+        # WHY SIX.  getThreshold is a step function (0-3 -> 1, 4-6 -> 2, 7-10 -> 3) and a re-share
+        # may never LOWER the threshold, so a four-owner key cannot shed an owner at all: 4 -> 3
+        # crosses 2 -> 1 and is refused.  Six owners can shed two (6 -> 5 -> 4, threshold 2
+        # throughout) and be refused on the third, which is the whole SS owner-departure behaviour
+        # -- accept, accept, refuse -- on one fleet.  Four machines can only ever show the refusal.
         SITE_PRIMARY="alvillarica@10.211.55.5"
-        SITE_JOINERS=("alvillarica@10.211.55.6" "alvillarica@10.211.55.7" "alvillarica@10.211.55.8")
+        SITE_JOINERS=("alvillarica@10.211.55.6" "alvillarica@10.211.55.7" "alvillarica@10.211.55.8" "alvillarica@10.211.55.9" "alvillarica@10.211.55.10")
         # UNDER ~/qadena-launch, AND THE PASSPHRASE INSIDE ITS OWN LAUNCH DIR.  These used to
         # scatter across $HOME -- a launch dir here, a bare -password file beside it, a dotfile for
         # another site -- so nothing collected the state of a fleet in one place and a stray
@@ -428,7 +440,7 @@ fleet_site_profile_load() {
     return 0
 }
 
-fleet_site_profile_list() { print -r -- "M1-M2 M1-M4 staging c3q-mainnet SGX" }
+fleet_site_profile_list() { print -r -- "M1-M2 M1-M6 staging c3q-mainnet SGX" }
 
 fleet_site_profile_print() {
     local _v

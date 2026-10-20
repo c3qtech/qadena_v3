@@ -29,21 +29,4 @@ message ParkedExternalAddress {
   // while unbonded gets its old address back, and the enclave's existing self-heal
   // (planExternalAddressRepublish) corrects a non-empty row that differs from the sealed address.
   string externalIPAddress = 2;
-
-  // WHEN the address was parked, as a block height.  This is the clock the SS owner-departure
-  // grace period is measured against: a pioneer counts as DEPARTED only once
-  // Params.SSDepartureGrace blocks have passed since this height, so a routine downtime jail --
-  // which parks and then restores minutes later -- never costs a re-share.
-  //
-  // A BLOCK HEIGHT, NOT A TIMESTAMP, AND NOT A LOCAL OBSERVATION.  Dropping an owner from a key's
-  // owner set is a consensus action: every node must agree on the moment the grace expired, or
-  // they disagree about which owner set is valid and the re-share forks.  Height is the only
-  // clock all of them already share.
-  //
-  // Nothing resets this field in place: AfterValidatorBonded DELETES the whole entry, so a
-  // re-bond inside the window restarts the clock for free and a later unbond writes a fresh
-  // height.  A zero value means "parked before this field existed" -- see the keeper, which
-  // treats it as not-yet-departed rather than infinitely old, because reading 0 as "parked at
-  // genesis" would make every pre-existing parked pioneer instantly departed on upgrade.
-  int64 parkedHeight = 3;
 }
