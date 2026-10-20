@@ -61,7 +61,7 @@ func enableRelease(t *testing.T, k keeper.Keeper, ctx sdk.Context) {
 func seedPioneerRow(k keeper.Keeper, ctx sdk.Context, ip string) {
 	k.SetIntervalPublicKeyID(ctx, types.IntervalPublicKeyID{
 		PubKID:              testValPubKID(),
-		NodeID:              "pioneer-hook-test",
+		NodeID:              testPioneerNodeID,
 		NodeType:            types.PioneerNodeType,
 		ExternalIPAddress:   ip,
 		ServiceProviderType: "test-srv-prv",
@@ -257,7 +257,7 @@ func TestHooksRestoreWithMissingRowKeepsParked(t *testing.T) {
 	seedPioneerRow(k, ctx, "10.0.0.1")
 	require.NoError(t, h.AfterValidatorBeginUnbonding(ctx, nil, testValAddr))
 
-	k.RemoveIntervalPublicKeyID(ctx, "pioneer-hook-test", types.PioneerNodeType)
+	k.RemoveIntervalPublicKeyID(ctx, testPioneerNodeID, types.PioneerNodeType)
 
 	ctx = ctx.WithEventManager(sdk.NewEventManager())
 	require.NoError(t, h.AfterValidatorBonded(ctx, nil, testValAddr))

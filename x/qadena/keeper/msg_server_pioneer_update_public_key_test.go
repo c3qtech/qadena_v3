@@ -116,13 +116,13 @@ func seedKey(k keeper.Keeper, ctx sdk.Context, pubB64 string, owners ...string) 
 func TestReshareMayDropADepartedOwner(t *testing.T) {
 	k, ms, ctx := setupReshareTest(t)
 	priv, pub := reshareKeyPair(t)
-	seedKey(k, ctx, pub, "pioneer1", "pioneer2", testValPubKID())
+	seedKey(k, ctx, pub, "pioneer1", "pioneer2", testPioneerNodeID)
 
 	// testValPubKID's validator left and the grace has elapsed.
 	setGrace(t, k, ctx, 100)
 	park(k, ctx, 10)
 	at := ctx.WithBlockHeight(500)
-	require.True(t, k.PioneerHasDeparted(at, testValPubKID()))
+	require.True(t, k.PioneerHasDeparted(at, testPioneerNodeID))
 
 	_, err := ms.PioneerUpdatePublicKey(at, reshareMsg(t, priv, 0, "pioneer1", "pioneer2"))
 	require.NoError(t, err)
@@ -138,7 +138,7 @@ func TestReshareMayDropADepartedOwner(t *testing.T) {
 func TestReshareMayNotDropAnEligibleOwner(t *testing.T) {
 	k, ms, ctx := setupReshareTest(t)
 	priv, pub := reshareKeyPair(t)
-	seedKey(k, ctx, pub, "pioneer1", "pioneer2", testValPubKID())
+	seedKey(k, ctx, pub, "pioneer1", "pioneer2", testPioneerNodeID)
 	setGrace(t, k, ctx, 100) // nobody parked: every owner is eligible
 
 	_, err := ms.PioneerUpdatePublicKey(ctx, reshareMsg(t, priv, 0, "pioneer1", "pioneer2"))
@@ -150,7 +150,7 @@ func TestReshareMayNotDropAnEligibleOwner(t *testing.T) {
 func TestReshareMayNotDropAnOwnerStillInsideTheGrace(t *testing.T) {
 	k, ms, ctx := setupReshareTest(t)
 	priv, pub := reshareKeyPair(t)
-	seedKey(k, ctx, pub, "pioneer1", "pioneer2", testValPubKID())
+	seedKey(k, ctx, pub, "pioneer1", "pioneer2", testPioneerNodeID)
 
 	setGrace(t, k, ctx, 100)
 	park(k, ctx, 450)
@@ -228,7 +228,7 @@ func TestReshareGenerationIsCoveredByTheAttestation(t *testing.T) {
 func TestReshareMayNotEmptyTheOwnerSet(t *testing.T) {
 	k, ms, ctx := setupReshareTest(t)
 	priv, pub := reshareKeyPair(t)
-	seedKey(k, ctx, pub, testValPubKID())
+	seedKey(k, ctx, pub, testPioneerNodeID)
 
 	setGrace(t, k, ctx, 100)
 	park(k, ctx, 10)

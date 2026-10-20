@@ -71,12 +71,24 @@ func (k Keeper) GetParkedExternalAddress(ctx context.Context, pubKID string) (va
 // the same verdict and only the row is mirrored to it (see IntervalPublicKeyID.departedHeight).
 // One fact, one home: a height kept in both places could disagree, and the two readers would then
 // disagree about whose shares are valid.
-func (k Keeper) PioneerHasDeparted(ctx context.Context, pubKID string) bool {
+//
+// THE ARGUMENT IS A pioneerID, NOT A pubKID, and the distinction is the whole correctness of this
+// function.  Its only caller walks Share.PioneerID (msg_server_pioneer_update_public_key.go), which
+// holds a NODE ID -- "qfi-pioneer6" -- while a pubKID is a bech32 address.  This used to take the
+// pubKID-indexed getter, so the lookup missed every time, every owner read as still-eligible, and
+// no shrink could ever be accepted: measured on M1-M6 against a genuinely departed pioneer, the
+// enclave planned "owners 6->5" for four keys and the chain rejected all four with
+// ErrOwnerStillEligible.  The unit tests did not catch it because their fixture used ONE
+// identifier for both roles, so the two indexes coincided.
+//
+// The enclave's departedOwners() reads the SAME primary (nodeID, nodeType) index -- that agreement
+// is load-bearing, since a verdict the two reach differently is a fork.
+func (k Keeper) PioneerHasDeparted(ctx context.Context, pioneerID string) bool {
 	grace := k.GetParams(ctx).SsDepartureGrace
 	if grace == 0 {
 		return false
 	}
-	row, found := k.GetIntervalPublicKeyIDByPubKID(ctx, pubKID)
+	row, found := k.GetIntervalPublicKeyID(ctx, pioneerID, types.PioneerNodeType)
 	if !found || row.DepartedHeight == 0 {
 		return false
 	}
