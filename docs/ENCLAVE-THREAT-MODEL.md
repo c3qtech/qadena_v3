@@ -131,6 +131,62 @@ block; the only addition is the nonce, without which the question is about the p
 
 **Status: accepted residual.** Not scheduled. Backlog item 58.
 
+## Accepted residual: re-sharing revokes a share, not a cached key
+
+**An SS re-share removes a departed owner from the chain row. It does not remove the key from that
+owner's disk.**
+
+Re-sharing draws a new Shamir polynomial over the same secret, so shares from the previous split no
+longer combine with the new ones. For a party that only ever held a *fragment*, that is real
+revocation. It is not revocation for a party that holds the whole key — and in this design every
+owner does.
+
+Three mechanisms put the whole key in an owner's hands, and none of them are exceptional:
+
+- **Below four owners nothing is split at all.** `getThreshold` returns 1 for 0–3 owners, and
+  `addSSShare` short-circuits there: every owner receives a copy of `privK`, not a share. On a
+  chain that grows organically from one node, every key minted before the fourth pioneer became
+  addressable was distributed whole.
+- **Receiving a share of a split key triggers a reconstruction.** `SetPublicKey`'s threshold-≥2
+  branch calls `scheduleSSReconstruct`, which gathers shares and caches the rebuilt key. This is
+  deliberate and correct: gathering lazily would put network I/O inside deterministic block
+  execution, where a node that cannot reach its peers computes a different result from one that
+  can — a fork. The confidentiality consequence is a side effect of a determinism fix.
+- **Re-sharing a key requires reconstructing it first**, so any proposer that heals a key holds it.
+
+The result lands in `EnclaveSSIntervalPrivKKeyPrefix`, keyed by pubKID, inside `SecretsDB` — an
+on-disk store deliberately kept unversioned so it survives a tree rollback. It has **no eviction**:
+`removePrivKCache` is reached only from the debug `RemovePrivateKey` endpoint and the escrow path,
+never from the re-share. Measured on the M1–M6 fleet: three separate nodes each held 21 entries for
+21 interval keys, every value a 64-hex-character whole key, not one fragment among them.
+
+**What this does and does not mean.** For a CURRENT owner it means nothing new: an owner can gather
+threshold-many shares and rebuild on demand, so holding the key and being able to obtain it are the
+same capability. The threshold governs *acquisition* — who is entitled to the key, and what a node
+without it (freshly synced, rebuilt, restored from backup) must do to get one. It was never a
+guarantee that owners must cooperate with each other.
+
+For a DEPARTED owner it is the whole point. Dropping a pioneer from an owner set is meant to end
+its custody. It ends its *share*; the cached key stays on its disk for as long as that disk exists.
+So a decommissioned node does not retire holding a dead fragment — it retires holding every SS
+interval key it ever owned or reconstructed.
+
+**Why this is accepted rather than fixed.** The material is sealed: values hang off
+`SealedTableSharedSecret`, which lives inside the unique-key-sealed params, so a departed operator
+holds ciphertext it cannot open without breaking SGX on that machine. The residual is therefore a
+long-horizon one — retired hardware whose sealing has to hold indefinitely — and not an immediate
+disclosure.
+
+**What would close it** is clearing the cache for keys an owner no longer owns, at the point the
+chain records the drop. That is cheap and node-local, but it is not sufficient on its own: an
+operator who keeps a disk image from before the departure still has the key, and nothing on their
+own hardware can be made to forget on command. Rotation remains the real bound — a key the
+departed node never saw is one it cannot hold — which is the same conclusion the genesis-era
+exposure reaches.
+
+**Scoping, as everywhere else here: this is an SGX claim.** On a debug enclave the sealing is
+nominal and the cache is simply readable.
+
 ## Claim scoping
 
 When describing these defences, keep the claims to what they cover:
@@ -139,6 +195,9 @@ When describing these defences, keep the claims to what they cover:
   current state. It does **not** address rollback.
 - `refuseIfCatchingUp` refuses secret release while replaying, on a liveness signal that is
   host-supplied. It is defence in depth, not a guarantee.
+- **an SS re-share revokes a departed owner's SHARE, not its copy of the key.** The chain row
+  stops naming it and its fragment stops combining; the cached whole key on its disk is untouched.
+  Say "dropped from the owner set", not "custody was removed".
 - **debug builds have none of these properties.** `DebugVerifyRemoteReport` is a no-op and the
   measurement is an embedded string, so every check here is forgeable by editing a text file. Debug
   runs prove logic; only SGX runs prove security.
