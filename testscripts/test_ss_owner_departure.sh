@@ -79,8 +79,11 @@ skip() {
 # one audit tick to drain.  4 is maxSSResharesPerRotation, so 5 keys guarantees a second sweep.
 EXTRA_KEYS=4
 
-# Blocks of grace to run the test with.  The default (4*555) is ~2h at 3s blocks; the test lowers
-# it by governance and restores nothing, because a test fleet's params are disposable.
+# Blocks of grace the phases wait out.  OVERWRITTEN from the chain's own ss_departure_grace during
+# preflight -- this is only the value used if that read somehow yields nothing, and it matches what
+# fill_launch_config.py renders for a test fleet.  Reading it rather than assuming it means a fleet
+# built with a different grace waits the right amount instead of auditing too early and reporting a
+# departure that has not matured as a bug.
 TEST_GRACE=30
 
 # -------------------------------------------------------------------- readings
@@ -214,10 +217,29 @@ for v in json.load(sys.stdin).get("validators", []):
     [[ -n "$val" ]] || fail "$pioneer is not a validator"
 
     echo "  funding $pioneer ($addr)"
-    qadenad_alias tx bank send "$FUND_FROM" "$addr" "$FUND_AMOUNT" \
-        --gas auto --gas-adjustment 1.5 --gas-prices 0.1aqdn -y -o json > /dev/null 2>&1 \
-        || fail "could not fund $pioneer from $FUND_FROM"
-    sleep 8
+    # KEEP THE ERROR.  This used to end in `> /dev/null 2>&1 || fail "could not fund ..."`, which
+    # reported the loss of the reason as though it were the reason.  The first real failure here
+    # was "too many failed passphrase attempts" -- a local keyring problem with nothing to do with
+    # funding -- and the discarded line was the only thing that said so.
+    local fund_out
+    fund_out=$(qadenad_alias tx bank send "$FUND_FROM" "$addr" "$FUND_AMOUNT" \
+        --gas auto --gas-adjustment 1.5 --gas-prices 0.1aqdn -y -o json 2>&1) \
+        || fail "could not fund $pioneer from $FUND_FROM -- qadenad said:
+$(print -r -- "$fund_out" | tail -4 | sed 's/^/       /')"
+    print -r -- "$fund_out" | grep -q '"code":0' || print -r -- "$fund_out" | tail -2 | sed 's/^/    /'
+
+    # WAIT FOR THE BALANCE, DO NOT SLEEP AT IT.  `tx ... -y` returns as soon as the transaction is
+    # BROADCAST, not when it is committed, so a fixed sleep is a race against block time: the
+    # unbond below then signs against an account the chain still shows as empty and fails with
+    # "insufficient funds", which reads as a problem with unbonding rather than with timing.
+    local waited=0
+    while [[ -z "$(qadenad_alias q bank balances "$addr" -o json 2>/dev/null \
+                    | python3 -c 'import sys,json; b=json.load(sys.stdin).get("balances") or []; print(b[0]["amount"] if b else "")')" ]]; do
+        sleep 3
+        (( waited += 3 ))
+        (( waited > 90 )) && fail "funded $pioneer 90s ago but its balance is still empty --
+       the send was accepted and never arrived.  Check: qadenad q tx <hash>"
+    done
 
     echo "  unbonding $pioneer on $host"
     amt=$(qadenad_alias q staking delegation "$addr" "$val" -o json 2>/dev/null | python3 -c '
@@ -225,14 +247,18 @@ import sys, json
 print(json.load(sys.stdin)["delegation_response"]["balance"]["amount"])')
     [[ -n "$amt" && "$amt" != "0" ]] || fail "$pioneer has no self-delegation to unbond"
 
-    ssh -o ConnectTimeout=30 -o BatchMode=yes "$host" \
+    local unbond_out
+    unbond_out=$(ssh -o ConnectTimeout=30 -o BatchMode=yes "$host" \
         "export PATH=\$HOME/qadena/bin:\$PATH; cd \$HOME/qadena; \
          CID=\$(qadenad --home . status --node tcp://localhost:26657 2>/dev/null | jq -r .node_info.network); \
          for i in \$(seq 4); do head -1 \$HOME/$REMOTE_PASS; done | \
          qadenad --home . tx staking unbond $val ${amt}aqdn --from $pioneer \
              --keyring-backend file --node tcp://localhost:26657 --chain-id \$CID \
-             --gas auto --gas-adjustment 1.5 --gas-prices 0.1aqdn -y -o json" > /dev/null 2>&1 \
-        || fail "unbond failed for $pioneer on $host"
+             --gas auto --gas-adjustment 1.5 --gas-prices 0.1aqdn -y -o json" 2>&1) \
+        || fail "unbond failed for $pioneer on $host -- qadenad said:
+$(print -r -- "$unbond_out" | tail -5 | sed 's/^/       /')
+       If this says 'insufficient funds', the funding had not committed yet; if it says 'too many
+       failed passphrase attempts', $REMOTE_PASS on that host is missing or wrong."
 
     # THE STAMP IS THE EVENT, not the transaction.  AfterValidatorBeginUnbonding fires when staking
     # moves the validator out of the bonded set, which is an end-blocker, so the tx landing is not
@@ -252,12 +278,17 @@ print(json.load(sys.stdin)["delegation_response"]["balance"]["amount"])')
 typeset -a DEPART_SPECS
 FUND_FROM=""
 REMOTE_PASS=".qadena-sstest-pass"
+# The LOCAL keyring passphrase.  Separate from --remote-pass: that one names a file on each
+# DEPARTING node, where the unbond is signed; this one unlocks the keyring on the host running the
+# suite, which is where --fund-from signs.  Both are needed and they are not the same file.
+LOCAL_PASSFILE="$HOME/$REMOTE_PASS"
 
 while (( $# )); do
     case "$1" in
         --depart)     DEPART_SPECS+=("$2"); shift 2 ;;
         --fund-from)  FUND_FROM="$2"; shift 2 ;;
         --remote-pass) REMOTE_PASS="$2"; shift 2 ;;
+        --keyring-passfile) LOCAL_PASSFILE="$2"; shift 2 ;;
         --help)
             echo "Usage: test_ss_owner_departure.sh --fund-from <key> \\"
             echo "         --depart <pioneerID>:<ssh-host> --depart ... [--remote-pass <name>]"
@@ -287,7 +318,35 @@ echo "========================="
 echo "preflight"
 echo "========================="
 
+# UNLOCK THE LOCAL KEYRING BEFORE ANYTHING SIGNS.
+#
+# setup_env.sh auto-loads QADENA_KEYRING_PASS only when QADENA_KEYRING_BACKEND is ALREADY "file"
+# when it is sourced, which it is not for a suite invoked by hand.  qadenad_alias re-reads the
+# variable on every call, so setting it here works -- and setting it HERE, in preflight, rather
+# than at the first signature means an unopenable keyring is reported before three validators have
+# been unbonded, not after.
+if [[ -r "$LOCAL_PASSFILE" ]]; then
+    QADENA_KEYRING_PASS=$(head -1 "$LOCAL_PASSFILE")
+    [[ -n "$QADENA_KEYRING_PASS" ]] || fail "--keyring-passfile $LOCAL_PASSFILE is readable but its
+       first line is empty.  An empty passphrase is indistinguishable from a wrong one downstream:
+       both end in 'too many failed passphrase attempts'."
+    export QADENA_KEYRING_PASS QADENA_KEYRING_BACKEND=file
+else
+    print -u2 -- "note: no local passphrase file at $LOCAL_PASSFILE -- assuming an unencrypted"
+    print -u2 -- "      keyring.  If the node uses the 'file' backend this run will fail at the"
+    print -u2 -- "      first signature with 'too many failed passphrase attempts'."
+fi
+
 qadenad_alias status > /dev/null 2>&1 || fail "chain is not reachable -- start it first"
+
+# PROVE THE KEYRING OPENS, AND THAT IT HOLDS THE FUNDING KEY, before departing anyone.  These are
+# different failures with different fixes -- a wrong passphrase versus a wrong --fund-from -- and
+# an empty `keys show` cannot tell them apart.
+qadenad_alias keys list --output json > /dev/null 2>&1 \
+    || fail "the local keyring DID NOT OPEN.  Passphrase, permissions or I/O -- not a missing key.
+       Checked with --keyring-passfile $LOCAL_PASSFILE."
+[[ "$(qadenad_alias keys show "$FUND_FROM" -a 2>/dev/null)" == qadena1* ]] \
+    || fail "the keyring opened but holds no '$FUND_FROM' -- check --fund-from against: qadenad keys list"
 
 # DEBUG ENCLAVES ONLY, and it must say so rather than passing quietly.
 if ! qadenad_alias enclave audit-ss-keys > /dev/null 2>&1; then
@@ -314,11 +373,46 @@ echo ""
 echo "SS interval keys before:"
 ss_key_owners | while IFS=$'\t' read -r k g o; do echo "  ${k} gen=${g} owners=${o}"; done
 
+# GROW THE KEYS TO FULL OWNERSHIP FIRST, here rather than in the caller.
+#
+# A fresh chain's genesis SS key is minted at ONE owner -- the only pioneer addressable at the
+# time -- and grows only when the audit runs.  A key that is still deficient cannot demonstrate a
+# shrink: the audit would heal it upward and the phases below would read that as a drop.
+#
+# This used to tell the operator to run test_ss_reshare_audit.sh first.  That is the wrong division
+# of labour for a suite that already mints interval keys, funds accounts and unbonds three
+# validators -- refusing to also run an idempotent audit is a strange place to draw the line, and a
+# test with three manual setup steps does not get run.  The audit is safe to force repeatedly: when
+# there is nothing to do it reports selected=0 and writes nothing.
+ensure_full_ownership() {
+    local want="$1" cur i line
+    cur=$(min_owner_count)
+    if (( cur >= want )); then
+        echo "  ownership already at $cur (want $want)"
+        return 0
+    fi
+    echo "  growing ownership: $cur -> $want, forcing audits"
+    for (( i = 1; i <= 8; i++ )); do
+        line=$(audit_once) || fail "the forced audit produced no parseable line while growing
+       ownership.  On a real enclave it is refused outright, which preflight should have caught."
+        echo "    audit $i: $line"
+        sleep 10
+        cur=$(min_owner_count)
+        (( cur >= want )) && break
+    done
+    (( cur >= want )) || fail "ownership stalled at $cur after $i audits (want $want).
+       The audit is reporting work but the chain is not applying it -- check the node log for
+       'ss-reshare: failed to broadcast', which means the chain REJECTED what the enclave planned."
+    echo "  ownership now $cur"
+}
+
+ensure_full_ownership "${#BONDED}"
+
 start_min=$(min_owner_count)
 echo "minimum owner count: $start_min"
-(( start_min >= 6 )) || fail "the SS keys are not at full ownership (min=$start_min, want >=6).
-       Run test_ss_reshare_audit.sh first: a key that is already deficient cannot demonstrate a
-       shrink, because the audit would heal it upward and this suite would read that as a drop."
+(( start_min >= 6 )) || fail "the SS keys are not at full ownership (min=$start_min, want >=6)
+       even after forcing audits.  Three departures from fewer than six owners cannot show both a
+       shrink inside a threshold step and one across it."
 
 echo ""
 echo "PASSED preflight"
@@ -340,16 +434,27 @@ echo "SS interval keys now: $key_count"
 
 echo ""
 echo "========================="
-echo "lower ss_departure_grace to $TEST_GRACE"
+echo "check ss_departure_grace"
 echo "========================="
-echo "  (default is 4*555=2220 blocks, ~2h at 3s blocks -- too long for a test)"
-echo "  NOTE: this is a governance change; run gov_update_qadena_params.sh or submit by hand."
+# ASSERTED, NOT SET.  The grace is genesis configuration, not run state: a test fleet gets it from
+# fill_launch_config.py, which rewrites it to 30 blocks under --test-gov-timings alongside the
+# voting periods.  The production figure in config/launch-config.yml is 2220 (~2h), which this
+# suite will not sit through -- three departures would be six hours.
+#
+# Changing it here instead would mean a test mutating chain configuration to suit itself, and
+# would need a governance proposal carried by whichever validator happens to hold quorum.  That is
+# fleet knowledge, not test knowledge.  So this reports what the chain is set to and refuses if it
+# was not built for testing.
 grace=$(qadenad_alias q qadena params -o json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)["params"]["ss_departure_grace"])')
-echo "  ss_departure_grace = $grace"
+TEST_GRACE="$grace"
+echo "  ss_departure_grace = $grace blocks"
 (( grace > 0 )) || fail "ss_departure_grace is 0 -- the feature is DISABLED and no departure can
-       ever be recognised.  Set it by governance before running this suite."
-(( grace <= 200 )) || fail "ss_departure_grace is $grace blocks, too long to test against.
-       Lower it by governance first; this suite will not wait out a two-hour grace."
+       ever be recognised.  An older chain's stored params unmarshal to zero; this one was built
+       without the parameter set."
+(( grace <= 200 )) || fail "ss_departure_grace is $grace blocks, too long to test against -- this
+       suite will not wait out a two-hour grace three times over.
+       Rebuild the fleet with --test-gov-timings 1, which renders the launch config with a 30-block
+       grace (foundation_scripts/fill_launch_config.py), or lower it by governance."
 
 
 # threshold_for <ownerCount> -- mirrors getThreshold in cmd/qadenad_enclave/enclave.go.
@@ -367,7 +472,7 @@ threshold_for() {
     fi
 }
 
-# phase <n> <spec> <stays-split|crosses-to-unsplit> -- depart one pioneer and assert the outcome.
+# phase <n> <spec> -- depart one pioneer and assert the outcome.
 #
 # TWO ASSERTIONS APPLY TO EVERY PHASE, and they are the point of the suite:
 #
@@ -378,17 +483,17 @@ threshold_for() {
 #                         `threshold` live owners, so once this fails the key is gone for good and
 #                         no later re-share can retrieve it.
 #
-# The third argument only says which side of a threshold step this departure lands on, so the suite
-# can check that the step was crossed when it should have been and not when it should not.  It does
-# NOT select between "re-share" and "refuse": the key is re-shared either way.
+# There is no "expected outcome" argument: the key is re-shared on every departure, and which side
+# of a threshold step it lands on is derived from the owner counts and reported rather than
+# asserted.  That keeps the suite usable from any starting fleet size.
 phase() {
-    local n="$1" spec="$2" expect="$3"
+    local n="$1" spec="$2"
     local pioneer="${spec%%:*}" host="${spec##*:}"
     local before_min after_min still gen_before gen_after t_before t_after
 
     echo ""
     echo "========================="
-    echo "phase $n: depart $pioneer  (expect: $expect)"
+    echo "phase $n: depart $pioneer"
     echo "========================="
 
     before_min=$(min_owner_count)
@@ -400,11 +505,30 @@ phase() {
 
     local d
     d=$(departed_height_of "$pioneer")
-    echo "  waiting out the grace ($TEST_GRACE blocks from $d)"
-    wait_height $(( d + TEST_GRACE + 5 ))
+
+    # WAIT FOR THE ENCLAVE'S CLOCK, NOT THE CHAIN'S.  The grace is measured against the height the
+    # ENCLAVE knows, and it only learns one when the chain calls UpdateHeight -- which happens on
+    # multiples of 11 (x/qadena/keeper/enclave_grpc_client.go).  So its view of "now" trails the
+    # real head by up to 10 blocks, and an audit forced the instant the grace elapses on chain is
+    # still inside the grace as far as the enclave is concerned: it reports selected=0 and the
+    # phase reads that as "the shrink was rejected".  Measured: departed at 621, grace 30, audited
+    # at 656, and the enclave was working from 649 -- 28 blocks, two short.
+    #
+    # Hence grace + 11 + margin, and the retry loop below rather than a single drain: the loop is
+    # what makes this robust if the cadence ever changes, the fixed margin just avoids a wasted
+    # cycle on the common path.
+    echo "  waiting out the grace ($TEST_GRACE blocks from $d, plus the enclave's 11-block lag)"
+    wait_height $(( d + TEST_GRACE + 16 ))
 
     echo "  draining audits"
-    drain_audits 6
+    local attempt still_now
+    for (( attempt = 1; attempt <= 8; attempt++ )); do
+        drain_audits 3
+        still_now=$(keys_still_naming "$pioneer")
+        (( still_now == 0 )) && break
+        echo "    $still_now key(s) still name $pioneer -- waiting 12 blocks and retrying"
+        wait_height $(( $(chain_height) + 12 ))
+    done
 
     after_min=$(min_owner_count)
     t_after=$(threshold_for "$after_min")
@@ -434,24 +558,28 @@ phase() {
        needed -- this key can no longer be reconstructed, and nothing can recover it.  A re-share
        must never leave fewer owners than its own threshold requires."
 
-    # ---- the step was crossed exactly when expected
-    if [[ "$expect" == "crosses-to-unsplit" ]]; then
-        (( t_after == 1 && t_before > 1 )) || fail "phase $n: expected this departure to cross the
-       threshold step down to 1 (it takes the fleet below 4 owners), but the threshold went
-       $t_before -> $t_after.  Check the owner counts: the suite's phases assume 6 -> 5 -> 4 -> 3."
-        echo "  PASSED phase $n (owners $before_min->$after_min, threshold $t_before->$t_after:"
-        echo "                   key is no longer split, every owner now holds it whole -- expected)"
+    # ---- report which side of a threshold step this landed on
+    #
+    # DERIVED, NOT ASSERTED, and deliberately so.  The threshold is not on the chain -- it is
+    # recomputed from the owner count wherever it is needed -- so there is nothing here to compare
+    # an expectation against that is not simply threshold_for() applied twice.  An earlier version
+    # took "stays-split" / "crosses-to-unsplit" as an argument and asserted it, which tested the
+    # caller's arithmetic rather than the enclave's behaviour and tied the suite to a fleet that
+    # starts at exactly six owners.  The assertions above are the ones with content; this reports
+    # what happened so the run is readable.
+    if (( t_after < t_before )); then
+        echo "  PASSED phase $n (owners $before_min->$after_min, threshold $t_before->$t_after)"
+        echo "                   this crossed a step: the key is NO LONGER SPLIT and every"
+        echo "                   remaining owner now holds it whole.  Expect an UNSPLIT line in"
+        echo "                   the node log; that exposure is not undone if the fleet regrows."
     else
-        (( t_after == t_before )) || fail "phase $n: the threshold moved $t_before -> $t_after on a
-       departure that should have stayed inside a step ($before_min -> $after_min owners).  Either
-       the curve changed or the phases are being run against the wrong fleet size."
         echo "  PASSED phase $n (owners $before_min->$after_min, threshold held at $t_after, still split)"
     fi
 }
 
-phase 1 "${DEPART_SPECS[1]}" stays-split
-phase 2 "${DEPART_SPECS[2]}" stays-split
-phase 3 "${DEPART_SPECS[3]}" crosses-to-unsplit
+phase 1 "${DEPART_SPECS[1]}"
+phase 2 "${DEPART_SPECS[2]}"
+phase 3 "${DEPART_SPECS[3]}"
 
 echo ""
 echo "========================="

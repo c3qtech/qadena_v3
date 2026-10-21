@@ -493,6 +493,14 @@ def render(supplied, pubkeys=None, generate=None, test_gov=False, amounts=None,
         lc = re.sub(r'^(\s*)voting_period: ".*?"',            r'\1voting_period: "300s"',            lc, count=1, flags=re.M)
         lc = re.sub(r'^(\s*)expedited_voting_period: ".*?"',  r'\1expedited_voting_period: "30s"',   lc, count=1, flags=re.M)
         lc = re.sub(r'^(\s*)max_deposit_period: ".*?"',       r'\1max_deposit_period: "300s"',       lc, count=1, flags=re.M)
+        # NOT A GOVERNANCE TIMING, BUT THE SAME DECISION: a clock that has to be short for a test
+        # fleet and long for a real one.  The production figure is 2220 blocks (~2h), which no test
+        # suite will sit through -- testscripts/test_ss_owner_departure.sh departs three pioneers
+        # and would wait six hours.  Rewriting it here rather than carrying a test value in
+        # config/launch-config.yml means a launch rendered without --test-gov-timings cannot
+        # inherit a 90-second grace by accident, which is the failure that matters: on a real chain
+        # it would turn every downtime jail into a re-share of every key that pioneer owned.
+        lc = re.sub(r'^(\s*)ss_departure_grace: ".*?"',       r'\1ss_departure_grace: "30"',         lc, count=1, flags=re.M)
         changed += 1
 
     return lc, changed, unknown

@@ -896,6 +896,27 @@ genesis:
         update_credential_allow_last_name_life_event: true
         update_credential_allow_gender_change: true
 
+        # HOW LONG A PIONEER MUST BE OUT OF THE BONDED SET before its shares of SS interval keys
+        # may be re-shared without it.  Four rotations at 555 blocks, ~2 hours at 3s blocks.
+        #
+        # THE COST OF TOO SHORT IS CHURN, AND IT IS THE ONE TO AVOID HERE.  Parking fires on any
+        # bonded->unbonding transition, a downtime jail included, and a pioneer that comes back
+        # still physically holds its shares -- so a grace shorter than a realistic outage turns
+        # every recovery into a re-share of every key that pioneer owned.  Too long merely means
+        # the chain overstates custody for longer, which the audit reports and which is
+        # recoverable.  So this errs long deliberately.
+        #
+        # A TEST FLEET NEEDS THE OPPOSITE, and gets it from --test-gov-timings rather than from a
+        # different value here: fill_launch_config.py rewrites this to 30 blocks alongside the
+        # voting periods, because a suite that has to sit out two hours per departure does not get
+        # run.  Keep the production figure in this file so a launch rendered WITHOUT that flag can
+        # never pick up a test value by accident.
+        #
+        # ZERO DISABLES THE FEATURE ENTIRELY -- departed owners are never droppable -- which is
+        # also what an older chain's stored params unmarshal to.  That is the safe direction for
+        # an upgrade, but it is not a setting to choose on purpose.
+        ss_departure_grace: "2220"
+
         # AML scan.  These are LEGAL figures, so they must be confirmed against each regulator the
         # chain reports to rather than carried over from here.  The threshold that applies to a
         # transfer is the LOWEST among the sender's residency and citizenship, so listing a country
