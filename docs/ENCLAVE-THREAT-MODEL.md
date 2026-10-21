@@ -131,61 +131,54 @@ block; the only addition is the nonce, without which the question is about the p
 
 **Status: accepted residual.** Not scheduled. Backlog item 58.
 
-## Accepted residual: re-sharing revokes a share, not a cached key
+## Not a residual, a definition: membership is irreversible
 
-**An SS re-share removes a departed owner from the chain row. It does not remove the key from that
-owner's disk.**
+**An owner keeps what it learned. There is no mechanism that takes a key back from a machine we do
+not control, and none is possible.**
 
-Re-sharing draws a new Shamir polynomial over the same secret, so shares from the previous split no
-longer combine with the new ones. For a party that only ever held a *fragment*, that is real
-revocation. It is not revocation for a party that holds the whole key — and in this design every
-owner does.
+This is recorded here because the SS departure work invites the opposite reading. Dropping a
+pioneer from an owner set and re-sharing the key *looks* like revocation, and a re-share does draw
+a new Shamir polynomial so the old fragment no longer combines. But a departed owner is not left
+holding a dead fragment:
 
-Three mechanisms put the whole key in an owner's hands, and none of them are exceptional:
-
-- **Below four owners nothing is split at all.** `getThreshold` returns 1 for 0–3 owners, and
-  `addSSShare` short-circuits there: every owner receives a copy of `privK`, not a share. On a
-  chain that grows organically from one node, every key minted before the fourth pioneer became
-  addressable was distributed whole.
+- **Below four owners nothing is split at all.** `getThreshold` returns 1 for 0–3 owners and
+  `addSSShare` short-circuits there, handing every owner a copy of `privK`. On a chain that grows
+  organically from one node, every key minted before the fourth pioneer became addressable was
+  distributed whole.
 - **Receiving a share of a split key triggers a reconstruction.** `SetPublicKey`'s threshold-≥2
   branch calls `scheduleSSReconstruct`, which gathers shares and caches the rebuilt key. This is
-  deliberate and correct: gathering lazily would put network I/O inside deterministic block
-  execution, where a node that cannot reach its peers computes a different result from one that
-  can — a fork. The confidentiality consequence is a side effect of a determinism fix.
-- **Re-sharing a key requires reconstructing it first**, so any proposer that heals a key holds it.
+  deliberate: gathering lazily would put network I/O inside deterministic block execution, where a
+  node that cannot reach its peers computes a different result from one that can — a fork.
+- **Re-sharing requires reconstructing first**, so any proposer that heals a key holds it.
 
-The result lands in `EnclaveSSIntervalPrivKKeyPrefix`, keyed by pubKID, inside `SecretsDB` — an
-on-disk store deliberately kept unversioned so it survives a tree rollback. It has **no eviction**:
-`removePrivKCache` is reached only from the debug `RemovePrivateKey` endpoint and the escrow path,
-never from the re-share. Measured on the M1–M6 fleet: three separate nodes each held 21 entries for
-21 interval keys, every value a 64-hex-character whole key, not one fragment among them.
+The result sits in `EnclaveSSIntervalPrivKKeyPrefix`, keyed by pubKID, in the unversioned
+`SecretsDB`, with no eviction — `removePrivKCache` is reached only from the debug
+`RemovePrivateKey` endpoint and the escrow path. Measured on M1–M6: three nodes, 21 entries each
+for 21 interval keys, every value a whole 32-byte key.
 
-**What this does and does not mean.** For a CURRENT owner it means nothing new: an owner can gather
-threshold-many shares and rebuild on demand, so holding the key and being able to obtain it are the
-same capability. The threshold governs *acquisition* — who is entitled to the key, and what a node
-without it (freshly synced, rebuilt, restored from backup) must do to get one. It was never a
-guarantee that owners must cooperate with each other.
+**None of that is a defect, and clearing the cache would not fix it.** An owner that can gather
+threshold-many shares can rebuild the key whenever it likes; caching only saves the round trip.
+Holding the key and being entitled to obtain it are the same capability, so an owner learning the
+key is what ownership MEANS. A node that has departed is outside our control by definition: code
+that clears a cache runs only on a node still cooperating with us, which is not the node in
+question, and an operator with a disk image from before the departure is unaffected regardless.
 
-For a DEPARTED owner it is the whole point. Dropping a pioneer from an owner set is meant to end
-its custody. It ends its *share*; the cached key stays on its disk for as long as that disk exists.
-So a decommissioned node does not retire holding a dead fragment — it retires holding every SS
-interval key it ever owned or reconstructed.
+**What the departure machinery actually buys**, stated without overclaiming:
 
-**Why this is accepted rather than fixed.** The material is sealed: values hang off
-`SealedTableSharedSecret`, which lives inside the unique-key-sealed params, so a departed operator
-holds ciphertext it cannot open without breaking SGX on that machine. The residual is therefore a
-long-horizon one — retired hardware whose sealing has to hold indefinitely — and not an immediate
-disclosure.
+- the departed pioneer cannot participate in future reconstructions — its fragment is dead against
+  the new polynomial, so it cannot serve shares or rebuild keys re-shared after it left;
+- the chain stops reporting custody that does not exist, which is what the audit's `AT RISK` and
+  `UNRECOVERABLE` warnings are measured against;
+- surviving owners regain the margin a departed owner was silently consuming.
 
-**What would close it** is clearing the cache for keys an owner no longer owns, at the point the
-chain records the drop. That is cheap and node-local, but it is not sufficient on its own: an
-operator who keeps a disk image from before the departure still has the key, and nothing on their
-own hardware can be made to forget on command. Rotation remains the real bound — a key the
-departed node never saw is one it cannot hold — which is the same conclusion the genesis-era
-exposure reaches.
+**The only real bound on what a departed node holds is ROTATION.** A key minted after it left is
+one it never saw. That is the same conclusion the genesis-era exposure reaches, and it is why
+retiring old interval keys matters more than re-sharing them.
 
-**Scoping, as everywhere else here: this is an SGX claim.** On a debug enclave the sealing is
-nominal and the cache is simply readable.
+**Scoping: this is an SGX claim.** The cached keys are sealed under `SealedTableSharedSecret`,
+inside the unique-key-sealed params, so a departed operator holds ciphertext it cannot open without
+breaking SGX on that machine — a long-horizon risk tied to retired hardware, not a disclosure. On a
+debug enclave the sealing is nominal and the cache is simply readable.
 
 ## Claim scoping
 
@@ -195,9 +188,9 @@ When describing these defences, keep the claims to what they cover:
   current state. It does **not** address rollback.
 - `refuseIfCatchingUp` refuses secret release while replaying, on a liveness signal that is
   host-supplied. It is defence in depth, not a guarantee.
-- **an SS re-share revokes a departed owner's SHARE, not its copy of the key.** The chain row
-  stops naming it and its fragment stops combining; the cached whole key on its disk is untouched.
-  Say "dropped from the owner set", not "custody was removed".
+- **an SS re-share drops a departed owner from the owner set; it does not revoke what that owner
+  already knows.** Say "dropped from the owner set" or "cannot participate in future
+  reconstructions", never "custody was removed" or "its access was revoked".
 - **debug builds have none of these properties.** `DebugVerifyRemoteReport` is a no-op and the
   measurement is an embedded string, so every check here is forgeable by editing a text file. Debug
   runs prove logic; only SGX runs prove security.
