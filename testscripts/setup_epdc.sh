@@ -97,6 +97,7 @@ with_chain="true"
 with_contracts="true"
 rebuild="false"
 force_contracts="false"
+stack_dir=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -106,9 +107,16 @@ while [[ $# -gt 0 ]]; do
         --no-contracts)     with_contracts="false"; shift ;;
         --rebuild)          rebuild="true"; shift ;;
         --force-contracts)  force_contracts="true"; shift ;;
+        --stack)            stack_dir="$2"; shift 2 ;;
         --help|-h)
             echo "Usage: $0 [--pioneer <p>] [--fund-mode foundation-sponsored|banksend]"
             echo "          [--contracts-only | --no-contracts] [--rebuild] [--force-contracts]"
+            echo "          [--stack <path to follow-the-money/stacks/epdc>]"
+            echo ""
+            echo "  --stack  write the key block straight into that stack's env-*.local files"
+            echo "           instead of only printing it.  Without it this script prints the"
+            echo "           block and you paste it -- which is how the cloudflare variant"
+            echo "           spent a month holding September keys on an October chain."
             exit 0 ;;
         *) echo "Unknown option: $1 (try --help)"; exit 1 ;;
     esac
@@ -313,3 +321,80 @@ echo ""
 echo "Then recreate the api and register the orchestrator wallets:"
 echo "  docker compose -f stacks/epdc/compose-cloudflare.yml up -d --force-recreate --no-deps api"
 echo "  make -C stacks/epdc setup-backend-if-needed"
+
+# --- --stack: write the block instead of leaving it to a copy-paste ----------
+#
+# WHY THIS EXISTS.  Printing the block put the burden of getting it into the right
+# file on whoever read the terminal, and there are two right files: env-dev.local
+# for the dev stack and env-cloudflare.local for the public one.  On 20 Oct 2026 the
+# new keys reached the dev file and not the cloudflare one.  Both variants then held
+# the SAME wallet usernames with DIFFERENT keys -- the shape that fails latest and
+# loudest, because names resolve and signatures do not.  The cloudflare stack
+# anchored nothing for a month behind a green readiness flag.
+#
+# PATCHES WHAT IS THERE, CREATES NOTHING.  patch_env_file.sh refuses a file that does
+# not exist, deliberately; `make -C stacks/epdc env-local VARIANT=<v>` creates it from
+# the template.  A variant that is not set up on this machine is skipped with a note,
+# not an error -- not every machine runs both.
+if [ -n "$stack_dir" ]; then
+    echo ""
+    echo "========================="
+    echo "patching $stack_dir"
+    echo "========================="
+
+    patcher="$SCRIPT_DIR/patch_env_file.sh"
+    if [ ! -x "$patcher" ]; then
+        echo "WARNING: $patcher not found -- the block above was printed, nothing was written" >&2
+    elif [ ! -d "$stack_dir" ]; then
+        echo "WARNING: no such directory: $stack_dir -- nothing was written" >&2
+    else
+        # The passphrase the keys are armored with.  Taken from the same file the
+        # bring-up used, because a mismatch kills the api at startup with an empty reason.
+        armor_args=()
+        if [ -n "${QADENA_KEYRING_PASS_FILE:-}" ] && [ -r "${QADENA_KEYRING_PASS_FILE}" ]; then
+            armor_args=(--armor-passfile "$QADENA_KEYRING_PASS_FILE")
+        elif [ -r "$HOME/qadena-keyring-password" ]; then
+            armor_args=(--armor-passfile "$HOME/qadena-keyring-password")
+        else
+            echo "note: no keyring passphrase file -- ARMOR_PASS_PHRASE left as it was." >&2
+            echo "      Set QADENA_KEYRING_PASS_FILE if it is not ~/qadena-keyring-password." >&2
+        fi
+
+        register_args=()
+        [ -f "$epdcdir/epdc_state.json" ] && register_args=(--register-state "$epdcdir/epdc_state.json")
+
+        patched=0
+        for variant in dev cloudflare; do
+            target="$stack_dir/env-$variant.local"
+            if [ ! -f "$target" ]; then
+                echo "  env-$variant.local: not on this machine -- skipped"
+                echo "      (create it with: make -C $stack_dir env-local VARIANT=$variant)"
+                continue
+            fi
+            echo ""
+            echo "  --- env-$variant.local"
+            if "$patcher" epdc "$target" --in-place \
+                    --var-prefix EPDC \
+                    --key-dir "$PWD" \
+                    "${register_args[@]}" "${armor_args[@]}"; then
+                patched=$((patched + 1))
+            else
+                echo "WARNING: patching env-$variant.local failed -- it is unchanged" >&2
+            fi
+        done
+
+        echo ""
+        if [ "$patched" -gt 0 ]; then
+            echo "$patched env file(s) patched.  THE API STILL HOLDS THE OLD VALUES until it is"
+            echo "recreated -- compose does not re-read an env file on restart:"
+            echo "    make -C $stack_dir recreate-api VARIANT=<dev|cloudflare>"
+            echo "    make -C $stack_dir setup-backend-if-needed"
+            echo ""
+            echo "Then confirm the register actually answers on this chain -- 'configured' and"
+            echo "'runtimeReady' can both be true while nothing is being anchored:"
+            echo "    make -C $stack_dir setup-backend-status     # wants onChain: true"
+        else
+            echo "nothing was patched; the block above is still the record of what to set."
+        fi
+    fi
+fi

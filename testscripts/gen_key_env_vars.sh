@@ -9,21 +9,31 @@
 # utils.ConvertBase64JsonStringToArray().
 #
 # Usage:
-#   ./gen_key_env_vars.sh [KEY_DIR] [PREFIX] > uat-keys.env
+#   ./gen_key_env_vars.sh [KEY_DIR] [PREFIX] [VAR_PREFIX] > uat-keys.env
 #
-#   KEY_DIR defaults to the current directory.
-#   PREFIX  defaults to "sec" -- the leading component of the .base64 FILE names,
-#           which is what setup_ekycph.sh / setup_enf.sh vary per deployment:
+#   KEY_DIR    defaults to the current directory.
+#   PREFIX     defaults to "sec" -- the leading component of the .base64 FILE names,
+#              which is what setup_ekycph.sh / setup_enf.sh vary per deployment:
 #
-#             sec     -> secdsvs-names.base64, sec-create-wallet-sponsor-keys.base64, ...
-#             ekycph  -> ekycphdsvs-names.base64, ekycph-create-wallet-sponsor-keys.base64, ...
+#                sec     -> secdsvs-names.base64, sec-create-wallet-sponsor-keys.base64, ...
+#                ekycph  -> ekycphdsvs-names.base64, ekycph-create-wallet-sponsor-keys.base64, ...
+#                epdc    -> epdcdsvs-names.base64, epdc-create-wallet-sponsor-keys.base64, ...
 #
-# THE ENVIRONMENT VARIABLE NAMES DO NOT CHANGE WITH THE PREFIX, and that is
-# deliberate: the backend reads the same SEC_* variables whichever deployment
-# produced the files (see config.go, which binds SEC_DSVS_EPH_USERNAME and
-# friends unconditionally).  Only the filenames carry the deployment name.  Do
-# not "fix" this by renaming the variables to match the prefix -- that breaks
-# every consumer.
+#   VAR_PREFIX defaults to "SEC" -- the leading component of the VARIABLE names.
+#              Pass it ONLY for a deployment whose config.go bindings are its own.
+#
+# THE VARIABLE PREFIX IS NOT THE FILE PREFIX, and defaulting it to SEC is not an
+# oversight.  sec, ekycph and enf all write SEC_* because config.go binds
+# SEC_DSVS_EPH_USERNAME and friends unconditionally (config.go:457) -- only their
+# FILENAMES carry the deployment name.  Do not "fix" that by deriving the variable
+# names from PREFIX; it breaks every one of those consumers.
+#
+# e-PDC is the exception that forced this third argument: it has its own bindings
+# (config.go:562, optionalKeyArray("EPDC_DSVS_EPH_USERNAME")), so it is the one
+# deployment where the variables really are named after the prefix.  It passes
+# VAR_PREFIX=EPDC.  A new deployment should only pass it if config.go reads its
+# own names -- check first, because a mismatch here produces a complete-looking
+# env file that the app ignores entirely.
 #
 # The output is written to stdout; progress and validation results go to stderr,
 # so redirecting stdout gives you a clean block to paste into env-template-uat.
@@ -34,6 +44,7 @@ set -euo pipefail
 
 KEY_DIR="${1:-.}"
 PREFIX="${2:-sec}"
+VAR_PREFIX="${3:-SEC}"
 
 if [ ! -d "$KEY_DIR" ]; then
 	echo "error: '$KEY_DIR' is not a directory" >&2
@@ -44,22 +55,31 @@ case "$PREFIX" in
 	*/*|"") echo "error: PREFIX must be a bare name like 'sec' or 'ekycph', not '$PREFIX'" >&2; exit 1 ;;
 esac
 
+# The variable prefix is spliced into environment variable names, so it must be a
+# legal leading component of one: a mangled value here yields assignments no loader
+# will ever read, and nothing downstream would notice.
+case "$VAR_PREFIX" in
+	[A-Z]|[A-Z][A-Z0-9_]*) ;;
+	*) echo "error: VAR_PREFIX must be UPPER_SNAKE like 'SEC' or 'EPDC', not '$VAR_PREFIX'" >&2; exit 1 ;;
+esac
+
 # file stem -> environment variable name.
 # Grouped as name/key pairs so the two arrays can be length-checked against
 # each other; the section headers mirror the layout of env-template-uat.
 # The stems are exactly the wallet names the setup script used, so they follow
-# PREFIX; the variables on the right do not.  setup_ekycph.sh sets
+# PREFIX; the variables on the right follow VAR_PREFIX, which is a SEPARATE
+# argument and defaults to SEC for every deployment but e-PDC.  setup_ekycph.sh sets
 # dsvsname=${PREFIX}dsvs, dsvsprovidername=${PREFIX}dsvssrvprv,
 # identityprovidername=${PREFIX}identitysrvprv and
 # createwalletsponsorname=${PREFIX}-create-wallet-sponsor, and writes
 # <name>-names.base64 / <name>-keys.base64 for each -- which is what this table
 # reproduces.
 MAPPINGS="
-# ${PREFIX}dsvs-eph config|${PREFIX}dsvs-names|SEC_DSVS_EPH_USERNAME|${PREFIX}dsvs-keys|SEC_DSVS_EPH_PRIVATE_KEY
-# ${PREFIX}dsvssrvprv config|${PREFIX}dsvssrvprv-names|SEC_DSVS_SRV_PRV_USERNAME|${PREFIX}dsvssrvprv-keys|SEC_DSVS_SRV_PRV_PRIVATE_KEY
-# ${PREFIX}identitysrvprv config|${PREFIX}identitysrvprv-names|SEC_IDENTITY_SRV_PRV_USERNAME|${PREFIX}identitysrvprv-keys|SEC_IDENTITY_SRV_PRV_PRIVATE_KEY
-# pioneer sponsor config|${PREFIX}-create-wallet-sponsor-names|SEC_CREATE_WALLET_SPONSOR_USERNAME|${PREFIX}-create-wallet-sponsor-keys|SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY
-# ${PREFIX}dsvs-eph-credential config|${PREFIX}dsvs-credential-names|SEC_DSVS_EPH_CREDENTIAL_USERNAME|${PREFIX}dsvs-credential-keys|SEC_DSVS_EPH_CREDENTIAL_PRIVATE_KEY
+# ${PREFIX}dsvs-eph config|${PREFIX}dsvs-names|${VAR_PREFIX}_DSVS_EPH_USERNAME|${PREFIX}dsvs-keys|${VAR_PREFIX}_DSVS_EPH_PRIVATE_KEY
+# ${PREFIX}dsvssrvprv config|${PREFIX}dsvssrvprv-names|${VAR_PREFIX}_DSVS_SRV_PRV_USERNAME|${PREFIX}dsvssrvprv-keys|${VAR_PREFIX}_DSVS_SRV_PRV_PRIVATE_KEY
+# ${PREFIX}identitysrvprv config|${PREFIX}identitysrvprv-names|${VAR_PREFIX}_IDENTITY_SRV_PRV_USERNAME|${PREFIX}identitysrvprv-keys|${VAR_PREFIX}_IDENTITY_SRV_PRV_PRIVATE_KEY
+# pioneer sponsor config|${PREFIX}-create-wallet-sponsor-names|${VAR_PREFIX}_CREATE_WALLET_SPONSOR_USERNAME|${PREFIX}-create-wallet-sponsor-keys|${VAR_PREFIX}_CREATE_WALLET_SPONSOR_PRIVATE_KEY
+# ${PREFIX}dsvs-eph-credential config|${PREFIX}dsvs-credential-names|${VAR_PREFIX}_DSVS_EPH_CREDENTIAL_USERNAME|${PREFIX}dsvs-credential-keys|${VAR_PREFIX}_DSVS_EPH_CREDENTIAL_PRIVATE_KEY
 "
 
 # REUSABLE_EKYC_APP_* IS THE ONE PAIR THAT DOES NOT FOLLOW THE PREFIX.
@@ -85,7 +105,7 @@ if [ -f "$KEY_DIR/ekycphidentitysrvprv-names.base64" ] && \
 	MAPPINGS="$MAPPINGS
 # reusable ekyc app config|ekycphidentitysrvprv-names|REUSABLE_EKYC_APP_NAME|ekycphidentitysrvprv-keys|REUSABLE_EKYC_APP_PRIVATE_KEY
 "
-else
+elif [ "$VAR_PREFIX" = "SEC" ]; then
 	echo "note: no ekycphidentitysrvprv bundle in '$KEY_DIR' -- REUSABLE_EKYC_APP_* left unchanged." >&2
 	echo "      An eKYCPH app-server patched without it signs key recoveries with its OLD identity." >&2
 fi
@@ -166,7 +186,7 @@ if [ -z "$JSON_TOOL" ]; then
 fi
 
 echo "# Generated by scripts/gen_key_env_vars.sh on $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-echo "# Source: $KEY_DIR (prefix: $PREFIX)"
+echo "# Source: $KEY_DIR (file prefix: $PREFIX, variable prefix: ${VAR_PREFIX}_)"
 
 failures=0
 # Fed by here-string rather than a pipe so the loop body runs in this shell and

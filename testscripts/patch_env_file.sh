@@ -37,8 +37,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 GEN="$SCRIPT_DIR/gen_key_env_vars.sh"
 
 PREFIX=""
+VAR_PREFIX=""
 ENV_FILE=""
 KEY_DIR="."
+REGISTER_STATE=""
 SPONSORS=""
 ARMOR_PASSFILE=""
 OUT=""
@@ -51,12 +53,23 @@ usage() {
 	cat <<'EOF'
 Usage: patch_env_file.sh <prefix> <env-file> [options]
 
-  <prefix>      the leading component of the .base64 FILENAMES: sec, ekycph, ...
-                (the VARIABLE names are always SEC_*; see gen_key_env_vars.sh)
+  <prefix>      the leading component of the .base64 FILENAMES: sec, ekycph, epdc, ...
+                (the VARIABLE names default to SEC_*; see --var-prefix)
   <env-file>    an EXISTING env file; it is READ, never written (see --out)
 
 Options:
   --key-dir <dir>    where the *.base64 files are (default: the current directory)
+  --var-prefix <P>   the leading component of the VARIABLE names (default: SEC).
+                     Pass EPDC only for the e-PDC stack, which is the one
+                     deployment whose config.go reads its own names.  Getting this
+                     wrong writes a complete-looking env file the app ignores.
+  --register-state <file>
+                     also set EPDC_REGISTER_CONTRACT_ADDRESS from the
+                     .contract_address in an epdc_state.json.  The address is the
+                     one thing in the e-PDC block that is not a key file, and
+                     patching the keys without it leaves the app holding valid
+                     wallets pointed at a contract from a previous chain -- which
+                     is how the cloudflare stack anchored nothing for a month.
   --sponsors <file>  also set QADENA_FOUNDATION_USERS_ADDRESS and
                      QADENA_FOUNDATION_APPSVR_ADDRESS from a veritas-sponsors.json
                      (written by sec_veritas_before_step_1.sh --stage prepare)
@@ -89,12 +102,19 @@ Options:
   ./testscripts/patch_env_file.sh sec stacks/veritas/env-sponsored-test \
       --key-dir ~/sec-veritas/keys \
       --sponsors ~/fleet-launch/coord/veritas-sponsors.json
+
+  ./testscripts/patch_env_file.sh epdc stacks/epdc/env-cloudflare.local --in-place \
+      --var-prefix EPDC --key-dir ~/epdc-deployment \
+      --register-state ~/test/qv3/epdc-smart-contracts/epdc_state.json \
+      --armor-passfile ~/qadena-keyring-password
 EOF
 }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--key-dir)  KEY_DIR="$2"; shift 2 ;;
+	--var-prefix) VAR_PREFIX="$2"; shift 2 ;;
+	--register-state) REGISTER_STATE="$2"; shift 2 ;;
 	--sponsors) SPONSORS="$2"; shift 2 ;;
 	--armor-passfile) ARMOR_PASSFILE="$2"; shift 2 ;;
 	--node-host) NODE_HOST="$2"; shift 2 ;;
@@ -115,6 +135,28 @@ done
 
 [ -n "$PREFIX" ] && [ -n "$ENV_FILE" ] || { usage >&2; exit 1; }
 [ -x "$GEN" ] || { echo "error: cannot run $GEN" >&2; exit 1; }
+
+# DEFAULTED, NOT DERIVED FROM $PREFIX.  sec, ekycph and enf all write SEC_* -- see the
+# header of gen_key_env_vars.sh.  Deriving it would silently re-key those three to
+# variables config.go never reads.
+[ -n "$VAR_PREFIX" ] || VAR_PREFIX="SEC"
+
+# READ THE ADDRESS NOW, BEFORE ANYTHING IS WRITTEN, for the same reason the key block is
+# generated first: a missing or malformed state file must not leave a half-patched env.
+REGISTER_ADDRESS=""
+if [ -n "$REGISTER_STATE" ]; then
+	[ -f "$REGISTER_STATE" ] || { echo "error: no such file: $REGISTER_STATE" >&2; exit 1; }
+	command -v jq >/dev/null 2>&1 || { echo "error: --register-state needs jq" >&2; exit 1; }
+	REGISTER_ADDRESS=$(jq -r '.contract_address // empty' "$REGISTER_STATE")
+	[ -n "$REGISTER_ADDRESS" ] || {
+		echo "error: $REGISTER_STATE names no .contract_address." >&2
+		echo "  The contract is not deployed to this chain yet; run setup_epdc.sh first." >&2
+		exit 1
+	}
+	# PUBLIC, so it may be printed -- and it is the value most worth seeing in a log,
+	# because a wrong one is invisible from inside the running app.
+	echo "register contract from $(basename "$REGISTER_STATE"): $REGISTER_ADDRESS"
+fi
 
 # REFUSE TO CREATE.  An env file is a deployment's whole configuration; one containing only these
 # ten variables would start and then fail on everything else, which is a worse outcome than a
@@ -149,8 +191,8 @@ fi
 # it before touching the env file means a bad key directory cannot leave a half-patched config.
 BLOCK="$(mktemp)"
 trap 'rm -f "$BLOCK"' EXIT
-echo "reading keys from $KEY_DIR (prefix: $PREFIX)"
-if ! "$GEN" "$KEY_DIR" "$PREFIX" > "$BLOCK"; then
+echo "reading keys from $KEY_DIR (file prefix: $PREFIX, variables: ${VAR_PREFIX}_*)"
+if ! "$GEN" "$KEY_DIR" "$PREFIX" "$VAR_PREFIX" > "$BLOCK"; then
 	echo "error: key generation failed -- $ENV_FILE is untouched" >&2
 	exit 1
 fi
@@ -241,6 +283,7 @@ FOUNDATION_APPSVR="$FOUNDATION_APPSVR" \
 ARMOR_PASS="$ARMOR_PASS" \
 NODE_HOST="$NODE_HOST" \
 GRPC_PORT="$GRPC_PORT" \
+REGISTER_ADDRESS="$REGISTER_ADDRESS" \
 python3 - <<'PY'
 import os, re, sys
 
@@ -278,6 +321,13 @@ if _host:
 _grpc = os.environ.get("GRPC_PORT", "")
 if _grpc:
     pairs["QADENA_GRPC_PORT"] = f"QADENA_GRPC_PORT={_grpc}"
+
+# QUOTED, unlike the host and the addresses above.  The existing e-PDC env files quote it,
+# and it is a bech32 address -- no shell metacharacters, so either form loads, but matching
+# what is already in the file keeps the diff to the value.
+_register = os.environ.get("REGISTER_ADDRESS", "")
+if _register:
+    pairs["EPDC_REGISTER_CONTRACT_ADDRESS"] = "EPDC_REGISTER_CONTRACT_ADDRESS='" + _register + "'"
 
 if not pairs:
     sys.exit("error: the generated block contained no assignments")
@@ -356,7 +406,7 @@ else
 fi
 echo ""
 echo "THIS FILE NOW CONTAINS ARMORED PRIVATE KEYS.  Whoever holds"
-echo "SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY can sign as every pooled sponsor wallet."
+echo "${VAR_PREFIX}_CREATE_WALLET_SPONSOR_PRIVATE_KEY can sign as every pooled sponsor wallet."
 if [ -n "$BACKUP" ]; then
 	echo "Do not commit it, and delete the backup once the deployment is confirmed:"
 	echo "    rm -f $BACKUP"
