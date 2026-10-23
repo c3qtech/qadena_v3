@@ -43,6 +43,13 @@
 set -e
 
 SCRIPT_DIR="${0:A:h}"
+# OUR OWN COPY, TAKEN BEFORE ANYTHING IS SOURCED.  The scripts under ../scripts each set
+# SCRIPT_DIR="${0:A:h}" at their own top, and sourcing runs that in THIS shell -- so by the time
+# the body runs, SCRIPT_DIR points at qv3/scripts, not here. $epdcdir survived that by accident
+# (scripts/../epdc-smart-contracts is the same place), but patch_env_file.sh lives in THIS
+# directory, and resolving it through the clobbered value missed it and silently fell back to
+# "nothing was written" after a successful setup.
+TESTSCRIPTS_DIR="${0:A:h}"
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 # EXPORT THE RESOLVED BACKEND. setup_env.sh reads it from client.toml (`file` on a current devnet)
 # but does not export it, and setup_foundation_accounts.sh forces `test` when it sees it unset --
@@ -98,6 +105,8 @@ with_contracts="true"
 rebuild="false"
 force_contracts="false"
 stack_dir=""
+stack_variants="dev,cloudflare"
+create_env="true"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -108,6 +117,8 @@ while [[ $# -gt 0 ]]; do
         --rebuild)          rebuild="true"; shift ;;
         --force-contracts)  force_contracts="true"; shift ;;
         --stack)            stack_dir="$2"; shift 2 ;;
+        --variants)         stack_variants="$2"; shift 2 ;;
+        --no-create-env)    create_env="false"; shift ;;
         --help|-h)
             echo "Usage: $0 [--pioneer <p>] [--fund-mode foundation-sponsored|banksend]"
             echo "          [--contracts-only | --no-contracts] [--rebuild] [--force-contracts]"
@@ -117,6 +128,10 @@ while [[ $# -gt 0 ]]; do
             echo "           instead of only printing it.  Without it this script prints the"
             echo "           block and you paste it -- which is how the cloudflare variant"
             echo "           spent a month holding September keys on an October chain."
+            echo "           A missing env-<variant>.local is CREATED from the stack's template"
+            echo "           (make env-local), so a fresh machine needs no preparation."
+            echo "  --variants dev,cloudflare    which variants to wire (default: both)"
+            echo "  --no-create-env              patch only the overlays that already exist"
             exit 0 ;;
         *) echo "Unknown option: $1 (try --help)"; exit 1 ;;
     esac
@@ -254,10 +269,26 @@ if [ "$with_contracts" = "true" ]; then
     existing=$("$cli" contract-addr 2>/dev/null | tail -1)
     if [ -n "$existing" ]; then
         creator=$(qadenad_alias query wasm contract "$existing" --output json 2>/dev/null | jq -r '.contract_info.creator // empty' 2>/dev/null)
-        deployer=$(qadenad_alias keys show EPDC -a 2>/dev/null)
+        # THE DEPLOYER COMES FROM THE STATE FILE FIRST.  epdc_cli.sh keeps the EPDC key in the
+        # DEPLOYMENT keyring (deployment_keyring.sh -> $QADENA_KEYRING_DIR, e.g.
+        # ~/epdc-deployment/keyring), not the default one -- so `qadenad_alias keys show EPDC`
+        # from here resolved nothing, and under `set -e` that empty assignment ABORTED THE WHOLE
+        # SCRIPT, exit 1 with no message, on every re-run that found a recorded contract. The
+        # run never reached the attestors or the env patching. epdc_state.json already records
+        # .epdc_address, and that address IS the creator of the contract it deployed.
+        deployer=$(jq -r '.epdc_address // empty' "$epdcdir/epdc_state.json" 2>/dev/null || true)
+        [ -n "$deployer" ] || deployer=$(QADENA_KEYRING_DIR="${QADENA_KEYRING_DIR:-$PWD/keyring}" qadenad_alias keys show EPDC -a 2>/dev/null || true)
         if [ -z "$creator" ]; then
             echo "Recorded contract $existing is NOT on this chain -- redeploying (epdc_state.json is stale)"
             existing=""
+        elif [ -z "$deployer" ]; then
+            # NOT KNOWING IS A REASON TO KEEP, NEVER TO REPLACE.  A blank deployer used to fall
+            # straight through to the mismatch branch below, whose remedy is redeploying the
+            # contract -- which orphans every register event already anchored in it. The silent
+            # abort above was the only thing standing between a re-run and that outcome.
+            echo "WARNING: cannot determine the EPDC deployer address, so the creator of" >&2
+            echo "         $existing cannot be verified. KEEPING the recorded contract." >&2
+            echo "         Pass --force-contracts if replacing it is what you actually want." >&2
         elif [ "$creator" != "$deployer" ]; then
             echo "Recorded contract $existing was created by $creator, not the EPDC deployer $deployer -- redeploying"
             existing=""
@@ -342,7 +373,7 @@ if [ -n "$stack_dir" ]; then
     echo "patching $stack_dir"
     echo "========================="
 
-    patcher="$SCRIPT_DIR/patch_env_file.sh"
+    patcher="$TESTSCRIPTS_DIR/patch_env_file.sh"
     if [ ! -x "$patcher" ]; then
         echo "WARNING: $patcher not found -- the block above was printed, nothing was written" >&2
     elif [ ! -d "$stack_dir" ]; then
@@ -386,11 +417,36 @@ if [ -n "$stack_dir" ]; then
         fi
 
         patched=0
-        for variant in dev cloudflare; do
+        for variant in $(printf '%s' "$stack_variants" | tr ',' ' '); do
+            case "$variant" in
+                dev|cloudflare) ;;
+                *) echo "WARNING: unknown variant '$variant' -- skipped (expected dev or cloudflare)" >&2; continue ;;
+            esac
             target="$stack_dir/env-$variant.local"
+
+            # CREATE IT THROUGH make, NOT BY COPYING THE TEMPLATE HERE.  patch_env_file.sh
+            # deliberately refuses to create an env file, and that rule is right for veritas,
+            # where the file IS the whole config. An e-PDC .local is an OVERLAY -- compose reads
+            # env-<variant> first and this second -- so one holding just these values is complete
+            # by design. Rather than weaken the patcher, ask the stack's own Makefile, which
+            # already owns "copy the template, mode 600, never overwrite".
+            if [ ! -f "$target" ] && [ "$create_env" = "true" ]; then
+                if command -v make >/dev/null 2>&1 && [ -f "$stack_dir/Makefile" ]; then
+                    echo ""
+                    echo "  env-$variant.local does not exist -- creating it from the template"
+                    make -C "$stack_dir" env-local VARIANT="$variant" 2>&1 | sed 's/^/      /' || true
+                else
+                    echo "WARNING: cannot create env-$variant.local: no make, or no Makefile in $stack_dir" >&2
+                fi
+            fi
+
             if [ ! -f "$target" ]; then
-                echo "  env-$variant.local: not on this machine -- skipped"
-                echo "      (create it with: make -C $stack_dir env-local VARIANT=$variant)"
+                if [ "$create_env" = "true" ]; then
+                    echo "  env-$variant.local: could not be created -- skipped"
+                else
+                    echo "  env-$variant.local: not on this machine -- skipped (--no-create-env)"
+                    echo "      (create it with: make -C $stack_dir env-local VARIANT=$variant)"
+                fi
                 continue
             fi
             echo ""
