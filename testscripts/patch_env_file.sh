@@ -41,6 +41,8 @@ VAR_PREFIX=""
 ENV_FILE=""
 KEY_DIR="."
 REGISTER_STATE=""
+ATTESTOR_KEYS_FILE=""
+ENSURE_CUSTODY=0
 SPONSORS=""
 ARMOR_PASSFILE=""
 OUT=""
@@ -70,6 +72,23 @@ Options:
                      patching the keys without it leaves the app holding valid
                      wallets pointed at a contract from a previous chain -- which
                      is how the cloudflare stack anchored nothing for a month.
+  --attestor-keys-file <file>
+                     also set EPDC_ATTESTOR_KEYS from this file, which holds
+                     either a bare JSON array or the whole
+                     EPDC_ATTESTOR_KEYS='[...]' line that
+                     `epdc_cli.sh attestor-keys` prints.  A FILE, not an
+                     argument, because the array carries the demo attestors'
+                     PRIVATE keys and argv is world-readable through ps.
+                     These must match the on-chain roster, so they go stale on a
+                     chain rebuild exactly like the wallet keys do.
+  --ensure-custody-key
+                     set EPDC_CUSTODY_KEY to 32 fresh random bytes ONLY if it is
+                     absent, empty or still TO_BE_REPLACED.  It is NEVER
+                     replaced when it already holds a value: it is the AES key
+                     the custodial payor seeds are sealed with, it is not derived
+                     from the chain, and nothing else can open those seeds.  A
+                     wrong one does not fail at startup -- it fails when a payor
+                     tries to sign, which is far too late to notice.
   --sponsors <file>  also set QADENA_FOUNDATION_USERS_ADDRESS and
                      QADENA_FOUNDATION_APPSVR_ADDRESS from a veritas-sponsors.json
                      (written by sec_veritas_before_step_1.sh --stage prepare)
@@ -115,6 +134,8 @@ while [ $# -gt 0 ]; do
 	--key-dir)  KEY_DIR="$2"; shift 2 ;;
 	--var-prefix) VAR_PREFIX="$2"; shift 2 ;;
 	--register-state) REGISTER_STATE="$2"; shift 2 ;;
+	--attestor-keys-file) ATTESTOR_KEYS_FILE="$2"; shift 2 ;;
+	--ensure-custody-key) ENSURE_CUSTODY=1; shift ;;
 	--sponsors) SPONSORS="$2"; shift 2 ;;
 	--armor-passfile) ARMOR_PASSFILE="$2"; shift 2 ;;
 	--node-host) NODE_HOST="$2"; shift 2 ;;
@@ -156,6 +177,37 @@ if [ -n "$REGISTER_STATE" ]; then
 	# PUBLIC, so it may be printed -- and it is the value most worth seeing in a log,
 	# because a wrong one is invisible from inside the running app.
 	echo "register contract from $(basename "$REGISTER_STATE"): $REGISTER_ADDRESS"
+fi
+
+# ALSO READ UP FRONT.  Accepts the whole `EPDC_ATTESTOR_KEYS='[...]'` line as printed, or a bare
+# JSON array, so the caller can redirect epdc_cli.sh straight into a file without editing it.
+ATTESTOR_KEYS=""
+if [ -n "$ATTESTOR_KEYS_FILE" ]; then
+	[ -r "$ATTESTOR_KEYS_FILE" ] || { echo "error: cannot read $ATTESTOR_KEYS_FILE" >&2; exit 1; }
+	command -v jq >/dev/null 2>&1 || { echo "error: --attestor-keys-file needs jq" >&2; exit 1; }
+	ATTESTOR_KEYS=$(sed -n "s/^[[:space:]]*EPDC_ATTESTOR_KEYS=//p" "$ATTESTOR_KEYS_FILE" | head -1 | sed "s/^'//; s/'[[:space:]]*$//")
+	[ -n "$ATTESTOR_KEYS" ] || ATTESTOR_KEYS=$(tr -d "\n" < "$ATTESTOR_KEYS_FILE")
+	# EMPTY IS AN ERROR, CHECKED SEPARATELY FROM THE SHAPE.  `epdc_cli.sh attestor-keys` writes
+	# nothing and exits 0 when it cannot export from the keyring (no QADENA_KEYRING_PASS), so the
+	# caller gets a zero-byte file and no failure.  Feeding that through produced a reassuring
+	# "attestor roster: attestor(s)" line and then quietly left EPDC_ATTESTOR_KEYS unset -- the
+	# deployment degraded to anchoring without countersignatures, reported as success.
+	[ -n "$ATTESTOR_KEYS" ] || {
+		echo "error: $ATTESTOR_KEYS_FILE is empty." >&2
+		echo "  'epdc_cli.sh attestor-keys' writes nothing when it cannot read the keyring --" >&2
+		echo "  export QADENA_KEYRING_PASS and regenerate it." >&2
+		exit 1
+	}
+	# A JSON ARRAY OR NOTHING.  An empty EPDC_ATTESTOR_KEYS is not an error to the api -- events
+	# then anchor with no countersignatures -- so a malformed file written here would degrade the
+	# deployment silently rather than fail it.
+	printf '%s' "$ATTESTOR_KEYS" | jq -e 'if type == "array" then length else error("not an array") end' >/dev/null 2>&1 || {
+		echo "error: $ATTESTOR_KEYS_FILE does not hold a JSON array." >&2
+		echo "  Expected what 'epdc_cli.sh attestor-keys' prints: EPDC_ATTESTOR_KEYS='[{...}]'" >&2
+		exit 1
+	}
+	# COUNT ONLY.  The array holds private keys; the roster size is the useful fact.
+	echo "attestor roster from $(basename "$ATTESTOR_KEYS_FILE"): $(printf '%s' "$ATTESTOR_KEYS" | jq -r 'length') attestor(s), keys not shown"
 fi
 
 # REFUSE TO CREATE.  An env file is a deployment's whole configuration; one containing only these
@@ -284,6 +336,8 @@ ARMOR_PASS="$ARMOR_PASS" \
 NODE_HOST="$NODE_HOST" \
 GRPC_PORT="$GRPC_PORT" \
 REGISTER_ADDRESS="$REGISTER_ADDRESS" \
+ATTESTOR_KEYS="$ATTESTOR_KEYS" \
+ENSURE_CUSTODY="$ENSURE_CUSTODY" \
 python3 - <<'PY'
 import os, re, sys
 
@@ -329,10 +383,42 @@ _register = os.environ.get("REGISTER_ADDRESS", "")
 if _register:
     pairs["EPDC_REGISTER_CONTRACT_ADDRESS"] = "EPDC_REGISTER_CONTRACT_ADDRESS='" + _register + "'"
 
+# Quoted for the same reason as the address: it is JSON, so it contains spaces and braces that an
+# unquoted assignment would not survive.
+_attestors = os.environ.get("ATTESTOR_KEYS", "")
+if _attestors:
+    pairs["EPDC_ATTESTOR_KEYS"] = "EPDC_ATTESTOR_KEYS='" + _attestors + "'"
+
 if not pairs:
     sys.exit("error: the generated block contained no assignments")
 
 lines = open(env_path, encoding="utf-8").read().split("\n")
+
+# --- EPDC_CUSTODY_KEY: FILL IF UNSET, NEVER REPLACE -------------------------------------------
+#
+# Everything in `pairs` above is replaced unconditionally, because everything in it is derived
+# from the chain and a stale copy is worthless. The custody key is the opposite: it is local
+# randomness that seals the custodial payor seeds in the DATABASE, it is not derived from the
+# chain, and no rebuild invalidates it. Replacing a live one makes every sealed seed permanently
+# unopenable -- and not loudly: the api starts fine and fails later, when a payor tries to sign.
+#
+# So it is decided against the file rather than generated blindly: filled when it is absent, empty
+# or still the template's TO_BE_REPLACED, and reported-and-left otherwise.
+custody_note = None
+if os.environ.get("ENSURE_CUSTODY") == "1":
+    _cur = None
+    for line in lines:
+        m = re.match(r"^\s*EPDC_CUSTODY_KEY=(.*)$", line)
+        if m:
+            _cur = m.group(1).strip().strip("'\"")
+            break
+    if _cur in (None, "", "TO_BE_REPLACED"):
+        import base64, secrets
+        _new = base64.b64encode(secrets.token_bytes(32)).decode("ascii")
+        pairs["EPDC_CUSTODY_KEY"] = f"EPDC_CUSTODY_KEY={_new}"
+        custody_note = "generated (it was unset)"
+    else:
+        custody_note = "already set -- LEFT ALONE (replacing it would orphan every sealed payor seed)"
 
 # REPLACE IN PLACE, PRESERVING POSITION.  An env file's ordering is meaningful to the humans who
 # read it (sections, comments explaining a value), and appending a second definition of a variable
@@ -385,6 +471,8 @@ unchanged = sorted(set(pairs) - set(changed) - set(added))
 for var in unchanged:
     print(f"  same     {var}")
 print(f"\n  {len(changed)} updated, {len(added)} added, {len(unchanged)} already correct")
+if custody_note:
+    print(f"  EPDC_CUSTODY_KEY: {custody_note}")
 PY
 
 if [ "$DRY_RUN" -eq 1 ]; then

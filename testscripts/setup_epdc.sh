@@ -363,6 +363,28 @@ if [ -n "$stack_dir" ]; then
         register_args=()
         [ -f "$epdcdir/epdc_state.json" ] && register_args=(--register-state "$epdcdir/epdc_state.json")
 
+        # THE ATTESTOR ROSTER, VIA A FILE AND NOT argv.  The array carries the demo attestors'
+        # private keys, and argv is world-readable through ps for the life of the call. umask 077
+        # before the redirect, because the shell creates the file before the command writes to it.
+        # Removed on exit whatever happens -- including the exits below.
+        attestor_args=()
+        attestor_tmp=""
+        if [ -n "$contract_address" ]; then
+            attestor_tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/epdc-attestors.XXXXXX")
+            trap '[ -n "$attestor_tmp" ] && rm -f "$attestor_tmp"' EXIT INT TERM
+            if "$cli" attestor-keys > "$attestor_tmp" 2>/dev/null && [ -s "$attestor_tmp" ]; then
+                attestor_args=(--attestor-keys-file "$attestor_tmp")
+            else
+                # It writes nothing and exits 0 when it cannot export from the keyring, so the
+                # emptiness is the only signal. Say so rather than patch 13 of 14 values and
+                # call it done: an unset EPDC_ATTESTOR_KEYS is not an error to the api, it just
+                # anchors without countersignatures.
+                echo "WARNING: could not read the attestor keys from the keyring --" >&2
+                echo "         EPDC_ATTESTOR_KEYS will be left as it is. Export QADENA_KEYRING_PASS" >&2
+                echo "         and re-run, or set it from 'epdc_cli.sh attestor-keys' by hand." >&2
+            fi
+        fi
+
         patched=0
         for variant in dev cloudflare; do
             target="$stack_dir/env-$variant.local"
@@ -376,7 +398,8 @@ if [ -n "$stack_dir" ]; then
             if "$patcher" epdc "$target" --in-place \
                     --var-prefix EPDC \
                     --key-dir "$PWD" \
-                    "${register_args[@]}" "${armor_args[@]}"; then
+                    --ensure-custody-key \
+                    "${register_args[@]}" "${armor_args[@]}" "${attestor_args[@]}"; then
                 patched=$((patched + 1))
             else
                 echo "WARNING: patching env-$variant.local failed -- it is unchanged" >&2
@@ -389,6 +412,10 @@ if [ -n "$stack_dir" ]; then
             echo "recreated -- compose does not re-read an env file on restart:"
             echo "    make -C $stack_dir recreate-api VARIANT=<dev|cloudflare>"
             echo "    make -C $stack_dir setup-backend-if-needed"
+            echo ""
+            echo "A custody key generated just now is NOT recoverable from anywhere else -- it is"
+            echo "local randomness, not chain state. Back up each env-*.local that got one:"
+            echo "    grep '^EPDC_CUSTODY_KEY=' $stack_dir/env-<variant>.local"
             echo ""
             echo "Then confirm the register actually answers on this chain -- 'configured' and"
             echo "'runtimeReady' can both be true while nothing is being anchored:"
