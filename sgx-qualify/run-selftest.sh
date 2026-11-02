@@ -4,10 +4,15 @@
 # independently as a single box allows.  POSIX sh, no repo dependencies, like the rest of this
 # directory.
 #
-#   ./run-selftest.sh                       everything, bringing up a PCCS if one is needed
-#   ./run-selftest.sh --pccs-key <key>      ... including installing one (needs the Intel key)
+#   ./run-selftest.sh                       everything, bringing up the PCCS if one is needed
 #   ./run-selftest.sh --pccs-url https://host:8081/sgx/certification/v4/
 #   ./run-selftest.sh --host <other-ip>     the real two-machine test; this box verifies only
+#
+# THE PCCS IS THE ONE THE FLEET RUNS: the ghcr.io/edgelesssys/pccs docker container on 8081, which
+# scripts/ensure_sgx_attestation.sh starts before every real-enclave node and which needs NO Intel
+# subscription key.  This script calls that script when it can reach it and inlines the same logic
+# when sgx-qualify has been copied somewhere on its own.  Qualifying against an apt-installed PCCS
+# instead would be qualifying against collateral plumbing the nodes do not use.
 #
 # WHY A SINGLE-MACHINE RUN IS WORTH ANYTHING AT ALL.  The verifier needs no SGX: eclient links
 # liboehostverify and never opens /dev/sgx_*.  So the README's "two machines" is really two
@@ -23,9 +28,10 @@
 #
 # Options:
 #   --pccs-url URL        point this machine's quote provider at an existing PCCS
-#   --pccs-key KEY        Intel PCS subscription key, to INSTALL a local PCCS
-#                         ($PCCS_API_KEY is read too).  From
+#   --pccs-key KEY        ONLY for a machine with no docker at all: install an apt PCCS instead
+#                         of the container the fleet uses.  Needs an Intel subscription key from
 #                         https://api.portal.trustedservices.intel.com/provisioning-certification
+#                         ($PCCS_API_KEY is read too).
 #   --no-pccs-setup       diagnose the PCCS but change nothing; fail if it is unreachable
 #   --host H              verify an enclave on another machine instead of starting one here.
 #                         The only form that proves the collateral path independently.
@@ -40,6 +46,9 @@ set -e
 cd "$(dirname "$0")"
 
 INTEL_PCS="https://api.trustedservices.intel.com/sgx/certification/v4/"
+# THE SAME IMAGE scripts/ensure_sgx_attestation.sh runs, so a machine is qualified against the
+# collateral path its node will actually use.  Edgeless publish it preconfigured: no Intel key.
+PCCS_IMAGE="ghcr.io/edgelesssys/pccs"
 
 PCCS_URL=""
 PCCS_KEY="${PCCS_API_KEY:-}"
@@ -173,6 +182,13 @@ head1 "1. quote provider (PCCS)"
 # while looking entirely normal.
 pccs_ok() { ./check-pccs.sh > /dev/null 2>&1; }
 
+# pccs_url as the conf actually has it.  check-pccs.sh parses it with a grep rather than a JSON
+# parse because the stock file carries // comments; same reason here.
+conf_pccs_url() {
+    grep -oE '"pccs_url"[[:space:]]*:[[:space:]]*"[^"]*"' /etc/sgx_default_qcnl.conf 2>/dev/null \
+        | head -1 | sed 's/.*:[[:space:]]*"//; s/"$//'
+}
+
 if [ -n "$PCCS_URL" ]; then
     say "pointing the quote provider at $PCCS_URL"
     $SUDO ./check-pccs.sh --install-url "$PCCS_URL"
@@ -205,94 +221,134 @@ else
         exit 1
     fi
 
-    say "--- no reachable PCCS; bringing one up locally"
+    say "--- no reachable PCCS; bringing one up"
 
-    # CASE 1: the package is already there and simply not running.  This needs no API key and is
-    # much the commonest case on a box that was provisioned once and rebooted.
-    if [ -d /opt/intel/sgx-dcap-pccs ] || dpkg -s sgx-dcap-pccs > /dev/null 2>&1; then
-        say "sgx-dcap-pccs is installed; starting it"
-        $SUDO systemctl enable --now pccs || true
+    # AZURE NEEDS NOTHING.  Mirrors scripts/ensure_sgx_attestation.sh: with the Azure DCAP client
+    # installed, attestation goes through it and there is no PCCS to run.
+    if dpkg -V az-dcap-client > /dev/null 2>&1; then
+        pass "az-dcap-client is installed -- attestation goes through Azure DCAP, no PCCS needed"
     else
-        # CASE 2: install it.  THE API KEY CANNOT BE GUESSED, and a PCCS without one caches
-        # nothing: it is a proxy in front of Intel's PCS and the key is how it authenticates.
-        if [ -z "$PCCS_KEY" ]; then
-            say ""
-            say "A local PCCS has to be installed, and that needs an Intel PCS subscription key."
-            say "Get one (free) at"
-            say "    https://api.portal.trustedservices.intel.com/provisioning-certification"
-            say "then re-run:"
-            say "    ./run-selftest.sh --pccs-key <key>"
-            say ""
-            say "Or point at a PCCS that already exists on your network -- simpler if you have one,"
-            say "and it is what check-pccs.sh recommends:"
-            say "    ./run-selftest.sh --pccs-url https://<host>:8081/sgx/certification/v4/"
-            exit 1
-        fi
-        # The Intel apt repo, added the same way ubuntu/setup_qadena_build.sh adds it, and only if
-        # the package is not already reachable from the configured sources.
-        if ! apt-cache policy sgx-dcap-pccs 2>/dev/null | grep -q 'Candidate: [0-9]'; then
-            say "adding the Intel SGX apt repository"
-            $SUDO mkdir -p /etc/apt/keyrings
-            wget -qO- https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
-                | $SUDO tee /etc/apt/keyrings/intel-sgx-keyring.asc > /dev/null
-            echo "deb [signed-by=/etc/apt/keyrings/intel-sgx-keyring.asc arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu $(lsb_release -cs) main" \
-                | $SUDO tee /etc/apt/sources.list.d/intel-sgx.list > /dev/null
-            $SUDO apt-get update
-        fi
-        say "installing sgx-dcap-pccs"
-        $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y sgx-dcap-pccs
-
-        # THE KEY GOES INTO THE CONFIG THE PACKAGE SHIPPED, rather than a config written from
-        # scratch here: the key set in default.json has changed between PCCS versions, and
-        # overwriting it wholesale would silently drop whatever this version needs.
-        PCCS_CONF=/opt/intel/sgx-dcap-pccs/config/default.json
-        if [ -f "$PCCS_CONF" ]; then
-            $SUDO cp "$PCCS_CONF" "$PCCS_CONF.bak.$$"
-            if command -v jq > /dev/null 2>&1; then
-                # Built in OUR shell and copied in, rather than interpolated into a `sudo sh -c`
-                # string: the key would be inside two levels of quoting there.
-                _pj=$(mktemp)
-                $SUDO cat "$PCCS_CONF.bak.$$" | jq --arg k "$PCCS_KEY" '.ApiKey = $k' > "$_pj"
-                $SUDO cp "$_pj" "$PCCS_CONF"
-                rm -f "$_pj"
+        # THE HOUSE PCCS IS A DOCKER CONTAINER, NOT AN APT PACKAGE, and it needs NO Intel
+        # subscription key: scripts/ensure_sgx_attestation.sh runs ghcr.io/edgelesssys/pccs on
+        # 8081 and every real-enclave node on this fleet starts that way (run.sh calls it before
+        # `qadenad start`).  Qualifying a machine against an apt-installed PCCS would be
+        # qualifying it against collateral plumbing the nodes do not use -- and would demand a key
+        # for no reason.
+        #
+        # PREFER THE REPO SCRIPT when it is reachable, so there is one source of truth for the
+        # image, the port and the health probe.  sgx-qualify is meant to be copyable to a bare
+        # machine on its own, though, so the same logic is inlined below for when it is not.
+        HOUSE="../scripts/ensure_sgx_attestation.sh"
+        if [ -x "$HOUSE" ] && command -v zsh > /dev/null 2>&1; then
+            say "using the fleet's own $HOUSE"
+            "$HOUSE" || { bad "ensure_sgx_attestation.sh could not bring up attestation"; exit 1; }
+        elif command -v docker > /dev/null 2>&1; then
+            say "standalone copy: bringing up $PCCS_IMAGE directly (same image and port)"
+            if docker container ls -a --format '{{.Names}}' 2>/dev/null | grep -qx pccs; then
+                if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx pccs; then
+                    # Up but not answering -- the state the house script restarts rather than
+                    # recreates, because the container holds the cache it has already fetched.
+                    say "the pccs container is up but not answering; restarting it"
+                    docker stop pccs > /dev/null 2>&1 || true
+                    docker start pccs > /dev/null 2>&1 || true
+                else
+                    say "starting the existing pccs container"
+                    docker start pccs > /dev/null 2>&1 \
+                        || { bad "could not start the existing pccs container"; exit 1; }
+                fi
             else
-                $SUDO sed -i 's|"ApiKey"[[:space:]]*:[[:space:]]*"[^"]*"|"ApiKey": "'"$PCCS_KEY"'"|' "$PCCS_CONF"
+                say "no pccs container yet; creating one"
+                docker run -p 8081:8081 --name pccs -d "$PCCS_IMAGE" > /dev/null \
+                    || { bad "docker run failed."
+                         say "        If this is a permission error, add yourself to the docker"
+                         say "        group and start a NEW login session: docker needs it, and"
+                         say "        group changes never apply to the session that made them."
+                         exit 1; }
             fi
-            say "wrote the API key into $PCCS_CONF (backup at $PCCS_CONF.bak.$$)"
-            $SUDO systemctl enable --now pccs || true
+        elif [ -n "$PCCS_KEY" ]; then
+            # LAST RESORT, and deliberately last: an apt PCCS is not what the nodes run.  Kept
+            # only for a machine with no docker at all.
+            say "no docker; falling back to an apt-installed PCCS (not what the fleet runs)"
+            if ! apt-cache policy sgx-dcap-pccs 2>/dev/null | grep -q 'Candidate: [0-9]'; then
+                say "adding the Intel SGX apt repository"
+                $SUDO mkdir -p /etc/apt/keyrings
+                wget -qO- https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
+                    | $SUDO tee /etc/apt/keyrings/intel-sgx-keyring.asc > /dev/null
+                echo "deb [signed-by=/etc/apt/keyrings/intel-sgx-keyring.asc arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu $(lsb_release -cs) main" \
+                    | $SUDO tee /etc/apt/sources.list.d/intel-sgx.list > /dev/null
+                $SUDO apt-get update
+            fi
+            $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y sgx-dcap-pccs
+            PCCS_CONF=/opt/intel/sgx-dcap-pccs/config/default.json
+            if [ -f "$PCCS_CONF" ]; then
+                # The key goes into the config the PACKAGE shipped: its key set has changed
+                # between versions and overwriting it wholesale would drop what this one needs.
+                $SUDO cp "$PCCS_CONF" "$PCCS_CONF.bak.$$"
+                if command -v jq > /dev/null 2>&1; then
+                    _pj=$(mktemp)
+                    $SUDO cat "$PCCS_CONF.bak.$$" | jq --arg k "$PCCS_KEY" '.ApiKey = $k' > "$_pj"
+                    $SUDO cp "$_pj" "$PCCS_CONF"; rm -f "$_pj"
+                else
+                    $SUDO sed -i 's|"ApiKey"[[:space:]]*:[[:space:]]*"[^"]*"|"ApiKey": "'"$PCCS_KEY"'"|' "$PCCS_CONF"
+                fi
+                $SUDO systemctl enable --now pccs || true
+            else
+                say "$PCCS_CONF does not exist, so the package's own interactive setup has not run."
+                say "This script will not fake answers to it.  Run whichever it provides:"
+                for s in /opt/intel/sgx-dcap-pccs/install.sh \
+                         /opt/intel/sgx-dcap-pccs/container/pccs_install.sh; do
+                    [ -f "$s" ] && say "    sudo $s"
+                done
+                exit 1
+            fi
         else
             say ""
-            say "The package is installed but $PCCS_CONF does not exist, so its own setup has not"
-            say "run.  That step is interactive (HTTPS port, tokens, a self-signed certificate) and"
-            say "this script will not fake answers to it.  Run whichever of these the package"
-            say "provides, then re-run this script:"
-            for s in /opt/intel/sgx-dcap-pccs/install.sh \
-                     /opt/intel/sgx-dcap-pccs/container/pccs_install.sh; do
-                [ -f "$s" ] && say "    sudo $s"
-            done
-            say "    (otherwise see /opt/intel/sgx-dcap-pccs/README.md)"
+            say "No PCCS is reachable and one cannot be brought up here."
+            say ""
+            say "The fleet runs the PCCS as a docker container and needs NO Intel key"
+            say "(scripts/ensure_sgx_attestation.sh).  Install docker and re-run:"
+            say "    sudo apt install -y docker.io"
+            say "    sudo usermod -aG docker $(id -un)      # then a NEW login session"
+            say ""
+            say "Or point at a PCCS that already exists on your network:"
+            say "    ./run-selftest.sh --pccs-url https://<host>:8081/sgx/certification/v4/"
+            say ""
+            say "An apt-installed PCCS is also possible but is NOT what the nodes use, and needs a"
+            say "key from https://api.portal.trustedservices.intel.com/provisioning-certification :"
+            say "    ./run-selftest.sh --pccs-key <key>"
             exit 1
         fi
+
+        # ONLY REWRITE THE CONF IF IT IS NOT ALREADY RIGHT.  ubuntu/sgx_default_qcnl.conf already
+        # points pccs_url at localhost:8081, which is where the container listens, so on a
+        # Qadena-provisioned machine there is nothing to change -- and rewriting it anyway would
+        # churn a file this script does not own and reset collateral_service needlessly.
+        case "$(conf_pccs_url)" in
+            *localhost:8081*|*127.0.0.1:8081*)
+                say "the quote provider already points at localhost:8081; leaving the conf alone" ;;
+            *)
+                $SUDO ./check-pccs.sh --install-url https://localhost:8081/sgx/certification/v4/ ;;
+        esac
     fi
 
-    # Point the quote provider at it.  check-pccs.sh owns this file -- it backs it up and uses
-    # use_secure_cert:false, which a self-signed local PCCS needs.
-    $SUDO ./check-pccs.sh --install-url https://localhost:8081/sgx/certification/v4/
-
-    # A PCCS takes a few seconds to bind, and the first call also fetches from Intel.
+    # The container takes a few seconds to bind, and its first call also fetches from Intel.
     i=0
-    while [ $i -lt 30 ]; do
+    while [ $i -lt 40 ]; do
         pccs_ok && break
         i=$((i + 1)); sleep 2
     done
     if pccs_ok; then
-        pass "local PCCS is answering"
+        pass "PCCS is answering"
     else
-        bad "the local PCCS still does not answer"
+        bad "the PCCS still does not answer"
         say ""
         say "What it logged:"
-        $SUDO journalctl -u pccs -n 30 --no-pager 2>/dev/null | sed 's/^/        /' \
-            || say "        (no journal for the pccs unit)"
+        if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx pccs; then
+            docker logs --tail 30 pccs 2>&1 | sed 's/^/        /'
+        else
+            $SUDO journalctl -u pccs -n 30 --no-pager 2>/dev/null | sed 's/^/        /' \
+                || say "        (no pccs container and no pccs unit)"
+        fi
         exit 1
     fi
 fi

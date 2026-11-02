@@ -57,11 +57,30 @@ json_field() {
 reachable() {
     # A PCCS answers /rootcacrl.  -k because on-prem PCCS deployments usually have a self-signed
     # certificate, which use_secure_cert:false in the conf also reflects.
-    code=$(curl -sk -m 6 -o /dev/null -w '%{http_code}' "$1rootcacrl" 2>/dev/null)
+    code=$(curl -sk -m 10 -o /dev/null -w '%{http_code}' "$1rootcacrl" 2>/dev/null)
     case "$code" in
         200) echo "reachable"; return 0 ;;
         000) echo "no response"; return 1 ;;
         *)   echo "HTTP $code"; return 1 ;;
+    esac
+}
+
+# THE SAME PROBE IS WRONG FOR collateral_service, AND SAID SO ON EVERY CORRECTLY CONFIGURED BOX.
+#
+# /rootcacrl is a PCCS API path.  Intel's PCS does not serve it and answers 404 -- so a machine
+# whose collateral_service points at Intel, which is what BOTH of Qadena's shipped confs do, was
+# reported as "collateral: no response" while Intel was perfectly reachable, and the message then
+# sent the operator to look at a cache that was not the problem.  Measured on the cloudsigma SGX
+# host 2026-11-02: rootcacrl 404, /tcb 400, github 200 -- the service was answering throughout.
+#
+# ANY HTTP RESPONSE IS PROOF OF LIFE here; only a connection that never completes (000) is not.
+# A 404 or 400 means something at that URL answered, which is all this line claims to test.
+responding() {
+    code=$(curl -sk -m 10 -o /dev/null -w '%{http_code}' "$1rootcacrl" 2>/dev/null)
+    case "$code" in
+        000) echo "no response"; return 1 ;;
+        200) echo "reachable"; return 0 ;;
+        *)   echo "reachable (HTTP $code to a PCCS-only path; Intel's PCS has none)"; return 0 ;;
     esac
 }
 
@@ -185,7 +204,7 @@ printf "  pccs_url reachable ......... "
 if ! reachable "$pccs"; then status=1; fi
 
 printf "  collateral reachable ....... "
-reachable "$collateral" > /dev/null 2>&1 && echo reachable || echo "no response (verification may still work from cache)"
+responding "$collateral" || echo "  ^ verification will fail unless cached collateral covers it"
 
 # Reachability is not the whole story for VERIFICATION.  A cloud cache answers only about its own
 # fleet, so a machine configured this way can generate quotes and verify its neighbours while being
