@@ -10,11 +10,34 @@ SCRIPT_DIR="${0:A:h}"
 # caller wins.
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
+# EXPORT THE RESOLVED BACKEND. setup_env.sh reads it from client.toml (`file` on a current devnet)
+# but does not export it, and setup_foundation_accounts.sh forces `test` when it sees it unset --
+# so, called from here, it looked in an empty test keyring, "recovered" foundation-appsvr into a
+# new unencrypted keyring-test, and failed with "treasury.info: key not found".
+export QADENA_KEYRING_BACKEND
 
 # THE DEPLOYMENT PROFILE.  Sourced AFTER setup_env.sh, which clobbers SCRIPT_DIR, so re-derive the
 # path from $0 rather than trusting the variable to still point here.
+# DEV STATE, KEPT APART FROM FLEET STATE.  Every key this script makes derives from the
+# hardcoded public mnemonics above, so its deployment home is throwaway material that must not
+# share a parent with a real fleet's keyring and sealed mnemonics -- ~/qadena-launch holds both
+# c3q-mainnet's custody directories and the fleet launch dirs.  The profile builds
+# DEPLOY_SEC_HOME under $QADENA_LAUNCH_ROOT, so setting it here is the whole change.
+# EXPORTED, because step_1/2/3 and the after_step_* scripts are CHILD PROCESSES that load the
+# profile themselves -- an unexported value would put the parent and the children in different
+# directories, which is precisely the split that reported a successful step_1 as a failure.
+# An explicit QADENA_LAUNCH_ROOT from the caller still wins, as does VERITAS_SEC_HOME.
+export QADENA_LAUNCH_ROOT="${QADENA_LAUNCH_ROOT:-$HOME/qadena-dev-launch}"
+
 source "${0:A:h}/../foundation_scripts/deployment_profile.sh"
 deployment_profile_load "ekycph" || exit 1
+# THE DEPLOYMENT HOME, FROM THE PROFILE -- NEVER A LITERAL.  step_1 defaults
+# VERITAS_SEC_HOME to $DEPLOY_SEC_HOME and writes pregrant_addresses.json and
+# pool_addresses.json there; it is a child process, so the value does not come back.  The two
+# checks below used a hardcoded "$HOME/ekyc-ph", which the profile moved to
+# "$QADENA_LAUNCH_ROOT/ekyc-ph" -- so a perfectly successful step_1 was reported as
+# "step_1 did not complete".  Read it from the same place step_1 does.
+ekycph_home="${VERITAS_SEC_HOME:-$DEPLOY_SEC_HOME}"
 
 # inputs
 
@@ -26,18 +49,6 @@ dsvsprovidermnemonic="verb next spot entry congress electric fiction admit manag
 
 
 config_yml_treasurymnemonic="eyebrow unaware jealous actor annual farm radio open sword memory other secret twelve reduce festival buddy peace fun film return sniff december february post"
-
-# check if "treasury" key exists by "qadenad "
-if qadenad_alias keys show treasury > /dev/null 2>&1; then
-    echo "treasury key already exists"
-else
-    echo "treasury key not found, adding it now"
-    # `keys add --recover` reads the mnemonic from stdin, then the passphrase.  _raw feeds
-    # nothing, so the call site owns that ordering; qadenad_alias would replace stdin.
-    { echo "$config_yml_treasurymnemonic"
-      [ -z "${QADENA_KEYRING_PASS:-}" ] || { echo "$QADENA_KEYRING_PASS"; echo "$QADENA_KEYRING_PASS"; }
-    } | qadenad_alias_raw keys add treasury --recover
-fi
 
 
 provideramount="100000qdn"
@@ -121,6 +132,25 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# UNLOCK ONCE, HERE.  Every step below signs, and on a current devnet the keyring is the encrypted
+# `file` backend.  Without this the first key access prompts raw from qadenad with no indication of
+# which keyring it means, or -- with no tty -- hangs with no prompt at all; qadena_keyring_unlock
+# asks once, names the keyring, and fails with the remedy when it cannot ask.  AFTER the argument
+# loop, so --help never prompts.
+qadena_keyring_unlock
+
+# check if "treasury" key exists by "qadenad "
+if qadenad_alias keys show treasury > /dev/null 2>&1; then
+    echo "treasury key already exists"
+else
+    echo "treasury key not found, adding it now"
+    # `keys add --recover` reads the mnemonic from stdin, then the passphrase.  _raw feeds
+    # nothing, so the call site owns that ordering; qadenad_alias would replace stdin.
+    { echo "$config_yml_treasurymnemonic"
+      [ -z "${QADENA_KEYRING_PASS:-}" ] || { echo "$QADENA_KEYRING_PASS"; echo "$QADENA_KEYRING_PASS"; }
+    } | qadenad_alias_raw keys add treasury --recover
+fi
 
 
 
@@ -222,7 +252,7 @@ if [ "$fund_mode" != "banksend" ]; then
     echo "-------------------------"
     # step_1 wrote this into the deployment's state directory -- the profile's DEPLOY_SEC_HOME,
     # which --deployment ekycph selected, unless the caller pointed VERITAS_SEC_HOME elsewhere.
-    _pregrant="${VERITAS_SEC_HOME:-$HOME/ekyc-ph}/pregrant_addresses.json"
+    _pregrant="$ekycph_home/pregrant_addresses.json"
     [ -r "$_pregrant" ] || { echo "FAILED: no $_pregrant -- step_1 did not complete"; exit 1; }
     $qadenafoundationscripts/ekycph_after_step_1.sh --pregrant "$_pregrant" \
         --foundation-appsvr "$foundation_appsvr"
@@ -265,7 +295,7 @@ if [ "$fund_mode" != "banksend" ]; then
     # --pool-addresses, not --count: --count derives the pool names and resolves them in the
     # coordinator keyring, which on a devnet is the node's home, not ~/ekyc-ph.  step_3 already
     # wrote the addresses, and passing them needs no keyring.
-    _pool="${VERITAS_SEC_HOME:-$HOME/ekyc-ph}/pool_addresses.json"
+    _pool="$ekycph_home/pool_addresses.json"
     [ -r "$_pool" ] || { echo "FAILED: no $_pool -- step_3 did not complete"; exit 1; }
     $qadenafoundationscripts/ekycph_after_step_3.sh --pool-addresses "$_pool" \
         --foundation-users "$foundation_users" \
@@ -274,25 +304,39 @@ fi
 
 echo "These go into env-ekycph-dev"
 
+# WHERE step_3 ACTUALLY WROTE THEM.  extract_ephem_keys.sh is called with
+# --out-dir "$VERITAS_SEC_HOME" (veritas_scripts/step_3.sh:590), so these files live in the
+# DEPLOYMENT HOME -- not the directory the operator happened to start from.  Reading them as bare
+# relative names ended a completely SUCCESSFUL deploy with ten "No such file or directory" lines
+# and ten empty values, which reads exactly like the keys were never created.  The home first,
+# the CWD kept as a fallback for output left by an older run that wrote there.
+# NOT a bare `cat`: a missing file under `set -e` kills the script at its very last step, after
+# everything worked.  A marker line is both survivable and more visible than a cat error.
+emit_key_var() {
+    local var="$1" name="$2" _c file=""
+    for _c in "$ekycph_home/$name" "$name"; do
+        [ -f "$_c" ] && { file="$_c"; break; }
+    done
+    if [ -n "$file" ]; then
+        echo "$var='`cat $file`'"
+    else
+        echo "$var=<MISSING: $name in neither $ekycph_home nor $PWD>"
+        echo "WARNING: $name not found -- step_3 writes it to $ekycph_home" >&2
+    fi
+}
+
 # echo the contents of each of the names and keys
-echo "SEC_DSVS_EPH_USERNAME='`cat $dsvsname-names.base64`'"
-echo "SEC_DSVS_EPH_PRIVATE_KEY='`cat $dsvsname-keys.base64`'"
+emit_key_var SEC_DSVS_EPH_USERNAME "$dsvsname-names.base64"
+emit_key_var SEC_DSVS_EPH_PRIVATE_KEY "$dsvsname-keys.base64"
 
-echo "SEC_DSVS_EPH_CREDENTIAL_USERNAME='`cat $dsvsname-credential-names.base64`'"
-echo "SEC_DSVS_EPH_CREDENTIAL_PRIVATE_KEY='`cat $dsvsname-credential-keys.base64`'"
+emit_key_var SEC_DSVS_EPH_CREDENTIAL_USERNAME "$dsvsname-credential-names.base64"
+emit_key_var SEC_DSVS_EPH_CREDENTIAL_PRIVATE_KEY "$dsvsname-credential-keys.base64"
 
-# SEC_DSVS_SRV_PRV_USERNAME
-echo "SEC_DSVS_SRV_PRV_USERNAME='`cat $dsvsprovidername-names.base64`'"
-# SEC_DSVS_SRV_PRV_PRIVATE_KEY
-echo "SEC_DSVS_SRV_PRV_PRIVATE_KEY='`cat $dsvsprovidername-keys.base64`'"
+emit_key_var SEC_DSVS_SRV_PRV_USERNAME "$dsvsprovidername-names.base64"
+emit_key_var SEC_DSVS_SRV_PRV_PRIVATE_KEY "$dsvsprovidername-keys.base64"
 
-# SEC_IDENTITY_SRV_PRV_USERNAME
-echo "SEC_IDENTITY_SRV_PRV_USERNAME='`cat $identityprovidername-names.base64`'"
-# SEC_IDENTITY_SRV_PRV_PRIVATE_KEY
-echo "SEC_IDENTITY_SRV_PRV_PRIVATE_KEY='`cat $identityprovidername-keys.base64`'"
+emit_key_var SEC_IDENTITY_SRV_PRV_USERNAME "$identityprovidername-names.base64"
+emit_key_var SEC_IDENTITY_SRV_PRV_PRIVATE_KEY "$identityprovidername-keys.base64"
 
-#SEC_CREATE_WALLET_SPONSOR_USERNAME
-echo "SEC_CREATE_WALLET_SPONSOR_USERNAME='`cat $createwalletsponsorname-names.base64`'"
-# SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY
-echo "SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY='`cat $createwalletsponsorname-keys.base64`'"
-
+emit_key_var SEC_CREATE_WALLET_SPONSOR_USERNAME "$createwalletsponsorname-names.base64"
+emit_key_var SEC_CREATE_WALLET_SPONSOR_PRIVATE_KEY "$createwalletsponsorname-keys.base64"

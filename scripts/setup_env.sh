@@ -44,6 +44,7 @@ if [[ -d "$SCRIPT_DIR/../cmd" && -d "$SCRIPT_DIR/../x" ]]; then
     export qadenatestdata="$qadenabuild/test_data"
     export qadenaproviderscripts="$qadenabuild/provider_scripts"
     export veritasscripts="$qadenabuild/veritas_scripts"
+    export ekycphpartnerscripts="$qadenabuild/ekycph_partner_scripts"
     export qadenafoundationscripts="$qadenabuild/foundation_scripts"
 
     echo "Qadena build: $qadenabuild" >&2
@@ -55,6 +56,8 @@ else
 #    export qadenatestscripts="$QADENAHOME/testscripts"
     export qadenaproviderscripts="$QADENAHOME/provider_scripts"
     export veritasscripts="$QADENAHOME/veritas_scripts"
+    # BOTH BRANCHES, ALWAYS -- see the note on qadenafoundationscripts just below.
+    export ekycphpartnerscripts="$QADENAHOME/ekycph_partner_scripts"
     # BOTH BRANCHES, ALWAYS.  qadenabuild is exported only above, so `$qadenabuild/foundation_scripts/x`
     # expands to `/foundation_scripts/x` here and the call fails on an installed node.  Every other
     # path in this file is set in both branches; this one has to be too.

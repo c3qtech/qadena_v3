@@ -112,6 +112,16 @@ case "$FUND_MODE" in
 esac
 
 # The profile validates the deployment name and gives us the state directory and sponsor names.
+# DEV STATE, KEPT APART FROM FLEET STATE -- and here it is REQUIRED, not merely tidy.  This
+# script runs setup_<name>.sh as a CHILD, and that child exports the same dev root; the pregrant
+# and pool files below are then read back in THIS process from $DEPLOY_SEC_HOME.  Without the
+# same root on both sides the two disagree, and because those two reads are
+# `[[ -r ]] && append`, the mismatch does not fail -- it drops --pregrant and --pool and lets
+# verify report green having checked neither.  Correct for this script because it is the DEVNET
+# driver (no --site, funds by `tx bank send --from treasury`); the launch-fleet counterpart is
+# veritas_full_setup.sh, which sets VERITAS_SEC_HOME per site and is untouched by this.
+export QADENA_LAUNCH_ROOT="${QADENA_LAUNCH_ROOT:-$HOME/qadena-dev-launch}"
+
 source "$REPO/foundation_scripts/deployment_profile.sh"
 deployment_profile_load "$DEPLOYMENT" || exit 1
 

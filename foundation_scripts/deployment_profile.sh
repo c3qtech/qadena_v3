@@ -97,6 +97,15 @@ deployment_profile_load() {
     # Bucket 03 is 3-of-5 and provides voting power for EVERY deployment, so this does not vary.
     DEPLOY_STAKE_MEMBERS="foundation-m1,foundation-m2,foundation-m3"
 
+    # THE PARENT OF EVERY DEPLOYMENT HOME, IN ONE PLACE.  Each DEPLOY_SEC_HOME below is a
+    # directory UNDER this, so a caller that wants its state somewhere else moves one variable
+    # instead of patching four profiles.  testscripts/setup_ekycph.sh, setup_enf.sh and
+    # setup_epdc.sh export $HOME/qadena-dev-launch: they drive bring-up from HARDCODED PUBLIC
+    # MNEMONICS, so the keyrings they create must not sit in the same parent as a fleet's real
+    # custody material, where "which ekyc-ph is this" has no answer from the filesystem.
+    # NOT a dev/prod switch: it is a path, and the production flows simply leave it alone.
+    : ${QADENA_LAUNCH_ROOT:="$HOME/qadena-launch"}
+
     case "$_d" in
     veritas)
         # SEC PH VERITAS.  The names here are step_1.sh's built-in defaults, which is why
@@ -115,7 +124,7 @@ deployment_profile_load() {
         # its keys and sealed mnemonics; leaving it loose in $HOME put custody material next
         # to everything else and made "what does this fleet consist of" unanswerable from the
         # filesystem.  $SITE_HOME_SUFFIX still distinguishes one site's copy from another's.
-        DEPLOY_SEC_HOME="$HOME/qadena-launch/sec-veritas"
+        DEPLOY_SEC_HOME="$QADENA_LAUNCH_ROOT/sec-veritas"
         DEPLOY_DISPLAY="SEC"
         # step_1.sh's historical hardcoded values -- keep them, so a veritas run before and after
         # this block moved into the profile mints the SAME credential ids.
@@ -149,7 +158,7 @@ deployment_profile_load() {
         # its keys and sealed mnemonics; leaving it loose in $HOME put custody material next
         # to everything else and made "what does this fleet consist of" unanswerable from the
         # filesystem.  $SITE_HOME_SUFFIX still distinguishes one site's copy from another's.
-        DEPLOY_SEC_HOME="$HOME/qadena-launch/ekyc-ph"
+        DEPLOY_SEC_HOME="$QADENA_LAUNCH_ROOT/ekyc-ph"
         DEPLOY_DISPLAY="ekyc.ph"
         DEPLOY_FIRSTNAME="EKYCPH"
         DEPLOY_BIRTHDATE="2025-Jan-01"
@@ -178,7 +187,7 @@ deployment_profile_load() {
         # its keys and sealed mnemonics; leaving it loose in $HOME put custody material next
         # to everything else and made "what does this fleet consist of" unanswerable from the
         # filesystem.  $SITE_HOME_SUFFIX still distinguishes one site's copy from another's.
-        DEPLOY_SEC_HOME="$HOME/qadena-launch/qadena-enf"
+        DEPLOY_SEC_HOME="$QADENA_LAUNCH_ROOT/qadena-enf"
         DEPLOY_DISPLAY="Qadena ENF"
         # THE ELECTRONIC NOTARIAL BOOK.  ENF is the only deployment that drives a CosmWasm
         # contract: create_entry / register_enp / update_enp, plus every CND anchor write, all
@@ -230,7 +239,11 @@ deployment_profile_load() {
         DEPLOY_AVALUE="2200"
         # No "sec-" prefix: the other homes carry it from SEC PH VERITAS, the first deployment,
         # and e-PDC has nothing to do with SEC. (The variable keeps its shared name.)
-        DEPLOY_SEC_HOME="$HOME/epdc-deployment"
+        # "epdc", not "epdc-deployment", and UNDER THE ROOT rather than loose in $HOME: every
+        # other deployment home is <root>/<name>, and this one was the odd one out in both
+        # respects.  An existing ~/epdc-deployment is NOT moved by this -- point VERITAS_SEC_HOME
+        # at it, or mv it, before re-running.
+        DEPLOY_SEC_HOME="$QADENA_LAUNCH_ROOT/epdc"
         # 01 Adoption Programs, as for ekycph and enf -- a PLACEHOLDER, not a decision: which
         # bucket funds the e-PDC programme is the foundation's call. Pin it with an override file
         # ($QADENA_DEPLOYMENT_DIR/epdc.env) once settled rather than editing this line.

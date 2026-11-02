@@ -36,9 +36,9 @@
 # THE MNEMONICS BELOW ARE HARDCODED LITERALS, SO EVERY KEY DERIVED FROM THEM IS DETERMINISTIC AND
 # PUBLIC -- the same trade setup_enf.sh documents: reproducible test chains, never production.
 #
-# extract_ephem_keys.sh (inside step_3) writes the .base64 files into the CALLER'S CWD, and the
-# lines printed at the end read them from there -- so run the contract-only pass from the same
-# directory as the onboarding run if you want those lines reprinted.
+# extract_ephem_keys.sh (inside step_3) writes the .base64 files into the DEPLOYMENT HOME
+# ($epdc_home), and the lines printed at the end read them from there -- so a --contracts-only
+# pass reprints them wherever it is run from.
 
 set -e
 
@@ -59,6 +59,17 @@ source "$SCRIPT_DIR/../scripts/setup_env.sh"
 export QADENA_KEYRING_BACKEND
 # The epdc profile names the deployment's home (where step_1..3 keep variables.json, the pre-grant
 # and pool files). Read from it rather than hardcoding the path in a second place.
+# DEV STATE, KEPT APART FROM FLEET STATE.  Every key this script makes derives from the
+# hardcoded public mnemonics above, so its deployment home is throwaway material that must not
+# share a parent with a real fleet's keyring and sealed mnemonics -- ~/qadena-launch holds both
+# c3q-mainnet's custody directories and the fleet launch dirs.  The profile builds
+# DEPLOY_SEC_HOME under $QADENA_LAUNCH_ROOT, so setting it here is the whole change.
+# EXPORTED, because step_1/2/3 and the after_step_* scripts are CHILD PROCESSES that load the
+# profile themselves -- an unexported value would put the parent and the children in different
+# directories, which is precisely the split that reported a successful step_1 as a failure.
+# An explicit QADENA_LAUNCH_ROOT from the caller still wins, as does VERITAS_SEC_HOME.
+export QADENA_LAUNCH_ROOT="${QADENA_LAUNCH_ROOT:-$HOME/qadena-dev-launch}"
+
 source "$SCRIPT_DIR/../foundation_scripts/deployment_profile.sh"
 deployment_profile_load epdc || exit 1
 epdc_home="${VERITAS_SEC_HOME:-$DEPLOY_SEC_HOME}"
@@ -271,7 +282,7 @@ if [ "$with_contracts" = "true" ]; then
         creator=$(qadenad_alias query wasm contract "$existing" --output json 2>/dev/null | jq -r '.contract_info.creator // empty' 2>/dev/null)
         # THE DEPLOYER COMES FROM THE STATE FILE FIRST.  epdc_cli.sh keeps the EPDC key in the
         # DEPLOYMENT keyring (deployment_keyring.sh -> $QADENA_KEYRING_DIR, e.g.
-        # ~/epdc-deployment/keyring), not the default one -- so `qadenad_alias keys show EPDC`
+        # $QADENA_LAUNCH_ROOT/epdc/keyring), not the default one -- so `qadenad_alias keys show EPDC`
         # from here resolved nothing, and under `set -e` that empty assignment ABORTED THE WHOLE
         # SCRIPT, exit 1 with no message, on every re-run that found a recorded contract. The
         # run never reached the attestors or the env patching. epdc_state.json already records
@@ -321,13 +332,24 @@ echo "dev variant). They carry PRIVATE keys and the keyring passphrase -- never 
 echo ""
 
 # A missing file prints a marker rather than dying under set -e at the last step (setup_enf.sh).
+# WHERE step_3 ACTUALLY WROTE THEM.  extract_ephem_keys.sh is called with
+# --out-dir "$VERITAS_SEC_HOME" (veritas_scripts/step_3.sh:590), so these files live in the
+# DEPLOYMENT HOME -- not the directory the operator happened to start from.  Reading them as bare
+# relative names ended a completely SUCCESSFUL deploy with ten "No such file or directory" lines
+# and ten empty values, which reads exactly like the keys were never created.  The home first,
+# the CWD kept as a fallback for output left by an older run that wrote there.
+# NOT a bare `cat`: a missing file under `set -e` kills the script at its very last step, after
+# everything worked.  A marker line is both survivable and more visible than a cat error.
 emit_key_var() {
-    local var="$1" file="$2"
-    if [ -f "$file" ]; then
+    local var="$1" name="$2" _c file=""
+    for _c in "$epdc_home/$name" "$name"; do
+        [ -f "$_c" ] && { file="$_c"; break; }
+    done
+    if [ -n "$file" ]; then
         echo "$var='`cat $file`'"
     else
-        echo "$var=<MISSING: no $file in $PWD>"
-        echo "WARNING: $file not found in $PWD -- rerun from the directory the onboarding wrote it to" >&2
+        echo "$var=<MISSING: $name in neither $epdc_home nor $PWD>"
+        echo "WARNING: $name not found -- step_3 writes it to $epdc_home" >&2
     fi
 }
 emit_key_var EPDC_DSVS_SRV_PRV_USERNAME "$dsvsprovidername-names.base64"

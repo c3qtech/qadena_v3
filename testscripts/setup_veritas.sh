@@ -7,6 +7,18 @@ SCRIPT_DIR="${0:A:h}"
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 
+# DEV STATE, KEPT APART FROM FLEET STATE.  Every key this script makes derives from the hardcoded
+# public mnemonics below, so its deployment home is throwaway material that must not share a
+# parent with a real fleet's keyring and sealed mnemonics -- ~/qadena-launch holds c3q-mainnet's
+# custody directories and the fleet launch dirs.  The profile builds DEPLOY_SEC_HOME under
+# $QADENA_LAUNCH_ROOT, so setting it here is the whole change.
+# EXPORTED, and that is the only thing that matters here: this script never loads the profile
+# itself.  step_1/2/3 are CHILD PROCESSES that load it on their own, so the environment is the
+# only way the root reaches the code that builds the path.
+# An explicit QADENA_LAUNCH_ROOT from the caller still wins, as does VERITAS_SEC_HOME -- which is
+# how veritas_full_setup.sh keeps its per-site $SITE_HOME_SUFFIX directories.
+export QADENA_LAUNCH_ROOT="${QADENA_LAUNCH_ROOT:-$HOME/qadena-dev-launch}"
+
 # THE HARNESS SAYS `test` OUT LOUD.  step_1/2/3 default to the ENCRYPTED keyring now, which is
 # right for SEC's own machine and impossible here: this suite runs unattended in the fleet and
 # cannot answer a passphrase prompt.  Exporting it explicitly is what keeps that default safe --

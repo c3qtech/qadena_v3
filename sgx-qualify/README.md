@@ -22,6 +22,39 @@ Splitting the roles is the point:
 - **server** runs *inside* an enclave, binds its TLS certificate into a quote, and serves both.
 - **client** runs *outside* any enclave, on a different machine, and verifies the quote from scratch.
 
+## If you only have one machine
+
+`./run-selftest.sh` runs both halves here and arranges the one separation that matters.
+
+    ./run-selftest.sh                      # everything; brings up a PCCS if one is needed
+    ./run-selftest.sh --pccs-key <key>      # ... including installing one
+    ./run-selftest.sh --pccs-url https://host:8081/sgx/certification/v4/
+    ./run-selftest.sh --host <other-ip>     # the real two-machine form; this box verifies only
+
+It is not a weaker invocation of the same thing — it is the two-machine test with one specific
+property removed, and it says which. What makes it meaningful is that **the verifier needs no
+SGX**: `eclient` links `liboehostverify` and never opens `/dev/sgx_*`. So "two machines" above is
+really two *collateral paths*, not two CPUs.
+
+The script therefore moves the QCNL collateral cache aside for the run — every directory the QPL
+searches (`$AZDCAP_CACHE`, `$XDG_CACHE_HOME`, `$HOME`, `$TMPDIR`, `/tmp`), not just the first — so
+verification fetches collateral rather than reading what quote generation just cached. It is moved,
+not deleted, and restored on exit. `--keep-cache` shows the circular result a naive self-test gives,
+which is worth seeing exactly once.
+
+It also checks the thing that otherwise fails much later and names no permission: membership of
+`sgx_prv`, the group on `/dev/sgx_provision`, which is a *different* group from `/dev/sgx_enclave`'s.
+And it pins `--unique-id`/`--signer-id` read straight out of the binaries it is about to run, so the
+run is a gate rather than an inspection, and `--require-production` always.
+
+**What one box cannot prove**, and the summary says so rather than letting a pass imply it: that a
+verifier here can resolve collateral for a platform that is *not* this one. Every quote verified
+came from the same CPU whose PCK certificates the configured PCCS already holds. The failure that
+hides is the cloud-cache asymmetry described under "Interpreting failures" — a cache that answers
+for its own fleet and fails on an outside quote while being perfectly reachable. Closing it needs a
+second *verifier*, not a second SGX machine: any x86-64 Linux box with `/opt/ego/lib` will do, via
+`--host`.
+
 ## What it proves, step by step
 
 1. **The enclave can generate a quote.** `enclave.GetRemoteReport` succeeds — so the driver, the

@@ -123,7 +123,7 @@ Options:
       --sponsors ~/fleet-launch/coord/veritas-sponsors.json
 
   ./testscripts/patch_env_file.sh epdc stacks/epdc/env-cloudflare.local --in-place \
-      --var-prefix EPDC --key-dir ~/epdc-deployment \
+      --var-prefix EPDC --key-dir ~/qadena-dev-launch/epdc \
       --register-state ~/test/qv3/epdc-smart-contracts/epdc_state.json \
       --armor-passfile ~/qadena-keyring-password
 EOF
@@ -327,8 +327,16 @@ if [ "$DRY_RUN" -eq 0 ]; then
 	fi
 fi
 
+# WHAT THE PYTHON BELOW READS.  Normally $OUT -- the copy just made, which it edits in place.
+# Under --dry-run nothing is copied, so $OUT does not exist unless an earlier run made it, and
+# passing it anyway killed the whole thing with a FileNotFoundError traceback: the --dry-run
+# against a fresh --out is the FIRST run an operator makes, and the one that has to work.
+# (--in-place is unaffected: $OUT is the source there, see the assignment above.)
+READ_FROM="$OUT"
+[ "$DRY_RUN" -eq 1 ] && READ_FROM="$ENV_FILE"
+
 DRY_RUN="$DRY_RUN" \
-ENV_FILE="$OUT" \
+ENV_FILE="$READ_FROM" \
 BLOCK="$BLOCK" \
 FOUNDATION_USERS="$FOUNDATION_USERS" \
 FOUNDATION_APPSVR="$FOUNDATION_APPSVR" \

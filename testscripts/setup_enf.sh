@@ -10,11 +10,34 @@ SCRIPT_DIR="${0:A:h}"
 # caller wins.
 
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
+# EXPORT THE RESOLVED BACKEND. setup_env.sh reads it from client.toml (`file` on a current devnet)
+# but does not export it, and setup_foundation_accounts.sh forces `test` when it sees it unset --
+# so, called from here, it looked in an empty test keyring, "recovered" foundation-appsvr into a
+# new unencrypted keyring-test, and failed with "treasury.info: key not found".
+export QADENA_KEYRING_BACKEND
 
 # THE DEPLOYMENT PROFILE.  Sourced AFTER setup_env.sh, which clobbers SCRIPT_DIR, so re-derive the
 # path from $0 rather than trusting the variable to still point here.
+# DEV STATE, KEPT APART FROM FLEET STATE.  Every key this script makes derives from the
+# hardcoded public mnemonics above, so its deployment home is throwaway material that must not
+# share a parent with a real fleet's keyring and sealed mnemonics -- ~/qadena-launch holds both
+# c3q-mainnet's custody directories and the fleet launch dirs.  The profile builds
+# DEPLOY_SEC_HOME under $QADENA_LAUNCH_ROOT, so setting it here is the whole change.
+# EXPORTED, because step_1/2/3 and the after_step_* scripts are CHILD PROCESSES that load the
+# profile themselves -- an unexported value would put the parent and the children in different
+# directories, which is precisely the split that reported a successful step_1 as a failure.
+# An explicit QADENA_LAUNCH_ROOT from the caller still wins, as does VERITAS_SEC_HOME.
+export QADENA_LAUNCH_ROOT="${QADENA_LAUNCH_ROOT:-$HOME/qadena-dev-launch}"
+
 source "${0:A:h}/../foundation_scripts/deployment_profile.sh"
 deployment_profile_load "enf" || exit 1
+# THE DEPLOYMENT HOME, FROM THE PROFILE -- NEVER A LITERAL.  step_1 defaults
+# VERITAS_SEC_HOME to $DEPLOY_SEC_HOME and writes pregrant_addresses.json and
+# pool_addresses.json there; it is a child process, so the value does not come back.  The two
+# checks below used a hardcoded "$HOME/qadena-enf", which the profile moved to
+# "$QADENA_LAUNCH_ROOT/qadena-enf" -- so a perfectly successful step_1 was reported as
+# "step_1 did not complete".  Read it from the same place step_1 does.
+enf_home="${VERITAS_SEC_HOME:-$DEPLOY_SEC_HOME}"
 
 
 
@@ -226,6 +249,14 @@ if [ "$with_contracts" = "true" ]; then
     echo "contracts: docker is available, the contract will be deployed"
 fi
 
+# UNLOCK ONCE, HERE.  Every step below signs, and on a current devnet the keyring is the encrypted
+# `file` backend.  Without this the first key access -- the --contracts-only check immediately
+# below -- prompts raw from qadenad with no indication of which keyring it means, or, with no tty,
+# hangs with no prompt at all; qadena_keyring_unlock asks once, names the keyring, and fails with
+# the remedy when it cannot ask.  AFTER the argument and docker checks, so --help never prompts and
+# a machine without docker is told so before being asked for a passphrase it will not get to use.
+qadena_keyring_unlock
+
 # --contracts-only presupposes the chain half already ran.  Check that here rather than letting
 # enf_cli.sh setup-enf discover it: create_user.sh needs the create-wallet sponsor to pay for the
 # ENF deployer's wallet and the identity provider to issue its credentials, and when either is
@@ -380,7 +411,7 @@ if [ "$fund_mode" != "banksend" ]; then
     echo "-------------------------"
     # step_1 wrote this into the deployment's state directory -- the profile's DEPLOY_SEC_HOME,
     # which --deployment enf selected, unless the caller pointed VERITAS_SEC_HOME elsewhere.
-    _pregrant="${VERITAS_SEC_HOME:-$HOME/qadena-enf}/pregrant_addresses.json"
+    _pregrant="$enf_home/pregrant_addresses.json"
     [ -r "$_pregrant" ] || { echo "FAILED: no $_pregrant -- step_1 did not complete"; exit 1; }
     $qadenafoundationscripts/enf_after_step_1.sh --pregrant "$_pregrant" \
         --foundation-appsvr "$foundation_appsvr"
@@ -429,7 +460,7 @@ if [ "$fund_mode" != "banksend" ]; then
     # --pool-addresses, not --count: --count derives the pool names and resolves them in the
     # coordinator keyring, which on a devnet is the node's home, not ~/qadena-enf.  step_3 already
     # wrote the addresses, and passing them needs no keyring.
-    _pool="${VERITAS_SEC_HOME:-$HOME/qadena-enf}/pool_addresses.json"
+    _pool="$enf_home/pool_addresses.json"
     [ -r "$_pool" ] || { echo "FAILED: no $_pool -- step_3 did not complete"; exit 1; }
     $qadenafoundationscripts/enf_after_step_3.sh --pool-addresses "$_pool" \
         --foundation-users "$foundation_users" \
@@ -551,19 +582,24 @@ fi
 
 echo "These go into env-enf-dev"
 
-# extract_ephem_keys.sh writes these files into the CALLER'S CWD, not anywhere derived from
-# $SCRIPT_DIR -- so on a full run they are here because step_3.sh just put them here, but under
-# --contracts-only they are only here if this run happens to share a cwd with the run that made
-# them.  A bare `cat` on a missing one dies under `set -e`, which would kill the script at the very
-# last step -- after a successful deploy, before ENF_NOTARIAL_CONTRACT_ADDRESS is ever printed.
-# Print a marker instead, which is also more visible than a cat error buried in this output.
+# WHERE step_3 ACTUALLY WROTE THEM.  extract_ephem_keys.sh is called with
+# --out-dir "$VERITAS_SEC_HOME" (veritas_scripts/step_3.sh:590), so these files live in the
+# DEPLOYMENT HOME -- not the directory the operator happened to start from.  Reading them as bare
+# relative names ended a completely SUCCESSFUL deploy with ten "No such file or directory" lines
+# and ten empty values, which reads exactly like the keys were never created.  The home first,
+# the CWD kept as a fallback for output left by an older run that wrote there.
+# NOT a bare `cat`: a missing file under `set -e` kills the script at its very last step, after
+# everything worked.  A marker line is both survivable and more visible than a cat error.
 emit_key_var() {
-    local var="$1" file="$2"
-    if [ -f "$file" ]; then
+    local var="$1" name="$2" _c file=""
+    for _c in "$enf_home/$name" "$name"; do
+        [ -f "$_c" ] && { file="$_c"; break; }
+    done
+    if [ -n "$file" ]; then
         echo "$var='`cat $file`'"
     else
-        echo "$var=<MISSING: no $file in $PWD>"
-        echo "WARNING: $file not found in $PWD -- rerun from the directory the setup wrote it to" >&2
+        echo "$var=<MISSING: $name in neither $enf_home nor $PWD>"
+        echo "WARNING: $name not found -- step_3 writes it to $enf_home" >&2
     fi
 }
 
