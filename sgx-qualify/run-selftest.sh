@@ -41,6 +41,12 @@
 #   --skip-offline        run only the networked leg
 #   --rebuild             rebuild even if the binaries are present
 #   --timeout N           seconds to wait for the enclave to serve its bundle (default 90)
+#   --data-dir DIR        the filesystem to check for free space (default: $HOME).  Point it at
+#                         wherever the chain data will actually live.
+#
+# It also checks that the machine is big enough to RUN a node: at least 200GiB free on the data
+# filesystem and at least 8GiB of RAM, 16GiB or more preferred.  Those are reported rather than
+# fatal -- a small box can still attest, and the two findings are worth having separately.
 
 set -e
 cd "$(dirname "$0")"
@@ -49,6 +55,22 @@ INTEL_PCS="https://api.trustedservices.intel.com/sgx/certification/v4/"
 # THE SAME IMAGE scripts/ensure_sgx_attestation.sh runs, so a machine is qualified against the
 # collateral path its node will actually use.  Edgeless publish it preconfigured: no Intel key.
 PCCS_IMAGE="ghcr.io/edgelesssys/pccs"
+
+# THE RESOURCE FLOOR FOR RUNNING A NODE, not for this test.  Attestation itself needs almost
+# nothing -- the run below would pass on a 2GB VM -- so these are checked here only because this
+# script is where a machine gets qualified, and discovering the shortfall after it has been given
+# a validator key costs a resync at best.
+#
+# They are REPORTED, NOT FATAL, for exactly that reason: a box can attest perfectly and still be
+# too small, and exiting on a sizing problem would hide a working attestation behind it.
+#
+# Two concrete things eat the memory, beyond the OS and the node process: each enclave reserves
+# its heapSize up front (cmd/qadenad_enclave 1024MB, cmd/sealprobe 512MB, cmd/signer_enclave
+# 64MB), and that reservation is not shared with the host.  16GiB is preferred over the 8GiB
+# floor because 8 leaves very little head-room once the chain is syncing and an enclave is live.
+MIN_DISK_GIB=200
+MIN_MEM_GIB=8
+WANT_MEM_GIB=16
 
 PCCS_URL=""
 PCCS_KEY="${PCCS_API_KEY:-}"
@@ -59,6 +81,11 @@ TCB_STRICT=1
 RUN_OFFLINE=1
 REBUILD=0
 TIMEOUT=90
+# WHERE THE 200GiB IS MEASURED.  "200GB free" is meaningless without naming the filesystem: on
+# these boxes $HOME and / are often the same device and sometimes deliberately are not, and the
+# chain data is what grows.  Defaults to $HOME and the mount point is printed, so the figure can
+# never be read against the wrong device.
+DATA_DIR="$HOME"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -71,6 +98,7 @@ while [ $# -gt 0 ]; do
         --skip-offline)      RUN_OFFLINE=0; shift ;;
         --rebuild)           REBUILD=1; shift ;;
         --timeout)           TIMEOUT="$2"; shift 2 ;;
+        --data-dir)          DATA_DIR="$2"; shift 2 ;;
         # DERIVED FROM THE HEADER, not a fixed line range: a range silently starts printing
         # shell code the moment the comment block grows, which is exactly what it did.
         --help|-h)           awk 'NR<2{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"; exit 0 ;;
@@ -165,6 +193,47 @@ if [ -z "$REMOTE_HOST" ]; then
         done
     fi
     [ $RC -eq 0 ] || { say ""; say "Fix the above first: nothing below can succeed."; exit 1; }
+
+    # ----- size.  Past this point RC is 0, so a shortfall below marks the run without aborting
+    # it, and the attestation result is still obtained in the same pass.
+    mem_kib=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null)
+    if [ -z "$mem_kib" ]; then
+        warn "could not read /proc/meminfo; memory not checked"
+    else
+        mem_gib=$(awk -v k="$mem_kib" 'BEGIN{printf "%.1f", k/1048576}')
+        mem_int=$((mem_kib / 1048576))
+        if [ "$mem_int" -lt "$MIN_MEM_GIB" ]; then
+            bad "${mem_gib}GiB of RAM, below the ${MIN_MEM_GIB}GiB minimum for running a node."
+            say "        ${WANT_MEM_GIB}GiB or more is preferred.  Each enclave reserves its heap"
+            say "        up front (1024MB for the chain enclave alone), so this is not head-room"
+            say "        the node can borrow back."
+        elif [ "$mem_int" -lt "$WANT_MEM_GIB" ]; then
+            pass "${mem_gib}GiB of RAM (meets the ${MIN_MEM_GIB}GiB minimum)"
+            warn "${WANT_MEM_GIB}GiB or more is PREFERRED: at ${mem_gib}GiB there is little"
+            say "        head-room once the chain is syncing and an enclave holds its reserved heap."
+        else
+            pass "${mem_gib}GiB of RAM (${WANT_MEM_GIB}GiB+ preferred, met)"
+        fi
+    fi
+
+    # df -P for the single-line POSIX format: without it a long device name wraps and $4/$6 land
+    # on the wrong fields.
+    _df=$(df -P -k "$DATA_DIR" 2>/dev/null | awk 'NR==2{print $4" "$6}')
+    if [ -z "$_df" ]; then
+        warn "could not read free space for $DATA_DIR; disk not checked"
+    else
+        disk_kib=${_df%% *}
+        disk_mnt=${_df##* }
+        disk_gib=$(awk -v k="$disk_kib" 'BEGIN{printf "%.0f", k/1048576}')
+        disk_int=$((disk_kib / 1048576))
+        if [ "$disk_int" -lt "$MIN_DISK_GIB" ]; then
+            bad "${disk_gib}GiB free on $disk_mnt (holding $DATA_DIR), below the ${MIN_DISK_GIB}GiB minimum."
+            say "        The chain data grows here.  If it will live on another device, point"
+            say "        --data-dir at that one instead."
+        else
+            pass "${disk_gib}GiB free on $disk_mnt (${MIN_DISK_GIB}GiB minimum, met)"
+        fi
+    fi
 fi
 
 # EGo IS ONLY NEEDED FOR THE ENCLAVE HALF.  With --host this box verifies, and the README's whole
@@ -531,6 +600,9 @@ else
     say "this host (collateral, /etc/sgx_default_qcnl.conf).  A TCB status other than UpToDate is"
     say "neither: the quote is genuine and the platform needs microcode or PSW updates, which is"
     say "exactly what a remote relying party would reject."
+    say ""
+    say "A memory or disk shortfall is none of the above: attestation is fine and the machine is"
+    say "simply too small to run a node.  Read section 0 to tell them apart."
 fi
 say ""
 say "NOT PROVEN, and not provable from one box: that a verifier here can resolve collateral for a"
