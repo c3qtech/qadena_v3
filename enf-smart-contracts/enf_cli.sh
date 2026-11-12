@@ -109,9 +109,30 @@ require_args() {
 # ($FROM) is a distinct key — NOT the enfidentitysrvprv provider key.
 setup_enf() {
   local name="$FROM"
-  if [[ -n "$(load_state "enf_address")" ]]; then
-    echo "ENF user '$name' already created ($(load_state enf_address))"
+  # THE STATE FILE IS NOT ENOUGH -- THE KEY HAS TO BE THERE TOO.
+  #
+  # enf_state.json is gitignored local residue that outlives any number of chains, and
+  # it records enf_address. The keyring holds the key that address belongs to. This
+  # used to return early on the state file alone, so a stale enf_address meant
+  # create_user.sh never ran, the deployer was never created on THIS chain, and the
+  # failure surfaced two steps later as `upload` dying with "ENF.info: key not found"
+  # -- which points at the keyring, not at the thing that skipped the work.
+  #
+  # Decided from the keyring FILES (scripts/deployment_keyring.sh's _dkr_has) rather
+  # than `keys show`: on the `file` backend that needs the passphrase, and a wrong one
+  # would read as "key absent" and re-create a deployer that already exists.
+  local active_kr="${QADENA_KEYRING_DIR:-$QADENAHOME}"
+  local recorded="$(load_state "enf_address")"
+  if [[ -n "$recorded" ]] && _dkr_has "$active_kr" "$name"; then
+    echo "ENF user '$name' already created ($recorded)"
     return
+  fi
+  if [[ -n "$recorded" ]]; then
+    echo "-------------------------"
+    echo "enf_state.json records '$name' at $recorded, but that key is NOT in"
+    echo "  $active_kr/keyring-$QADENA_KEYRING_BACKEND"
+    echo "Treating the state as left over from a previous chain and re-creating the deployer."
+    echo "-------------------------"
   fi
   [[ -n "$qadenaproviderscripts" && -x "$qadenaproviderscripts/create_user.sh" ]] || {
     echo "create_user.sh not found (qadenaproviderscripts=$qadenaproviderscripts)"; exit 1; }
