@@ -59,7 +59,16 @@ contract_addr() {
 tx() { # broadcast a tx and wait for it to commit
   local label=$1; shift
   echo ">> $label"
-  local resp=$(qadenad_alias --node $QADENA_NODE --gas $gas_auto --gas-adjustment $gas_adjustment --gas-prices $minimum_gas_prices "$@" --from $FROM -y -o json)
+  # THE SUBCOMMAND GOES FIRST.  qadenad_alias switches on $1: only `keys` and `tx` get
+  # --keyring-backend, --keyring-dir and the passphrase fed in; everything else falls to a
+  # default branch that passes --home $QADENAHOME and nothing more.  With --node/--gas
+  # leading, $1 was "--node", so a SIGNING call took the no-keyring branch and qadenad looked
+  # for the key in the node's home.  That was invisible while the node keyring was the only
+  # one; on a --fund-mode foundation-sponsored devnet the enf-* keys live in ENF's own home
+  # (scripts/deployment_keyring.sh) and it failed with "ENF.info: key not found".
+  # --node is dropped here too: the wrapper adds it, and --chain-id, for a tx.
+  local resp=$(qadenad_alias "$@" --from $FROM \
+    --gas $gas_auto --gas-adjustment $gas_adjustment --gas-prices $minimum_gas_prices -y -o json)
   local hash=$(echo "$resp" | jq -r '.txhash')
   qadenad_alias --node $QADENA_NODE query wait-tx "$hash" --timeout 30s -o json | jq '{code: .code, raw_log: .raw_log, events: [.events[] | select(.type|test("wasm|store_code|instantiate"))]}'
 }
@@ -227,7 +236,10 @@ setup_backend() {
 # confirm_tx polls the CHAIN rather than trusting the event, which is the whole reason it exists.
 cmd_upload() {
   [[ -f "$WASM" ]] || { echo "Missing $WASM — run ./optimizer.sh first"; exit 1; }
-  local resp=$(qadenad_alias --node $QADENA_NODE --gas $gas_auto --gas-adjustment $gas_adjustment --gas-prices $minimum_gas_prices tx wasm store "$WASM" --from $FROM -y -o json)
+  # Subcommand first, so the wrapper takes its `tx` branch and passes the keyring flags --
+  # see the note in tx() above.
+  local resp=$(qadenad_alias tx wasm store "$WASM" --from $FROM \
+    --gas $gas_auto --gas-adjustment $gas_adjustment --gas-prices $minimum_gas_prices -y -o json)
 
   local hash=$(echo "$resp" | jq -r '.txhash // empty' 2>/dev/null)
   local bcode=$(echo "$resp" | jq -r '.code // empty' 2>/dev/null)
@@ -261,8 +273,10 @@ cmd_instantiate() {
   # like any other transfer; a contract address is neither a module account nor a credentialed
   # wallet, so the deposit is refused and takes the whole instantiate with it.  The notarial book
   # keeps records and never held or paid out funds, so the deposit was doing nothing to begin with.
-  local resp=$(qadenad_alias --node $QADENA_NODE --gas $gas_auto --gas-adjustment $gas_adjustment --gas-prices $minimum_gas_prices tx wasm instantiate "$code_id" '{}' \
-    --admin="$admin" --from $FROM --label "enf-notarial-book-v1" -y -o json)
+  # Subcommand first -- see the note in tx() above.
+  local resp=$(qadenad_alias tx wasm instantiate "$code_id" '{}' \
+    --admin="$admin" --from $FROM --label "enf-notarial-book-v1" \
+    --gas $gas_auto --gas-adjustment $gas_adjustment --gas-prices $minimum_gas_prices -y -o json)
 
   # CHECKED.  wait_for_tx's status was previously discarded, so a lost websocket race fell straight
   # through to list-contract-by-code -- which happily returns the PREVIOUS contract for this code_id,

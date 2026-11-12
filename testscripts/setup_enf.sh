@@ -29,6 +29,11 @@ export QADENA_KEYRING_BACKEND
 # An explicit QADENA_LAUNCH_ROOT from the caller still wins, as does VERITAS_SEC_HOME.
 export QADENA_LAUNCH_ROOT="${QADENA_LAUNCH_ROOT:-$HOME/qadena-dev-launch}"
 
+# WHICH KEYRING ENF'S KEYS ARE IN.  Defines deployment_keyring_select/node_keyring_*;
+# calling it is deliberate and scoped, see the --contracts-only check below.  On a
+# foundation-sponsored devnet step_1 writes enf-* into ENF'S OWN home, not the node's,
+# so anything looking for them in the node keyring finds nothing.
+source "$SCRIPT_DIR/../scripts/deployment_keyring.sh"
 source "${0:A:h}/../foundation_scripts/deployment_profile.sh"
 deployment_profile_load "enf" || exit 1
 # THE DEPLOYMENT HOME, FROM THE PROFILE -- NEVER A LITERAL.  step_1 defaults
@@ -107,6 +112,9 @@ identityprovidername="enfidentitysrvprv"
 dsvsprovidername="enfdsvssrvprv"
 dsvsname="enfdsvs"
 createwalletsponsorname="enf-create-wallet-sponsor"
+# The ENF deployer user, as enf_cli.sh names it (FROM, enf_cli.sh:29).  Only used to
+# ask deployment_keyring_select which keyring ENF's keys live in.
+enfdeployername="ENF"
 # IDENTITY FROM THE PROFILE.  These were literals here AND (as SEC values) in step_1.sh, so the
 # devnet path and the fleet path disagreed about who enf is -- the fleet path minted SEC's
 # credentials and collided.  One source now; step_1.sh defaults from the same place, so passing
@@ -255,16 +263,39 @@ fi
 # hangs with no prompt at all; qadena_keyring_unlock asks once, names the keyring, and fails with
 # the remedy when it cannot ask.  AFTER the argument and docker checks, so --help never prompts and
 # a machine without docker is told so before being asked for a passphrase it will not get to use.
+# BEFORE THE UNLOCK, so the passphrase prompt names the keyring that will be used.
+#
+# --contracts-only ONLY.  A full run needs the NODE keyring -- treasury, foundation-appsvr
+# and foundation-users are only there -- and the chain half below reaches for those by bare
+# name.  --contracts-only skips that half entirely, and the contract half delegates to
+# enf_cli.sh, which makes the same call for itself (enf_cli.sh:290).
+#
+# A no-op on a chain that has not been set up: the chooser decides from the keyring FILES,
+# and with no enf-* keys anywhere it leaves QADENA_KEYRING_DIR unset, so the check below
+# still looks in the node keyring and still refuses.  Only an already-prepared chain is
+# affected, which is the case this flag exists for.
+if [ "$contracts_only" = "true" ]; then
+    deployment_keyring_select enf "$enfdeployername" "$identityprovidername"
+fi
+
 qadena_keyring_unlock
 
 # --contracts-only presupposes the chain half already ran.  Check that here rather than letting
 # enf_cli.sh setup-enf discover it: create_user.sh needs the create-wallet sponsor to pay for the
 # ENF deployer's wallet and the identity provider to issue its credentials, and when either is
 # missing it fails deep inside a sub-script with a message that says nothing about this flag.
+#
+# THE KEYRING HAS TO BE CHOSEN FIRST, which is what the block above does.  Without it this
+# ran `keys show` against the node keyring while --fund-mode foundation-sponsored (the
+# default) had put every enf-* key in ENF's own home -- so a chain whose setup had fully
+# succeeded was reported as never having had it run, and the only way forward looked like
+# re-running a chain half that is explicitly not re-runnable.  Same failure the comment at
+# the top of this file describes for the hardcoded "$HOME/qadena-enf" checks.
 if [ "$contracts_only" = "true" ]; then
     for required_key in "$createwalletsponsorname" "$identityprovidername"; do
         qadenad_alias keys show "$required_key" > /dev/null 2>&1 || {
-            echo "FAILED: --contracts-only, but '$required_key' is not in the keyring."
+            echo "FAILED: --contracts-only, but '$required_key' is not in the keyring"
+            echo "        ${QADENA_KEYRING_DIR:-$QADENAHOME} (backend: $QADENA_KEYRING_BACKEND)."
             echo "        That key is made by the chain setup, so this chain has not had it run."
             echo "        Run $me (no flags) instead -- it does both halves."
             exit 1; }
