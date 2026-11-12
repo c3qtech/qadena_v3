@@ -1536,7 +1536,9 @@ func (k Keeper) EnclaveValidateTransferDoublePrime(sdkctx sdk.Context, msg *type
 }
 
 func (k Keeper) EnclaveQuerySyncEnclave(sdkctx sdk.Context, msg *types.QueryEnclaveSyncEnclaveRequest) (error, *types.QueryEnclaveSyncEnclaveResponse) {
-	ctx, cancel := enclaveQueryContext()
+	// NOT enclaveQueryContext. Serving a joiner means verifying its quote, which can reach out for
+	// collateral; at 2s that failed a real join on c3q-mainnet with an error naming nothing.
+	ctx, cancel := enclaveJoinContext()
 	defer cancel()
 
 	r, err := EnclaveGRPCClient.QueryEnclaveSyncEnclave(ctx, msg)

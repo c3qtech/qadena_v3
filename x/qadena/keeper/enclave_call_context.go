@@ -182,18 +182,18 @@ func reportSlowEnclaveCalls(sdkctx sdk.Context) {
 // The deadline is kept rather than removed: an unbounded peer-facing endpoint is a denial-of-service
 // surface, and timing out here cannot fork US. It is only made generous.
 //
-// Three calls that LOOK peer-facing are deliberately NOT here, because nothing they return gates
+// Two calls that LOOK peer-facing are deliberately NOT here, because nothing they return gates
 // anyone's execution, so a long deadline would buy nothing and widen the DoS window:
 //
-//	EnclaveQuerySyncEnclave             the CLI `qadenad enclave sync-enclave`, run by
-//	                                    add_full_node.sh:555 BEFORE the joining node starts
 //	EnclaveQueryValidateEnclaveIdentity validateEnclaveIdentities(), called from UpdateHeight
 //	                                    inside `go func()` and only when IsProposer -- async,
 //	                                    fire-and-forget, retried on a counter
 //	EnclaveQueryRecoverKeyShare         the requesting enclave is itself serving a user query
 //	                                    (QueryGetRecoverKey, enclave.go:2438), not executing
 //
-// All three ran at c.DebugTimeout historically and worked, and each fails loudly and retryably.
+// Both ran at c.DebugTimeout historically and worked, and each fails loudly and retryably.
+// EnclaveQuerySyncEnclave was a third entry on that list until it was measured; see
+// enclaveJoinContext below for what it cost.
 //
 // CAVEAT on the 60s: it is a judgement, not a measurement. Nobody has profiled what an attested,
 // Shamir-reconstructing QueryEnclaveSecretShare or a 3MiB private-state page actually costs. It
@@ -227,6 +227,72 @@ const enclavePeerCallTimeout = 60 * time.Second
 func enclaveQueryContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), time.Duration(c.DebugTimeout)*time.Second)
 }
+
+// enclaveJoinContext returns the context for serving sync-enclave to a JOINING node. One call uses
+// it, EnclaveQuerySyncEnclave, and it gets a tier of its own because the two existing ones are both
+// wrong for it: the local-query 2s is far too short, and enclavePeerContext would file it under
+// "gates a peer's consensus", which it does not -- its durations would then pollute the one metric
+// whose job is to warn that we are about to fork somebody.
+//
+// WHY 2s WAS NOT ENOUGH, measured on c3q-mainnet 2026-11-02 at height 329,023. The deadline fired
+// at 2.004s and the joiner was told `unknown request` -- the SDK's wrapper for any failed gRPC
+// query (gRPCErrorToSDKError's default branch), which names nothing and sent the operator looking
+// at the joiner, where everything was correct. The handler then finished normally several seconds
+// later, having verified the joiner's quote and accepted it.
+//
+// The cost was collateral. verifyRemoteReport needs Intel-signed TCB info, QE identity and CRLs,
+// and this node's /etc/sgx_default_qcnl.conf points collateral_service at Intel's PCS rather than
+// at the PCCS on its own loopback: four items, api.trustedservices.intel.com, 05:52:29.863 to
+// 05:52:32.223 by the mtimes in ~/.dcap-qcnl. The same items answer in 6-12ms from the local PCCS,
+// which already holds them. So the fetch is worth eliminating -- but it is not the defect, and
+// fixing only the config would leave this deadline waiting to fire on the next cold FMSPC.
+//
+// NOTHING HERE BOUNDS WORK, which is what makes the DoS argument that kept it at 2s not apply. The
+// enclave handler does not read its context: when this deadline fires the quote verification runs
+// to completion anyway (that is how the 2026-11-02 log shows it succeeding after the error). The
+// deadline decides only whether WE ARE STILL LISTENING when the answer arrives. Cancelling early
+// therefore buys no protection at all -- it discards work already paid for.
+//
+// THE CEILING IS NOT THE JOINER'S 10 MINUTES, and getting that wrong is how this constant was
+// first set to 2 minutes -- a number the transport can never deliver. There are four hops, and
+// the 10-minute one is two hops away from this deadline:
+//
+//	joiner CLI -> its OWN enclave        10m, cmd/qadenad/enclave_cmd.go  (never binds here)
+//	joiner's enclave -> the seed's chain context.Background(), i.e. NO timeout at all
+//	                                     (cmd/qadenad_enclave/enclave.go, SyncEnclave)
+//	...carried as an ABCI Query over the seed's COMETBFT RPC, because the joiner sets only
+//	   --node and client.Context.Invoke falls to case 2-2 when GRPCClient is nil
+//	seed's keeper -> seed's enclave      THIS deadline
+//
+// So the binding constraint is the seed's own RPC HTTP server. CometBFT sets
+// WriteTimeout = max(10s, timeout_broadcast_tx_commit + 1s) (node/node.go, and the 10s default in
+// rpc/jsonrpc/server/http_server.go), and that deadline is ARMED WHEN THE REQUEST HEADERS ARE
+// READ. With timeout_broadcast_tx_commit at its default 10s the wall is 11 SECONDS: a handler
+// still working then has its response write fail and its connection closed. The client imposes
+// nothing -- DefaultHTTPClient leaves Timeout at 0 -- so 11s is the whole budget.
+//
+// A deadline above that wall is not merely inert, it is WORSE THAN A SHORT ONE. Under 11s a slow
+// serve returns an application error, which is at least delivered; above it the connection is torn
+// and the joiner sees EOF, which says even less than `unknown request` did.
+//
+// 8 seconds, therefore: about 3x the measured cold fetch, and far enough inside the 11s wall to
+// still get an answer back. It deliberately does NOT cover a QCNL retry storm (retry_times 6,
+// retry_delay 10) -- nothing set here can, because that storm exceeds the wall whatever this says.
+// The fix for that case is to stop making the fetch: point collateral_service at the loopback
+// PCCS. If this ever needs to be larger, timeout_broadcast_tx_commit must be raised with it, and
+// that lifts the write timeout for EVERY RPC endpoint -- a far wider change than this constant.
+func enclaveJoinContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), enclaveJoinCallTimeout)
+}
+
+const enclaveJoinCallTimeout = 8 * time.Second
+
+// cometRPCWriteTimeoutFloor is the smallest value the seed's RPC HTTP server can have for
+// WriteTimeout: CometBFT computes max(10s default, timeout_broadcast_tx_commit + 1s), and
+// timeout_broadcast_tx_commit defaults to 10s, so 11s unless an operator raised it. It is here,
+// in the same file as the deadline it bounds, because this is the number enclaveJoinCallTimeout
+// must stay under -- not any timeout on the joiner's side -- and the test asserts the gap.
+const cometRPCWriteTimeoutFloor = 11 * time.Second
 
 // ---------------------------------------------------------------------------------------------
 // The watchdog: liveness asked as its own question, off the consensus path.

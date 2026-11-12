@@ -82,6 +82,35 @@ func TestEnclaveCallContextDeadlines(t *testing.T) {
 		t.Fatalf("local query deadline should track c.DebugTimeout (%ds), got %v", c.DebugTimeout, remaining)
 	}
 
+	// The joiner tier. A 2s budget here failed a real sponsored join on c3q-mainnet (2026-11-02,
+	// height 329,023): serving sync-enclave verifies the joiner's quote, which fetched collateral
+	// from Intel's PCS for 2.4s, and the joiner was handed `unknown request` -- a message naming
+	// neither the deadline nor the node that gave up.
+	joinCtx, cancel := enclaveJoinContext()
+	defer cancel()
+	d, ok = joinCtx.Deadline()
+	if !ok {
+		t.Fatal("join context must keep a deadline -- an unbounded endpoint a stranger can reach is a DoS surface")
+	}
+	// The floor that matters: the measured cold DCAP collateral fetch, 2.36s on 2026-11-02. A
+	// multiple of it, not the fetch itself -- anything near c.DebugTimeout puts us back where the
+	// join failed.
+	if remaining := time.Until(d); remaining < 5*time.Second {
+		t.Fatalf("join deadline (%v) is too tight for a cold collateral fetch during quote "+
+			"verification; at %ds this failed a real join", remaining, c.DebugTimeout)
+	}
+	// THE CEILING IS THE SEED'S OWN RPC WRITE TIMEOUT, not the joiner's 10-minute wait. The
+	// joiner's enclave reaches us as an ABCI Query over CometBFT RPC, whose HTTP server arms
+	// WriteTimeout = max(10s, timeout_broadcast_tx_commit + 1s) when it reads our request headers.
+	// At the default 10s that is an 11s wall, and a deadline beyond it can never return an answer:
+	// the response write fails and the joiner gets EOF instead of an error it can read. The
+	// joiner's 10m budget is two hops upstream and never binds, which is exactly the mistake this
+	// bound exists to catch -- this was 2 minutes until the transport was traced.
+	if remaining := time.Until(d); remaining > cometRPCWriteTimeoutFloor-3*time.Second {
+		t.Fatalf("join deadline (%v) must stay clear of the seed's %v RPC write timeout; beyond "+
+			"it the connection is torn and no error reaches the joiner", remaining, cometRPCWriteTimeoutFloor)
+	}
+
 	peerCtx, cancel := enclavePeerContext()
 	defer cancel()
 	d, ok = peerCtx.Deadline()
