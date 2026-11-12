@@ -18,6 +18,17 @@
 # Resolve the Qadena scripts (qadenad_alias, gas vars) the same way cadena_cli.sh does,
 # relative to this script, which lives in the qadena_v3 repo.
 SCRIPT_DIR=$(cd "$(dirname "$0")/../scripts"; pwd)
+# WHERE THIS MACHINE'S DEPLOYMENT HOMES ARE.  Same default as
+# testscripts/setup_enf.sh:30, and it has to be set BEFORE deployment_keyring.sh
+# resolves a profile: foundation_scripts/deployment_profile.sh falls back to
+# $HOME/qadena-launch instead, so without this deployment_keyring_select looked
+# for ENF's keys in a directory that does not exist, found none, and silently left
+# the NODE keyring selected.  `keys export` then failed for every key and
+# extract_ephem_keys.sh stored the literal string "error" in their place -- which
+# the app-server reported as "failed to import private key for ENF: failed to
+# decrypt private key: EOF", naming the passphrase rather than the keyring.
+export QADENA_LAUNCH_ROOT="${QADENA_LAUNCH_ROOT:-$HOME/qadena-dev-launch}"
+
 source "$SCRIPT_DIR/../scripts/setup_env.sh"
 source "$SCRIPT_DIR/../scripts/deployment_keyring.sh"
 
