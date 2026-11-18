@@ -144,6 +144,19 @@ jq -n --arg fn "$friendly_name" --arg n "$partner" --arg k "$armor_key" \
    > "$home/partner.json"
 chmod 600 "$home/partner.json"
 
+# The IMPORT CODE: everything the Add Partner form wants EXCEPT the passphrase, as one string to
+# paste into its "Import from setup script" box -- so the multi-line armored key is never
+# hand-copied, which is how it used to lose a line.  "qpartner-1." + unpadded base64url of JSON.
+#
+# THE PASSPHRASE IS LEFT OUT ON PURPOSE.  The armored key inside is already encrypted under it,
+# so the code on its own is useless; send the passphrase by a different channel (or type it in).
+# Encrypting the code too would only add a second secret that has to travel the same way.
+import_code="qpartner-1.$(jq -cn --arg fn "$friendly_name" --arg n "$partner" --arg k "$armor_key" --arg l "$logo" \
+    '{name:$n, friendly_name:$fn, logo:$l, armor_priv_key:$k}' \
+    | base64 | tr -d '\n=' | tr '+/' '-_')"
+print -r -- "$import_code" > "$home/$partner.import-code"
+chmod 600 "$home/$partner.import-code"
+
 echo ""
 echo "============================================================"
 echo "ADD PARTNER -- paste these into the partner dashboard's form"
@@ -158,11 +171,18 @@ echo ""
 print -r -- "$armor_key"
 echo ""
 echo "------------------------------------------------------------"
+echo "OR, QUICKER: paste this one line into the form's \"Import from setup script\" box, then type"
+echo "the passphrase above (it is deliberately not in the code):"
+echo ""
+print -r -- "$import_code"
+echo ""
+echo "------------------------------------------------------------"
 echo "registered as  : $reg"
 echo ""
 echo "files (0600, do not commit):"
 echo "  $home/partner.json          POST body for /partner/register-ekyc-partner"
 echo "  $home/$partner.armor        the armored key on its own"
+echo "  $home/$partner.import-code  the one-line import code for the Add Partner form"
 echo "  $home/$partner.mnemonic     the ONLY way to recover this wallet"
 echo ""
 echo "AFTER REGISTERING: the partner row is created with active=0."
