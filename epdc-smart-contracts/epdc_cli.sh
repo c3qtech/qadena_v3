@@ -334,6 +334,22 @@ setup_backend() {
   local epdc_private_key=$(echo "$ephem_keys" | jq -r ".private_keys")
   [[ -n "$epdc_username" && "$epdc_username" != "null" && -n "$epdc_private_key" && "$epdc_private_key" != "null" ]] || {
     echo "Failed to extract keys for '$FROM' (is it set up? run setup-epdc first)"; exit 1; }
+  # A key that failed to export comes back as the literal "error" (extract_ephem_keys.sh keeps
+  # going, and its stderr is discarded above). Sent on, the api reports it as
+  # "failed to decrypt private key: EOF" -- not an armor block at all -- which reads like a
+  # passphrase problem and is not one. Name the keys that did not export instead.
+  local bad=$(jq -rn --arg u "$epdc_username" --arg k "$epdc_private_key" '
+    ($u | @base64d | fromjson) as $names | ($k | @base64d | fromjson) as $keys
+    | range(0; $names | length) | select(($keys[.] // "") | test("BEGIN TENDERMINT PRIVATE KEY") | not)
+    | $names[.]' 2>/dev/null)
+  if [[ -n "$bad" ]]; then
+    echo "Could not export these keys from the keyring at $QADENAHOME:"
+    echo "$bad" | sed 's/^/    /'
+    echo "  Either the passphrase typed above is not this keyring's, or the keys do not exist in it"
+    echo "  (EPDC was set up from a different node home). Check with:"
+    echo "    qadenad keys list --home $QADENAHOME --keyring-backend file | grep -i '$FROM'"
+    exit 1
+  fi
 
   local body=$(jq -nc --arg c "$addr" --arg u "$epdc_username" --arg k "$epdc_private_key" \
     '{contract_address:$c, epdc_username:$u, epdc_private_key:$k}')
@@ -352,7 +368,8 @@ setup_backend() {
   if echo "$resp" | grep -qi "decrypt"; then
     echo ""
     echo "The app-server could not decrypt the keys: its ARMOR_PASS_PHRASE must equal this"
-    echo "keyring's passphrase (the one in QADENA_KEYRING_PASS). Set it in stacks/epdc/.env and restart the api."
+    echo "keyring's passphrase (the one in QADENA_KEYRING_PASS). Set it in follow-the-money's"
+    echo "stacks/epdc/env-cloudflare-<env>.local, then: make -C stacks/epdc recreate-api CF_ENV=<env>"
     exit 1
   fi
   if echo "$resp" | grep -q "X-Setup-Token"; then

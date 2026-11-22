@@ -37,10 +37,24 @@ _dkr_has() { [[ -f "$1/keyring-$QADENA_KEYRING_BACKEND/$2.info" ]] }
 deployment_keyring_select() {
     local dep="$1" from="$2" provider="$3"
     [[ -n "${QADENA_KEYRING_DIR:-}" ]] && return 0
+    local root_given="${QADENA_LAUNCH_ROOT:-}${VERITAS_SEC_HOME:-}"
     source "${qadenabuild:-${SCRIPT_DIR:h}}/foundation_scripts/deployment_profile.sh"
     deployment_profile_load "$dep" > /dev/null || return 0
     local dkr="${VERITAS_SEC_HOME:-$DEPLOY_SEC_HOME}/keyring"
     local why=""
+    # TWO DEFAULT ROOTS.  The profile defaults to ~/qadena-launch, but testscripts/setup_<name>.sh
+    # export ~/qadena-dev-launch (see deployment_profile.sh for why they are kept apart).  A CLI run
+    # on its own afterwards -- `make setup-backend-if-needed`, say -- never saw that export, looked
+    # in ~/qadena-launch, found nothing, and fell back to the node keyring, where the export of
+    # every key then failed.  So with no root given, a deployment keyring that exists only under
+    # the dev root is used, and named.
+    local devkr="$HOME/qadena-dev-launch/${DEPLOY_SEC_HOME:t}/keyring"
+    if [[ -z "$root_given" ]] && ! _dkr_has "$dkr" "$from" && ! _dkr_has "$dkr" "$provider" \
+        && { _dkr_has "$devkr" "$from" || _dkr_has "$devkr" "$provider"; }; then
+        dkr="$devkr"
+        echo "No QADENA_LAUNCH_ROOT given and nothing under $QADENA_LAUNCH_ROOT/${DEPLOY_SEC_HOME:t};" \
+             "using the dev bring-up's keyring (testscripts/setup_$dep.sh)." >&2
+    fi
     if _dkr_has "$dkr" "$from"; then
         why="'$from' is there"
     elif _dkr_has "$QADENAHOME" "$from"; then
