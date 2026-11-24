@@ -277,12 +277,13 @@ attestor_keys() {
   echo "EPDC_ATTESTOR_KEYS='$json'"
 }
 
-# writer_addrs -- the app-server's signing pool, as a JSON array of addresses: $FROM-credential and
-# $FROM-eph1..N, exactly the wallets setup_backend hands the api (extract_ephem_keys.sh with
-# --include-base-provider-credential). $FROM itself is the operator and needs no authorization.
-# The register refuses writes from anyone else, so this list and the api's pool must agree.
+# writer_addrs -- the app-server's signing pool, as a JSON array of addresses: $FROM-eph1..N only,
+# exactly the wallets setup_backend hands the api. $FROM (the operator) and $FROM-credential are
+# kept out of the pool on purpose: the operator's key administers the register (writers,
+# attestors, migrations) and stays off the app server. The register refuses writes from anyone
+# not on the list, so this list and the api's pool must agree.
 writer_addrs() {
-  local names=("$FROM-credential") i a out=()
+  local names=() i a out=()
   for i in $(seq 1 $EPDC_EPH_COUNT); do names+=("$FROM-eph$i"); done
   for i in "${names[@]}"; do
     a=$(qadenad_alias keys show "$i" --address 2>/dev/null) || { echo "key $i not found" >&2; return 1; }
@@ -292,9 +293,17 @@ writer_addrs() {
 }
 
 # authorize_writers -- let the app-server's signing pool write the register (SetWriters).
+# The list ends up EXACTLY the pool: any other writer (e.g. $FROM-credential, authorized by an older
+# version of this script) is removed in the same transaction.
 authorize_writers() {
-  local addrs; addrs=$(writer_addrs) || exit 1
-  tx "set_writers" tx wasm execute "$(contract_addr)" "{\"set_writers\":{\"add\":$addrs}}" || exit 1
+  local addrs current remove
+  addrs=$(writer_addrs) || exit 1
+  current=$(q '{"get_writers":{}}' | jq -c '.data.writers // []') || exit 1
+  remove=$(jq -nc --argjson cur "$current" --argjson want "$addrs" '$cur - $want')
+  [[ "$remove" != "[]" ]] && echo "Removing writers not in the pool: $remove"
+  tx "set_writers" tx wasm execute "$(contract_addr)" "{\"set_writers\":{\"add\":$addrs,\"remove\":$remove}}" || exit 1
+  echo "Writers now:"
+  q '{"get_writers":{}}'
 }
 
 # cmd_migrate -- upgrade the deployed register IN PLACE to artifacts/epdc_register.wasm: store the
@@ -327,9 +336,10 @@ setup_backend() {
   [[ -n "$qadenatestscripts" && -x "$qadenatestscripts/extract_ephem_keys.sh" ]] || {
     echo "extract_ephem_keys.sh not found (qadenatestscripts=$qadenatestscripts)"; exit 1; }
 
-  echo "Extracting signing keys for '$FROM' (base + credential + $EPDC_EPH_COUNT ephemerals)..."
+  # The ephemerals only (see writer_addrs): the operator's key never goes to the app server.
+  echo "Extracting signing keys for '$FROM' ($EPDC_EPH_COUNT ephemerals: $FROM-eph1..$EPDC_EPH_COUNT)..."
   local ephem_keys=$("$qadenatestscripts/extract_ephem_keys.sh" --provider "$FROM#" --count "$EPDC_EPH_COUNT" \
-    --include-base-provider --include-base-provider-credential --json 2>/dev/null)
+    --json 2>/dev/null)
   local epdc_username=$(echo "$ephem_keys" | jq -r ".names")
   local epdc_private_key=$(echo "$ephem_keys" | jq -r ".private_keys")
   [[ -n "$epdc_username" && "$epdc_username" != "null" && -n "$epdc_private_key" && "$epdc_private_key" != "null" ]] || {
@@ -374,8 +384,10 @@ setup_backend() {
   fi
   if echo "$resp" | grep -q "X-Setup-Token"; then
     echo ""
-    echo "The api already has a register configured. To replace it, set EPDC_SETUP_TOKEN to the"
-    echo "api's value (stacks/epdc/env-cloudflare.local) and run this again."
+    echo "The api already has a register configured. To replace it, export EPDC_SETUP_TOKEN with the"
+    echo "api's value and run this again. In the follow-the-money epdc stack it is in"
+    echo "stacks/epdc/env-cloudflare-<env>.local; if the api has none, add it there and run"
+    echo "'make recreate-api CF_ENV=<env>' (check it took: docker exec epdc-api printenv EPDC_SETUP_TOKEN)."
     exit 1
   fi
   echo "$resp" | jq -e '.status == "ok"' > /dev/null 2>&1 || exit 1
